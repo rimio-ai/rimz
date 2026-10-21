@@ -1,4 +1,5 @@
 use super::*;
+use crate::ids::FocusNonce;
 use crate::sidebar_pane::app::inbox::WakeupInbox;
 
 fn scroll_rig() -> (Rig, FrameOutput) {
@@ -1400,6 +1401,7 @@ fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
     };
     destination
         .state
+        .view
         .current
         .viewed_panes
         .push(destination.state.config.own_pane.clone().unwrap());
@@ -2376,7 +2378,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         assert!(rig.state.ui.focus_placement.is_some());
         rig.state.dirty = true;
         paint_at(&mut rig, 0);
-        let theme = rig.state.ui.theme(&rig.state.current.theme);
+        let theme = rig.state.ui.theme(&rig.state.view.current.theme);
         let frame = render::compose_lines(&rig.state.current, None, &rig.state.ui, &theme, 80, 24);
         let (_, first_line) = rig
             .state

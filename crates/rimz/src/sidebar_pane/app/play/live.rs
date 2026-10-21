@@ -234,7 +234,7 @@ fn paint(
                     .column
                     .state
                     .ui
-                    .theme(&entry.column.state.current.theme)
+                    .theme(&entry.column.state.view.current.theme)
                     .alarm(ratatui::style::Modifier::empty()),
             );
         }

@@ -540,7 +540,7 @@ fn diagnostics_record_group_migrations() {
     );
     emit_diagnostics(
         &diagnostics_sink,
-        FetchDiagnostics {
+        fetch_diagnostics(FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_panes_produced_at_ms: next.panes_produced_at_ms,
             next_snapshot: &next,
@@ -552,7 +552,7 @@ fn diagnostics_record_group_migrations() {
             rejected: true,
             released_via_escape_hatch: false,
             now: fixed_time(1_700_000_000),
-        },
+        }),
     );
     let events = diagnostic_events(&diagnostics_sink);
 
@@ -1274,7 +1274,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
 
     emit_diagnostics(
         &sink,
-        FetchDiagnostics {
+        fetch_diagnostics(FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_panes_produced_at_ms: prev.panes_produced_at_ms,
             next_snapshot: &prev,
@@ -1289,11 +1289,11 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             rejected: false,
             released_via_escape_hatch: false,
             now: fixed_time(1_700_000_000),
-        },
+        }),
     );
     emit_diagnostics(
         &sink,
-        FetchDiagnostics {
+        fetch_diagnostics(FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_panes_produced_at_ms: incoming.panes_produced_at_ms,
             next_snapshot: &prev,
@@ -1305,11 +1305,11 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             rejected: true,
             released_via_escape_hatch: false,
             now: fixed_time(1_700_000_001),
-        },
+        }),
     );
     emit_diagnostics(
         &sink,
-        FetchDiagnostics {
+        fetch_diagnostics(FetchDiagnostics {
             prev_snapshot: &prev,
             incoming_panes_produced_at_ms: prev.panes_produced_at_ms,
             next_snapshot: &prev,
@@ -1321,7 +1321,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             rejected: false,
             released_via_escape_hatch: true,
             now: fixed_time(1_700_000_003),
-        },
+        }),
     );
 
     let events = diagnostic_events(&sink);

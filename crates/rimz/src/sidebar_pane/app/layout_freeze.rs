@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, UiState};
+use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, ViewState};
 use crate::store::snapshot::{
     SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
@@ -36,7 +36,7 @@ pub(super) fn focused_interaction(
     answered || prompted
 }
 
-pub(super) fn arm_freeze(ui: &mut UiState, now_ms: i64) {
+pub(super) fn arm_freeze(ui: &mut ViewState, now_ms: i64) {
     ui.freeze = Some(LayoutFreeze {
         frozen: ui.last_order.clone(),
         armed_ms: now_ms,
@@ -44,7 +44,7 @@ pub(super) fn arm_freeze(ui: &mut UiState, now_ms: i64) {
 }
 
 pub(super) fn apply_freeze(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     current: &mut SidebarSnapshot,
     interacted: bool,
     now_ms: i64,
@@ -69,7 +69,7 @@ pub(super) fn apply_freeze(
     }
 }
 
-pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOrder {
+pub(super) fn capture_order(current: &SidebarSnapshot, ui: &ViewState) -> FrozenOrder {
     let roster = ui.visible_roster(current);
     let visible: HashSet<String> = roster
         .rows()
@@ -98,7 +98,7 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOr
 }
 
 pub(super) fn adopt_shared_order(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     current: &mut SidebarSnapshot,
     mut order: FrozenOrder,
     armed_ms: Option<i64>,

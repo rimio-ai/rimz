@@ -201,13 +201,14 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
         assert!(rig.state.ui.browse.is_none());
         let alert = rig
             .state
+            .view
             .health
             .alert
             .as_ref()
             .expect("focus failure notice");
         assert_eq!(alert.reason, "focus failed: zsh: target disappeared");
         assert!(!alert.is_active());
-        let theme = rig.state.ui.theme(&rig.state.current.theme);
+        let theme = rig.state.ui.theme(&rig.state.view.current.theme);
         let frame = render::compose_lines(
             &rig.state.current,
             Some(alert),
@@ -580,7 +581,7 @@ fn tmux_sidebar_departure_releases_parked_freeze_before_the_next_pull() {
     ) {
         rig.event(event);
     }
-    rig.state.ui.theme(&rig.state.current.theme);
+    rig.state.ui.theme(&rig.state.view.current.theme);
     layout_freeze::arm_freeze(&mut rig.state.ui, now as i64 - 6_000);
     assert!(rig.state.parked(now));
     let departure = project_presence(

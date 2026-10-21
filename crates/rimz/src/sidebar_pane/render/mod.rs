@@ -298,7 +298,7 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
         .retain(|id, turn| agent(id).is_some_and(|agent| agent.user_turn_started_at == *turn));
 }
 
-fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
+fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &ViewState) -> Option<&'a SidebarRow> {
     ui.visible_roster(snapshot).row(ui.selected_index?)
 }
 
@@ -352,7 +352,7 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
 /// filter.
 pub(in crate::sidebar_pane) fn selected_agent_kind(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
 ) -> Option<crate::ids::AgentKind> {
     selected_row(snapshot, ui)
         .filter(|row| row.is_agent())

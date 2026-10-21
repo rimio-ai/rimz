@@ -7,7 +7,7 @@ use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, HitTarget, UiState, active_dashboard_tab,
+    BodyFilter, Browse, DashboardTab, HitTarget, UiState, ViewState, active_dashboard_tab,
     dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs, selected_agent_kind,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
@@ -580,7 +580,7 @@ fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: B
 }
 
 pub(super) fn set_make_up_filter(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     lens: BodyLens,
 ) -> bool {
@@ -661,7 +661,7 @@ fn begin_or_continue_browse(ui: &mut UiState) {
     }
 }
 
-fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
+fn clamp_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
     let Some(index) = ui.selected_index else {
         return;
     };
@@ -707,7 +707,7 @@ fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
 ///    provider kind genuinely changes from the value captured at pick time —
 ///    the dashboard's twin of the browse end-condition.
 pub(super) fn reconcile_selection(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
@@ -717,7 +717,7 @@ pub(super) fn reconcile_selection(
 }
 
 fn reconcile_filter_and_baseline(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
@@ -731,7 +731,7 @@ fn reconcile_filter_and_baseline(
     }
 }
 
-fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+fn reconcile_browse_and_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     let mut browse_pinned = false;
     if let Some(browse) = ui.browse.take()
         && ui.baseline_pane == browse.baseline_at_start
@@ -763,7 +763,7 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
     }
 }
 
-fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     let derived_kind = selected_agent_kind(snapshot, ui);
     if let Some(kind) = &derived_kind
         && dashboard_tab_of_kind(snapshot, kind).is_some()
@@ -784,14 +784,14 @@ fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// the dangling identity and index; the held baseline or the next
 /// pick re-seats it. Without a frame, hold the pane identity and withhold only
 /// the index.
-pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+pub(super) fn anchor_selection(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     if let Some(roster) = framed_selection_roster(ui, snapshot) {
         anchor_selection_in(ui, &roster);
     }
 }
 
 fn framed_selection_roster<'a>(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &'a SidebarSnapshot,
 ) -> Option<VisibleRoster<'a>> {
     if snapshot.panes_produced_at_ms.is_none() {
@@ -801,7 +801,7 @@ fn framed_selection_roster<'a>(
     Some(ui.visible_roster(snapshot))
 }
 
-fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
+fn anchor_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
     if let Some(pane) = ui.selected_pane.clone() {
         if let Some(index) = roster.ordinal_of_pane(&pane) {
             ui.selected_index = Some(index);

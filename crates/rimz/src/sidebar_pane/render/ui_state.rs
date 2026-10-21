@@ -230,7 +230,9 @@ impl UiState {
         let (cached_config, theme) = self.theme_cache.as_ref()?;
         (cached_config == config).then(|| Rc::clone(theme))
     }
+}
 
+impl ViewState {
     pub(in crate::sidebar_pane) fn visible_roster<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,

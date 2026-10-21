@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::sidebar_pane::render::UiState;
+use crate::sidebar_pane::render::ViewState;
 use crate::store::snapshot::SidebarSnapshot;
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
@@ -22,7 +22,7 @@ pub(super) struct FrameClock {
 }
 
 impl FrameClock {
-    pub(super) fn stamp(&self, ui: &mut UiState) {
+    pub(super) fn stamp(&self, ui: &mut ViewState) {
         ui.animation_phase = self.phase;
         ui.frame_ms = self.elapsed_ms;
     }
