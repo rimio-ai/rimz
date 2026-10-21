@@ -773,6 +773,7 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
     );
     assert!(ui.expanded_groups.contains("landed"));
     assert_eq!(ui.selected_pane, Some(selected));
+    assert_eq!(ui.reveal_row, None);
 }
 
 #[test]
