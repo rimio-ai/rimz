@@ -22,9 +22,13 @@ pub fn hook_trust_fix(
     profile: Option<&str>,
     relaunch: Option<(&crate::agents::AgentState, &str)>,
 ) -> String {
+    let team_member = |agent: &crate::agents::AgentState| {
+        (agent.team.is_some() && agent.role.is_some())
+            || profile.is_some_and(|profile| profile.contains('.'))
+    };
+    // `rimz agents resume @handle` refuses team members; restart and fork accept them.
     if let Some((agent, action)) = relaunch
-        && !(agent.team.is_some() && agent.role.is_some())
-        && !profile.is_some_and(|profile| profile.contains('.'))
+        && !(action == "resume" && team_member(agent))
     {
         return format!(
             "rimz agents {action} @{}",

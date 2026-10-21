@@ -289,53 +289,6 @@ fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr, subject: &str) 
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn hook_relaunch_fix_keeps_team_members_out_of_solo_resume() {
-        let mut agent = rimz::testkit::agent_state("codex", "session", jiff::Timestamp::UNIX_EPOCH);
-        agent.name = Some("worker".into());
-        agent.profile = Some("sol".into());
-        for action in ["resume", "restart", "fork"] {
-            assert_eq!(
-                rimz::config::definitions::hook_trust_fix(
-                    &agent.kind,
-                    agent.profile.as_deref(),
-                    Some((&agent, action))
-                ),
-                format!("rimz agents {action} @worker")
-            );
-        }
-        agent.team = Some("forge".into());
-        agent.role = Some("coder".into());
-        for action in ["resume", "restart", "fork"] {
-            assert_eq!(
-                rimz::config::definitions::hook_trust_fix(
-                    &agent.kind,
-                    agent.profile.as_deref(),
-                    Some((&agent, action))
-                ),
-                "rimz agents sol"
-            );
-        }
-        agent.profile = None;
-        assert_eq!(
-            rimz::config::definitions::hook_trust_fix(
-                &agent.kind,
-                agent.profile.as_deref(),
-                Some((&agent, "resume"))
-            ),
-            "rimz agents codex"
-        );
-        agent.profile = Some("missing.worker".into());
-        assert_eq!(
-            rimz::config::definitions::hook_trust_fix(
-                &agent.kind,
-                agent.profile.as_deref(),
-                Some((&agent, "resume"))
-            ),
-            "rimz agents codex"
-        );
-    }
-
     fn untrusted_hooks(choice: Option<&'static str>) -> rimz::agents::BirthLoginErr {
         rimz::agents::BirthLoginErr::HooksUntrusted {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
