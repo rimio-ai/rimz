@@ -188,6 +188,7 @@ impl FramePainter {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn draw_and_paint(
         &mut self,
         terminal: &mut Terminal<PaneBackend>,

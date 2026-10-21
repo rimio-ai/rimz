@@ -34,7 +34,7 @@ use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 #[cfg(test)]
 pub(in crate::sidebar_pane) use self::compose::compose_lines;
-pub(in crate::sidebar_pane) use self::compose::compose_lines_with_meter;
+use self::compose::compose_lines_with_meter;
 #[cfg(test)]
 use self::compose::lead_unread;
 #[cfg(test)]

@@ -5,6 +5,8 @@ use crate::sidebar_pane::app::fetch::{FetchPhase, FetchUpdate, SnapshotSource};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
+use crate::sidebar_pane::app::view_state::ViewContext;
+use crate::sidebar_pane::app::views::Views;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
@@ -348,12 +350,16 @@ fn set_viewed(snapshot: &mut SidebarSnapshot, viewed: bool) {
 }
 
 fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
-    harness.tab_read_dwell_until =
-        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    harness.routed_view(|_, view| {
+        view.tab_read_dwell_until =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    });
 }
 
 struct ApplyHarness {
     state: LoopState,
+    views: std::sync::Arc<std::sync::Mutex<Views>>,
+    own: PaneId,
 }
 
 impl ApplyHarness {
@@ -382,7 +388,8 @@ impl ApplyHarness {
         let mut config = serve_config(ws);
         config.instance_id = instance_id.clone();
         config.mux = crate::MuxName::Tmux;
-        config.own_pane = Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar"));
+        let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
+        config.own_pane = Some(own.clone());
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (_result_tx, result_rx) = super::super::fetch::result_channel();
@@ -400,10 +407,13 @@ impl ApplyHarness {
             Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
         );
         state.current = snapshot(ws);
-        Self { state }
+        let views = std::sync::Arc::default();
+        state.share_views(std::sync::Arc::clone(&views));
+        Self { state, views, own }
     }
 
-    fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
+    /// Deliver a snapshot through the attachment's entry; returns whether the gate rejected it.
+    fn apply(&mut self, snapshot: SidebarSnapshot) -> bool {
         self.apply_outcome(FetchUpdate::Snapshot {
             snapshot: Box::new(snapshot),
             phase: FetchPhase::Final,
@@ -411,14 +421,26 @@ impl ApplyHarness {
         })
     }
 
-    fn apply_outcome(&mut self, outcome: FetchUpdate) -> ApplyOutcome {
-        self.state.apply_fetch_outcome(outcome, true)
+    fn apply_outcome(&mut self, outcome: FetchUpdate) -> bool {
+        self.state.apply_latest_snapshot(outcome)
     }
 
-    fn fail(&mut self, reason: &str) -> ApplyOutcome {
+    fn fail(&mut self, reason: &str) -> bool {
         self.apply_outcome(FetchUpdate::Failed {
             error: reason.to_owned(),
         })
+    }
+
+    /// The view this pane's next painted fold borrows, routed and made as that borrow would.
+    /// Outside a borrow the pane's own copies are scratch, so a test seeds and reads here.
+    fn routed_view<T>(&mut self, access: impl FnOnce(&mut ViewState, &mut ViewContext) -> T) -> T {
+        let now = std::time::Instant::now();
+        let mut views = self.views.lock().unwrap();
+        let (_, entry) = views.presentation(&self.own, now, false);
+        let context = entry
+            .context
+            .get_or_insert_with(|| ViewContext::new(self.state.view.current.clone(), now));
+        access(&mut entry.state, context)
     }
 }
 
@@ -650,7 +672,7 @@ fn accepted_final_then_failed_final_keeps_rendered_facts() {
         h.current.rows().map(|row| row.status()).collect::<Vec<_>>(),
         statuses
     );
-    assert_eq!(h.health.failure_streak, 1);
+    assert_eq!(h.inspect_view(|_, view| view.health.failure_streak), 1);
     assert_eq!(h.ui.gate_notice, gate_notice);
 }
 
@@ -658,20 +680,22 @@ fn accepted_final_then_failed_final_keeps_rendered_facts() {
 fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
-    h.health = degraded_health("snapshot failed: first");
+    h.routed_view(|_, view| view.health = degraded_health("snapshot failed: first"));
 
     h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(row_snapshot(&ws, AgentStatus::Running, false)),
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
     });
-    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
-    assert!(h.health.alert.as_ref().is_some_and(Alert::is_active));
+    let health = h.inspect_view(|_, view| view.health.clone());
+    assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
+    assert!(health.alert.as_ref().is_some_and(Alert::is_active));
 
     h.fail("produce failed");
 
-    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES + 1);
-    let alert = active_alert(&h.health);
+    let health = h.inspect_view(|_, view| view.health.clone());
+    assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES + 1);
+    let alert = active_alert(&health);
     assert!(alert.reason.contains("produce failed"));
 }
 
@@ -787,15 +811,18 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
 fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
-    let (mut background, first, _) =
+    let (mut painted, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
-    set_row_status(&mut background, "sess-1", AgentStatus::Success);
-    set_row_status(&mut background, "sess-2", AgentStatus::Waiting);
+    set_row_status(&mut painted, "sess-1", AgentStatus::Success);
+    set_row_status(&mut painted, "sess-2", AgentStatus::Waiting);
+    let mut background = painted.clone();
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut background.worktree_groups)[0].rows,
     )[0]
     .unread = true;
     set_viewed(&mut background, false);
+    // The client's view painted this tab before it left: its return is a switch in.
+    a.apply(painted);
 
     a.apply(background);
     assert_eq!(row_ids(&a.current), vec!["sess-2", "sess-1"]);
@@ -815,7 +842,7 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     );
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert_eq!(
-        a.ui.selected_index,
+        a.inspect_view(|ui, _| ui.selected_index),
         Some(1),
         "selection re-anchors to the focused row's ranked position"
     );
@@ -824,8 +851,12 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut settled.worktree_groups)[0].rows)
         [0]
     .unread = false;
-    a.ui.freeze.as_mut().expect("hold armed").armed_ms =
-        jiff::Timestamp::now().as_millisecond() - 5_001;
+    // The switch in has painted, which ends its arrival hold, and the freeze has run out.
+    a.routed_view(|ui, _| {
+        ui.arrival_pending = false;
+        ui.freeze.as_mut().expect("hold armed").armed_ms =
+            jiff::Timestamp::now().as_millisecond() - 5_001;
+    });
     a.apply(settled);
 
     assert_eq!(
@@ -834,7 +865,7 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
         "after the hold expires the live rank stays unchanged"
     );
     assert_eq!(
-        a.ui.selected_index,
+        a.inspect_view(|ui, _| ui.selected_index),
         Some(1),
         "selection follows the same pane"
     );
@@ -902,23 +933,25 @@ fn tab_switch_in_arms_sibling_read_dwell() {
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a);
-    let (mut background, first, _) =
+    let (painted, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    let mut background = painted.clone();
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
+    // The client's view painted this tab before it left: its return is a switch in.
+    a.apply(painted);
 
     a.apply(background);
 
     assert!(row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
-    assert_eq!(a.ui.viewing_own_tab, Some(false));
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
     assert!(
-        a.tab_read_dwell_until.is_some(),
+        a.inspect_view(|_, view| view.tab_read_dwell_until.is_some()),
         "switching into the tab arms the sibling dwell"
     );
     assert!(
@@ -953,7 +986,7 @@ fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
     force_tab_dwell_elapsed(&mut a);
     a.apply(viewed);
 
-    assert_eq!(a.tab_read_dwell_until, None);
+    assert_eq!(a.inspect_view(|_, view| view.tab_read_dwell_until), None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(!row_unread_by_id(&a.current, "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
@@ -998,22 +1031,25 @@ fn tab_switch_out_before_dwell_leaves_siblings_unread() {
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a);
-    let (mut background, first, _) =
+    let (painted, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    let mut background = painted.clone();
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
+    // The client's view painted this tab before it left: its return is a switch in.
+    a.apply(painted);
     a.apply(background);
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
-    assert!(a.tab_read_dwell_until.is_some());
+    assert!(a.inspect_view(|_, view| view.tab_read_dwell_until.is_some()));
 
     let mut left = a.current.clone();
     set_viewed(&mut left, false);
     a.apply(left);
 
-    assert_eq!(a.tab_read_dwell_until, None);
+    assert_eq!(a.routed_view(|_, view| view.tab_read_dwell_until), None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
@@ -1053,15 +1089,18 @@ fn staying_on_tab_does_not_sweep_new_unread() {
 fn new_ranked_first_unread_appends_during_freeze() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
-    let (mut background, first, _) =
+    let (mut painted, first, _) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
-    set_row_status(&mut background, "sess-1", AgentStatus::Success);
-    set_row_status(&mut background, "sess-2", AgentStatus::Running);
+    set_row_status(&mut painted, "sess-1", AgentStatus::Success);
+    set_row_status(&mut painted, "sess-2", AgentStatus::Running);
+    let mut background = painted.clone();
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut background.worktree_groups)[0].rows,
     )[0]
     .unread = true;
     set_viewed(&mut background, false);
+    // The client's view painted this tab before it left: its return is a switch in.
+    a.apply(painted);
     a.apply(background);
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
@@ -1090,9 +1129,14 @@ fn new_ranked_first_unread_appends_during_freeze() {
         "fresh unread rows append within their frozen group"
     );
     assert!(row_unread_by_id(&a.current, "sess-new"));
-    a.ui.freeze.as_mut().unwrap().armed_ms = Timestamp::now().as_millisecond() - 5_000;
+    // The switch in has painted, which ends its arrival hold, and the freeze has run out.
+    a.routed_view(|ui, _| {
+        ui.arrival_pending = false;
+        ui.freeze.as_mut().expect("hold armed").armed_ms =
+            Timestamp::now().as_millisecond() - 5_000;
+    });
     a.apply(with_new_unread);
-    assert!(a.ui.freeze.is_none());
+    assert!(a.inspect_view(|ui, _| ui.freeze.is_none()));
     assert_eq!(row_ids(&a.current), vec!["sess-new", "sess-1", "sess-2"]);
 }
 
@@ -1106,7 +1150,7 @@ fn attach_to_viewed_tab_keeps_unread_siblings() {
 
     a.apply(viewed);
 
-    assert_eq!(a.ui.viewing_own_tab, Some(true));
+    assert_eq!(a.inspect_view(|ui, _| ui.viewing_own_tab), Some(true));
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
@@ -1134,7 +1178,7 @@ fn frameless_fold_does_not_blip_switch_in() {
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
     });
-    assert_eq!(a.ui.viewing_own_tab, Some(true));
+    assert_eq!(a.inspect_view(|ui, _| ui.viewing_own_tab), Some(true));
 
     let (mut still_viewed, _, _) = two_pane_snapshot(&ws, first);
     std::sync::Arc::make_mut(
@@ -1159,7 +1203,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
     let read_marks = runtime.read_marks_path();
 
-    a.ui.unread_guard = Some("sess-1".to_owned());
+    a.routed_view(|ui, _| ui.unread_guard = Some("sess-1".to_owned()));
     let mut still_focused =
         row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
     std::sync::Arc::make_mut(
@@ -1170,7 +1214,10 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     a.apply(still_focused);
 
     assert!(row_unread(&a.current));
-    assert_eq!(a.ui.unread_guard.as_deref(), Some("sess-1"));
+    assert_eq!(
+        a.inspect_view(|ui, _| ui.unread_guard.clone()).as_deref(),
+        Some("sess-1")
+    );
     assert!(
         !read_marks.exists(),
         "the guarded focused row must not write a read receipt"
@@ -1185,7 +1232,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     a.apply(focus_left);
 
     assert!(row_unread(&a.current));
-    assert_eq!(a.ui.unread_guard, None);
+    assert_eq!(a.inspect_view(|ui, _| ui.unread_guard.clone()), None);
     assert!(
         !read_marks.exists(),
         "leaving focus only releases the guard; it does not clear the row"
@@ -1209,23 +1256,21 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
 fn published_fast_success_keeps_refresh_alert_active() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
-    h.health = degraded_health("snapshot failed: produce");
+    h.routed_view(|_, view| view.health = degraded_health("snapshot failed: produce"));
 
-    let applied = h.apply_outcome(FetchUpdate::Snapshot {
+    let rejected = h.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(snapshot(&ws)),
         phase: FetchPhase::Final,
         source: SnapshotSource::Cached,
     });
 
-    assert!(!applied.should_exit);
-    assert!(!applied.tab_emptied);
-    assert!(!applied.rejected);
-    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
+    assert!(!h.should_exit);
+    assert!(!h.tab_emptied);
+    assert!(!rejected);
+    let health = h.inspect_view(|_, view| view.health.clone());
+    assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
     assert!(
-        h.health
-            .alert
-            .as_ref()
-            .is_some_and(|alert| alert.is_active()),
+        health.alert.as_ref().is_some_and(|alert| alert.is_active()),
         "only a produced success may mark producer health recovered"
     );
 }
@@ -1239,8 +1284,7 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
     let mut empty = snapshot(&ws);
     empty.panes_produced_at_ms = Some(11);
 
-    let held = h.apply(empty);
-    assert!(held.rejected);
+    assert!(h.apply(empty), "the gate holds an empty stamped frame");
     assert!(matches!(
         h.ui.gate_notice,
         Some(GateNotice {
@@ -1250,8 +1294,7 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
 
     let mut recovered = h.current.clone();
     recovered.panes_produced_at_ms = Some(12);
-    let accepted = h.apply(recovered);
-    assert!(!accepted.rejected);
+    assert!(!h.apply(recovered));
     assert!(h.ui.gate_notice.is_none());
 }
 

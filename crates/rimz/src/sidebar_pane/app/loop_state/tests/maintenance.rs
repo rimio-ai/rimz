@@ -10,12 +10,12 @@ fn resize_does_not_arm_or_retime_a_layout_freeze() {
     rig.state
         .apply_input([Wakeup::Resize], &mut rig.terminal)
         .unwrap();
-    assert!(rig.state.ui.freeze.is_none(), "resize is not user input");
-    layout_freeze::arm_freeze(&mut rig.state.ui, 1);
+    assert!(rig.view().ui.freeze.is_none(), "resize is not user input");
+    layout_freeze::arm_freeze(&mut rig.view().ui, 1);
     rig.state
         .apply_input([Wakeup::Resize], &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().armed_ms, 1);
+    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().armed_ms, 1);
 }
 
 #[test]
@@ -25,8 +25,13 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
     let mut rig = Rig::new();
     rig.state.config.own_pane = Some(own.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
+    settle_width(&mut rig);
     rig.state.dirty = false;
-    rig.state.ui.theme(&rig.state.view.current.theme);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.theme(&state.view.current.theme);
+    }
     let now = crate::utils::time::unix_now_ms();
     rig.state.events().append(
         SidebarEvent::FocusChanged {
@@ -36,7 +41,7 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
         now,
         now,
     );
-    layout_freeze::arm_freeze(&mut rig.state.ui, now as i64 - 6_000);
+    layout_freeze::arm_freeze(&mut rig.view().ui, now as i64 - 6_000);
     assert!(rig.state.frame_timing().1 > FRAME_MIN_TIMEOUT);
     rig.maintenance();
     assert!(
@@ -48,7 +53,7 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
         unfocused: vec![own],
     });
     assert!(
-        rig.state.ui.freeze.is_none(),
+        rig.view().ui.freeze.is_none(),
         "unfocus releases the old freeze in its own fold"
     );
 }
@@ -60,10 +65,15 @@ fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
     let mut rig = Rig::new();
     rig.state.config.own_pane = Some(own);
     rig.fold(snapshot, SnapshotSource::Produced);
+    settle_width(&mut rig);
     rig.state.dirty = false;
-    rig.state.ui.theme(&rig.state.view.current.theme);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.theme(&state.view.current.theme);
+    }
     layout_freeze::arm_freeze(
-        &mut rig.state.ui,
+        &mut rig.view().ui,
         Timestamp::now().as_millisecond() - 29_800,
     );
     let timeout = rig.state.frame_timing().1;
@@ -100,13 +110,13 @@ fn parked_focus_uses_live_events_then_pulled_clients() {
         now + 1,
     );
     assert!(!rig.state.parked(now + 1));
-    rig.state.current.panes_observed_at_ms = Some(now + 1);
-    rig.state.current.client_views = vec![crate::pane::ClientPaneView {
+    rig.view().current.panes_observed_at_ms = Some(now + 1);
+    rig.view().current.client_views = vec![crate::pane::ClientPaneView {
         pane_id: own,
         client_id: crate::ids::MuxClientId::Zellij(1),
     }];
     assert!(rig.state.parked(now + 1));
-    rig.state.current.client_views.clear();
+    rig.view().current.client_views.clear();
     assert!(!rig.state.parked(now + 1));
 }
 
@@ -121,15 +131,15 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
         source: SnapshotSource::Cached,
     }));
 
-    assert_eq!(rig.state.current.worktree_groups.len(), 1);
-    assert_eq!(rig.state.current.worktree_groups[0].rows[0].name, "claude");
+    assert_eq!(rig.view().current.worktree_groups.len(), 1);
+    assert_eq!(rig.view().current.worktree_groups[0].rows[0].name, "claude");
     assert!(rig.state.dirty, "the folded snapshot is paint-pending");
 }
 
 #[test]
 fn maintenance_requests_releasing_fetch_when_freeze_expires() {
     let mut rig = Rig::new();
-    rig.state.ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
+    rig.view().ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
         frozen: crate::sidebar_pane::render::FrozenOrder::default(),
         armed_ms: jiff::Timestamp::now().as_millisecond() - 5_001,
     });
@@ -145,8 +155,10 @@ fn maintenance_requests_releasing_fetch_when_freeze_expires() {
 #[test]
 fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
     let mut rig = Rig::new();
-    rig.state.current.own_view = Some(own_view());
-    rig.state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    rig.view().current.own_view = Some(own_view());
+    // The user stays on the tab past the dwell.
+    rig.view().current.viewed_panes = own_view().working_pane_ids;
+    rig.view().tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
 
     rig.maintenance();
 
@@ -161,8 +173,8 @@ fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
 #[test]
 fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
     let mut rig = Rig::new();
-    rig.state.current.own_view = None;
-    rig.state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    rig.view().current.own_view = None;
+    rig.view().tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
 
     rig.maintenance();
 
@@ -175,7 +187,7 @@ fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
 #[test]
 fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
     let mut rig = Rig::new();
-    rig.state.gate = armed_gate(2, 1_001);
+    rig.view().gate = armed_gate(2, 1_001);
 
     rig.maintenance();
 
@@ -190,14 +202,14 @@ fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
 #[test]
 fn rejected_final_defers_one_gate_deadline_reevaluation() {
     let mut rig = Rig::new();
-    rig.state.current = agent_snapshot(&rig.ws);
+    rig.view().current = agent_snapshot(&rig.ws);
 
     let fold_started = Instant::now();
     rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
     let first_fold = fold_started.elapsed();
 
     assert_eq!(
-        rig.state.gate.rule,
+        rig.view().gate.rule,
         Some(crate::diag::record::GateRule::FramelessOverFrame)
     );
     assert!(
@@ -267,9 +279,9 @@ fn self_close_watchdog_verifies_panes_while_empty_confirming() {
 fn frame_timing_suspends_unwatched_animation() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
-    rig.state.current = animating_agent_snapshot(&rig.ws);
-    rig.state.current.own_view = Some(own_view());
-    rig.state.current.viewed_panes.clear();
+    rig.view().current = animating_agent_snapshot(&rig.ws);
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes.clear();
     rig.state.dirty = false;
 
     assert!(!rig.frame_active(), "hidden animation suspends");
@@ -280,7 +292,7 @@ fn frame_timing_suspends_unwatched_animation() {
         "a viewed sibling pane resumes animation"
     );
 
-    rig.state.current.viewed_panes = vec![own_pane];
+    rig.view().current.viewed_panes = vec![own_pane];
     assert!(
         rig.frame_active(),
         "the own pane on screen resumes animation"
@@ -289,35 +301,36 @@ fn frame_timing_suspends_unwatched_animation() {
 
 #[test]
 fn frame_timing_keeps_unknown_hot_but_holds_hidden_and_detached_dirty() {
-    let mut rig = Rig::new();
-    rig.state.current = animating_agent_snapshot(&rig.ws);
+    let mut rig = Rig::without_own_pane();
+    assert!(rig.state.config.own_pane.is_none());
+    rig.view().current = animating_agent_snapshot(&rig.ws);
     rig.state.dirty = false;
     assert!(rig.frame_active(), "an unknown own pane stays hot");
 
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
-    rig.state.current = animating_agent_snapshot(&rig.ws);
-    rig.state.current.own_view = None;
+    rig.view().current = animating_agent_snapshot(&rig.ws);
+    rig.view().current.own_view = None;
     rig.state.dirty = false;
     assert!(rig.frame_active(), "an unknown own view stays hot");
 
-    rig.state.current.own_view = Some(own_view());
-    rig.state.current.viewed_panes.clear();
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes.clear();
     rig.state.dirty = true;
-    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
+    rig.view().current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     assert!(
         !rig.frame_active(),
         "hidden and attached holds the dirty frame"
     );
 
-    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
+    rig.view().current.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
     assert!(
         !rig.frame_active(),
         "detached retains its dirty frame without painting"
     );
 
-    rig.state.current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
-    rig.state.current.viewed_panes = vec![own_pane];
+    rig.view().current.presence = Some(crate::store::snapshot::SidebarPresence::Active);
+    rig.view().current.viewed_panes = vec![own_pane];
     assert!(
         rig.frame_active(),
         "the own pane on screen paints the dirty frame"
@@ -350,27 +363,69 @@ fn frame_timing_resumes_on_own_pane_focus() {
 }
 
 #[test]
-fn frame_timing_wakes_for_elapsed_tab_read_dwell() {
+fn frame_timing_caps_idle_wait_at_tab_read_dwell() {
+    let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let mut rig = Rig::with_own_pane(own_pane);
-    rig.state.current = animating_agent_snapshot(&rig.ws);
-    rig.state.current.own_view = Some(own_view());
-    rig.state.current.viewed_panes.clear();
+    let mut rig = Rig::with_clock(
+        Some(own_pane.clone()),
+        BodyLens::default(),
+        None,
+        clock.clone(),
+    );
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes = vec![own_pane];
+    settle_width(&mut rig);
+    let theme = rig.view().current.theme.clone();
+    rig.view().ui.theme(&theme);
     rig.state.dirty = false;
-    rig.state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    let until = clock.now() + Duration::from_millis(300);
+    rig.view().tab_read_dwell_until = Some(until);
 
+    assert!(rig.state.width_control.feedback_deadline().is_none());
     let (active, timeout) = rig.state.frame_timing();
 
     assert!(!active);
-    assert_eq!(timeout, FRAME_MIN_TIMEOUT);
+    assert_eq!(rig.view().tab_read_dwell_until, Some(until));
+    assert!(
+        timeout <= until.saturating_duration_since(clock.now()),
+        "idle wait wakes at the pending tab-read dwell: {timeout:?}"
+    );
+}
+
+#[test]
+fn frame_timing_cancels_hidden_tab_read_dwell() {
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let mut rig = Rig::with_own_pane(own_pane);
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes.clear();
+    rig.view().tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
+    let view = rig.view().shared_view_id().unwrap();
+    settle_width(&mut rig);
+
+    assert!(rig.state.width_control.feedback_deadline().is_none());
+    rig.state.frame_timing();
+
+    assert!(
+        rig.views
+            .lock()
+            .unwrap()
+            .retained(view)
+            .unwrap()
+            .tab_read_dwell_until
+            .is_none()
+    );
 }
 
 #[test]
 fn frame_timing_caps_long_tick_at_gate_deadline() {
     let mut rig = Rig::new();
+    settle_width(&mut rig);
+    let theme = rig.view().current.theme.clone();
+    rig.view().ui.theme(&theme);
     rig.state.dirty = false;
-    rig.state.gate = armed_gate(1, 800);
+    rig.view().gate = armed_gate(1, 800);
 
+    assert!(rig.state.width_control.feedback_deadline().is_none());
     let (_active, timeout) = rig.state.frame_timing();
 
     assert!(
@@ -382,15 +437,17 @@ fn frame_timing_caps_long_tick_at_gate_deadline() {
 #[test]
 fn frame_timing_caps_idle_timeout_at_freeze_expiry() {
     let mut rig = Rig::new();
+    settle_width(&mut rig);
     rig.state.dirty = false;
-    let theme = rig.state.current.theme.clone();
-    rig.state.ui.theme(&theme);
-    rig.state.ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
+    let theme = rig.view().current.theme.clone();
+    rig.view().ui.theme(&theme);
+    rig.view().ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
         frozen: crate::sidebar_pane::render::FrozenOrder::default(),
         armed_ms: jiff::Timestamp::now().as_millisecond() - 4_800,
     });
 
     rig.state.config.tick_seconds = 10;
+    assert!(rig.state.width_control.feedback_deadline().is_none());
     let (_active, timeout) = rig.state.frame_timing();
 
     assert!(

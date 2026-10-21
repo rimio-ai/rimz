@@ -237,4 +237,32 @@ impl JumpHost {
             .filter(|active| now < active.until)
             .is_none_or(|active| active.nonce.is_some() && active.nonce == nonce)
     }
+
+    pub(super) fn paint_permit(
+        &self,
+        source: &SidebarInstanceId,
+        nonce: Option<crate::ids::FocusNonce>,
+        now: Instant,
+    ) -> Option<impl Fn() -> bool + use<>> {
+        let state = self.lock();
+        if state
+            .active
+            .as_ref()
+            .filter(|active| now < active.until)
+            .is_some_and(|active| {
+                if active.nonce.is_none() {
+                    &active.source != source
+                } else {
+                    active.nonce != nonce
+                }
+            })
+        {
+            return None;
+        }
+        let stamp = LeaseStamp {
+            sequence: self.current.load(Ordering::SeqCst),
+            current: self.current.clone(),
+        };
+        Some(move || stamp.is_current())
+    }
 }

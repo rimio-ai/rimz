@@ -16,11 +16,11 @@ fn scroll_rig() -> (Rig, FrameOutput) {
             row
         })
         .collect();
-    rig.state
+    rig.view()
         .ui
         .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
-    rig.state.current = snapshot;
+    rig.view().current = snapshot;
     let output = FrameOutput::default();
     rig.terminal = Terminal::with_options(
         PaneBackend::headless(output.clone()),
@@ -46,10 +46,105 @@ fn queued(wakeups: impl IntoIterator<Item = Wakeup>) -> WakeupInbox {
     WakeupInbox::new(rx)
 }
 
-fn viewport_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
+fn play_clock(rig: &mut Rig) -> LoopClock {
+    let clock = LoopClock::play(Timestamp::now());
+    rig.state.clock = clock.clone();
+    clock
+}
+
+#[test]
+fn input_uses_the_clock_after_preparation() {
+    let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
+    let input = std::iter::once_with(|| {
+        clock.advance(Duration::from_secs(2));
+        Wakeup::Scroll { down: true }
+    });
+    rig.state.apply_input(input, &mut rig.terminal).unwrap();
+    assert_eq!(
+        rig.state
+            .inspect_view(|ui, _| ui.freeze.as_ref().unwrap().armed_ms),
+        clock.timestamp().as_millisecond()
+    );
+}
+
+struct AdvancingOutput(LoopClock);
+
+impl std::io::Write for AdvancingOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.advance(Duration::from_secs(2));
+        Ok(())
+    }
+}
+
+#[test]
+fn input_frame_deadline_uses_the_clock_after_output() {
+    let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
+    rig.terminal
+        .backend_mut()
+        .play_output(AdvancingOutput(clock.clone()));
+    rig.state
+        .apply_input([Wakeup::Scroll { down: true }], &mut rig.terminal)
+        .unwrap();
+    assert!(
+        rig.state.next_frame > clock.now(),
+        "the next frame must not already be due after output"
+    );
+}
+
+#[test]
+fn input_advances_the_planes_view_before_the_client_moves_tabs() {
+    use crate::ids::MuxClientId;
+    use crate::pane::ClientPaneView;
+
+    let plane = super::super::super::plane::DataPlane::detached();
+    let (mut source, _) = scroll_rig();
+    let own = source.state.config.own_pane.clone().unwrap();
+    plane.views.lock().unwrap().reconcile(
+        &[ClientPaneView {
+            client_id: MuxClientId::Zellij(1),
+            pane_id: own.clone(),
+        }],
+        true,
+        source.state.clock.now(),
+        Duration::from_secs(60),
+    );
+    let group = source.state.current.worktree_groups[0].key.clone();
+    source.share_views(plane.views.clone());
+    plane
+        .views
+        .lock()
+        .unwrap()
+        .paint(&own, source.state.clock.now())
+        .expanded_groups
+        .insert(group);
+    source
+        .state
+        .on_input(
+            Wakeup::Scroll { down: true },
+            &mut source.terminal,
+            &mut source.fetch,
+        )
+        .unwrap();
+    assert_eq!(
+        plane
+            .views
+            .lock()
+            .unwrap()
+            .paint(&own, source.state.clock.now())
+            .scroll_offset,
+        3,
+        "input must advance the plane-owned presentation, not a pane copy"
+    );
+}
+
+fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
     let (mut source, _) = scroll_rig();
     let (mut destination, output) = scroll_rig();
-    destination.state.viewport = source.state.viewport.clone();
     for (rig, own, working) in [(&mut source, 99, 0), (&mut destination, 98, 19)] {
         rig.state.config.mux = mux;
         let id = |index| {
@@ -86,354 +181,390 @@ fn viewport_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
     (source, destination, output)
 }
 
-fn publish_scrolled(source: &mut Rig, offset: usize) {
-    source.state.ui.scroll_offset = offset;
-    source.state.ui.offset_authoritative = true;
-    source.state.ui.scroll_ease.cancel();
-    source.state.ui.landed_open = true;
+fn paint_scrolled(source: &mut Rig, offset: usize) {
+    source.view().ui.scroll_offset = offset;
+    source.view().ui.offset_authoritative = true;
+    source.view().ui.scroll_ease.cancel();
+    source.view().ui.landed_open = true;
     source.state.dirty = true;
     paint_at(source, 0);
 }
 
-fn anchored_pane_rows(ui: &UiState) -> Vec<(String, isize)> {
-    ui.anchored_rows
-        .iter()
-        .map(|(id, row)| (id.clone(), row + ui.scroll_zone_top as isize))
-        .collect()
+pub(super) struct SharedPanes {
+    pub(super) plane: super::super::super::plane::DataPlane,
+    pub(super) panes: [Rig; 2],
+    pub(super) snapshot: SidebarSnapshot,
+    pub(super) clock: LoopClock,
 }
 
-#[test]
-fn publication_wakes_no_peer() {
-    let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
-    let plane = super::super::super::plane::DataPlane::detached();
-    let (tx, rx) = std::sync::mpsc::sync_channel(64);
-    let _subscription = plane.subscribe(&destination.state.config, tx);
-    source.state.viewport = plane.viewport.clone();
-    publish_scrolled(&mut source, 12);
-    assert!(plane.viewport.lock().unwrap().is_some());
-    assert!(
-        rx.try_recv().is_err(),
-        "publication must not wake hidden peers"
-    );
-}
-
-#[test]
-fn frozen_viewport_survives_round_trip_on_both_backends() {
-    for mux in [MuxName::Zellij, MuxName::Tmux] {
-        let (mut a, mut b, _) = viewport_pair(mux);
-        Arc::make_mut(&mut Arc::make_mut(&mut a.state.current.worktree_groups)[0].rows).swap(7, 8);
-        a.state.ui.last_order = layout_freeze::capture_order(&a.state.current, &a.state.ui);
-        layout_freeze::arm_freeze(&mut a.state.ui, a.state.clock.now_ms() as i64);
-        publish_scrolled(&mut a, 12);
-        let expected = a.state.ui.last_order.clone();
-        let expected_rows = anchored_pane_rows(&a.state.ui);
-        let a_target = a.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
-        let b_target = b.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
-        for back in [false, true] {
-            let (departing, arriving, target) = if back {
-                (&mut b, &mut a, a_target.clone())
-            } else {
-                (&mut a, &mut b, b_target.clone())
-            };
-            departing.event(SidebarEvent::FocusChanged {
-                focused: vec![target.clone()],
-                unfocused: vec![],
-            });
-            arriving.event(SidebarEvent::FocusChanged {
-                focused: vec![target],
-                unfocused: vec![],
-            });
-            arriving.paint(true);
-            assert_eq!(arriving.state.ui.last_order.rows, expected.rows);
-            assert_eq!(arriving.state.ui.painted_rows, expected_rows);
-            assert!(arriving.state.ui.freeze.is_some());
+impl SharedPanes {
+    pub(super) fn new(mux: MuxName) -> Self {
+        let (a, b, _) = pane_pair(mux);
+        let snapshot = a.state.current.clone();
+        let clock = LoopClock::play(snapshot.now);
+        let plane = super::super::super::plane::DataPlane::detached();
+        let mut pair = Self {
+            plane,
+            panes: [a, b],
+            snapshot,
+            clock,
+        };
+        for rig in &mut pair.panes {
+            rig.state.clock = pair.clock.clone();
+            rig.share_views(pair.plane.views.clone());
         }
-    }
-}
-
-#[test]
-fn explicit_unfrozen_adoption_clears_prior_hold() {
-    for prior in ["none", "own", "copied"] {
-        let (mut source, mut destination, _) = viewport_pair(MuxName::Zellij);
-        destination.state.ui.freeze = None;
-        if prior == "own" {
-            layout_freeze::arm_freeze(&mut destination.state.ui, 1);
-        } else if prior == "copied" {
-            layout_freeze::arm_freeze(
-                &mut source.state.ui,
-                source.state.clock.timestamp().as_millisecond(),
-            );
-            publish_scrolled(&mut source, 12);
-            destination
-                .state
-                .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-            assert!(destination.state.ui.freeze.is_some());
-        }
-        source.state.ui.freeze = None;
-        Arc::make_mut(&mut Arc::make_mut(&mut source.state.current.worktree_groups)[0].rows)
-            .swap(1, 2);
-        publish_scrolled(&mut source, 3);
-        let published = source.state.ui.last_order.clone();
-        let rows = Arc::make_mut(
-            &mut Arc::make_mut(&mut destination.state.current.worktree_groups)[0].rows,
-        );
-        let mut arrival = rows.last().unwrap().clone();
-        arrival.id = "arrival".into();
-        arrival.pane = Some(pane("terminal_20", "tab_0", false));
-        rows.push(arrival);
-        destination
-            .state
-            .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-        assert!(destination.state.ui.freeze.is_none(), "prior hold: {prior}");
-        let mut expected = published.rows;
-        expected.push(render::FrozenRow {
-            id: "arrival".into(),
-            pane: Some("zellij:terminal_20".into()),
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.with_shared_view(false, false, |state| {
+            let group = state.current.worktree_groups[0].key.clone();
+            state.ui.expanded_groups.insert(group);
         });
-        assert_eq!(destination.state.ui.last_order.rows, expected);
-        assert_eq!(
-            layout_freeze::capture_order(&destination.state.current, &destination.state.ui).rows,
-            expected
-        );
-        assert!(destination.state.admits_clock_only(false));
-        let before = destination.state.projections;
-        let mut content = destination.state.current.clone();
-        content.display_name = "deferred after adoption".into();
-        destination.deliver(destination.lazy_update(content, SnapshotSource::Produced));
-        assert_eq!(
-            destination.state.projections, before,
-            "a settled hidden adoption must not project until reveal"
-        );
-        assert_ne!(
-            destination.state.current.display_name,
-            "deferred after adoption"
-        );
+        pair.paint(0);
+        pair
     }
-}
 
-#[test]
-fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
-    for (mux, resized) in [
-        (MuxName::Zellij, false),
-        (MuxName::Tmux, false),
-        (MuxName::Zellij, true),
-        (MuxName::Tmux, true),
-    ] {
-        let (mut source, mut destination, _) = viewport_pair(mux);
-        let clock = LoopClock::play(Timestamp::now());
-        destination.state.clock = clock.clone();
-        if resized {
-            destination.state.ui.freeze = None;
-            destination
-                .state
-                .on_resize(&mut destination.fetch, &mut destination.terminal, None)
-                .unwrap();
-            assert!(destination.state.optimistic_watch_until.is_some());
+    pub(super) fn sample(&mut self, clients: &[(u32, usize)]) {
+        let mux = self.panes[0].state.config.mux;
+        let mut panes = Vec::new();
+        for (index, rig) in self.panes.iter().enumerate() {
+            let own = rig.state.config.own_pane.as_ref().unwrap();
+            let mut sidebar = pane(own.raw(), &format!("tab_{index}"), false);
+            sidebar.pane_id = own.clone();
+            sidebar.command = Some("rimz-sidebar".into());
+            panes.push(sidebar);
         }
-        Arc::make_mut(&mut Arc::make_mut(&mut source.state.current.worktree_groups)[0].rows)
-            .swap(7, 8);
-        source.state.ui.last_order =
-            layout_freeze::capture_order(&source.state.current, &source.state.ui);
-        layout_freeze::arm_freeze(
-            &mut source.state.ui,
-            source.state.clock.timestamp().as_millisecond(),
-        );
-        publish_scrolled(&mut source, 12);
-        let published = source.state.ui.last_order.clone();
-        destination.state.next_frame = clock.now() + Duration::from_secs(10);
-        let target = destination
-            .state
-            .current
-            .own_view
-            .as_ref()
-            .unwrap()
-            .working_pane_ids[0]
-            .clone();
-        destination.event(SidebarEvent::FocusChanged {
-            focused: vec![target],
-            unfocused: vec![],
-        });
-        assert!(destination.state.watched());
-        destination.paint(true);
-        let hold = destination.state.ui.freeze.as_ref().unwrap();
-        assert_eq!(hold.armed_ms, clock.timestamp().as_millisecond());
-        assert_eq!(hold.frozen.rows, published.rows);
-        assert_eq!(destination.state.ui.last_order.rows, published.rows);
-        assert_eq!(
-            destination.state.ui.painted_rows,
-            anchored_pane_rows(&source.state.ui)
-        );
+        for (index, row) in self.snapshot.rows().enumerate() {
+            let mut working = row.pane.clone().unwrap();
+            working.view_id = Some(format!("tab_{}", usize::from(index >= 10)));
+            panes.push(working);
+        }
+        let mut frame =
+            crate::sidebar::frame::assemble_frame(panes, self.clock.now_ms(), "rimz-test");
+        frame.client_views = clients
+            .iter()
+            .map(|(client, destination)| crate::pane::ClientPaneView {
+                client_id: match mux {
+                    MuxName::Tmux => crate::ids::MuxClientId::Tmux(format!("client-{client}")),
+                    MuxName::Zellij => crate::ids::MuxClientId::Zellij(*client),
+                },
+                pane_id: self.panes[*destination]
+                    .state
+                    .config
+                    .own_pane
+                    .clone()
+                    .unwrap(),
+            })
+            .collect();
+        frame.client_view_fresh = true;
+        self.snapshot.viewed_panes = frame
+            .client_views
+            .iter()
+            .map(|client| client.pane_id.clone())
+            .collect();
+        let fold = WorkspaceFold {
+            workspace: crate::sidebar::enrich::WorkspaceSnapshot(self.snapshot.clone()),
+            frame: Some(Arc::new(frame)),
+        };
+        self.plane.remember(fold);
     }
-}
 
-#[test]
-fn zellij_own_scroll_before_observed_reveal_refuses_viewport_adoption() {
-    assert_own_scroll_before_observed_reveal(MuxName::Zellij);
-}
-
-#[test]
-fn tmux_own_scroll_before_observed_reveal_refuses_viewport_adoption() {
-    assert_own_scroll_before_observed_reveal(MuxName::Tmux);
-}
-
-fn assert_own_scroll_before_observed_reveal(mux: MuxName) {
-    let (mut source, mut destination, _) = viewport_pair(mux);
-    let clock = LoopClock::play(Timestamp::now());
-    destination.state.clock = clock.clone();
-    publish_scrolled(&mut source, 12);
-    destination
-        .state
-        .on_resize(&mut destination.fetch, &mut destination.terminal, None)
-        .unwrap();
-    destination
-        .state
-        .on_input(
-            Wakeup::Scroll { down: true },
-            &mut destination.terminal,
-            &mut destination.fetch,
-        )
-        .unwrap();
-    assert!(destination.state.watched());
-    assert!(
-        !destination
-            .state
-            .watches_snapshot(&destination.state.current)
-    );
-    let offset = destination.state.ui.scroll_offset;
-    assert!(offset > 12);
-    let hold = destination.state.ui.freeze.clone().unwrap();
-
-    source.state.ui.freeze = None;
-    publish_scrolled(&mut source, 3);
-    destination
-        .state
-        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-    assert_eq!(
-        destination.state.ui.scroll_offset, offset,
-        "{mux:?}: a stale hidden snapshot must not overwrite the user's scroll"
-    );
-    let retained = destination.state.ui.freeze.as_ref().unwrap();
-    assert_eq!(retained.armed_ms, hold.armed_ms);
-    assert_eq!(retained.frozen.rows, hold.frozen.rows);
-
-    let mut revealed = destination.state.current.clone();
-    revealed.viewed_panes = revealed.own_view.as_ref().unwrap().working_pane_ids.clone();
-    destination.fold(revealed, SnapshotSource::Produced);
-    assert_eq!(
-        destination.state.ui.scroll_offset, offset,
-        "arrival preserves own input evidence"
-    );
-}
-
-#[test]
-fn hidden_resize_does_not_replace_the_watched_viewport() {
-    for mux in [MuxName::Zellij, MuxName::Tmux] {
-        let (source, mut destination, _) = viewport_pair(mux);
-        let sequence = source
-            .state
-            .viewport
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .sequence;
-        destination.state.ui.freeze = None;
-        destination
-            .state
-            .on_resize(&mut destination.fetch, &mut destination.terminal, None)
+    pub(super) fn paint(&mut self, index: usize) {
+        let rig = &mut self.panes[index];
+        rig.state.dirty = true;
+        rig.state
+            .paint_now(&mut rig.terminal, self.clock.now())
             .unwrap();
-        let latest = source.state.viewport.lock().unwrap();
-        let latest = latest.as_ref().unwrap();
-        assert_eq!(latest.source, source.state.config.instance_id);
-        assert_eq!(latest.sequence, sequence);
+    }
+
+    fn input(&mut self, index: usize) {
+        let rig = &mut self.panes[index];
+        rig.state
+            .on_input(
+                Wakeup::Scroll { down: true },
+                &mut rig.terminal,
+                &mut rig.fetch,
+            )
+            .unwrap();
+    }
+
+    pub(super) fn view(&self, index: usize) -> render::ViewState {
+        self.panes[index].state.inspect_view(|ui, _| ui.clone())
     }
 }
 
 #[test]
-fn freeze_start_and_expiry_each_publish_once_with_unchanged_view() {
-    let (mut source, _, _) = viewport_pair(MuxName::Zellij);
-    let clock = LoopClock::play(Timestamp::now());
-    source.state.clock = clock.clone();
-    source.state.ui.freeze = None;
-    source.state.tab_read_dwell_until = None;
-    source.state.dirty = true;
-    source.state.next_frame = clock.now();
-    source.paint(true);
-    let initial = source
-        .state
-        .viewport
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .clone();
-    source
-        .state
-        .on_input(
-            Wakeup::Scroll { down: false },
-            &mut source.terminal,
-            &mut source.fetch,
-        )
-        .unwrap();
-    assert!(source.state.ui.freeze.is_some());
-    let armed = source
-        .state
-        .viewport
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .clone();
-    assert_eq!(armed.view.rows, initial.view.rows);
-    assert_eq!(armed.view.order, initial.view.order);
+fn frozen_view_survives_round_trip_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::new(mux);
+        pair.input(0);
+        let original = pair.view(0);
+        for destination in [1, 0] {
+            pair.clock.advance(Duration::from_millis(50));
+            pair.sample(&[(1, destination)]);
+            pair.paint(destination);
+            let arrived = pair.view(destination);
+            assert_eq!(
+                arrived.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
+                original.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
+                "arrival never restarts the hold"
+            );
+            assert_eq!(arrived.last_order, original.last_order);
+            assert_eq!(arrived.scroll_offset, original.scroll_offset);
+            assert!(!pair.panes[1 - destination].state.observed_watched());
+            assert_eq!(
+                pair.panes[1 - destination].state.ui.view.scroll_offset,
+                0,
+                "no departing pane copy"
+            );
+        }
+    }
+}
+
+#[test]
+fn arrival_holds_last_painted_order_and_catches_up_content() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    let order = pair.view(0).last_order;
+    pair.snapshot.display_name = "newest content".into();
+    Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows).swap(4, 5);
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    assert_eq!(pair.view(1).last_order, order);
+    assert_eq!(pair.panes[1].state.current.display_name, "newest content");
+}
+
+#[test]
+fn an_expired_hold_keeps_the_last_painted_order_for_the_first_return_frame() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.input(0);
+    let before = pair.view(0);
+    pair.sample(&[]);
+    pair.plane.views.lock().unwrap().refresh(pair.clock.now());
+    pair.clock.advance(Duration::from_secs(31));
+    Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows).swap(4, 5);
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
     assert_eq!(
-        armed.sequence,
-        initial.sequence + 1,
-        "arming alone republishes"
+        pair.view(1).last_order,
+        before.last_order,
+        "return first paints the frame the client actually saw"
     );
-    clock.advance(crate::sidebar::timing::LAYOUT_FREEZE);
-    let mut snapshot = source.state.current.clone();
-    snapshot.now = clock.timestamp();
-    source.fold(snapshot, SnapshotSource::Produced);
-    assert!(source.state.ui.freeze.is_none());
-    source.state.next_frame = clock.now();
-    source.paint(true);
-    let expired = source
-        .state
-        .viewport
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .clone();
-    assert_eq!(expired.view.rows, initial.view.rows);
-    assert_eq!(expired.view.order, initial.view.order);
     assert_eq!(
-        expired.sequence,
-        armed.sequence + 1,
-        "expiry alone republishes"
-    );
-    source.state.dirty = true;
-    source.state.next_frame = clock.now();
-    source.paint(true);
-    assert_eq!(
-        source
-            .state
-            .viewport
-            .lock()
-            .unwrap()
+        pair.view(1)
+            .freeze
             .as_ref()
-            .unwrap()
-            .sequence,
-        expired.sequence,
-        "identical paints deduplicate"
+            .map(|hold| hold.deadline_ms(false)),
+        before.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
+        "the expired epoch is not restarted"
     );
+}
+
+#[test]
+fn newborn_paints_the_clients_view_and_latest_content_in_its_first_frame() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.input(0);
+    let target = pair.view(0).scroll_offset;
+    let before = pair.panes[1].state.paints;
+    let reductions = pair.panes[1].state.content_applications;
+    pair.panes[1].state.ui = UiState::default();
+    for name in ["hidden one", "hidden two", "latest at arrival"] {
+        pair.snapshot.display_name = name.into();
+        pair.sample(&[(1, 0)]);
+        pair.panes[1].maintenance();
+        assert_eq!(pair.panes[1].state.content_applications, reductions);
+    }
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    assert_eq!(pair.panes[1].state.paints, before + 1);
+    assert_eq!(
+        pair.panes[1].state.current.display_name,
+        "latest at arrival"
+    );
+    assert_eq!(pair.view(1).scroll_offset, target);
+}
+
+#[test]
+fn hidden_resize_changes_no_client_view() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::new(mux);
+        pair.input(0);
+        let before = pair.view(0);
+        let reductions = pair.panes[1].state.content_applications;
+        let rig = &mut pair.panes[1];
+        rig.state
+            .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
+            .unwrap();
+        assert_eq!(pair.view(0).scroll_offset, before.scroll_offset);
+        assert_eq!(
+            pair.view(0)
+                .freeze
+                .as_ref()
+                .map(|hold| hold.deadline_ms(false)),
+            before.freeze.as_ref().map(|hold| hold.deadline_ms(false))
+        );
+        assert_eq!(pair.panes[1].state.content_applications, reductions);
+    }
+}
+
+#[test]
+fn input_before_resolved_reveal_survives_the_next_sample_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::new(mux);
+        pair.input(0);
+        let source = pair.view(0).scroll_offset;
+        pair.input(1);
+        let destination = pair.view(1).scroll_offset;
+        assert!(destination > source);
+        assert_eq!(
+            pair.view(0).scroll_offset,
+            source,
+            "evidence cannot take a resolved painting view"
+        );
+        pair.sample(&[(1, 0)]);
+        pair.paint(1);
+        assert_eq!(
+            pair.view(1).scroll_offset,
+            destination,
+            "older membership cannot undo input"
+        );
+        pair.sample(&[(1, 1)]);
+        pair.paint(1);
+        assert_eq!(
+            pair.view(1).scroll_offset,
+            destination,
+            "the newly resolved viewer joins the newer view"
+        );
+    }
+}
+
+#[test]
+fn two_zellij_views_keep_independent_input_until_they_join() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.sample(&[(1, 0), (2, 1)]);
+    pair.paint(1);
+    pair.input(0);
+    let before = pair.view(0).scroll_offset;
+    pair.input(1);
+    pair.input(1);
+    assert_eq!(pair.view(0).scroll_offset, before);
+    let destination = pair.view(1).scroll_offset;
+    pair.sample(&[(1, 1), (2, 1)]);
+    pair.paint(1);
+    assert_eq!(pair.view(1).scroll_offset, destination);
+}
+
+#[test]
+fn input_before_a_coviewer_split_keeps_the_copied_selection() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.sample(&[(1, 0), (2, 0)]);
+    pair.panes[0].input(KeyAction::Bottom);
+    let selected = pair.view(0).selected_pane.clone();
+    assert!(selected.is_some());
+    let focused = pair
+        .snapshot
+        .rows()
+        .nth(1)
+        .unwrap()
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone());
+    pair.snapshot.focused_pane = focused;
+    pair.sample(&[(1, 0), (2, 0)]);
+    pair.panes[1].input(KeyAction::Other);
+    assert_eq!(
+        pair.view(1).selected_pane,
+        selected,
+        "an unresolved destination must not derive focus from unrelated clients"
+    );
+    pair.sample(&[(1, 0), (2, 1)]);
+    pair.paint(1);
+    assert_eq!(pair.view(1).selected_pane, selected);
+}
+
+#[test]
+fn resolved_departure_cancels_old_input_optimism_before_the_client_returns() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.input(1);
+    pair.sample(&[(1, 0), (2, 1)]);
+    pair.paint(1);
+    pair.input(1);
+    pair.panes[0].input(KeyAction::Bottom);
+    let joined = pair.view(0).selected_pane;
+    assert!(joined.is_some());
+    pair.clock.advance(Duration::from_millis(50));
+    pair.sample(&[(1, 0), (2, 0)]);
+    pair.paint(0);
+    pair.paint(1);
+    assert!(
+        !pair.panes[1].state.watched(),
+        "resolved departure must supersede the departed pane's input optimism"
+    );
+    pair.clock.advance(Duration::from_millis(50));
+    pair.sample(&[(1, 0), (2, 1)]);
+    pair.paint(1);
+    assert_eq!(pair.view(1).selected_pane, joined);
+}
+
+#[test]
+fn an_unresolved_pane_releases_its_view_when_viewing_evidence_expires() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.input(1);
+    let pane = pair.panes[1].state.config.own_pane.clone().unwrap();
+    assert!(pair.plane.views.lock().unwrap().peek(&pane).is_some());
+    pair.clock.advance(Duration::from_secs(3));
+    pair.panes[1].state.frame_timing();
+    assert!(
+        pair.plane.views.lock().unwrap().peek(&pane).is_none(),
+        "a hidden pane cannot keep holding an anonymous view"
+    );
+}
+
+#[test]
+fn tmux_clients_share_a_view_through_focus_overlay_and_detach() {
+    let mut pair = SharedPanes::new(MuxName::Tmux);
+    pair.sample(&[(1, 0), (2, 0)]);
+    pair.input(0);
+    let before = pair.view(0).scroll_offset;
+    let rig = &mut pair.panes[0];
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![rig.state.config.own_pane.clone().unwrap()],
+        unfocused: vec![],
+    });
+    pair.sample(&[(2, 0)]);
+    pair.paint(0);
+    assert_eq!(pair.view(0).scroll_offset, before);
+}
+
+#[test]
+fn a_view_change_wakes_no_unrelated_pane() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let _subscription = pair.plane.subscribe(&pair.panes[1].state.config, tx);
+    pair.input(0);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn glide_arrival_snaps_to_target_in_the_receiving_geometry() {
+    let mut pair = SharedPanes::new(MuxName::Zellij);
+    pair.input(0);
+    let target = pair.view(0).scroll_offset;
+    assert!(pair.view(0).scroll_ease.in_flight());
+    pair.panes[1].terminal = Terminal::with_options(
+        PaneBackend::headless(FrameOutput::default()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 30)),
+        },
+    )
+    .unwrap();
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    assert!(!pair.view(1).scroll_ease.in_flight());
+    assert_eq!(pair.view(1).scroll_offset, target);
+    assert_eq!(pair.panes[1].state.painted_height, 30);
 }
 
 fn offscreen_focus_marker(mux: MuxName) -> (Rig, Instant) {
     let (mut rig, _) = scroll_rig();
     rig.state.config.mux = mux;
-    rig.state.config.own_pane = None;
     let mut focused = rig.state.current.clone();
     focused.focused_pane = focused.worktree_groups[0].rows[19]
         .pane
@@ -443,10 +574,10 @@ fn offscreen_focus_marker(mux: MuxName) -> (Rig, Instant) {
     rig.fold(focused, SnapshotSource::Produced);
     let after = Instant::now();
     assert!(
-        matches!(rig.state.focus_marker, Some(FocusMarker::Dwelling(_))),
+        matches!(rig.view().focus_marker, Some(FocusMarker::Dwelling(_))),
         "the consuming focus fold arms a dwell"
     );
-    let Some(FocusMarker::Dwelling(deadline)) = rig.state.focus_marker else {
+    let Some(FocusMarker::Dwelling(deadline)) = rig.view().focus_marker else {
         unreachable!()
     };
     let dwell = Duration::from_millis(if mux == MuxName::Tmux { 500 } else { 300 });
@@ -471,8 +602,8 @@ fn assert_focus_marker_boundary(mux: MuxName) {
             .is_none()
     );
     let rows = rig.state.ui.painted_rows.clone();
-    let anchors = rig.state.ui.anchored_rows.clone();
-    let offset = rig.state.ui.scroll_offset;
+    let anchors = rig.view().ui.anchored_rows.clone();
+    let offset = rig.view().ui.scroll_offset;
     rig.state
         .draw_frame(&mut rig.terminal, deadline, false)
         .unwrap();
@@ -484,8 +615,8 @@ fn assert_focus_marker_boundary(mux: MuxName) {
             .is_some()
     );
     assert_eq!(rig.state.ui.painted_rows, rows);
-    assert_eq!(rig.state.ui.anchored_rows, anchors);
-    assert_eq!(rig.state.ui.scroll_offset, offset);
+    assert_eq!(rig.view().ui.anchored_rows, anchors);
+    assert_eq!(rig.view().ui.scroll_offset, offset);
 }
 
 #[test]
@@ -507,7 +638,7 @@ fn a_second_focus_move_rearms_the_marker_dwell() {
         .as_ref()
         .map(|pane| pane.pane_id.clone());
     rig.fold(focused, SnapshotSource::Produced);
-    let Some(FocusMarker::Dwelling(deadline)) = rig.state.focus_marker else {
+    let Some(FocusMarker::Dwelling(deadline)) = rig.view().focus_marker else {
         panic!("rearmed dwell")
     };
     assert!(deadline > previous);
@@ -526,14 +657,18 @@ fn a_second_focus_move_rearms_the_marker_dwell() {
 #[test]
 fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
     let (mut rig, _) = scroll_rig();
-    rig.state.ui.selected_index = Some(19);
-    rig.state.ui.selected_pane = rig.state.current.worktree_groups[0].rows[19]
-        .pane
-        .as_ref()
-        .map(|pane| pane.pane_id.clone());
-    rig.state.ui.freeze = None;
+    rig.view().ui.selected_index = Some(19);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.selected_pane = state.current.worktree_groups[0].rows[19]
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.clone());
+    }
+    rig.view().ui.freeze = None;
     rig.state.dirty = false;
-    rig.state.focus_marker = Some(FocusMarker::Dwelling(
+    rig.view().focus_marker = Some(FocusMarker::Dwelling(
         Instant::now() + Duration::from_millis(50),
     ));
     let (active, timeout) = rig.state.frame_timing();
@@ -542,7 +677,7 @@ fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
         timeout <= Duration::from_millis(50),
         "the dwell caps the idle timeout"
     );
-    rig.state.focus_marker = Some(FocusMarker::Dwelling(Instant::now()));
+    rig.view().focus_marker = Some(FocusMarker::Dwelling(Instant::now()));
     rig.state.next_frame = Instant::now() + Duration::from_secs(2);
     let (active, _) = rig.state.frame_timing();
     assert!(active, "the elapsed dwell itself makes the frame due");
@@ -568,14 +703,14 @@ fn marker_click_reveals_without_changing_selection_and_then_disappears() {
         .interactions
         .line_for_target(&render::HitTarget::FocusMarker)
         .unwrap();
-    let selected = rig.state.ui.selected_pane.clone();
+    let selected = rig.view().ui.selected_pane.clone();
     let applied = rig
         .state
         .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
         .unwrap();
     assert!(applied.effects.is_empty());
-    assert_eq!(rig.state.ui.selected_pane, selected);
-    assert!(rig.state.ui.scroll_offset > 0);
+    assert_eq!(rig.view().ui.selected_pane, selected);
+    assert!(rig.view().ui.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -590,7 +725,7 @@ fn marker_click_reveals_without_changing_selection_and_then_disappears() {
             .line_for_target(&render::HitTarget::FocusMarker)
             .is_none()
     );
-    assert!(rig.state.focus_marker.is_none());
+    assert!(rig.view().focus_marker.is_none());
 }
 
 #[test]
@@ -606,9 +741,9 @@ fn hidden_paints_hide_the_marker_and_own_selection_ends_it() {
             .line_for_target(&render::HitTarget::FocusMarker)
             .is_some()
     );
-    rig.state.config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_99"));
-    rig.state.current.own_view = Some(own_view());
-    rig.state.current.viewed_panes.clear();
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes.clear();
+    rig.set_plane_viewed(false);
     assert!(!rig.state.watched());
     rig.state
         .draw_frame(&mut rig.terminal, deadline, false)
@@ -623,193 +758,20 @@ fn hidden_paints_hide_the_marker_and_own_selection_ends_it() {
     rig.state
         .apply_input([Wakeup::Key(KeyAction::Top)], &mut rig.terminal)
         .unwrap();
-    assert!(rig.state.focus_marker.is_none());
-}
-
-fn assert_native_arrival_keeps_shared_frame(mux: MuxName) {
-    let (mut source, mut destination, output) = viewport_pair(mux);
-    publish_scrolled(&mut source, 12);
-    destination.state.click_guard = Some(ClickGuard {
-        until: Instant::now() + Duration::from_secs(1),
-        interactions: destination.state.ui.interactions.clone(),
-        roster: destination.state.ui.painted_roster.clone(),
-    });
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(
-        paints(&output),
-        0,
-        "the hidden destination leaves the publication untouched"
-    );
-    let before = anchored_pane_rows(&source.state.ui);
-    let target = destination.state.current.worktree_groups[0].rows[19]
-        .pane
-        .as_ref()
-        .unwrap()
-        .pane_id
-        .clone();
-    let previous = destination.state.current.focused_pane.clone().unwrap();
-    destination.event(SidebarEvent::FocusChanged {
-        focused: vec![target.clone()],
-        unfocused: if mux == MuxName::Tmux {
-            vec![]
-        } else {
-            vec![previous]
-        },
-    });
-    assert!(destination.state.watched());
-    paint_at(&mut destination, 0);
-    assert_eq!(destination.state.ui.selected_pane, Some(target));
-    assert_eq!(
-        destination.state.ui.painted_rows, before,
-        "arrival moves only the highlight"
-    );
-    assert!(
-        !destination
-            .state
-            .ui
-            .painted_rows
-            .iter()
-            .any(|(id, _)| id == "agent-19")
-    );
-    assert!(destination.state.click_guard.is_none());
-    let (y, ordinal) = (0..24)
-        .find_map(
-            |y| match destination.state.ui.interactions.target_at(2, y) {
-                Some(render::HitTarget::Row(ordinal)) => Some((y, ordinal)),
-                _ => None,
-            },
-        )
-        .unwrap();
-    let clicked = destination
-        .state
-        .ui
-        .visible_roster(&destination.state.current)
-        .row(ordinal)
-        .unwrap()
-        .pane
-        .as_ref()
-        .unwrap()
-        .pane_id
-        .clone();
-    let applied = destination
-        .state
-        .apply_input(
-            [Wakeup::MouseClick { column: 2, row: y }],
-            &mut destination.terminal,
-        )
-        .unwrap();
-    assert_eq!(applied.effects, vec![InputEffect::Focus(clicked)]);
-}
-
-#[test]
-fn tmux_native_arrival_keeps_the_departing_viewport() {
-    assert_native_arrival_keeps_shared_frame(MuxName::Tmux);
-}
-
-#[test]
-fn tmux_switch_away_keeps_the_publication_until_arrival() {
-    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
-    let source_pane = source.state.current.focused_pane.clone().unwrap();
-    let destination_pane = destination
-        .state
-        .current
-        .own_view
-        .as_ref()
-        .unwrap()
-        .working_pane_ids[0]
-        .clone();
-    for rig in [&mut source, &mut destination] {
-        let mut pulled = rig.state.current.clone();
-        pulled.focused_pane = Some(destination_pane.clone());
-        pulled.viewed_panes = vec![destination_pane.clone()];
-        pulled.client_views = vec![crate::pane::ClientPaneView {
-            client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
-            pane_id: destination_pane.clone(),
-        }];
-        rig.fold(pulled, SnapshotSource::Produced);
-        paint_at(rig, 0);
-        rig.event(SidebarEvent::FocusChanged {
-            focused: vec![source_pane.clone()],
-            unfocused: vec![],
-        });
-    }
-    publish_scrolled(&mut source, 12);
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert!(!destination.state.watched());
-    for rig in [&mut source, &mut destination] {
-        rig.event(SidebarEvent::FocusChanged {
-            focused: vec![destination_pane.clone()],
-            unfocused: vec![],
-        });
-    }
-    let before = anchored_pane_rows(&source.state.ui);
-    paint_at(&mut destination, 0);
-    assert_eq!(destination.state.ui.painted_rows, before);
-    for target in [source_pane, destination_pane].iter().cycle().take(8) {
-        for rig in [&mut source, &mut destination] {
-            rig.event(SidebarEvent::FocusChanged {
-                focused: vec![target.clone()],
-                unfocused: vec![],
-            });
-            rig.maintenance();
-            paint_at(rig, 0);
-            assert_eq!(
-                rig.state.ui.painted_rows, before,
-                "rapid switch without a pull"
-            );
-        }
-    }
-}
-
-#[test]
-fn tmux_focus_overlay_keeps_other_clients_watched() {
-    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
-    let target = source.state.current.focused_pane.clone().unwrap();
-    let other = destination
-        .state
-        .current
-        .own_view
-        .as_ref()
-        .unwrap()
-        .working_pane_ids[0]
-        .clone();
-    let mut pulled = destination.state.current.clone();
-    pulled.viewed_panes.push(other.clone());
-    pulled.client_views = [target.clone(), other]
-        .into_iter()
-        .enumerate()
-        .map(|(i, pane_id)| crate::pane::ClientPaneView {
-            client_id: crate::ids::MuxClientId::Tmux(format!("client-{i}")),
-            pane_id,
-        })
-        .collect();
-    destination.fold(pulled, SnapshotSource::Produced);
-    paint_at(&mut destination, 0);
-    let before = destination.state.ui.painted_rows.clone();
-    destination.event(SidebarEvent::FocusChanged {
-        focused: vec![target],
-        unfocused: vec![],
-    });
-    publish_scrolled(&mut source, 12);
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert!(destination.state.watched());
-    assert_eq!(destination.state.ui.painted_rows, before);
+    assert!(rig.view().focus_marker.is_none());
 }
 
 #[test]
 fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
-    let (source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let (mut source, mut destination, _) = pane_pair(MuxName::Tmux);
     let own = destination.state.config.own_pane.clone().unwrap();
-    destination.state.current.client_views = vec![crate::pane::ClientPaneView {
+    // The plane samples one client, on the sidebar.
+    let mut sampled = destination.state.current.clone();
+    sampled.client_views = vec![crate::pane::ClientPaneView {
         client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
         pane_id: own.clone(),
     }];
+    destination.fold(sampled, SnapshotSource::Produced);
     destination.event(SidebarEvent::FocusChanged {
         focused: vec![own],
         unfocused: vec![],
@@ -817,7 +779,7 @@ fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
     assert!(destination.state.optimistic_watch_until.is_some());
     destination.event(SidebarEvent::FocusChanged {
         focused: source
-            .state
+            .view()
             .current
             .focused_pane
             .clone()
@@ -834,16 +796,20 @@ fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
 
 #[test]
 fn source_handles_cross_tab_click_without_holding_content() {
-    source_click(true);
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        source_click(mux, true);
+    }
 }
 
 #[test]
 fn source_handles_same_tab_click_without_holding_content() {
-    source_click(false);
+    source_click(MuxName::Zellij, false);
 }
 
-fn source_click(cross_tab: bool) {
-    let (mut source, _, _) = viewport_pair(MuxName::Zellij);
+fn source_click(mux: MuxName, cross_tab: bool) {
+    let (mut source, _, _) = pane_pair(mux);
+    let output = FrameOutput::default();
+    source.terminal.backend_mut().play_output(output.clone());
     source.state.clock.skip_focus = true;
     let peers = source.focus_plane.focus_peers(
         source.state.config.instance_id.clone(),
@@ -856,7 +822,7 @@ fn source_click(cross_tab: bool) {
     let index = usize::from(cross_tab);
     let (row_id, row) = source.state.ui.painted_rows[index].clone();
     let target = source
-        .state
+        .view()
         .current
         .rows()
         .find(|row| row.id == row_id)
@@ -875,7 +841,6 @@ fn source_click(cross_tab: bool) {
         })
         .unwrap();
     source
-        .result_tx
         .send(FetchUpdate::Snapshot {
             snapshot: Box::new(source.state.current.clone()),
             phase: FetchPhase::Final,
@@ -883,12 +848,21 @@ fn source_click(cross_tab: bool) {
         })
         .unwrap();
     let applications = source.state.content_applications;
+    let paints = source.state.paints;
     source
         .state
         .advance(&mut inbox, &mut source.fetch, &mut source.terminal)
         .unwrap();
+    assert!(
+        source.state.paints > paints,
+        "the source selection paints synchronously: {mux:?}"
+    );
+    assert!(
+        !output.0.lock().unwrap().is_empty(),
+        "source paint reaches its output: {mux:?}"
+    );
     assert_eq!(
-        source.state.pending_input_focus,
+        source.view().pending_input_focus,
         Some(target),
         "the source must handle the new click before dispatch"
     );
@@ -918,7 +892,7 @@ fn source_click(cross_tab: bool) {
 #[test]
 fn same_tab_focus_supersedes_pending_cross_tab_push() {
     for keyboard in [false, true] {
-        let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
+        let (mut source, destination, _) = pane_pair(MuxName::Zellij);
         let diag = crate::diag::DiagSink::under(
             source._dir.path().to_owned(),
             source.ws.clone(),
@@ -948,7 +922,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
             .unwrap();
         let first = source.state.input_jump.take().unwrap();
         let (_, _, mut anchor) = hidden_destination();
-        anchor.pane_id = source.state.pending_input_focus.clone().unwrap();
+        anchor.pane_id = source.view().pending_input_focus.clone().unwrap();
         let (_, _, _, ack, _) = first
             .push(&anchor, first.clicked().unwrap(), Instant::now)
             .unwrap();
@@ -956,8 +930,8 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         assert!(first.is_current());
         let (_, row) = source.state.ui.painted_rows[0].clone();
         let input = if keyboard {
-            source.state.ui.selected_index = Some(0);
-            source.state.ui.selected_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+            source.view().ui.selected_index = Some(0);
+            source.view().ui.selected_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
             Wakeup::Key(KeyAction::Enter)
         } else {
             Wakeup::MouseClick {
@@ -975,7 +949,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
                 .effects
                 .contains(&InputEffect::Focus(target.clone()))
         );
-        assert_eq!(source.state.pending_input_focus, Some(target));
+        assert_eq!(source.view().pending_input_focus, Some(target));
         assert!(
             source.state.input_jump.is_none(),
             "same-tab focus arms no push"
@@ -1015,7 +989,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         assert_eq!(stopped["event"]["sequence"], 1);
         assert_eq!(
             stopped["event"]["target"],
-            source.state.current.worktree_groups[0].rows[1]
+            source.view().current.worktree_groups[0].rows[1]
                 .pane
                 .as_ref()
                 .unwrap()
@@ -1035,8 +1009,8 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
 
 #[test]
 fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
-    let (mut target, _, _) = viewport_pair(MuxName::Zellij);
-    target.state.current.pane_session_name = Some("rimz-test".into());
+    let (mut target, _, _) = pane_pair(MuxName::Zellij);
+    target.view().current.pane_session_name = Some("rimz-test".into());
     let peers = target
         .focus_plane
         .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled());
@@ -1045,9 +1019,9 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
     std::thread::scope(|scope| {
         let start = &start;
         let work = scope.spawn(move || {
-            let (_, mut hidden, output) = viewport_pair(MuxName::Zellij);
+            let (_, mut hidden, output) = pane_pair(MuxName::Zellij);
             hidden.state.focus_peers = Some(peers);
-            hidden.state.filter_observed_at = None;
+            hidden.view().filter_observed_at = None;
             hidden.state.titled = true;
             let event = SidebarEventEnvelope::new(
                 hidden.ws.clone(),
@@ -1085,7 +1059,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
                 .advance(&mut inbox, &mut hidden.fetch, &mut hidden.terminal)
                 .unwrap();
             assert!(
-                hidden.state.filter_observed_at.is_some(),
+                hidden.view().filter_observed_at.is_some(),
                 "an active jump must not hold ordinary room work"
             );
             assert_eq!(
@@ -1118,8 +1092,8 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
     });
 }
 #[test]
-fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
-    let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
+fn source_click_arms_before_paint_and_release_wakes_each_peer_once() {
+    let (mut source, destination, _) = pane_pair(MuxName::Zellij);
     let plane = super::super::super::plane::DataPlane::detached();
     let (source_tx, source_rx) = std::sync::mpsc::sync_channel(64);
     let (dest_tx, dest_rx) = std::sync::mpsc::sync_channel(64);
@@ -1143,11 +1117,11 @@ fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
         .unwrap();
     assert!(
         source.state.input_jump.as_ref().unwrap().is_current(),
-        "lease must precede click publication"
+        "lease must precede click paint"
     );
     assert!(
         dest_rx.try_recv().is_err(),
-        "click publication must not wake peers"
+        "click paint must not wake peers"
     );
     drop(source.state.input_jump.take());
     assert_eq!(source_rx.try_recv().unwrap(), Wakeup::Tick);
@@ -1157,9 +1131,9 @@ fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
 }
 
 #[test]
-fn queued_publication_tick_does_not_paint_ahead_of_a_focus_push() {
-    let (mut source, mut destination, output) = viewport_pair(MuxName::Tmux);
-    publish_scrolled(&mut source, 12);
+fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
+    let (mut source, mut destination, output) = pane_pair(MuxName::Tmux);
+    paint_scrolled(&mut source, 12);
     let target = PaneId::from_parts(MuxName::Tmux, "%8");
     let mut pulled = destination.state.current.clone();
     pulled.own_view.as_mut().unwrap().working_pane_ids = vec![target.clone()];
@@ -1225,17 +1199,23 @@ fn queued_publication_tick_does_not_paint_ahead_of_a_focus_push() {
         .unwrap();
     assert_push_report(&ack, &destination, PushVerdict::Painted, true);
     assert_eq!(paints(&output), 1, "only the pushed placement paints");
-    assert!(destination.state.ui.painted_rows.contains(&(
-        "agent-8".into(),
-        destination.state.ui.scroll_zone_top as isize + 2
-    )));
+    {
+        let mut guard = destination.view();
+        let state = &mut *guard;
+        assert!(
+            state
+                .ui
+                .painted_rows
+                .contains(&("agent-8".into(), state.ui.scroll_zone_top as isize + 2))
+        );
+    }
 }
 
 #[test]
 fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
-    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let (mut source, mut destination, _) = pane_pair(MuxName::Tmux);
     let previous = destination
-        .state
+        .view()
         .current
         .own_view
         .as_ref()
@@ -1246,7 +1226,7 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
         focused: vec![previous.clone()],
         unfocused: vec![],
     });
-    publish_scrolled(&mut source, 12);
+    paint_scrolled(&mut source, 12);
     destination.maintenance();
     destination.event(SidebarEvent::FocusChanged {
         focused: vec![previous.clone()],
@@ -1265,8 +1245,8 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
         ),
         None
     );
-    assert_eq!(destination.state.ui.selected_pane, Some(previous));
-    assert_eq!(destination.state.ui.selected_index, Some(19));
+    assert_eq!(destination.view().ui.selected_pane, Some(previous));
+    assert_eq!(destination.view().ui.selected_index, Some(19));
     let new_pane = PaneId::from_parts(MuxName::Tmux, "%20");
     let mut admitted = destination.state.current.clone();
     let rows = Arc::make_mut(&mut Arc::make_mut(&mut admitted.worktree_groups)[0].rows);
@@ -1277,152 +1257,12 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
     admitted.own_view.as_mut().unwrap().working_pane_ids = vec![new_pane.clone()];
     destination.fold(admitted, SnapshotSource::Produced);
     paint_at(&mut destination, 0);
-    assert_eq!(destination.state.ui.selected_pane, Some(new_pane));
-}
-
-#[test]
-fn zellij_native_arrival_keeps_the_departing_viewport() {
-    assert_native_arrival_keeps_shared_frame(MuxName::Zellij);
-}
-
-#[test]
-fn shared_viewport_skips_watched_peers_and_its_source() {
-    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
-    publish_scrolled(&mut source, 12);
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(paints(&output), 0);
-    destination.event(SidebarEvent::FocusChanged {
-        focused: vec![destination.state.config.own_pane.clone().unwrap()],
-        unfocused: vec![],
-    });
-    paint_at(&mut destination, 0);
-    let held = destination.state.ui.painted_rows.clone();
-    assert!(destination.state.watched());
-    publish_scrolled(&mut source, 20);
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(
-        destination.state.ui.painted_rows, held,
-        "another watched client keeps its own view"
-    );
-    source.state.current.viewed_panes.clear();
-    source.state.ui.scroll_offset = 3;
-    source.maintenance();
-    assert_eq!(
-        source.state.ui.scroll_offset, 3,
-        "never adopt one's own publication"
-    );
-}
-
-#[test]
-fn shared_viewport_publishes_glide_target_once_and_waits_for_arrival() {
-    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
-    source
-        .state
-        .on_input(
-            Wakeup::Scroll { down: true },
-            &mut source.terminal,
-            &mut source.fetch,
-        )
-        .unwrap();
-    assert!(source.state.ui.scroll_ease.in_flight());
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(paints(&output), 0);
-    let sequence = source
-        .state
-        .viewport
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .sequence;
-    paint_at(&mut source, 16);
-    assert_eq!(
-        source
-            .state
-            .viewport
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .sequence,
-        sequence,
-        "animation alone never republishes"
-    );
-    destination.state.next_frame = Instant::now() + Duration::from_secs(1);
-    for offset in [12, 20] {
-        publish_scrolled(&mut source, offset);
-        destination.maintenance();
-        destination.state.next_frame = Instant::now() + Duration::from_millis(100);
-        destination.paint(false);
-        assert_eq!(paints(&output), 0, "hidden panes never paint publications");
-    }
-    destination.event(SidebarEvent::FocusChanged {
-        focused: destination
-            .state
-            .current
-            .own_view
-            .as_ref()
-            .unwrap()
-            .working_pane_ids
-            .clone(),
-        unfocused: vec![],
-    });
-    destination.paint(false);
-    assert_eq!(paints(&output), 1);
-    assert_eq!(
-        destination.state.ui.painted_rows,
-        anchored_pane_rows(&source.state.ui)
-    );
-}
-
-#[test]
-fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
-    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
-    destination.state.ui.freeze = None;
-    let mut update = destination.state.current.clone();
-    update.display_name = "deferred content".into();
-    let update = destination.lazy_update(update, SnapshotSource::Produced);
-    destination.deliver(update);
-    assert_ne!(destination.state.current.display_name, "deferred content");
-    publish_scrolled(&mut source, 12);
-    destination.state.ui = UiState {
-        view: render::ViewState {
-            selected_pane: destination.state.current.focused_pane.clone(),
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
-    };
-    destination
-        .state
-        .view
-        .current
-        .viewed_panes
-        .push(destination.state.config.own_pane.clone().unwrap());
-    destination.state.viewport_seen = 0;
-    destination
-        .state
-        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(paints(&output), 1, "newborn paints exactly once");
-    assert_eq!(destination.state.current.display_name, "deferred content");
-    assert_eq!(
-        destination.state.ui.painted_rows,
-        anchored_pane_rows(&source.state.ui),
-        "newborn uses its own measured cockpit top"
-    );
+    assert_eq!(destination.view().ui.selected_pane, Some(new_pane));
 }
 
 fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Instant) {
-    rig.state.ui.freeze = None;
-    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows)
+    rig.view().ui.freeze = None;
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows)
         .swap(first, second);
     rig.state.dirty = true;
     rig.state.paint_now(&mut rig.terminal, now).unwrap();
@@ -1431,30 +1271,35 @@ fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Ins
 #[test]
 fn arrival_freezes_the_painted_order_not_a_hidden_fold() {
     let (mut rig, _) = scroll_rig();
-    let painted = layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
+    let painted = {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        layout_freeze::capture_order(&state.current, &state.ui)
+    };
     let mut hidden = rig.state.current.clone();
     hidden.own_view = Some(own_view());
     hidden.viewed_panes.clear();
     hidden.focused_pane = None;
-    rig.fold(hidden, SnapshotSource::Produced);
-    rig.state.ui.freeze = None;
-    let mut reranked = rig.state.current.clone();
+    rig.fold(hidden.clone(), SnapshotSource::Produced);
+    rig.view().ui.freeze = None;
+    // Still hidden: the pane-local copy lags a fold its pane did not paint.
+    let mut reranked = hidden;
     Arc::make_mut(&mut Arc::make_mut(&mut reranked.worktree_groups)[0].rows)[1].attention_score =
         1000;
     Arc::make_mut(&mut Arc::make_mut(&mut reranked.worktree_groups)[0].rows)[1]
         .as_agent_mut()
         .unwrap()
         .status = crate::agents::AgentStatus::Waiting;
-    rig.fold(reranked, SnapshotSource::Produced);
+    rig.fold(reranked.clone(), SnapshotSource::Produced);
     rig.state.drain_snapshot(&mut rig.fetch, false);
-    assert_eq!(rig.state.current.worktree_groups[0].rows[0].id, "agent-1");
-    let mut arrival = rig.state.current.clone();
+    assert_eq!(rig.view().current.worktree_groups[0].rows[0].id, "agent-1");
+    let mut arrival = reranked;
     arrival.viewed_panes = own_view().working_pane_ids;
     rig.fold(arrival, SnapshotSource::Produced);
     rig.state.next_frame = Instant::now();
     rig.paint(true);
-    assert_eq!(rig.state.ui.last_order.rows, painted.rows);
-    assert!(rig.state.ui.freeze.is_some());
+    assert_eq!(rig.view().ui.last_order.rows, painted.rows);
+    assert!(rig.view().ui.freeze.is_some());
 }
 
 #[test]
@@ -1467,28 +1312,23 @@ fn automatic_moves_guard_the_first_frame_until_400ms_and_input_paints_clear_it()
         (400, false, true, 3),
     ] {
         let (mut rig, _) = scroll_rig();
+        let clock = play_clock(&mut rig);
         let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
-        let now = Instant::now();
+        let now = clock.now();
         move_cards_without_input(&mut rig, 1, 2, now);
         if input_paint {
+            clock.advance(Duration::from_millis(50));
             rig.state
-                .apply_input_at(
-                    [Wakeup::Scroll { down: false }],
-                    &mut rig.terminal,
-                    now + Duration::from_millis(50),
-                )
+                .apply_input([Wakeup::Scroll { down: false }], &mut rig.terminal)
                 .unwrap();
         }
         if second_move {
             move_cards_without_input(&mut rig, 1, 3, now + Duration::from_millis(200));
         }
+        clock.advance(now + Duration::from_millis(click_ms) - clock.now());
         let outcome = rig
             .state
-            .apply_input_at(
-                [Wakeup::MouseClick { column: 1, row }],
-                &mut rig.terminal,
-                now + Duration::from_millis(click_ms),
-            )
+            .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
             .unwrap();
         assert_eq!(
             outcome.effects,
@@ -1503,52 +1343,43 @@ fn automatic_moves_guard_the_first_frame_until_400ms_and_input_paints_clear_it()
 #[test]
 fn a_guarded_card_that_left_is_swallowed_without_selection_paint_or_rearm() {
     let (mut rig, output) = scroll_rig();
+    let clock = play_clock(&mut rig);
     let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
-    let now = Instant::now();
-    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows).remove(1);
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows).remove(1);
     rig.state.dirty = true;
-    rig.state.paint_now(&mut rig.terminal, now).unwrap();
-    layout_freeze::arm_freeze(&mut rig.state.ui, 1);
-    let selection = rig.state.ui.selected_pane.clone();
+    rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
+    layout_freeze::arm_freeze(&mut rig.view().ui, 1);
+    let selection = rig.view().ui.selected_pane.clone();
     let before = paints(&output);
+    clock.advance(Duration::from_millis(399));
     let outcome = rig
         .state
-        .apply_input_at(
-            [Wakeup::MouseClick { column: 1, row }],
-            &mut rig.terminal,
-            now + Duration::from_millis(399),
-        )
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(
         outcome,
         InputOutcome::default(),
         "do not click the replacement card"
     );
-    assert_eq!(rig.state.ui.selected_pane, selection);
+    assert_eq!(rig.view().ui.selected_pane, selection);
     assert_eq!(paints(&output), before);
-    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().armed_ms, 1);
+    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().armed_ms, 1);
 }
 
 #[test]
 fn resize_delivery_is_not_a_user_input_paint_for_the_click_guard() {
     let (mut rig, _) = scroll_rig();
+    let clock = play_clock(&mut rig);
     let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
-    let now = Instant::now();
-    move_cards_without_input(&mut rig, 1, 2, now);
+    move_cards_without_input(&mut rig, 1, 2, clock.now());
+    clock.advance(Duration::from_millis(100));
     rig.state
-        .apply_input_at(
-            [Wakeup::Resize],
-            &mut rig.terminal,
-            now + Duration::from_millis(100),
-        )
+        .apply_input([Wakeup::Resize], &mut rig.terminal)
         .unwrap();
+    clock.advance(Duration::from_millis(299));
     let outcome = rig
         .state
-        .apply_input_at(
-            [Wakeup::MouseClick { column: 1, row }],
-            &mut rig.terminal,
-            now + Duration::from_millis(399),
-        )
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(
         outcome.effects,
@@ -1562,14 +1393,10 @@ fn resize_delivery_is_not_a_user_input_paint_for_the_click_guard() {
 fn row_click_resolves_painted_identity_through_an_unpainted_fold() {
     let (mut rig, _) = scroll_rig();
     let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
-    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows).swap(1, 2);
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows).swap(1, 2);
     let outcome = rig
         .state
-        .apply_input_at(
-            [Wakeup::MouseClick { column: 1, row }],
-            &mut rig.terminal,
-            Instant::now(),
-        )
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(
         outcome.effects,
@@ -1598,13 +1425,11 @@ fn paints(output: &FrameOutput) -> usize {
 
 fn visible(rig: &Rig) -> usize {
     rig.state
-        .ui
-        .scroll_ease
-        .visible(rig.state.ui.scroll_offset, rig.state.ui.frame_ms)
+        .inspect_view(|ui, _| ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms))
 }
 
 fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
-    rig.state.anim_start = Instant::now() - Duration::from_millis(elapsed_ms);
+    rig.view().anim_start = Instant::now() - Duration::from_millis(elapsed_ms);
     rig.state.next_frame = Instant::now();
     rig.paint(true);
 }
@@ -1612,7 +1437,7 @@ fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
 fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnchor) {
     use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
     let (mut rig, output) = scroll_rig();
-    let target = rig.state.current.worktree_groups[0].rows[4].clone();
+    let target = rig.view().current.worktree_groups[0].rows[4].clone();
     let pane_id = target.pane.as_ref().unwrap().pane_id.clone();
     let mut pulled = rig.state.current.clone();
     pulled.own_view = Some(SidebarOwnView {
@@ -1624,7 +1449,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
     pulled.viewed_panes.clear();
     pulled.pane_session_name = Some("rimz-test".to_owned());
     rig.state.optimistic_watch_until = None;
-    rig.state.ui.scroll_offset = 30;
+    rig.view().ui.scroll_offset = 30;
     rig.fold(pulled, SnapshotSource::Produced);
     assert!(!rig.state.watched());
     let anchor = FocusAnchor {
@@ -1642,15 +1467,14 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
             viewport_row: 2,
             held: std::collections::BTreeSet::new(),
         }),
-        order: Some(rig.state.ui.last_order.clone()),
+        order: Some(rig.view().ui.last_order.clone()),
     };
     (rig, output, anchor)
 }
 
 fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
     let (mut rig, _) = scroll_rig();
-    rig.state.config.own_pane = None;
-    let target = rig.state.current.worktree_groups[0].rows[19]
+    let target = rig.view().current.worktree_groups[0].rows[19]
         .pane
         .as_ref()
         .unwrap()
@@ -1667,8 +1491,8 @@ fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
     focused.focused_pane = Some(target.clone());
     rig.fold(focused, SnapshotSource::Produced);
     paint_at(&mut rig, 0);
-    assert_eq!(rig.state.ui.selected_pane, Some(target));
-    assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(target));
+    assert_eq!(rig.view().ui.scroll_offset, 0);
     assert!(
         !rig.state
             .ui
@@ -1692,7 +1516,7 @@ fn rowless_focus_anchor_never_reveals_an_offscreen_selection() {
 fn own_key_browse_reveals_an_offscreen_selection() {
     let (mut rig, _) = scroll_rig();
     rig.input(KeyAction::Bottom);
-    assert!(rig.state.ui.scroll_offset > 0);
+    assert!(rig.view().ui.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -1705,12 +1529,11 @@ fn own_key_browse_reveals_an_offscreen_selection() {
 #[test]
 fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
     let (mut rig, _) = scroll_rig();
-    rig.state.config.own_pane = None;
-    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows)[19]
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows)[19]
         .as_agent_mut()
         .unwrap()
         .status = crate::agents::AgentStatus::Waiting;
-    let target = rig.state.current.worktree_groups[0].rows[19]
+    let target = rig.view().current.worktree_groups[0].rows[19]
         .pane
         .as_ref()
         .unwrap()
@@ -1721,13 +1544,13 @@ fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
         .apply_input([Wakeup::Key(KeyAction::InboxNext)], &mut rig.terminal)
         .unwrap();
     assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
-    assert_eq!(rig.state.ui.selected_pane, None);
+    assert_eq!(rig.view().ui.selected_pane, None);
     let mut focused = rig.state.current.clone();
     focused.focused_pane = Some(target.clone());
     rig.fold(focused, SnapshotSource::Produced);
     paint_at(&mut rig, 0);
-    assert_eq!(rig.state.ui.selected_pane, Some(target));
-    assert!(rig.state.ui.scroll_offset > 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(target));
+    assert!(rig.view().ui.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -1740,47 +1563,51 @@ fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
 #[test]
 fn shared_placement_captures_the_painted_opening_set() {
     let (mut rig, _) = scroll_rig();
-    let target = rig.state.current.worktree_groups[0].rows[1]
+    let target = rig.view().current.worktree_groups[0].rows[1]
         .pane
         .as_ref()
         .unwrap()
         .pane_id
         .clone();
-    rig.state.ui.selected_index = Some(0);
-    rig.state.ui.selected_pane = rig.state.current.worktree_groups[0].rows[0]
-        .pane
-        .as_ref()
-        .map(|pane| pane.pane_id.clone());
+    rig.view().ui.selected_index = Some(0);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.selected_pane = state.current.worktree_groups[0].rows[0]
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.clone());
+    }
     rig.state.dirty = true;
     paint_at(&mut rig, 0);
     let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
     rig.state
         .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection.as_deref(), Some("agent-1"));
+    assert_eq!(rig.view().ui.drawn_selection.as_deref(), Some("agent-1"));
     assert!(
-        rig.state.ui.held_expansions.contains("agent-0"),
+        rig.view().ui.held_expansions.contains("agent-0"),
         "the click paint already retains A under its freeze"
     );
     let placement = rig.state.focus_placement(&target).expect("visible target");
-    let mut expected = rig.state.ui.held_expansions.clone();
+    let mut expected = rig.view().ui.held_expansions.clone();
     expected.insert("agent-1".into());
     assert_eq!(placement.held, expected);
 }
 
 fn assert_shared_placement_from_history(previous: usize) {
     let (mut source, _) = scroll_rig();
-    let first = source.state.current.worktree_groups[0].rows[0]
+    let first = source.view().current.worktree_groups[0].rows[0]
         .pane
         .as_ref()
         .unwrap()
         .pane_id
         .clone();
-    source.state.ui.selected_index = Some(0);
-    source.state.ui.selected_pane = Some(first.clone());
+    source.view().ui.selected_index = Some(0);
+    source.view().ui.selected_pane = Some(first.clone());
     source.state.dirty = true;
     paint_at(&mut source, 0);
-    let target = source.state.current.worktree_groups[0].rows[1].clone();
+    let target = source.view().current.worktree_groups[0].rows[1].clone();
     let target_pane = target.pane.as_ref().unwrap().pane_id.clone();
     let row = source.state.ui.interactions.line_for_row(1).unwrap() as u16;
     source
@@ -1790,7 +1617,7 @@ fn assert_shared_placement_from_history(previous: usize) {
             &mut source.terminal,
         )
         .unwrap();
-    assert_eq!(source.state.ui.drawn_selection.as_deref(), Some("agent-1"));
+    assert_eq!(source.view().ui.drawn_selection.as_deref(), Some("agent-1"));
     let placement = source
         .state
         .focus_placement(&target_pane)
@@ -1805,40 +1632,48 @@ fn assert_shared_placement_from_history(previous: usize) {
         .1;
 
     let (mut destination, _, mut anchor) = hidden_destination();
-    destination.state.current = source.state.current.clone();
-    destination.state.ui.selected_index = Some(previous);
-    destination.state.ui.selected_pane = Some(
-        destination.state.current.worktree_groups[0].rows[previous]
-            .pane
-            .as_ref()
-            .unwrap()
-            .pane_id
-            .clone(),
-    );
+    destination.view().current = source.state.current.clone();
+    destination.view().ui.selected_index = Some(previous);
+    {
+        let mut guard = destination.view();
+        let state = &mut *guard;
+        state.ui.selected_pane = Some(
+            state.current.worktree_groups[0].rows[previous]
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .clone(),
+        );
+    }
     destination.state.dirty = true;
     destination
         .state
         .paint_now(&mut destination.terminal, Instant::now())
         .unwrap();
-    destination.state.current.own_view = Some(SidebarOwnView {
+    // The target's pane now shares the hidden destination's tab; the jump folds that sample.
+    let mut moved = destination.state.current.clone();
+    moved.own_view = Some(SidebarOwnView {
         sibling_count: 1,
         working_pane_ids: vec![target_pane.clone()],
         own_view_is_daemon: false,
     });
-    destination.state.current.focused_pane = Some(first);
-    destination.state.current.viewed_panes.clear();
+    moved.focused_pane = Some(first);
+    moved.viewed_panes.clear();
+    moved.pane_session_name = Some("rimz-test".to_owned());
+    destination.fold(moved, SnapshotSource::Produced);
     destination.state.optimistic_watch_until = None;
     anchor.pane_id = target_pane.clone();
     anchor.placement = Some(placement);
-    anchor.order = Some(source.state.ui.last_order.clone());
+    anchor.order = Some(source.view().ui.last_order.clone());
     let (push, ack) = focus_push(&mut destination, anchor);
     destination
         .state
         .on_focus_push(push, &mut destination.fetch, &mut destination.terminal)
         .unwrap();
 
-    assert_eq!(destination.state.ui.selected_pane, Some(target_pane));
-    assert!(destination.state.ui.focus_placement.is_none());
+    assert_eq!(destination.view().ui.selected_pane, Some(target_pane));
+    assert!(destination.view().ui.focus_placement.is_none());
     assert_eq!(
         destination
             .state
@@ -1892,7 +1727,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
     assert!(
         rig.state.watched(),
         "the overlay must open the existing paint gate"
@@ -1922,13 +1757,13 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
         y(&rig),
         rig.state.ui.scroll_zone_top as isize + placement.viewport_row
     );
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, anchor.issued_at_ms);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, anchor.issued_at_ms);
     let old_y = y(&rig);
     let mut switched = rig.state.current.clone();
     switched.focused_pane = Some(target.clone());
     switched.viewed_panes = vec![target];
     rig.fold(switched, SnapshotSource::Produced);
-    assert!(rig.state.ui.focus_placement.is_none());
+    assert!(rig.view().ui.focus_placement.is_none());
     paint_at(&mut rig, 100);
     assert_eq!(
         y(&rig),
@@ -2005,10 +1840,10 @@ fn cleared_anchor_without_push_keeps_the_viewport_on_the_first_target_fold() {
     switched.focused_pane = Some(anchor.pane_id.clone());
     switched.viewed_panes = vec![anchor.pane_id.clone()];
     rig.fold(switched, SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
-    assert!(!rig.state.ui.own_input_reveal);
-    assert!(rig.state.ui.focus_placement.is_none());
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(anchor.pane_id));
+    assert!(!rig.view().ui.own_input_reveal);
+    assert!(rig.view().ui.focus_placement.is_none());
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
 }
 
 fn fitted_grow_hold(resize_first: bool) {
@@ -2095,8 +1930,10 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
         rig.state.clock = LoopClock::play(jiff::Timestamp::now());
         anchor.placement.as_mut().unwrap().viewport_row = 1_000;
         if cached {
-            rig.state
-                .fold_focus_intent(anchor.clone(), rig.state.clock.now());
+            // The intent revealed this tab, so its fold and paint land in the routed view.
+            rig.state.optimistic_watch_until =
+                Some(rig.state.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+            rig.state.fold_focus_intent(anchor.clone());
             rig.state
                 .paint_now(&mut rig.terminal, rig.state.clock.now())
                 .unwrap();
@@ -2110,8 +1947,8 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
             .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
 
-        assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
-        assert!(rig.state.ui.focus_placement.is_none());
+        assert_eq!(rig.view().ui.selected_pane, Some(anchor.pane_id));
+        assert!(rig.view().ui.focus_placement.is_none());
         assert!(rig.state.ui.anchor_clamped);
         let report = assert_push_report(&ack, &rig, PushVerdict::Displaced, !cached);
         assert_eq!(
@@ -2273,14 +2110,14 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
-    rig.state.ui.drawn_selection = None;
-    rig.state.observe_paint(Instant::now());
-    rig.state.ui.drawn_selection = Some(row_id);
+    rig.view().ui.drawn_selection = None;
+    rig.observe_paint(Instant::now());
+    rig.view().ui.drawn_selection = Some(row_id);
     assert!(
-        rig.state.ui.focus_placement.is_some(),
+        rig.view().ui.focus_placement.is_some(),
         "placement has not been consumed by a paint"
     );
-    rig.state.observe_paint(Instant::now());
+    rig.observe_paint(Instant::now());
     assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
     rig.state.should_exit = true;
     rig.paint(true);
@@ -2294,7 +2131,7 @@ fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
     let (mut rig, _) = scroll_rig();
     let (row_id, from_y) = rig.state.ui.painted_rows[1].clone();
     let target = rig
-        .state
+        .view()
         .current
         .rows()
         .find(|row| row.id == row_id)
@@ -2318,8 +2155,8 @@ fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
         .unwrap();
     assert!(effect.effects.contains(&InputEffect::Focus(target)));
     // Deliberately bypass anchoring to exercise the detector at an actual paint.
-    rig.state.ui.offset_authoritative = true;
-    rig.state.ui.scroll_offset += 1;
+    rig.view().ui.offset_authoritative = true;
+    rig.view().ui.scroll_offset += 1;
     rig.state.dirty = true;
     paint_at(&mut rig, 0);
     let message = rx.try_recv();
@@ -2342,23 +2179,33 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
     for (viewport_row, banner) in [(-1, false), (2, false), (2, true)] {
         let (mut rig, _) = scroll_rig();
         if banner {
-            let lead = &mut Arc::make_mut(
-                &mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows,
-            )[0];
+            let mut guard = rig.view();
+            let lead =
+                &mut Arc::make_mut(&mut Arc::make_mut(&mut guard.current.worktree_groups)[0].rows)
+                    [0];
             lead.unread = true;
             lead.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
         }
-        let target = rig.state.current.worktree_groups[0].rows[4].clone();
-        rig.state.ui.selected_index = Some(4);
-        rig.state.ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
-        rig.state.ui.scroll_offset = 30;
+        let target = rig.view().current.worktree_groups[0].rows[4].clone();
+        // The anchored pane shares this sidebar's viewed tab, so the anchor is this view's.
+        let target_pane = target.pane.as_ref().unwrap().pane_id.clone();
+        rig.view().current.own_view = Some(SidebarOwnView {
+            sibling_count: 1,
+            working_pane_ids: vec![target_pane.clone()],
+            own_view_is_daemon: false,
+        });
+        rig.view().current.viewed_panes = vec![target_pane];
+        rig.view().ui.selected_index = Some(4);
+        rig.view().ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.view().ui.scroll_offset = 30;
         let stamp = crate::utils::time::unix_now_ms();
+        let selected = rig.view().ui.selected_pane.clone().unwrap();
         crate::mux::focus_anchor::store(
             &rig.runtime,
             &FocusAnchor {
                 nonce: crate::ids::FocusNonce::new(),
                 session_name: "rimz-test".to_owned(),
-                pane_id: rig.state.ui.selected_pane.clone().unwrap(),
+                pane_id: selected,
                 origin: FocusOrigin::User,
                 repair_generation: None,
                 issued_at_ms: stamp,
@@ -2375,11 +2222,19 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         )
         .unwrap();
         rig.state.apply_focus_anchor();
-        assert!(rig.state.ui.focus_placement.is_some());
+        assert!(rig.view().ui.focus_placement.is_some());
         rig.state.dirty = true;
         paint_at(&mut rig, 0);
-        let theme = rig.state.ui.theme(&rig.state.view.current.theme);
-        let frame = render::compose_lines(&rig.state.current, None, &rig.state.ui, &theme, 80, 24);
+        let theme = {
+            let mut guard = rig.view();
+            let state = &mut *guard;
+            state.ui.theme(&state.view.current.theme)
+        };
+        let frame = {
+            let mut guard = rig.view();
+            let state = &mut *guard;
+            render::compose_lines(&state.current, None, &state.ui, &theme, 80, 24)
+        };
         let (_, first_line) = rig
             .state
             .ui
@@ -2397,7 +2252,11 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
                 held: [target.id.clone()].into(),
             })
         );
-        let offscreen = rig.state.current.worktree_groups[0].rows.last().unwrap();
+        let offscreen = rig.view().current.worktree_groups[0]
+            .rows
+            .last()
+            .unwrap()
+            .clone();
         assert!(
             rig.state
                 .focus_placement(&offscreen.pane.as_ref().unwrap().pane_id)
@@ -2420,14 +2279,14 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
     // selection has since left through own input: either way the card must be visible.
     for (placed, selected, viewport_row) in [(19, 19, 30), (4, 18, 2)] {
         let (mut rig, _) = scroll_rig();
-        let rows = &rig.state.current.worktree_groups[0].rows;
+        let rows = rig.view().current.worktree_groups[0].rows.clone();
         let placed_id = rows[placed].id.clone();
         let target = rows[selected].clone();
-        rig.state.ui.selected_index = Some(selected);
-        rig.state.ui.own_input_reveal = true;
-        rig.state.ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
-        rig.state.ui.scroll_offset = 0;
-        rig.state.ui.focus_placement = Some(FocusPlacement {
+        rig.view().ui.selected_index = Some(selected);
+        rig.view().ui.own_input_reveal = true;
+        rig.view().ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.view().ui.scroll_offset = 0;
+        rig.view().ui.focus_placement = Some(FocusPlacement {
             row_id: placed_id,
             viewport_row,
             held: std::collections::BTreeSet::new(),
@@ -2450,9 +2309,9 @@ fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     let (mut rig, _) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.state.ui.frame_ms;
+    let started = rig.view().ui.frame_ms;
     paint_at(&mut rig, started + 40);
-    assert!(rig.state.ui.scroll_ease.in_flight());
+    assert!(rig.view().ui.scroll_ease.in_flight());
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
     rig.state.observe_tx = tx;
     let (_, y) = rig.state.ui.painted_rows.last().unwrap().clone();
@@ -2469,7 +2328,7 @@ fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     for elapsed in [60, 80, 100, 140] {
         paint_at(&mut rig, started + elapsed);
     }
-    assert!(!rig.state.ui.scroll_ease.in_flight());
+    assert!(!rig.view().ui.scroll_ease.in_flight());
     assert!(rx.try_recv().is_err(), "wheel glide is not a displacement");
     assert!(
         rig.state.clicked_row.is_some(),
@@ -2482,23 +2341,22 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     let (mut rig, output) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.state.ui.scroll_offset, 9);
+    assert_eq!(rig.view().ui.scroll_offset, 9);
     assert_eq!(visible(&rig), 0);
     assert_eq!(paints(&output), 1);
     assert!(rig.frame_active());
-    let started = rig.state.ui.frame_ms;
+    let started = rig.view().ui.frame_ms;
     paint_at(&mut rig, started + 100);
     assert_eq!(visible(&rig), 9);
-    assert!(!rig.state.ui.scroll_ease.in_flight());
-    assert_eq!(
-        render::animation_interval(
-            &rig.state.current,
-            &rig.state.ui,
-            rig.state.ui.animation_phase,
-            false
-        ),
-        Some(animation_frame(&rig.state.current))
-    );
+    assert!(!rig.view().ui.scroll_ease.in_flight());
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        assert_eq!(
+            render::animation_interval(&state.current, &state.ui, state.ui.animation_phase, false),
+            Some(animation_frame(&state.current))
+        );
+    }
     paint_at(&mut rig, started + 2100);
     assert!(!rig.frame_active());
 }
@@ -2506,22 +2364,21 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
 #[test]
 fn click_after_wheel_ease_hits_the_landed_frame() {
     let (mut rig, _) = scroll_rig();
-    let now = Instant::now();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.state.ui.frame_ms;
+    let started = rig.view().ui.frame_ms;
     for elapsed in [16, 48, 100] {
         paint_at(&mut rig, started + elapsed);
     }
-    assert!(!rig.state.ui.scroll_ease.in_flight());
+    assert!(!rig.view().ui.scroll_ease.in_flight());
     let index = rig.state.ui.interactions.visible_row_span().unwrap().0 + 1;
     let row = rig.state.ui.interactions.line_for_row(index).unwrap() as u16;
-    let id = &rig.state.ui.painted_roster[index];
+    let id = rig.state.ui.painted_roster[index].clone();
     let expected = rig
-        .state
+        .view()
         .current
         .rows()
-        .find(|row| &row.id == id)
+        .find(|row| row.id == id)
         .unwrap()
         .pane
         .as_ref()
@@ -2530,11 +2387,7 @@ fn click_after_wheel_ease_hits_the_landed_frame() {
         .clone();
     let outcome = rig
         .state
-        .apply_input_at(
-            [Wakeup::MouseClick { column: 1, row }],
-            &mut rig.terminal,
-            now + Duration::from_millis(200),
-        )
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(
         outcome.effects,
@@ -2551,7 +2404,7 @@ fn late_wheel_frame_matches_regular_playback() {
     for rig in [&mut regular, &mut late] {
         let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
         dispatch(rig, &mut inbox);
-        starts.push(rig.state.ui.frame_ms);
+        starts.push(rig.view().ui.frame_ms);
     }
     for elapsed in [16, 32, 48, 64] {
         paint_at(&mut regular, starts[0] + elapsed);
@@ -2568,12 +2421,12 @@ fn selection_key_snaps_an_in_flight_wheel_run() {
         rig.input(KeyAction::Down);
         let mut inbox = queued((0..count).map(|_| Wakeup::Scroll { down: true }));
         dispatch(&mut rig, &mut inbox);
-        assert!(rig.state.ui.scroll_ease.in_flight());
+        assert!(rig.view().ui.scroll_ease.in_flight());
         rig.input(KeyAction::Down);
-        assert!(!rig.state.ui.scroll_ease.in_flight());
-        assert_eq!(visible(&rig), rig.state.ui.scroll_offset);
+        assert!(!rig.view().ui.scroll_ease.in_flight());
+        assert_eq!(visible(&rig), rig.view().ui.scroll_offset);
         let (first, last) = rig.state.ui.interactions.visible_row_span().unwrap();
-        assert!((first..=last).contains(&rig.state.ui.selected_index.unwrap()));
+        assert!((first..=last).contains(&rig.view().ui.selected_index.unwrap()));
     }
 }
 
@@ -2596,18 +2449,18 @@ fn wheel_input_pulls_the_next_grid_frame_in() {
 fn queued_wheel_ticks_paint_once_at_the_final_offset() {
     for count in [1, 4, 30] {
         let (mut rig, output) = scroll_rig();
-        let selected = rig.state.ui.selected_pane.clone();
+        let selected = rig.view().ui.selected_pane.clone();
         let max = rig.state.ui.drawn_scroll_max.unwrap();
         let mut inbox = queued((0..count).map(|_| Wakeup::Scroll { down: true }));
         dispatch(&mut rig, &mut inbox);
-        assert_eq!(rig.state.ui.scroll_offset, (count * 3).min(max));
+        assert_eq!(rig.view().ui.scroll_offset, (count * 3).min(max));
         assert_eq!(paints(&output), 1);
-        assert_eq!(rig.state.ui.selected_pane, selected);
+        assert_eq!(rig.view().ui.selected_pane, selected);
         assert!(
-            !rig.state.ui.offset_authoritative,
+            !rig.view().ui.offset_authoritative,
             "paint consumed the wheel intent"
         );
-        assert!(rig.state.ui.freeze.is_some());
+        assert!(rig.view().ui.freeze.is_some());
         assert!(!rig.state.dirty);
     }
 }
@@ -2622,7 +2475,11 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
         let (mut single, _) = scroll_rig();
         for rig in [&mut batched, &mut single] {
             if bottom {
-                rig.state.ui.scroll_offset = rig.state.ui.drawn_scroll_max.unwrap();
+                {
+                    let mut guard = rig.view();
+                    let state = &mut *guard;
+                    state.ui.scroll_offset = state.ui.drawn_scroll_max.unwrap();
+                }
             }
         }
         let mut inbox = queued(directions.iter().map(|&down| Wakeup::Scroll { down }));
@@ -2638,8 +2495,8 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
                 .unwrap();
         }
         assert_eq!(
-            batched.state.ui.scroll_offset,
-            single.state.ui.scroll_offset
+            batched.view().ui.scroll_offset,
+            single.view().ui.scroll_offset
         );
     }
 }
@@ -2654,16 +2511,16 @@ fn key_between_runs_acts_on_the_first_painted_frame() {
         Wakeup::Scroll { down: true },
     ]);
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.state.ui.scroll_offset, 6);
+    assert_eq!(rig.view().ui.scroll_offset, 6);
     assert_eq!(paints(&output), 1);
     // ScreenTop resolves the row from the frame the preceding run painted.
     let expected = rig.state.ui.interactions.visible_row_span().unwrap().0;
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.state.ui.selected_index, Some(expected));
+    assert_eq!(rig.view().ui.selected_index, Some(expected));
     assert_eq!(paints(&output), 2);
-    let offset = rig.state.ui.scroll_offset;
+    let offset = rig.view().ui.scroll_offset;
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.state.ui.scroll_offset, offset + 3);
+    assert_eq!(rig.view().ui.scroll_offset, offset + 3);
     assert_eq!(paints(&output), 3);
 }
 
@@ -2675,27 +2532,27 @@ fn help_dismissal_consumes_only_the_first_tick_of_a_run() {
     output.1.store(0, std::sync::atomic::Ordering::SeqCst);
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    assert!(!rig.state.ui.help_visible);
-    assert_eq!(rig.state.ui.scroll_offset, 6);
+    assert!(!rig.view().ui.help_visible);
+    assert_eq!(rig.view().ui.scroll_offset, 6);
     assert_eq!(paints(&output), 1);
 }
 
 #[test]
-fn hidden_run_stays_dirty_until_watched() {
+fn hidden_redraw_stays_dirty_until_watched() {
     let (mut rig, output) = scroll_rig();
-    let cards = rig.state.current.worktree_groups.clone();
+    let cards = rig.view().current.worktree_groups.clone();
     rig.hide();
-    rig.state.current.worktree_groups = cards;
-    let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
-    dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.state.ui.scroll_offset, 9);
+    rig.view().current.worktree_groups = cards;
+    // A wheel run is viewing evidence and paints; a relayout alone is not.
+    rig.state
+        .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
+        .unwrap();
     assert!(rig.state.dirty);
     assert!(output.0.lock().unwrap().is_empty());
     assert_eq!(paints(&output), 0);
     rig.watch();
     rig.state.next_frame = Instant::now();
     rig.paint(true);
-    assert_eq!(rig.state.ui.scroll_offset, 9);
     assert_eq!(paints(&output), 1);
     assert!(!rig.state.dirty);
 }

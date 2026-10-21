@@ -1,6 +1,7 @@
 //! The data plane the room host runs once for every pane it paints.
 //!
 //! Each pane subscribes for its own projection of the shared fold.
+//! Client views are lent to their painting attachment under one memory-only lock.
 
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -19,10 +20,10 @@ use super::input::Wakeup;
 use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
+    pub(super) views: Arc<Mutex<super::views::Views>>,
     pub(super) events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     pub(super) caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
-    pub(super) viewport: Arc<Mutex<Option<super::loop_state::ViewportPublication>>>,
     jumps: Arc<super::focus_push::JumpHost>,
     request_tx: Sender<FetchRequest>,
     pub(super) subscribers: Subscribers,
@@ -125,15 +126,17 @@ impl DataPlane {
     fn idle() -> (Self, Receiver<FetchRequest>, Receiver<ObserveMsg>) {
         let (request_tx, request_rx) = std::sync::mpsc::channel();
         let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel(64);
+        let host_data = Arc::new(Mutex::new(HostData::default()));
+        let views = lock(&host_data).views.clone();
         let plane = Self {
+            views,
             events: Arc::default(),
             caps: Arc::default(),
             geometry: Arc::default(),
-            viewport: Arc::default(),
             jumps: Arc::default(),
             request_tx,
             subscribers: Subscribers::default(),
-            host_data: Arc::default(),
+            host_data,
             covered: Covered::default(),
             observe_tx,
             fit: None,
@@ -190,7 +193,18 @@ impl DataPlane {
 
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
-        lock(&self.host_data).last_fold = Some(Arc::new(fold));
+        let fold = Arc::new(fold);
+        lock(&self.host_data).last_fold = Some(fold.clone());
+        lock(&self.views).publish(
+            Some(fold.clone()),
+            FetchUpdate::Fold {
+                fold,
+                own_pane: None,
+                refresh_override: None,
+                phase: super::fetch::FetchPhase::Interim,
+                source: super::fetch::SnapshotSource::Cached,
+            },
+        );
     }
 
     #[cfg(test)]

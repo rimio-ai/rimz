@@ -15,7 +15,7 @@ fn resize_hold_releases_only_on_a_post_engage_pane_stamp() {
         (99, SnapshotSource::Produced, false),
     ] {
         let mut rig = Rig::new();
-        rig.state.current = agent_snapshot(&rig.ws);
+        rig.view().current = agent_snapshot(&rig.ws);
         rig.state.self_close.seen_sibling = true;
         rig.state.paint_hold.engage(Instant::now(), 100);
 
@@ -35,7 +35,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     let mut rig = Rig::new();
     let mut prior = agent_snapshot(&rig.ws);
     prior.panes_observed_at_ms = Some(90);
-    rig.state.current = prior;
+    rig.view().current = prior;
     rig.state.paint_hold.engage(Instant::now(), 100);
 
     let snapshot = process_snapshot(&rig.ws, 150);
@@ -44,9 +44,9 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         rig.state.paint_hold.is_engaged(),
         "the rejected fold stays held"
     );
-    assert_eq!(rig.state.gate.reject_streak, 1);
+    assert_eq!(rig.view().gate.reject_streak, 1);
     assert_eq!(
-        rig.state
+        rig.view()
             .overlay_baseline
             .as_ref()
             .and_then(|snapshot| snapshot.panes_observed_at_ms),
@@ -60,9 +60,9 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         rig.state.paint_hold.is_engaged(),
         "the second rejected fold still stays held"
     );
-    assert_eq!(rig.state.gate.reject_streak, 2);
+    assert_eq!(rig.view().gate.reject_streak, 2);
     let now_ms = jiff::Timestamp::now().as_millisecond();
-    rig.state.gate.rejecting_since =
+    rig.view().gate.rejecting_since =
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
 
     let snapshot = process_snapshot(&rig.ws, 152);
@@ -72,7 +72,7 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
         "the escape-hatch accepted fold releases by pane stamp"
     );
     assert!(
-        rig.state.overlay_baseline.is_none(),
+        rig.view().overlay_baseline.is_none(),
         "an accepted overlay-free pull releases the full baseline"
     );
 }
@@ -149,7 +149,7 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
 #[test]
 fn empty_close_suppresses_widened_paint_until_exit() {
     let mut rig = Rig::new();
-    rig.state.current = agent_snapshot(&rig.ws);
+    rig.view().current = agent_snapshot(&rig.ws);
     rig.state.self_close.seen_sibling = true;
     rig.state.paint_hold.engage(Instant::now(), 100);
 
@@ -359,9 +359,11 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
     let mut rig = Rig::with_own_pane(own_pane);
     rig.state.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
     let snapshot = rig.state.current.clone();
-    rig.state
-        .paint
-        .refresh_view(&mut rig.state.ui, &snapshot, false);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.paint.refresh_view(&mut state.ui, &snapshot, false);
+    }
 
     assert!(rig.state.ui.meter_pixels.is_none());
 }

@@ -19,15 +19,27 @@ impl Rig {
                 .map(|id| pane(id.raw(), "tab_0", false)),
         );
         let frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
-        FetchUpdate::Fold {
-            fold: Arc::new(WorkspaceFold {
-                workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
-                frame: Some(Arc::new(frame)),
+        // The worker wraps every fold in the cycle's shared context, which is what lets a view
+        // catching up recognize its own take instead of projecting the fold again.
+        FetchUpdate::Shared {
+            update: Box::new(FetchUpdate::Fold {
+                fold: Arc::new(WorkspaceFold {
+                    workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+                    frame: Some(Arc::new(frame)),
+                }),
+                own_pane: Some(own),
+                refresh_override: self.state.config.refresh_ms_override,
+                phase: FetchPhase::Final,
+                source,
             }),
-            own_pane: Some(own),
-            refresh_override: self.state.config.refresh_ms_override,
-            phase: FetchPhase::Final,
-            source,
+            context: Arc::new(crate::sidebar_pane::app::fetch::FoldShared {
+                inputs: Arc::new(crate::sidebar_pane::app::fetch::FoldInputs {
+                    sampled_at: self.state.clock.now(),
+                    anchor: crate::mux::focus_anchor::load(&self.runtime),
+                    filter: crate::sidebar::body_filter::load(&self.runtime),
+                }),
+                ..Default::default()
+            }),
         }
     }
 }
@@ -76,7 +88,7 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
         unfocused: vec![],
     });
     assert_eq!(rig.state.projections, 2, "reveal projects only the latest");
-    assert_eq!(rig.state.current.display_name, "latest");
+    assert_eq!(rig.view().current.display_name, "latest");
 }
 
 fn hidden_rig() -> Rig {
@@ -90,17 +102,6 @@ fn hidden_rig() -> Rig {
     assert!(!rig.state.watched());
     assert!(rig.state.admits_clock_only(false));
     rig
-}
-
-fn settle_width(rig: &mut Rig) {
-    // These tests start after width admission, not at its initial probe deadline.
-    rig.state.width_control = WidthController::new(
-        rig.runtime.clone(),
-        rig.state.config.session_name.clone(),
-        None,
-        rig.state.config.mux,
-        crate::mux::SidebarWidth::from_config(&rig.state.current.theme),
-    );
 }
 
 fn defer_name(rig: &mut Rig, name: &str) {
@@ -186,7 +187,7 @@ fn skipped_final_completes_requests_and_refreshes_backstops() {
             .clone(),
         unfocused: vec![],
     });
-    assert_eq!(rig.state.current.display_name, "deferred");
+    assert_eq!(rig.view().current.display_name, "deferred");
 }
 
 #[test]
@@ -209,7 +210,7 @@ fn assert_reveal_or_changed_own_view(reveal: bool) {
         snapshot.own_view = Some(empty_own_view());
     }
     rig.lazy_fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.state.current.display_name, "immediate");
+    assert_eq!(rig.view().current.display_name, "immediate");
     assert_eq!(
         rig.state.should_exit, !reveal,
         "an observed sibling disappearing closes immediately"
@@ -223,21 +224,21 @@ fn hidden_failure_always_applies() {
     rig.deliver(FetchUpdate::Failed {
         error: "offline".into(),
     });
-    assert_eq!(rig.state.current.display_name, "before failure");
-    assert_eq!(rig.state.health.failure_streak, 1);
+    assert_eq!(rig.view().current.display_name, "before failure");
+    assert_eq!(rig.view().health.failure_streak, 1);
 }
 
 #[test]
 fn hidden_health_obligation_applies() {
     let mut rig = hidden_rig();
-    rig.state.health.failure_streak = 1;
+    rig.view().health.failure_streak = 1;
     assert_hidden_obligation(rig);
 }
 
 #[test]
 fn hidden_gate_obligation_applies() {
     let mut rig = hidden_rig();
-    rig.state.gate.reject_streak = 1;
+    rig.view().gate.reject_streak = 1;
     assert_hidden_obligation(rig);
 }
 
@@ -250,7 +251,7 @@ fn hidden_empty_confirmation_applies() {
 }
 
 #[test]
-fn input_and_resize_flush_hidden_content() {
+fn input_flushes_hidden_content() {
     for input in [
         Wakeup::Key(KeyAction::Dismiss),
         Wakeup::Scroll { down: true },
@@ -261,15 +262,22 @@ fn input_and_resize_flush_hidden_content() {
         rig.state
             .on_input(input, &mut rig.terminal, &mut rig.fetch)
             .unwrap();
-        assert_eq!(rig.state.current.display_name, "before input");
+        assert_eq!(rig.view().current.display_name, "before input");
     }
+}
+
+#[test]
+fn hidden_resize_keeps_deferred_content_unprojected() {
     let mut rig = hidden_rig();
     defer_name(&mut rig, "before resize");
+    let projections = rig.state.projections;
+    let reductions = rig.state.content_applications;
     rig.state
         .on_resize(&mut rig.fetch, &mut rig.terminal, None)
         .unwrap();
-    assert_eq!(rig.state.current.display_name, "before resize");
-    assert!(!rig.state.dirty, "the resize paint shows the flushed fold");
+    assert_ne!(rig.view().current.display_name, "before resize");
+    assert_eq!(rig.state.projections, projections);
+    assert_eq!(rig.state.content_applications, reductions);
 }
 
 #[test]
@@ -281,7 +289,7 @@ fn hidden_filter_and_width_events_keep_content_pending() {
         let mut rig = hidden_rig();
         defer_name(&mut rig, "pending");
         rig.event(event);
-        assert_ne!(rig.state.current.display_name, "pending");
+        assert_ne!(rig.view().current.display_name, "pending");
         assert_eq!(rig.state.projections, 1);
     }
 }
@@ -290,11 +298,12 @@ fn hidden_filter_and_width_events_keep_content_pending() {
 fn hidden_overlay_only_folds_for_its_reveal() {
     let mut rig = hidden_rig();
     defer_name(&mut rig, "pending");
+    assert!(!rig.state.observed_watched());
     rig.event(SidebarEvent::FocusChanged {
         focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_500")],
         unfocused: vec![],
     });
-    assert_ne!(rig.state.current.display_name, "pending");
+    assert_ne!(rig.view().current.display_name, "pending");
     assert_eq!(rig.state.projections, 1);
     rig.event(SidebarEvent::FocusChanged {
         focused: rig
@@ -307,8 +316,13 @@ fn hidden_overlay_only_folds_for_its_reveal() {
             .clone(),
         unfocused: vec![],
     });
-    assert_eq!(rig.state.current.display_name, "pending");
+    assert_eq!(rig.view().current.display_name, "pending");
     assert!(rig.state.watched());
+    assert!(
+        rig.next_request()
+            .expect("reveal verifies panes")
+            .is_fresh_panes()
+    );
 }
 
 #[test]
@@ -323,7 +337,7 @@ fn hidden_foreign_notifications_do_not_fold() {
         notification_kind: None,
     });
     assert_eq!(rig.state.projections, 1);
-    assert_ne!(rig.state.current.display_name, "pending");
+    assert_ne!(rig.view().current.display_name, "pending");
 }
 
 #[test]
@@ -331,8 +345,12 @@ fn hidden_expired_freeze_neither_folds_nor_spins() {
     let mut rig = hidden_rig();
     let clock = LoopClock::play(Timestamp::now());
     rig.state.clock = clock.clone();
-    layout_freeze::arm_freeze(&mut rig.state.ui, clock.now_ms() as i64);
-    rig.state.overlay_baseline = Some(rig.state.current.clone());
+    layout_freeze::arm_freeze(&mut rig.view().ui, clock.now_ms() as i64);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.overlay_baseline = Some(state.current.clone());
+    }
     clock.advance(Duration::from_secs(60));
     defer_name(&mut rig, "pending");
     assert_eq!(rig.state.projections, 1);
@@ -358,7 +376,7 @@ fn hidden_strand_only_drains_its_owner() {
             generation: 1,
             clients: vec![],
         });
-        assert_eq!(rig.state.current.display_name == "pending", own);
+        assert_eq!(rig.view().current.display_name == "pending", own);
     }
 }
 
@@ -367,7 +385,7 @@ fn hidden_intent_only_drains_its_owner() {
     for own in [false, true] {
         let mut rig = hidden_rig();
         // The pending fold observes the target's session, so the jump stays in flight.
-        rig.state.current.pane_session_name = Some("rimz-test".to_owned());
+        rig.view().current.pane_session_name = Some("rimz-test".to_owned());
         defer_name(&mut rig, "pending");
         let target = if own {
             own_view().working_pane_ids[0].clone()
@@ -393,12 +411,12 @@ fn hidden_intent_only_drains_its_owner() {
             pane_id: target.clone(),
             nonce: anchor.nonce,
         });
-        assert_eq!(rig.state.current.display_name == "pending", own);
+        assert_eq!(rig.view().current.display_name == "pending", own);
         assert_eq!(
-            rig.state.last_folded_focus_intent == Some(anchor.nonce),
+            rig.view().last_folded_focus_intent == Some(anchor.nonce),
             own
         );
-        assert_eq!(rig.state.ui.selected_pane.as_ref() == Some(&target), own);
+        assert_eq!(rig.view().ui.selected_pane.as_ref() == Some(&target), own);
     }
 }
 
@@ -407,7 +425,7 @@ fn hidden_command_overlay_is_retained_until_reveal() {
     let mut rig = hidden_rig();
     defer_name(&mut rig, "pending");
     let target = rig
-        .state
+        .view()
         .current
         .own_view
         .as_ref()
@@ -424,9 +442,9 @@ fn hidden_command_overlay_is_retained_until_reveal() {
         focused: vec![rig.state.config.own_pane.clone().unwrap()],
         unfocused: vec![],
     });
-    assert_eq!(rig.state.current.display_name, "pending");
+    assert_eq!(rig.view().current.display_name, "pending");
     assert_eq!(
-        rig.state
+        rig.view()
             .current
             .row_owning_pane(&target)
             .unwrap()
@@ -457,7 +475,11 @@ fn hidden_peer_does_not_clear_a_watched_manual_unread_guard() {
         .clone();
     snapshot.focused_pane = Some(focused.clone());
     snapshot.viewed_panes = vec![focused];
-    watched.state.ui.unread_guard = Some("agent-1".into());
+    // A guard lives in a painted view, so the watched view folds once before arming it.
+    let mut unfocused = snapshot.clone();
+    unfocused.focused_pane = None;
+    watched.fold(unfocused, SnapshotSource::Produced);
+    watched.view().ui.unread_guard = Some("agent-1".into());
     watched.fold(snapshot.clone(), SnapshotSource::Produced);
     snapshot.own_view.as_mut().unwrap().working_pane_ids =
         vec![PaneId::from_parts(MuxName::Zellij, "terminal_500")];
@@ -482,7 +504,7 @@ fn assert_hidden_obligation(mut rig: Rig) {
     let mut snapshot = rig.state.current.clone();
     snapshot.display_name = "obligation".into();
     rig.lazy_fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.state.current.display_name, "obligation");
+    assert_eq!(rig.view().current.display_name, "obligation");
 }
 
 #[test]
@@ -495,14 +517,14 @@ fn hidden_exit_obligation_applies() {
 #[test]
 fn hidden_dwell_obligation_applies() {
     let mut rig = hidden_rig();
-    rig.state.tab_read_dwell_until = Some(rig.state.clock.now());
+    rig.view().tab_read_dwell_until = Some(rig.state.clock.now());
     assert_hidden_obligation(rig);
 }
 
 #[test]
 fn hidden_input_focus_obligation_applies() {
     let mut rig = hidden_rig();
-    rig.state.pending_input_focus = rig.state.config.own_pane.clone();
+    rig.view().pending_input_focus = rig.state.config.own_pane.clone();
     assert_hidden_obligation(rig);
 }
 
@@ -548,14 +570,13 @@ fn notification_rings_against_the_deferred_unread_fold() {
         let output = capture_bells(&mut rig);
         let snapshot = unread_snapshot(&rig, true);
         let panes = snapshot.own_view.as_ref().unwrap().working_pane_ids.clone();
-        rig.result_tx
-            .send(rig.lazy_update(snapshot, SnapshotSource::Produced))
+        rig.send(rig.lazy_update(snapshot, SnapshotSource::Produced))
             .unwrap();
         if drain {
             rig.state.on_snapshot(&mut rig.fetch);
         }
         assert!(
-            !rig.state.current.rows().next().unwrap().unread,
+            !rig.view().current.rows().next().unwrap().unread,
             "unread fold deferred"
         );
         rig.event(SidebarEvent::Notify {
@@ -616,42 +637,66 @@ fn zellij_room_reminder_banner_comes_from_the_watched_pane_only() {
 
 #[test]
 fn arrival_settles_spend_accrued_while_hidden() {
-    let mut rig = hidden_rig();
-    let cost = |snapshot: &SidebarSnapshot, usd: f64, viewed: bool| {
-        let mut snapshot = snapshot.clone();
-        let row = &mut Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0];
-        row.as_agent_mut().unwrap().delegated_cost_usd = Some(usd);
-        snapshot.viewed_panes = if viewed {
-            own_view().working_pane_ids
-        } else {
-            Vec::new()
-        };
-        snapshot
-    };
-    let base = rig.state.current.clone();
-    // Seen at $1, then left: the hidden pane settles there.
-    rig.lazy_fold(cost(&base, 1.0, true), SnapshotSource::Produced);
-    rig.lazy_fold(cost(&base, 1.0, false), SnapshotSource::Produced);
-    rig.state.ui.animation_phase += 1_000;
-    // $5 accrues while hidden, then the tab is revealed.
-    rig.lazy_fold(cost(&base, 5.0, false), SnapshotSource::Produced);
-    rig.lazy_fold(cost(&base, 5.0, true), SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.viewing_own_tab, Some(true));
-    let phase = rig.state.ui.animation_phase;
+    let mut pair = super::scroll::SharedPanes::new(MuxName::Zellij);
+    set_cost(&mut pair.snapshot, 1.0);
+    pair.sample(&[(1, 0)]);
+    pair.paint(0);
+    pair.sample(&[]);
+    assert!(!pair.panes[0].state.observed_watched());
+    let applications = pair.panes[0].state.content_applications;
+    pair.clock.advance(Duration::from_secs(1));
+    set_cost(&mut pair.snapshot, 5.0);
+    pair.sample(&[]);
+    assert_eq!(pair.panes[0].state.content_applications, applications);
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let arrived = pair.view(1);
+    assert_eq!(arrived.viewing_own_tab, Some(true));
+    let phase = arrived.animation_phase;
     assert!(
-        !rig.state.ui.cost_rolls.any_rolling(phase),
+        !arrived.cost_rolls.any_rolling(phase),
         "arrival snaps card cost"
     );
     assert!(
-        !rig.state.ui.tally.any_rolling(phase),
+        !arrived.tally.any_rolling(phase),
         "arrival snaps the headline"
     );
-    rig.lazy_fold(cost(&base, 9.0, true), SnapshotSource::Produced);
+    set_cost(&mut pair.snapshot, 9.0);
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let watched = pair.view(1);
     assert!(
-        rig.state
-            .ui
-            .cost_rolls
-            .any_rolling(rig.state.ui.animation_phase),
+        watched.cost_rolls.any_rolling(watched.animation_phase),
         "a climb seen while watched still rolls"
+    );
+}
+
+fn set_cost(snapshot: &mut SidebarSnapshot, usd: f64) {
+    let row = &mut Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[0];
+    row.as_agent_mut().unwrap().delegated_cost_usd = Some(usd);
+}
+
+#[test]
+fn continuously_painted_view_keeps_its_spend_roll_when_moving_tabs() {
+    let mut pair = super::scroll::SharedPanes::new(MuxName::Zellij);
+    set_cost(&mut pair.snapshot, 1.0);
+    pair.sample(&[(1, 0)]);
+    pair.paint(0);
+    set_cost(&mut pair.snapshot, 5.0);
+    pair.sample(&[(1, 0)]);
+    pair.paint(0);
+    let before = pair.view(0);
+    let phase = before.animation_phase + 1;
+    let row = pair.snapshot.worktree_groups[0].rows[0].id.clone();
+    let display = before.cost_rolls.display(&row, 5.0, phase);
+    assert!(before.cost_rolls.any_rolling(phase));
+    pair.sample(&[(1, 1)]);
+    pair.paint(1);
+    let after = pair.view(1);
+    assert!(after.cost_rolls.any_rolling(phase));
+    assert_eq!(
+        after.cost_rolls.display(&row, 5.0, phase),
+        display,
+        "moving neither settles nor restarts an ongoing roll"
     );
 }
