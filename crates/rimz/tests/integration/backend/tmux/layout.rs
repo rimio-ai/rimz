@@ -1284,7 +1284,7 @@ fn stack_hooks_preserve_user_global_hooks_and_companion_grid_refuses_stacks() {
 }
 
 #[test]
-fn stacked_layout_birth_opens_focus_or_top_in_each_column() {
+fn stacked_layout_birth_opens_focus_or_last_in_each_column() {
     require_tmux!();
     let server = TmuxServer::new();
     ensure_rimz_session(&server, "stacks", Some((240, 70)));
@@ -1329,7 +1329,7 @@ fn stacked_layout_birth_opens_focus_or_top_in_each_column() {
             .iter()
             .map(|pane| pane.id.clone())
             .collect::<Vec<_>>();
-        assert_stack(&server, &ids, &ids[usize::from(index == 1)]);
+        assert_stack(&server, &ids, &ids[if index == 1 { 1 } else { 2 }]);
     }
 }
 
