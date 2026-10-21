@@ -26,7 +26,7 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
     rig.state.config.own_pane = Some(own.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state.dirty = false;
-    rig.state.ui.theme(&rig.state.current.theme);
+    rig.state.ui.theme(&rig.state.view.current.theme);
     let now = crate::utils::time::unix_now_ms();
     rig.state.events().append(
         SidebarEvent::FocusChanged {
@@ -61,7 +61,7 @@ fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
     rig.state.config.own_pane = Some(own);
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state.dirty = false;
-    rig.state.ui.theme(&rig.state.current.theme);
+    rig.state.ui.theme(&rig.state.view.current.theme);
     layout_freeze::arm_freeze(
         &mut rig.state.ui,
         Timestamp::now().as_millisecond() - 29_800,

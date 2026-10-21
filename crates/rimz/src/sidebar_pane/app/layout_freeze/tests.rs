@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar::timing::LAYOUT_FREEZE;
+use crate::sidebar_pane::render::UiState;
 
 #[test]
 fn arrivals_append_within_the_agent_and_process_partitions() {

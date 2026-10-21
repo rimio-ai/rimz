@@ -8,7 +8,7 @@ use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 
 use crate::sidebar::unread::{self, ClearedUnread, UnreadClearCause};
-use crate::sidebar_pane::render::UiState;
+use crate::sidebar_pane::render::ViewState;
 
 use super::gate::{GateState, gate_held_ms};
 use super::health::{Health, next_health};
@@ -68,7 +68,18 @@ pub(super) struct FetchDiagnostics<'a> {
     pub(super) now: Timestamp,
 }
 
-pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchDiagnostics<'_>) {
+pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: Vec<DiagEvent>) {
+    for event in diagnostics {
+        if matches!(event, DiagEvent::HealthAlert { .. }) {
+            diag.emit_unlimited(event);
+        } else {
+            diag.emit(event);
+        }
+    }
+}
+
+pub(super) fn fetch_diagnostics(diagnostics: FetchDiagnostics<'_>) -> Vec<DiagEvent> {
+    let mut events = Vec::new();
     let FetchDiagnostics {
         prev_snapshot,
         incoming_panes_produced_at_ms,
@@ -83,13 +94,13 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         now,
     } = diagnostics;
     if let Some(reason) = fetch_failure {
-        diag.emit(crate::diag::record::DiagEvent::FetchFailure {
+        events.push(crate::diag::record::DiagEvent::FetchFailure {
             reason,
             failure_streak: next_health.failure_streak,
         });
     }
     if rejected && let Some(rule) = next_gate.rule {
-        diag.emit(crate::diag::record::DiagEvent::GateHold {
+        events.push(crate::diag::record::DiagEvent::GateHold {
             rule,
             prev_produced_at_ms: prev_snapshot.panes_produced_at_ms,
             incoming_produced_at_ms: incoming_panes_produced_at_ms,
@@ -98,7 +109,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
     } else if next_gate.rule.is_none()
         && let Some(rule) = prev_gate.rule
     {
-        diag.emit(crate::diag::record::DiagEvent::GateRelease {
+        events.push(crate::diag::record::DiagEvent::GateRelease {
             rule,
             held_ms: gate_held_ms(prev_gate, now),
             via_escape_hatch: released_via_escape_hatch,
@@ -106,7 +117,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
     }
     match (prev_health.alert.as_ref(), next_health.alert.as_ref()) {
         (prev, Some(next)) if next.is_active() && !prev.is_some_and(|alert| alert.is_active()) => {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::HealthAlert {
+            events.push(crate::diag::record::DiagEvent::HealthAlert {
                 reason: next.reason.clone(),
                 since_ms: next.since.as_millisecond().max(0) as u64,
                 recovered_after_ms: None,
@@ -120,7 +131,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
                     .try_into()
                     .ok()
             });
-            diag.emit_unlimited(crate::diag::record::DiagEvent::HealthAlert {
+            events.push(crate::diag::record::DiagEvent::HealthAlert {
                 reason: next.reason.clone(),
                 since_ms: next.since.as_millisecond().max(0) as u64,
                 recovered_after_ms,
@@ -128,9 +139,8 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         }
         _ => {}
     }
-    for event in diff_group_migrations(prev_snapshot, next_snapshot) {
-        diag.emit(event);
-    }
+    events.extend(diff_group_migrations(prev_snapshot, next_snapshot));
+    events
 }
 
 fn diff_group_migrations(prev: &SidebarSnapshot, next: &SidebarSnapshot) -> Vec<DiagEvent> {
@@ -219,7 +229,7 @@ pub(super) fn session_focus_baseline(
 }
 
 pub(super) fn apply_manual_unread_guard(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     focused_row_id: Option<&str>,
     focus_clear: &mut ReadClear,
 ) {

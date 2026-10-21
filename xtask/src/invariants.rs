@@ -1074,7 +1074,14 @@ fn ensure_sidebar_loop_runtime_uses_driver_clock(root: &Path, files: &[PathBuf])
         if path.parent() != Some(app_root.as_path())
             || !matches!(
                 path.file_name().and_then(OsStr::to_str),
-                Some("loop_state.rs" | "health.rs" | "remind.rs" | "timing.rs")
+                Some(
+                    "loop_state.rs"
+                        | "view_state.rs"
+                        | "views.rs"
+                        | "health.rs"
+                        | "remind.rs"
+                        | "timing.rs"
+                )
             )
         {
             continue;
