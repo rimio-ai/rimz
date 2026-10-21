@@ -1694,6 +1694,8 @@ struct ResultSink {
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
     deliveries: Arc<Mutex<DeliveryCounts>>,
+    #[cfg(test)]
+    on_delivery: Option<Box<dyn Fn() + Send>>,
 }
 
 impl ResultSink {
@@ -1729,6 +1731,8 @@ impl ResultSink {
             context: None,
             inputs: Arc::default(),
             deliveries: Arc::default(),
+            #[cfg(test)]
+            on_delivery: None,
         };
         sink.begin_cycle();
         sink
@@ -1804,6 +1808,12 @@ impl ResultSink {
             self.covered.record(cycle);
         }
         let staged = staged.map(|(fold, pane)| (Arc::new(fold), pane));
+        if is_snapshot && let Some((fold, _)) = &staged {
+            self.host_data
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last_fold = Some(fold.clone());
+        }
         let Some((eldest, others)) = self.cycle.split_first() else {
             return;
         };
@@ -1827,12 +1837,6 @@ impl ResultSink {
             }
         }
         self.send(eldest, update);
-        if is_snapshot && let Some((fold, _)) = staged {
-            self.host_data
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .last_fold = Some(fold);
-        }
     }
 
     fn notify(&self, workspace_id: &crate::WorkspaceId, session_name: &str, event: SidebarEvent) {
@@ -1866,6 +1870,10 @@ impl ResultSink {
             .send_tracked(update, Some(self.deliveries.clone()))
             .is_ok()
         {
+            #[cfg(test)]
+            if let Some(on_delivery) = &self.on_delivery {
+                on_delivery();
+            }
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
