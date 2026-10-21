@@ -243,7 +243,9 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
     refusal.details["server"] = serde_json::json!("rust");
     let readable = strip(|w| render_lsp(w, &Probe::Ready(lsp), &mut Tally::default()));
     assert!(
-        readable.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by /holder rust (4 GB)"),
+        readable.contains(
+            "needs 8 GB, 2 GB free (3 GB available, 1 GB reserved); held by /holder rust (4 GB)"
+        ),
         "{readable}"
     );
     assert!(!readable.contains("committed_bytes"), "{readable}");
@@ -266,14 +268,14 @@ fn refusal_shows_free_swap_only_when_present() {
     let body = render(details.clone());
     assert!(
         body.contains(
-            "needs 8 GB, 3 GB available + 50 GB free swap, 1 GB reserved; held by /holder rust (4 GB)"
+            "needs 8 GB, 52 GB free (3 GB available + 50 GB swap, 1 GB reserved); held by /holder rust (4 GB)"
         ),
         "{body}"
     );
     details["swap_free_bytes"] = serde_json::json!(0);
     let body = render(details);
     assert!(
-        body.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by"),
+        body.contains("needs 8 GB, 2 GB free (3 GB available, 1 GB reserved); held by"),
         "{body}"
     );
 }
@@ -2244,7 +2246,9 @@ fn assert_refusal_shape(event: &str, details: serde_json::Value, memory: bool) {
     let closing = strip(|w| render_tally(w, &tally));
     if memory {
         assert!(
-            body.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by /holder rust (4 GB)"),
+            body.contains(
+                "needs 8 GB, 2 GB free (3 GB available, 1 GB reserved); held by /holder rust (4 GB)"
+            ),
             "{event}: {body}"
         );
     } else {

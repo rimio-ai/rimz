@@ -72,10 +72,10 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
 pub(super) fn write_wait(wait: &Wait) -> Result<()> {
     writeln!(
         super::render::err(),
-        "rimz: waiting to start language server {}: needs {}, {} free; position {} in the queue; giving up in {}",
+        "rimz: waiting to start language server {}: needs {}, {}; position {} in the queue; giving up in {}",
         wait.shortfall.server,
         bytes(wait.shortfall.estimate_bytes),
-        bytes(wait.shortfall.free_bytes()),
+        wait.shortfall.headroom(),
         wait.position,
         rimz::utils::time::format_duration_compact(wait.remaining)
     )?;

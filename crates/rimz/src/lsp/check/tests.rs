@@ -29,7 +29,7 @@ fn outline_requests_stop_after_server_failure() {
     other.server = "other".into();
     let entries = [entry, other];
     let mut counts = Vec::new();
-    for code in [3, 4, 1] {
+    for code in [3, 4, 1, 8, 9] {
         let mut context = Context {
             checkout: Path::new("/checkout"),
             entries: &entries,
@@ -57,13 +57,22 @@ fn outline_requests_stop_after_server_failure() {
                                 server: "rust".into(),
                                 seconds: 110,
                             },
+                            8 => query::QueryErr::MemoryShort {
+                                root: "/checkout".into(),
+                                server: "rust".into(),
+                                shortfall: None,
+                            },
+                            9 => query::QueryErr::MemoryPressure {
+                                root: "/checkout".into(),
+                                server: "rust".into(),
+                            },
                             _ => LspErr::Protocol("bad outline".into()).into(),
                         })
                     },
                 )
                 .err()
                 .unwrap();
-            assert_eq!(error.exit_code(), code);
+            assert_eq!(error.exit_code(), if code >= 8 { 4 } else { code });
             errors.push(error.to_string());
         }
         assert_eq!(errors[0], errors[1]);
@@ -78,7 +87,7 @@ fn outline_requests_stop_after_server_failure() {
             .unwrap();
         assert_eq!(error.exit_code(), 1);
     }
-    assert_eq!(counts, [1, 1, 2]);
+    assert_eq!(counts, [1, 1, 2, 1, 1]);
 }
 
 #[test]

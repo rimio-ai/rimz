@@ -1119,11 +1119,123 @@ fn aliases_collapse_to_definitions_without_guessing() {
 
 #[test]
 fn incomplete_position_requires_a_column() {
-    assert!(
+    assert_eq!(
         Target::parse(Verb::Def, "src/lib.rs:12")
             .unwrap_err()
-            .to_string()
-            .contains("path:line:col")
+            .to_string(),
+        "src/lib.rs:12 has no column; use path:line:col with 1-based line and column"
+    );
+}
+
+#[test]
+fn missing_column_names_only_an_items_selection_line() {
+    let range = json!({"start":{"line":0,"character":0},"end":{"line":20,"character":1}});
+    let selection = json!({"start":{"line":11,"character":9},"end":{"line":11,"character":15}});
+    let outline = json!([{"name":"outer","kind":2,"range":range,"selectionRange":range,"children":[{"name":"Entry","kind":10,"range":range,"selectionRange":selection}]}]);
+    assert_eq!(
+        missing_column(
+            Path::new("/checkout"),
+            Path::new("src/lib.rs"),
+            12,
+            Some(outline.clone())
+        )
+        .to_string(),
+        "src/lib.rs:12 has no column; line 12 names enum Entry at src/lib.rs:12:10"
+    );
+    for outline in [None, Some(Value::Null), Some(json!([])), Some(outline)] {
+        assert_eq!(
+            missing_column(Path::new("/checkout"), Path::new("src/lib.rs"), 10, outline)
+                .to_string(),
+            "src/lib.rs:10 has no column; use path:line:col with 1-based line and column"
+        );
+    }
+}
+
+#[test]
+fn missing_column_understands_flat_outlines() {
+    let outline = json!([{"name":"Entry","kind":23,"location":{"uri":"file:///checkout/src/lib.rs","range":{"start":{"line":11,"character":9},"end":{"line":11,"character":15}}}}]);
+    assert_eq!(
+        missing_column(
+            Path::new("/checkout"),
+            Path::new("src/lib.rs"),
+            12,
+            Some(outline)
+        )
+        .to_string(),
+        "src/lib.rs:12 has no column; line 12 names struct Entry at src/lib.rs:12:10"
+    );
+}
+
+#[test]
+fn hover_text_trims_leading_blank_lines() {
+    let result = json!({"contents":{"kind":"markdown","value":"\n\n```rust\nfn work()\n```  \n"}});
+    assert_eq!(
+        render(
+            Verb::Hover,
+            Path::new("/checkout"),
+            None,
+            result,
+            Scope::Checkout.into(),
+            &BTreeSet::new(),
+            |_| panic!("hover needs no outline")
+        )
+        .unwrap(),
+        "```rust\nfn work()\n```\n"
+    );
+}
+
+#[test]
+fn uncovered_extension_is_a_target_failure() {
+    let config = serde_json::from_value(
+        json!({"command":["stub"],"extensions":["rs","rlib"],"root-markers":[]}),
+    )
+    .unwrap();
+    let error = select(
+        Path::new("/checkout"),
+        vec![],
+        &BTreeMap::from([("rust".into(), config)]),
+        None,
+        Some(Path::new("README.md")),
+    )
+    .unwrap_err();
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(
+        error.to_string(),
+        "no language server handles .md files (rust covers .rs, .rlib); use grep for this target"
+    );
+    let error = select(
+        Path::new("/checkout"),
+        vec![],
+        &BTreeMap::new(),
+        None,
+        Some(Path::new("README.md")),
+    )
+    .unwrap_err();
+    assert_eq!(error.exit_code(), 3);
+}
+
+#[test]
+fn multiple_servers_name_the_root_without_configuration_prefix() {
+    let entries = ["rust", "other"].map(|server| {
+        serde_json::from_value(json!({
+            "root":"/checkout", "server":server, "nonce":"test", "broker_pid":1,
+            "broker_start_token":"test", "state":"ready", "started_at_ms":0,
+            "estimate_bytes":0, "settings_hash":"", "request_count":0, "peak_rss_kb":0, "leases":[]
+        }))
+        .unwrap()
+    });
+    let error = select(
+        Path::new("/checkout"),
+        entries.into(),
+        &BTreeMap::new(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(
+        error.to_string(),
+        "multiple language servers for /checkout: other, rust; choose --server NAME"
     );
 }
 
@@ -1570,8 +1682,6 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     );
     let reasons = [
         UnavailableReason::NoneConfigured,
-        UnavailableReason::MemoryShort,
-        UnavailableReason::MemoryPressure,
         UnavailableReason::Crashed,
         UnavailableReason::CheckoutRemoved,
         UnavailableReason::StoppedByHand,
@@ -1593,8 +1703,6 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
         .join("\n");
     insta::assert_snapshot!(lines, @"
     no language server for /checkout (none configured); use grep
-    no language server for /checkout (not started: memory short); use grep
-    no language server for /checkout (stopped: memory pressure); use grep
     no language server for /checkout (stopped: crashed; see rimz lsp status); use grep
     no language server for /checkout (stopped: checkout removed); use grep
     no language server for /checkout (stopped by hand); use grep
@@ -1608,6 +1716,25 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     };
     assert_eq!(indexing.exit_code(), 4);
     insta::assert_snapshot!(indexing.to_string(), @"rust still indexing after 47s; use grep for this question");
+    for error in [
+        QueryErr::MemoryShort {
+            root: "/checkout".into(),
+            server: "rust".into(),
+            shortfall: None,
+        },
+        QueryErr::MemoryPressure {
+            root: "/checkout".into(),
+            server: "rust".into(),
+        },
+    ] {
+        assert_eq!(error.exit_code(), 4);
+        assert!(
+            error
+                .to_string()
+                .starts_with("language server rust for /checkout "),
+            "{error}"
+        );
+    }
 }
 
 #[test]

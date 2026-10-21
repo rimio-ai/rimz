@@ -47,10 +47,10 @@ What happens on a refusal depends on the server's `policy`:
 
 | Policy | Refused admission |
 | --- | --- |
-| `optional` (default) | Launch does not check memory. A query-time refusal leaves the broker dormant, returns exit 3, and records the shortfall diagnostically. A later query retries admission. |
+| `optional` (default) | Launch does not check memory. A query-time refusal leaves the broker dormant, returns exit 4 with the memory figures, and records the shortfall diagnostically. A later query retries admission. |
 | `required` | The launch waits in first-come order among required waiters before panes open. Admission polls every five seconds; the launcher's terminal prints the wait when the queue position changes. There is no pre-launch sidebar row. At `wait-timeout` the launch fails with the fix, naming memory needed, memory free, and the holders. Optional launches do not queue behind required ones. |
 
-`required` gates initial launch admission only. Joining a live broker, including a dormant one, does not repeat eager admission. After a stop, either policy restarts lazily and a memory refusal returns exit 3; RimZ never stops agents to honour required policy.
+`required` gates initial launch admission only. Joining a live broker, including a dormant one, does not repeat eager admission. After a stop, either policy restarts lazily and a query-time memory refusal returns exit 4; RimZ never stops agents to honour required policy. Editor attachment retains exit 3 for admission timeout or refusal.
 
 `admission::admit_query` can evict other servers to make room. Candidates must be ready, have a live broker, have been ready for at least five minutes, and have no request in the last 120 seconds (measured from the later of readiness and last request). Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`; admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then re-samples and stops as soon as the request fits. Required launch admission does not evict.
 
@@ -90,7 +90,7 @@ The broker keeps the machine policy captured at spawn. Existing broker processes
 
 ### The agent's view of a kill
 
-Agents are not messaged. The next query against a dormant key requests a restart. It answers normally if ready within the wait, exits 4 if still indexing, or exits 3 if memory admission refuses. A query interrupted by shutdown can fail; the next call can retry without relaunching the agent.
+Agents are not messaged. The next query against a dormant key requests a restart. It answers normally if ready within the wait, or exits 4 if still indexing or memory admission refuses. Memory pressure interrupting an in-flight query also exits 4; other shutdown reasons remain exit 3. The next call can retry without relaunching the agent.
 
 ## Learned cost
 
@@ -225,7 +225,7 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## Query surface
 
-`cli/lsp.rs::run` loops over targets sequentially, selects a server per target, reuses an entry's exit 3/4 error for the rest of the call without another request, and folds exits by severity (3 > 4 > 1 > 6 > 5 > 0). Single-target streams stay unchanged; the [reference](../reference/cli/lsp.md#queries) defines multi-target blocks and JSON arrays.
+`crates/rimz/src/cli/lsp.rs::run` validates an explicit server name against configuration and checkout registry rows before any target (unknown names exit 2), then loops over targets sequentially and selects a server per target. An uncovered extension fails that target with exit 1; multiple servers also exit 1 without a configuration-error prefix. `QueryErr::server_error` supplies the shared exit 3/4 memo for queries, checks, and source reads, including memory refusals and memory-pressure stops. Exits fold by severity (3 > 4 > 1 > 7 > 6 > 5 > 0). The [reference](../reference/cli/lsp.md#queries) defines multi-target blocks and JSON arrays.
 
 Qualified names missing from `workspace/symbol` first narrow their exact-name candidates to the named files or to files matching a leading qualifier prefix that ends at the file-derived module. Module narrowing omits server containers; both paths reuse the workspace matcher's subsequence and named-file rules. Each candidate is considered independently, so overlapping module paths such as `a.rs` and `a/tests.rs` remain eligible together. The narrowed set is enriched from outlines and rematched through the same matcher with its outline containers restored. Exact-container preference applies to the recovered matches; ambiguous sets proceed to definition collapse without a second enrichment. This accepts the same outline chains that ambiguous candidate names print, including methods of types inside inline modules. Failed enrichment or no recovered match retries the full exact-name set under the 20-file cap, reusing requested outlines, before falling back to the qualifier's `documentSymbol` children. Raw workspace-symbol candidates are preserved for not-found suggestions. The qualifier uses workspace lookup only, without definition collapse or recursive member fallback, and more than 20 qualifier matches skip the fallback. Each distinct file costs one outline request, at most 20 total per fan-out, through an order-preserving pool of at most four workers. Each matching qualifier's outline node is located at any depth by a `selectionRange.start` equal to its indexed workspace-symbol position; failing that, as for ty, whose workspace-symbol range spans the whole declaration, it is the earliest same-named node whose `selectionRange.start` falls inside that range. Only its direct children are then matched. The child's selection position feeds navigation; its container path includes the qualifier's container and name. Multiple members remain ambiguous, no members preserve the original not-found candidates, and flat outlines supply none.
 
@@ -259,8 +259,10 @@ An ambiguous or not-found symbol name lists qualified candidates instead of gues
 | Exit | Meaning |
 | --- | --- |
 | 0 | Answered; `no results` is a real answer. Check has no failing anchors, including when some are unchecked. |
-| 3 | No server for this checkout, memory admission refused, or terminal shutdown; the one line names the reason. |
-| 4 | Still indexing after the readiness bound; the line gives the elapsed time. |
+| 1 | Target or protocol failure, including uncovered file types, multiple servers, and column-less positions. A column-less position names the item on that line when an outline is available, otherwise the format hint. |
+| 2 | Invalid arguments, including an unknown query `--server` before any target runs. |
+| 3 | No server for this checkout, or stopped for a reason other than memory pressure; the one line names the reason. |
+| 4 | Not ready: still indexing after the readiness bound (with elapsed time), memory admission refused (with its own needs/free/available/swap/reserve figures when parseable), or stopped by memory pressure during the query. `check` retries once a minute, at most ten times; other queries use grep for this question and retry on the next. |
 | 5 | Symbol name not found; exact-name candidates are listed on stdout. |
 | 6 | Symbol name ambiguous; qualified candidates are listed on stdout. |
 | 7 | Anchor check found failures; verdicts on stdout, nothing on stderr. |

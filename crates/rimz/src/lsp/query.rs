@@ -6,7 +6,7 @@ pub use client::{Output, execute, select};
 use super::protocol::{
     CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation, Symbols,
 };
-use super::{LspErr, Result};
+use super::{LspErr, NamedItem, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +39,16 @@ impl Target {
             |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
         let (Some(column), Some(line), Some(path)) = (column, line, path) else {
             if line.is_some() && column.is_some_and(numeric) {
+                if let Some(path) = line.filter(|path| !path.is_empty())
+                    && let Some(line) = column.and_then(|line| line.parse::<u32>().ok())
+                    && line > 0
+                {
+                    return Err(LspErr::MissingColumn {
+                        path: path.into(),
+                        line,
+                        item: None,
+                    });
+                }
                 return Err(LspErr::Protocol(format!(
                     "invalid position {raw}; use path:line:col with 1-based line and column"
                 )));
@@ -96,6 +106,14 @@ pub enum Verb {
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryErr {
+    #[error("language server {server} for {root} stopped: memory pressure; use grep for this question and retry on the next", root = root.display())]
+    MemoryPressure { root: PathBuf, server: String },
+    #[error("language server {server} for {root} not started: memory short{figures}; use grep for this question and retry on the next", root = root.display(), figures = shortfall.as_ref().map(|shortfall| format!(", needs {}, {}", crate::utils::size::decimal_bytes(shortfall.estimate_bytes), shortfall.headroom())).unwrap_or_default())]
+    MemoryShort {
+        root: PathBuf,
+        server: String,
+        shortfall: Option<Box<super::admission::Shortfall>>,
+    },
     #[error("no language server for {root} ({reason}); use grep", root = root.display())]
     Unavailable {
         root: PathBuf,
@@ -103,6 +121,27 @@ pub enum QueryErr {
     },
     #[error("{server} still indexing after {seconds}s; use grep for this question")]
     Indexing { server: String, seconds: u64 },
+    #[error(
+        "no language server handles .{extension} files ({coverage}); use grep for this target",
+        coverage = coverage.iter().map(|(name, extensions)| {
+            let extensions = extensions.iter().map(|ext| format!(".{ext}"))
+                .collect::<Vec<_>>().join(", ");
+            format!("{name} covers {extensions}")
+        }).collect::<Vec<_>>().join("; ")
+    )]
+    UncoveredExtension {
+        extension: String,
+        coverage: BTreeMap<String, Vec<String>>,
+    },
+    #[error(
+        "multiple language servers for {root}: {names}; choose --server NAME",
+        root = root.display(),
+        names = servers.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+    )]
+    MultipleServers {
+        root: PathBuf,
+        servers: BTreeSet<String>,
+    },
     #[error(transparent)]
     Failed(#[from] LspErr),
 }
@@ -111,10 +150,96 @@ impl QueryErr {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::Unavailable { .. } => 3,
-            Self::Indexing { .. } => 4,
-            Self::Failed(_) => 1,
+            Self::Indexing { .. } | Self::MemoryShort { .. } | Self::MemoryPressure { .. } => 4,
+            Self::UncoveredExtension { .. } | Self::MultipleServers { .. } | Self::Failed(_) => 1,
         }
     }
+
+    pub fn server_error(&self) -> Option<Self> {
+        Some(match self {
+            Self::Unavailable { root, reason } => Self::Unavailable {
+                root: root.clone(),
+                reason: reason.clone(),
+            },
+            Self::Indexing { server, seconds } => Self::Indexing {
+                server: server.clone(),
+                seconds: *seconds,
+            },
+            Self::MemoryShort {
+                root,
+                server,
+                shortfall,
+            } => Self::MemoryShort {
+                root: root.clone(),
+                server: server.clone(),
+                shortfall: shortfall.clone(),
+            },
+            Self::MemoryPressure { root, server } => Self::MemoryPressure {
+                root: root.clone(),
+                server: server.clone(),
+            },
+            Self::UncoveredExtension { .. } | Self::MultipleServers { .. } | Self::Failed(_) => {
+                return None;
+            }
+        })
+    }
+
+    fn stopped(entry: &super::registry::Entry, reason: &super::registry::StopReason) -> Self {
+        use super::registry::StopReason;
+        if *reason == StopReason::MemoryPressure {
+            return Self::MemoryPressure {
+                root: entry.root.clone(),
+                server: entry.server.clone(),
+            };
+        }
+        Self::Unavailable {
+            root: entry.root.clone(),
+            reason: match reason {
+                StopReason::Crashed => UnavailableReason::Crashed,
+                StopReason::CheckoutRemoved => UnavailableReason::CheckoutRemoved,
+                StopReason::StoppedByHand => UnavailableReason::StoppedByHand,
+                reason => UnavailableReason::Stopped(*reason),
+            },
+        }
+    }
+}
+
+pub fn missing_column(root: &Path, path: &Path, line: u32, outline: Option<Value>) -> QueryErr {
+    let item = outline
+        .and_then(|value| serde_json::from_value::<Symbols>(value).ok())
+        .and_then(|outline| match outline {
+            Symbols::Tree(symbols) => {
+                let mut pending: Vec<_> = symbols.into_iter().rev().collect();
+                while let Some(symbol) = pending.pop() {
+                    if u64::from(symbol.selection_range.start.line) + 1 == u64::from(line) {
+                        return Some(NamedItem {
+                            kind: kind_name(symbol.kind),
+                            name: symbol.name,
+                            column: u64::from(symbol.selection_range.start.character) + 1,
+                        });
+                    }
+                    pending.extend(symbol.children.into_iter().rev());
+                }
+                None
+            }
+            Symbols::Flat(symbols) => {
+                let symbol = symbols.iter().find(|symbol| {
+                    u64::from(symbol.location.range.start.line) + 1 == u64::from(line)
+                })?;
+                let candidate = Candidate::new(root, symbol).ok()?;
+                Some(NamedItem {
+                    kind: candidate.kind,
+                    name: candidate.name,
+                    column: u64::from(symbol.location.range.start.character) + 1,
+                })
+            }
+        });
+    LspErr::MissingColumn {
+        path: path.into(),
+        line,
+        item,
+    }
+    .into()
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -123,10 +248,6 @@ pub enum UnavailableReason {
     NoneConfigured,
     #[error("not running")]
     NotRunning,
-    #[error("not started: memory short")]
-    MemoryShort,
-    #[error("stopped: memory pressure")]
-    MemoryPressure,
     #[error("stopped: crashed; see rimz lsp status")]
     Crashed,
     #[error("stopped: checkout removed")]
@@ -135,19 +256,6 @@ pub enum UnavailableReason {
     StoppedByHand,
     #[error("stopped: {0}")]
     Stopped(super::registry::StopReason),
-}
-
-impl UnavailableReason {
-    fn stopped(reason: &super::registry::StopReason) -> Self {
-        use super::registry::StopReason;
-        match reason {
-            StopReason::MemoryPressure => Self::MemoryPressure,
-            StopReason::Crashed => Self::Crashed,
-            StopReason::CheckoutRemoved => Self::CheckoutRemoved,
-            StopReason::StoppedByHand => Self::StoppedByHand,
-            reason => Self::Stopped(*reason),
-        }
-    }
 }
 
 enum SymbolResolution {
@@ -1238,7 +1346,7 @@ fn render_with_source(
                 contents: HoverContents,
             }
             let hover: Hover = serde_json::from_value(result)?;
-            Ok(format!("{}\n", hover.contents.text().trim_end()))
+            Ok(format!("{}\n", hover.contents.text().trim()))
         }
         Verb::Find => render_find(
             root,

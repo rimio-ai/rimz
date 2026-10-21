@@ -257,13 +257,13 @@ impl<'a> Context<'a> {
                 let server = candidates.next().filter(|_| candidates.next().is_none());
                 if let Some(error) = server
                     .and_then(|server| self.failures.get(&server.server))
-                    .and_then(Self::server_error)
+                    .and_then(query::QueryErr::server_error)
                 {
                     return Err(error);
                 }
                 let result = select().and_then(|server| request(&server, path));
                 if let Err(error) = &result
-                    && let Some(error) = Self::server_error(error)
+                    && let Some(error) = error.server_error()
                     && let Some(server) = server
                 {
                     self.failures.insert(server.server.clone(), error);
@@ -281,20 +281,6 @@ impl<'a> Context<'a> {
             }
         };
         Ok(Some(file))
-    }
-
-    fn server_error(error: &query::QueryErr) -> Option<query::QueryErr> {
-        match error {
-            query::QueryErr::Unavailable { root, reason } => Some(query::QueryErr::Unavailable {
-                root: root.clone(),
-                reason: reason.clone(),
-            }),
-            query::QueryErr::Indexing { server, seconds } => Some(query::QueryErr::Indexing {
-                server: server.clone(),
-                seconds: *seconds,
-            }),
-            query::QueryErr::Failed(_) => None,
-        }
     }
 }
 
