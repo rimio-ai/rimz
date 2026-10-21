@@ -1896,7 +1896,7 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
 }
 
 #[test]
-fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
+fn model_breakdown_folds_unpriced_rows_by_work_token_share() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
@@ -1905,8 +1905,9 @@ fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
         recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: model_map([
-            ("model-a".to_owned(), model_tally(100, 0.0, 100, 0, 0)),
-            ("model-b".to_owned(), model_tally(50, 0.0, 50, 0, 0)),
+            ("model-a".to_owned(), model_tally(9_800, 0.0, 9_800, 0, 0)),
+            ("model-b".to_owned(), model_tally(150, 0.0, 150, 0, 0)),
+            ("model-c".to_owned(), model_tally(50, 0.0, 50, 0, 0)),
         ]),
         by_agent: BTreeMap::new(),
         total: SpendTally::default(),
@@ -1914,8 +1915,109 @@ fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
 
     let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
 
-    assert_eq!(models.len(), 2);
-    assert!(models.iter().all(|(name, _, _)| name != "Other"));
+    assert_eq!(
+        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        ["Model A", "Model B", "Other"]
+    );
+    assert_eq!(models[2].1.tokens, 50);
+    assert_eq!(models[2].1.usd, 0.0);
+    assert_eq!(model_breakdown_size(&stats, Window::Year), models.len());
+}
+
+fn dual_share_models() -> Stats {
+    Stats {
+        timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
+        subagents: BTreeMap::new(),
+        recorded_since_secs: None,
+        by_day: BTreeMap::new(),
+        by_model: model_map([
+            (
+                "model-a".into(),
+                model_tally(10_000, 400.0, 6_000, 4_000, 400_000),
+            ),
+            (
+                "model-b".into(),
+                model_tally(70_000, 40.0, 40_000, 30_000, 400_000),
+            ),
+            (
+                "model-c".into(),
+                model_tally(18_000, 6.07, 10_000, 8_000, 0),
+            ),
+            ("model-d".into(), model_tally(500, 5.65, 300, 200, 0)),
+            ("model-e".into(), model_tally(1_430, 0.12, 1_000, 430, 0)),
+            ("model-f".into(), model_tally(50, 0.10, 30, 20, 100)),
+            ("model-g".into(), model_tally(20, 0.06, 15, 5, 200)),
+        ]),
+        by_agent: BTreeMap::new(),
+        total: tally(100_000, 452.0, 0),
+    }
+}
+
+#[test]
+fn model_breakdown_names_work_token_share_without_cache_reads() {
+    let stats = dual_share_models();
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
+
+    assert_eq!(
+        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        [
+            "Model A", "Model B", "Model C", "Model D", "Model E", "Other"
+        ]
+    );
+    assert_eq!(models[5].1, spend_window(70, 0.16, 45, 25, 300, 0));
+    assert!(models[5].2.is_empty());
+    assert_eq!(model_breakdown_size(&stats, Window::Year), 6);
+    let glyphs = panel_glyphs();
+    let cells = model_cells(&models, 7, &glyphs, stats.total.year.usd);
+    let layout = stat_section_layout(&[&cells], stat_pct_width(&[&cells]), 120);
+    let mut lines = Vec::new();
+    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
+    let token_row = lines.iter().find(|line| line.contains("Model E")).unwrap();
+    assert!(strip_ansi(token_row).contains("0.0%"));
+    assert_eq!(token_row.matches(glyphs.bar_filled.as_str()).count(), 0);
+}
+
+#[test]
+fn model_breakdown_cap_keeps_work_over_a_larger_dollar_share() {
+    let stats = dual_share_models();
+    let models = model_breakdown(&stats, Window::Year, 5);
+
+    assert_eq!(
+        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        ["Model A", "Model B", "Model C", "Model E", "Other"]
+    );
+    assert!((models[4].1.usd - 5.81).abs() < 1e-12);
+    let mut expected = spend_window(570, 0.0, 345, 225, 300, 0);
+    expected.usd = models[4].1.usd;
+    assert_eq!(models[4].1, expected);
+}
+
+#[test]
+fn model_breakdown_admits_dollar_only_rows_and_folds_unknown_models() {
+    let mut stats = dual_share_models();
+    stats.by_model = model_map([
+        ("model-a".into(), model_tally(0, 10.0, 0, 0, 0)),
+        ("model-b".into(), model_tally(200, 2.0, 150, 50, 0)),
+        (String::new(), model_tally(10_000, 100.0, 6_000, 4_000, 0)),
+        ("cache-only".into(), model_tally(0, 0.0, 0, 0, 1_000_000)),
+    ]);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
+
+    assert_eq!(
+        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        ["Model A", "Model B", "Other"]
+    );
+    assert_eq!(models[2].1, stats.by_model[""].tally.year);
+    assert_eq!(model_breakdown_size(&stats, Window::Year), models.len());
+    let all_folded = model_breakdown(&stats, Window::Year, 1);
+    assert_eq!(all_folded.len(), 1);
+    assert_eq!(all_folded[0].0, "Other");
+    assert_eq!(all_folded[0].1.usd, 112.0);
+    assert_eq!(all_folded[0].1.tokens, 10_200);
+    assert_eq!(all_folded[0].1.cache_read, 0);
+    assert!(model_breakdown(&stats, Window::Year, 0).is_empty());
 }
 
 #[test]
@@ -2094,6 +2196,57 @@ fn agent_breakdown_folds_rows_below_one_percent_into_other() {
 }
 
 #[test]
+fn agent_breakdown_names_work_and_folds_unpriced_tail() {
+    let mut stats = dual_share_models();
+    stats.by_agent = BTreeMap::from([
+        ("agent-a".into(), tally(9_000, 90.0, 9)),
+        ("agent-b".into(), tally(800, 10.0, 8)),
+        ("agent-c".into(), tally(150, 0.0, 2)),
+        ("agent-d".into(), tally(50, 0.0, 1)),
+    ]);
+    stats.total = tally(1_000_000, 100.0, 20);
+    let agents = agent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
+
+    assert_eq!(
+        agents
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Agent-a", "Agent-b", "Agent-c", "Other"]
+    );
+    assert_eq!(agents[2].share, 0.0);
+    assert!(!agents[2].folded);
+    assert_eq!(agents[3].window, stats.by_agent["agent-d"].year);
+    assert_eq!(agents[3].share, 0.0);
+    assert!(agents[3].folded);
+    assert_eq!(agent_breakdown_size(&stats, Window::Year), agents.len());
+}
+
+#[test]
+fn agent_breakdown_cap_keeps_earlier_display_rows_at_equal_significance() {
+    let mut stats = dual_share_models();
+    stats.by_agent = BTreeMap::from([
+        ("agent-a".into(), tally(9_700, 100.0, 9)),
+        ("agent-b".into(), tally(100, 0.0, 1)),
+        ("agent-c".into(), tally(100, 0.0, 2)),
+        ("agent-d".into(), tally(100, 0.0, 3)),
+    ]);
+    let agents = agent_breakdown(&stats, Window::Year, Some(3));
+
+    assert_eq!(
+        agents
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Agent-a", "Agent-b", "Other"]
+    );
+    assert_eq!(agents[2].window.tokens, 200);
+    assert_eq!(agents[2].window.sessions, 5);
+    assert!(agents[2].folded);
+    assert_eq!(agent_breakdown_size(&stats, Window::Year), 4);
+}
+
+#[test]
 fn subagent_breakdown_folds_against_profile_spend_not_fleet() {
     let stats = Stats {
         timezone: "UTC".into(),
@@ -2121,6 +2274,89 @@ fn subagent_breakdown_folds_against_profile_spend_not_fleet() {
     assert!(
         (rows[0].share - 0.005).abs() < f64::EPSILON,
         "share stays fleet-relative"
+    );
+}
+
+#[test]
+fn subagent_breakdown_names_the_sections_work_and_unpriced_profiles() {
+    let mut stats = dual_share_models();
+    stats.subagents = BTreeMap::from([
+        ("implementer".into(), tally(9_700, 99.8, 9)),
+        ("explorer".into(), tally(200, 0.2, 2)),
+        ("finder".into(), tally(100, 0.0, 1)),
+    ]);
+    stats.total = tally(1_000_000, 1_000.0, 100);
+    let rows = subagent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
+
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["implementer", "explorer", "finder"]
+    );
+    assert!((rows[1].share - 0.0002).abs() < f64::EPSILON);
+    assert_eq!(rows[2].share, 0.0);
+    assert!(rows.iter().all(|row| !row.folded));
+}
+
+#[test]
+fn stats_json_lists_unpriced_usage_without_folding_or_empty_windows() {
+    let rows: BTreeMap<String, SpendTally> = BTreeMap::from([
+        (
+            "priced".into(),
+            every_window(model_tally(10_000, 10.0, 6_000, 4_000, 0)),
+        ),
+        (
+            "dollar-only".into(),
+            every_window(model_tally(0, 2.0, 0, 0, 0)),
+        ),
+        (
+            "unpriced".into(),
+            every_window(model_tally(100, 0.0, 60, 40, 40)),
+        ),
+        ("tiny".into(), every_window(model_tally(1, 0.0, 1, 0, 0))),
+        ("empty".into(), model_tally(100, 1.0, 60, 40, 0)),
+        (
+            "cache-only".into(),
+            every_window(model_tally(0, 0.0, 0, 0, 1_000_000)),
+        ),
+    ]);
+    let mut stats = dual_share_models();
+    stats.by_model = rows
+        .iter()
+        .map(|(id, tally)| (id.clone(), produced(tally.clone())))
+        .collect();
+    stats.by_agent = rows.clone();
+    stats.subagents = rows;
+    stats.total = every_window(tally(10_101, 12.0, 4));
+    let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false, Window::Week);
+
+    for (section, key) in [
+        ("models", "model"),
+        ("agents", "kind"),
+        ("subagents", "profile"),
+    ] {
+        let rows = value[section].as_array().unwrap();
+        let expected = if section == "subagents" {
+            ["priced", "dollar-only", "tiny", "unpriced"]
+        } else {
+            ["priced", "dollar-only", "unpriced", "tiny"]
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row[key].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected,
+            "{section}"
+        );
+        for (id, tokens) in [("unpriced", 140), ("tiny", 1)] {
+            let row = rows.iter().find(|row| row[key] == id).unwrap();
+            assert_eq!(row["usd"], 0.0);
+            assert_eq!(row["share"], 0.0);
+            assert_eq!(row["tokens"], tokens);
+        }
+    }
+    assert_eq!(
+        json::subagents_value(&stats, Window::Week)["subagents"],
+        value["subagents"]
     );
 }
 

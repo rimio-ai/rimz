@@ -58,6 +58,8 @@ One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a c
 
 The held view keeps its compact rows and geometry budget, with dollar shares for Models, Agents, and Subagents. Agent names come from provider descriptors; model names use `model_display::display_model`. Both use provider identity colours, with each model's published producing kind supplying its colour. Unknown and folded model names stay muted; profile names and bullets are muted. Token units are uppercase.
 
+Held rows enter with dollars or work tokens. Work tokens are `SpendWindow::tokens`: input (including cache writes) plus output, excluding cache reads, unlike displayed token totals. Each section measures both shares against its own admitted rows; a share against a zero total is zero. A row stays named at 1% of either measure, except the empty model id always folds into `Other`. `crates/rimz/src/cli/stats/panel.rs::fold_breakdown` applies this rule to all three sections and supplies their natural sizes without a cap cut. When the cap requires more folding, the least significant rows fold first, ranked by the greater of their dollar and work-token shares; ties fold the later display row first. Display order stays dollars, then work tokens, then key, with a muted `Other` last carrying the merged window and summed fleet-dollar share.
+
 The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
 
 The final Models and Agents column uses `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; in the held view, when every row is untimed the column disappears. Held Subagents omits the rate. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
@@ -76,7 +78,7 @@ The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` wri
 
 `fit` spends the row budget (terminal rows minus one) after the fixed rows, the section chrome, and the assist rows, and it keeps data ahead of chrome:
 
-1. With room for everything, each breakdown gets its natural row count, capped at 6.
+1. With room for everything, each breakdown gets its natural row count (named rows plus `Other` when present), capped at 6.
 2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
 3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
 4. If the three 1-row sections still do not fit, Subagents drops, including its chrome and recorded-since note. Models and Agents retain their rows. A visible note reserves enough rows for wrapping at the panel width.
@@ -117,7 +119,7 @@ Reload re-execs `reload::current_reexec_target()` with the original arguments. T
 
 Molt records project to `molts` in the assist rollup and the `Molts:` dashboard category. They count as recorded after placement, retaining both agents' provider, identity, and label plus the inherited generation in timeline JSON and forensic text. The successor identity is a launch id, not a provider session id.
 
-`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, `window`, optional local-date `subagents_since`, selected-window sessions, streak fields, `windows.today/week/month/year`, unfolded selected-window `models`, provider `agents`, profile `subagents`, local-date `days`, and the selected-window assist rollup only. Activity fields keep the full-history computation so `active_days_28` retains its meaning. Agents gains optional `tokens_per_sec`; profiles carry no model. `--subagents --json` emits `{as_of, window, subagents, subagents_since?}`.
+`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, `window`, optional local-date `subagents_since`, selected-window sessions, streak fields, `windows.today/week/month/year`, unfolded selected-window `models`, provider `agents`, profile `subagents`, local-date `days`, and the selected-window assist rollup only. Models, agents, and profiles include every row with dollars or work tokens in the selected window, without a row cap. Activity fields keep the full-history computation so `active_days_28` retains its meaning. Agents gains optional `tokens_per_sec`; profiles carry no model. `--subagents --json` emits `{as_of, window, subagents, subagents_since?}` with the same profile admission.
 
 `--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`, with `as_of` the read time in the configured zone that spend history uses (`MachineConfig::time_zone`). The rollup covers all retained records, not just the displayed page.
 

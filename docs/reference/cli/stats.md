@@ -19,7 +19,7 @@ rimz stats --subagents                  # every subagent profile, unfolded
 | `--window <WINDOW>` | Select `today` (default), `week`, `month`, or `year` for breakdowns, JSON sessions and assists, and the held dashboard's initial tab. The Spend row always shows all four. Conflicts with `--assists`. |
 | `--refresh` | Open the [held dashboard](#the-held-dashboard): a full-screen panel that refreshes every 60 seconds and re-centres on resize. Conflicts with `--json`. |
 | `--assists` | Print the [assist timeline](#the-assist-timeline). Conflicts with `--subagents` and `--refresh`; supports `--json`. |
-| `--subagents` | Show every non-zero subagent profile in the selected window, with spend, fleet dollar share, input, output, cached tokens, hit rate, and runs (distinct sessions). Supports `--json`; conflicts with `--refresh`. |
+| `--subagents` | Show every subagent profile with spend in the selected window: spend, fleet dollar share, input, output, cached tokens, hit rate, and runs (distinct sessions). With `--json`, also include profiles with work tokens and no spend. Conflicts with `--refresh`. |
 | `-n N` | With `--assists`, show at most N events (default 50); 0 means all retained. |
 | `--all` | With `--assists`, include held and undelivered attempts. |
 
@@ -68,9 +68,11 @@ Other keys do nothing. In the daemon view both `q` and `Ctrl-C` are ignored; clo
 
 The dashboard starts on Today, or the tab selected by `--window`. It includes Models, Agents, and Subagents; Agents adds a `tok/s` column when any row has response timing. Short panes drop the wordmark before shrinking each section to one row, then omit Subagents and its recorded-since note if all three sections cannot fit. Today scopes the breakdowns, sessions, cost per session, spend, and assists to the local calendar day in the published timezone. Its activity rows and daily average keep Year's history, so today's spend can be compared with a typical active day. Today and Year have no spend trend; Week and Month add a spend comparison with the preceding week or month when that period had spend. A refresh that fails leaves the last frame on screen with no marker. When the first refresh fails, the dashboard shows `Spending refresh unavailable - retrying.` with the cause and tries again after 5 seconds. Reload returns to the initial tab specified by the flags.
 
+Each section names a row when it accounts for at least 1% of that section's dollars or work tokens: input (including cache writes) plus output, excluding cache reads. Smaller rows combine as `Other`. If the pane's row limit requires more folding, rows rank by whichever of their dollar or token shares is greater, and the least significant fold first. Order, percentages, and bars still follow dollars, so a row kept for its tokens can have a near-empty bar.
+
 ## JSON output
 
-`rimz stats --json` prints one pretty-printed object describing the selected window (today by default). Breakdowns carry every non-zero-spend entry in that window, with no `Other` folding and no row cap. To inspect a timed model over the year:
+`rimz stats --json` prints one pretty-printed object describing the selected window (today by default). Breakdowns carry every model, agent, and profile with dollars or work tokens in that window, with no `Other` folding and no row cap. To inspect a timed model over the year:
 
 ```sh
 rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del(.tools)'
@@ -88,9 +90,9 @@ rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_s
 | `most_active_day` | `YYYY-MM-DD` of the heaviest day. Omitted when there is no usage. |
 | `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`, plus `tool_calls` and a `tools` map of calls by tool name, each omitted when empty. `today` is the local calendar day in the published timezone. |
 | `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
-| `agents` | One object per provider kind with non-zero selected-window spend, sorted by dollars: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, optional `tokens_per_sec`, and `share` of selected-window fleet dollars as a fraction. |
+| `agents` | One object per provider kind with selected-window dollars or work tokens, sorted by dollars: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, optional `tokens_per_sec`, and `share` of selected-window fleet dollars as a fraction. |
 | `days` | One object per local calendar day in the published timezone with usage, oldest first: `date`, `tokens`, `usd`. |
-| `subagents` | Every non-zero selected-window profile: `profile`, `runs`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. |
+| `subagents` | Every profile with selected-window dollars or work tokens: `profile`, `runs`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. |
 | `assists` | The selected-window effective-assist rollup only, without events. |
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty; `cache_hit_pct` is omitted when there is no input to measure.

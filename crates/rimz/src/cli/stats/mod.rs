@@ -57,7 +57,7 @@ const GUTTER: usize = 6;
 const MAX_MODELS: usize = 6;
 const MAX_AGENTS: usize = 6;
 /// A named breakdown row must carry at least one percent of its section's
-/// displayed quantity; smaller rows fold into "Other".
+/// dollars or work tokens (input plus output, excluding cache reads).
 const MIN_BREAKDOWN_SHARE: f64 = 0.01;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
