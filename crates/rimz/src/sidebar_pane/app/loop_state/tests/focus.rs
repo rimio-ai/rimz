@@ -1245,7 +1245,7 @@ fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
 }
 
 #[test]
-fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
+fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     let own = zellij("terminal_99");
     let target = zellij("terminal_2");
     let mut rig = Rig::with_own_pane(own);
@@ -1279,11 +1279,11 @@ fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
         nonce: anchor.nonce,
     });
     assert_eq!(
-        rig.state.projections, 1,
-        "the ordinary event still flushes the mailbox"
+        rig.state.projections, 0,
+        "a foreign intent leaves the mailbox untouched"
     );
-    assert_eq!(rig.state.current.display_name, "waiting fold");
-    assert_eq!(rig.state.last_folded_focus_intent, Some(anchor.nonce));
+    assert_ne!(rig.state.current.display_name, "waiting fold");
+    assert_eq!(rig.state.last_folded_focus_intent, None);
 }
 
 #[test]

@@ -730,8 +730,6 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
             .contents()
             .contains(&snapshot.worktree_groups[0].rows[0].name)
     });
-    // Give the hidden adoption its own frame interval after the source paint.
-    std::thread::sleep(Duration::from_millis(600));
     visible.drain();
     hidden.drain();
     let beat = room.heartbeat(&hidden_pane.instance_id).unwrap().last_seen;

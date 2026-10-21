@@ -177,7 +177,6 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
         state.viewport = plane.viewport.clone();
-        state.viewport_peers = Some(plane.subscribers.clone());
         state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
         state.wake = Some(wake);
         state.request_reload = request_reload;

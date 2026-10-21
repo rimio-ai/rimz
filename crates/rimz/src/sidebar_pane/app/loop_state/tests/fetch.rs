@@ -1009,7 +1009,7 @@ fn lifecycle_store_delta_preserves_fresh_pane_verification() {
 }
 
 #[test]
-fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
+fn only_watched_metrics_and_presence_publications_fold_immediately() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
     for watched in [true, false] {
@@ -1035,13 +1035,16 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
         folded.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
         rig.fold(folded, SnapshotSource::Produced);
 
-        assert!(matches!(
-            &rig.state.current.worktree_groups[0].rows[0].card,
-            crate::store::snapshot::RowCard::Process(card) if card.cpu_pct == Some(73)
-        ));
+        assert_eq!(
+            matches!(
+                &rig.state.current.worktree_groups[0].rows[0].card,
+                crate::store::snapshot::RowCard::Process(card) if card.cpu_pct == Some(73)
+            ),
+            watched
+        );
         assert_eq!(
             rig.state.current.presence,
-            Some(crate::store::snapshot::SidebarPresence::Detached)
+            watched.then_some(crate::store::snapshot::SidebarPresence::Detached)
         );
     }
 }
