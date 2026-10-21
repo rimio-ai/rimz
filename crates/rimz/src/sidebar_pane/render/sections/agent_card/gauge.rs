@@ -101,7 +101,17 @@ pub(super) fn bar_row(
 /// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
 /// fills it to `▣`.
 ///
-/// At L2 every meter reserves a five-cell age cluster after a space; below L2 the bar keeps that room and the stats line pins the age instead. The age appears from five minutes quiet, with a clock-fill glyph ([`elapsed_glyph`]) and continuous tone: muted until half the known TTL, or the last ten minutes if earlier, then warn through caution to alarm at the ceiling. Past the ceiling it wears the fixed expired-cache tone and ringed over face. Unknown lifetimes stay muted. A keep-warm horizon uses the steady held tone ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last cache request, not child-folded activity: a parent waiting on children makes no model call, so its cache keeps cooling.
+/// At L2 every meter reserves a five-cell age cluster after a space; below L2
+/// the bar keeps that room and the stats line pins the age instead. The age
+/// appears from five minutes quiet, with a clock-fill glyph ([`elapsed_glyph`])
+/// and continuous tone: muted until half the known TTL, or the last ten
+/// minutes if earlier, then warn through caution to alarm at the ceiling. Past
+/// the ceiling it wears the fixed expired-cache tone and ringed over face.
+/// Unknown lifetimes stay muted. A keep-warm horizon uses the steady held tone
+/// ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads
+/// the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last cache
+/// request, not child-folded activity: a parent waiting on children makes no
+/// model call, so its cache keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -404,7 +414,14 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
     }
 }
 
-/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads the time since the last real turn ended, the face filling over the horizon in the steady `good` tone; otherwise the time since the agent's own activity or its last cache request (a ping refreshes the cache, not the activity), face over the card's provider cache TTL, else the hour. After half a known TTL, or in the last ten minutes if earlier, the pin heats from warn through caution to alarm; an unknown lifetime stays muted, and an expired cache wears the meter's expired-cache tone.
+/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
+/// the time since the last real turn ended, the face filling over the horizon
+/// in the steady `good` tone; otherwise the time since the agent's own activity
+/// or its last cache request (a ping refreshes the cache, not the activity),
+/// face over the card's provider cache TTL, else the hour. After half a known
+/// TTL, or in the last ten minutes if earlier, the pin heats from warn through
+/// caution to alarm; an unknown lifetime stays muted, and an expired cache
+/// wears the meter's expired-cache tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = age.phase(now).style(theme);
