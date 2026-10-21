@@ -18,7 +18,7 @@ use tungstenite::error::ProtocolError;
 use tungstenite::handshake::{HandshakeError, client::ClientHandshake};
 use tungstenite::{Message, WebSocket};
 
-use crate::agents::adapters::codex::CodexAdapter;
+use crate::agents::adapters::codex::{CodexAdapter, oauth_usage};
 use crate::agents::capabilities::LaunchCapability;
 
 /// Names the `codex` binary for every codex process RimZ starts on its own
@@ -43,6 +43,8 @@ pub(crate) enum AppServerErr {
     JsonRpc { code: i64, message: String },
     #[error("codex app-server stream closed before responding")]
     Closed,
+    #[error("codex app-server broker did not confirm it serves the login")]
+    Unconfirmed,
     #[error("{attempt}: {source}")]
     Attempt {
         attempt: &'static str,
@@ -76,9 +78,36 @@ impl ServedBy {
         })
     }
 
+    /// The identity a client expects of a child serving `login_env`.
+    pub(in crate::agents::adapters::codex) fn expected(
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<Self> {
+        Self::of(login_env, oauth_usage::credentials_stamp(login_env))
+    }
+
+    /// The member's identity on a response frame. A missing or malformed member
+    /// is `None`; `authStamp` must be present, and `null` equals only `null`.
+    fn from_frame(frame: &Value) -> Option<Self> {
+        let member = frame.get(SERVED_BY_MEMBER)?;
+        let auth_stamp = match member.get("authStamp")? {
+            Value::Null => None,
+            stamp => Some(stamp.as_u64()?),
+        };
+        Some(Self {
+            codex_home: PathBuf::from(member.get("codexHome")?.as_str()?),
+            auth_stamp,
+        })
+    }
+
     pub(in crate::agents::adapters::codex) fn insert_into(&self, frame: &mut Value) {
         frame[SERVED_BY_MEMBER] =
             json!({"codexHome": self.codex_home.to_str(), "authStamp": self.auth_stamp});
+    }
+}
+
+impl AppServerErr {
+    pub(in crate::agents::adapters::codex) fn is_unconfirmed(&self) -> bool {
+        matches!(self, Self::Unconfirmed)
     }
 }
 
@@ -175,8 +204,16 @@ pub(crate) fn write_frame(writer: &mut dyn Write, frame: &Value) -> Result<(), A
     writer.flush().map_err(AppServerErr::Io)
 }
 
-/// Wait for the response frame matching `id`, skipping late responses until `deadline`.
-fn recv_response(rx: &Receiver<Value>, deadline: Instant, id: i64) -> Result<Value, AppServerErr> {
+/// Wait for the response frame matching `id`, skipping late responses until
+/// `deadline`. With an `expected` identity, a successful response that does not
+/// name it is [`AppServerErr::Unconfirmed`]; an error frame carries no data and
+/// passes through.
+fn recv_response(
+    rx: &Receiver<Value>,
+    deadline: Instant,
+    id: i64,
+    expected: Option<&ServedBy>,
+) -> Result<Value, AppServerErr> {
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -185,9 +222,17 @@ fn recv_response(rx: &Receiver<Value>, deadline: Instant, id: i64) -> Result<Val
             RecvTimeoutError::Timeout => AppServerErr::Timeout,
             RecvTimeoutError::Disconnected => AppServerErr::Closed,
         })?;
-        if let Some(response) = response_for(&value, id) {
-            return response;
-        }
+        let Some(response) = response_for(&value, id) else {
+            continue;
+        };
+        let confirmed = expected.is_none_or(|expected| {
+            response.is_err() || ServedBy::from_frame(&value).as_ref() == Some(expected)
+        });
+        return if confirmed {
+            response
+        } else {
+            Err(AppServerErr::Unconfirmed)
+        };
     }
 }
 
@@ -262,6 +307,9 @@ pub(crate) struct FramedTransport {
     rx: Receiver<Value>,
     next_id: i64,
     deadline: Instant,
+    /// The identity every successful response must name; set for a broker
+    /// connection only.
+    expected: Option<ServedBy>,
     /// `Some` when we spawned a `codex` child — killed and reaped on drop. `None`
     /// for a unix-socket connection (dropping `writer` closes it; the broker
     /// reaps the client on EOF).
@@ -349,6 +397,7 @@ impl FramedTransport {
             rx,
             next_id: 1,
             deadline,
+            expected: None,
             child: Some(child),
         })
     }
@@ -377,7 +426,13 @@ impl FramedTransport {
 
     /// Connect to the per-session broker socket at `path`, giving the handshake +
     /// reads `total` wall-clock. The broker is warm, so this is the fast path.
-    pub(super) fn connect(path: &Path, total: Duration) -> Result<Self, AppServerErr> {
+    /// Every successful response must name `expected`, else the request fails
+    /// as [`AppServerErr::Unconfirmed`].
+    pub(super) fn connect(
+        path: &Path,
+        total: Duration,
+        expected: ServedBy,
+    ) -> Result<Self, AppServerErr> {
         let deadline = Instant::now() + total;
         let stream = connect_stream(path, total)?;
         let reader = stream.try_clone().map_err(AppServerErr::Io)?;
@@ -387,6 +442,7 @@ impl FramedTransport {
             rx,
             next_id: 1,
             deadline,
+            expected: Some(expected),
             child: None,
         })
     }
@@ -400,7 +456,7 @@ impl JsonRpcTransport for FramedTransport {
             &mut self.writer,
             &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
         )?;
-        recv_response(&self.rx, self.deadline, id)
+        recv_response(&self.rx, self.deadline, id, self.expected.as_ref())
     }
 
     fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
@@ -571,7 +627,16 @@ mod tests {
             let result = if websocket {
                 WsTransport::connect(&path, Duration::from_millis(30)).map(|_| ())
             } else {
-                FramedTransport::connect(&path, Duration::from_millis(30)).map(|_| ())
+                FramedTransport::connect(
+                    &path,
+                    Duration::from_millis(30),
+                    ServedBy::of(
+                        &BTreeMap::from([("CODEX_HOME".to_owned(), "/".to_owned())]),
+                        None,
+                    )
+                    .unwrap(),
+                )
+                .map(|_| ())
             };
             let elapsed = started.elapsed();
             release.join().unwrap();
@@ -745,5 +810,118 @@ mod tests {
             "expected closed transport, got {err:?}"
         );
         handle.join().unwrap();
+    }
+
+    /// A listener that answers one request with `{}` plus `member` under the
+    /// broker's identity key, as a broker (`Some`) or a pre-identity one (`None`).
+    fn fake_broker(path: &Path, member: Option<Value>) -> thread::JoinHandle<()> {
+        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let mut frame = json!({"jsonrpc": "2.0", "id": request["id"], "result": {}});
+            if let Some(member) = &member {
+                frame[SERVED_BY_MEMBER] = member.clone();
+            }
+            write_frame(&mut writer, &frame).unwrap();
+        })
+    }
+
+    fn served_by_at(home: &Path, stamp: Option<u64>) -> ServedBy {
+        ServedBy::of(
+            &BTreeMap::from([("CODEX_HOME".to_owned(), home.to_str().unwrap().to_owned())]),
+            stamp,
+        )
+        .unwrap()
+    }
+
+    fn request_through(
+        expected: &ServedBy,
+        reported: Option<Value>,
+    ) -> Result<Value, AppServerErr> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broker.sock");
+        let broker = fake_broker(&path, reported);
+        let mut transport =
+            FramedTransport::connect(&path, Duration::from_secs(2), expected.clone()).unwrap();
+        let result = transport.request("account/rateLimits/read", Value::Null);
+        drop(transport);
+        broker.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn a_broker_response_is_accepted_only_when_it_names_the_expected_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mine, other) = (dir.path().join("mine"), dir.path().join("other"));
+        std::fs::create_dir(&mine).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let home = mine.canonicalize().unwrap();
+        let named =
+            |home: &Path, stamp: Value| Some(json!({"codexHome": home, "authStamp": stamp}));
+        let expected = served_by_at(&mine, Some(7));
+        let unstamped = served_by_at(&mine, None);
+
+        assert_eq!(
+            request_through(&expected, named(&home, json!(7))).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            request_through(&unstamped, named(&home, Value::Null)).unwrap(),
+            json!({})
+        );
+        let unconfirmed = [
+            (&expected, None),
+            (&expected, named(&other.canonicalize().unwrap(), json!(7))),
+            (&expected, named(&home, json!(8))),
+            (&expected, named(&home, Value::Null)),
+            (&unstamped, named(&home, json!(7))),
+            (&expected, Some(json!({"codexHome": home}))),
+            (
+                &expected,
+                Some(json!({"codexHome": home, "authStamp": "7"})),
+            ),
+            (&expected, Some(json!({"authStamp": 7}))),
+            (&expected, Some(json!("mine"))),
+        ];
+        for (expected, reported) in unconfirmed {
+            let result = request_through(expected, reported.clone());
+            assert!(
+                matches!(result, Err(AppServerErr::Unconfirmed)),
+                "{reported:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broker_error_frame_needs_no_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broker.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let broker = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let frame = json!({"jsonrpc": "2.0", "id": request["id"],
+                "error": {"code": -32000, "message": "child gone"}});
+            write_frame(&mut writer, &frame).unwrap();
+        });
+        let mut transport = FramedTransport::connect(
+            &path,
+            Duration::from_secs(2),
+            served_by_at(dir.path(), None),
+        )
+        .unwrap();
+        let result = transport.request("account/rateLimits/read", Value::Null);
+        broker.join().unwrap();
+        assert!(
+            matches!(result, Err(AppServerErr::JsonRpc { .. })),
+            "{result:?}"
+        );
     }
 }

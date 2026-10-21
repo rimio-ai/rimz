@@ -23,6 +23,15 @@
 //! (headless / no-mux just cold-spawns). Set `RIMZ_CODEX_APP_SERVER_SOCK` to an
 //! empty value to drop the daemon from the order.
 //!
+//! A reading reaches a login's entry only from that login's Codex home. The
+//! broker reports the child that served each response and this client decides:
+//! every broker response must name the canonical home and auth stamp of the
+//! login ([`ServedBy`]), or the whole attempt is discarded and the ladder goes on.
+//! An older broker never names its child, so it is skipped after `initialize`.
+//! The daemon socket is the login's own and the cold spawn runs under the
+//! login's env, so neither needs the check. Enrichment and the model catalog
+//! share the one ladder.
+//!
 //! Why no token gauge here: as of the pinned Codex app-server, token /
 //! context-window usage is exposed only on the live `thread/tokenUsage/updated`
 //! notification (requires a subscribing `thread/resume`), never on a read-only
@@ -169,7 +178,7 @@ type RateLimitRead = (
     Option<ResetCredits>,
 );
 
-/// One way [`CodexAppServer::connect`] tries to reach an app-server, in
+/// One way [`CodexAppServer::observe_login`] tries to reach an app-server, in
 /// preference order.
 #[derive(Debug)]
 enum ConnectAttempt {
@@ -182,26 +191,28 @@ enum ConnectAttempt {
     Spawn,
 }
 
-fn catalog_from_attempts<T: JsonRpcTransport>(
+/// Run `read` against the first attempt that opens, handshakes, and reads
+/// whole. An attempt that fails at any step, including a broker response that
+/// does not confirm the login, is discarded with everything it returned. A
+/// `budget` of `None` stops the ladder.
+fn read_from_attempts<T: JsonRpcTransport, R>(
     attempts: Vec<ConnectAttempt>,
-    deadline: Instant,
+    mut budget: impl FnMut(&ConnectAttempt) -> Option<Duration>,
     mut open: impl FnMut(&ConnectAttempt, Duration) -> Result<T, AppServerErr>,
-) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
+    mut read: impl FnMut(&mut CodexAppServer<T>) -> Result<R, AppServerErr>,
+) -> Result<R, AppServerErr> {
     let mut last_error = None;
     for attempt in attempts {
-        let Some(remaining) = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-        else {
+        let Some(budget) = budget(&attempt) else {
             break;
         };
-        let result = open(&attempt, remaining).and_then(|transport| {
+        let result = open(&attempt, budget).and_then(|transport| {
             let mut client = CodexAppServer::new(transport);
             client.handshake()?;
-            client.model_catalog()
+            read(&mut client)
         });
         match result {
-            Ok(catalog) => return Ok(catalog),
+            Ok(value) => return Ok(value),
             Err(error) => {
                 last_error = Some(AppServerErr::Attempt {
                     attempt: match attempt {
@@ -217,21 +228,66 @@ fn catalog_from_attempts<T: JsonRpcTransport>(
     Err(last_error.unwrap_or(AppServerErr::Timeout))
 }
 
+fn catalog_from_attempts<T: JsonRpcTransport>(
+    attempts: Vec<ConnectAttempt>,
+    deadline: Instant,
+    open: impl FnMut(&ConnectAttempt, Duration) -> Result<T, AppServerErr>,
+) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
+    read_from_attempts(
+        attempts,
+        |_| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+        },
+        open,
+        CodexAppServer::model_catalog,
+    )
+}
+
+/// [`CodexAppServer::observe`] on the first attempt that serves the login. Each
+/// attempt has its own budget: the short probe for a warm socket, the cold-spawn
+/// budget for a spawn.
+fn observe_from_attempts<T: JsonRpcTransport>(
+    attempts: Vec<ConnectAttempt>,
+    open: impl FnMut(&ConnectAttempt, Duration) -> Result<T, AppServerErr>,
+    source: &str,
+    session_id: Option<&str>,
+    model_hint: Option<&str>,
+    observed_at: Timestamp,
+) -> Result<AppServerObservation, AppServerErr> {
+    read_from_attempts(
+        attempts,
+        |attempt| {
+            Some(match attempt {
+                ConnectAttempt::Spawn => APP_SERVER_DEADLINE,
+                _ => DAEMON_PROBE_DEADLINE,
+            })
+        },
+        open,
+        |client| client.observe(source, session_id, model_hint, observed_at),
+    )
+}
+
 pub(crate) enum Transport {
     Framed(FramedTransport),
     Ws(Box<WsTransport>),
 }
 
 impl Transport {
+    /// `expected` is the identity a broker must confirm; without one (the login's
+    /// home cannot be resolved) no broker attempt can be confirmed.
     fn open(
         attempt: &ConnectAttempt,
         bin: &Path,
         login_env: &BTreeMap<String, String>,
+        expected: Option<&ServedBy>,
         budget: Duration,
     ) -> Result<Self, AppServerErr> {
         match attempt {
             ConnectAttempt::Broker(path) => {
-                FramedTransport::connect(path, budget).map(Self::Framed)
+                let expected = expected.ok_or(AppServerErr::Unconfirmed)?;
+                FramedTransport::connect(path, budget, expected.clone()).map(Self::Framed)
             }
             ConnectAttempt::DaemonWs(path) => WsTransport::connect(path, budget)
                 .map(Box::new)
@@ -260,31 +316,30 @@ impl JsonRpcTransport for Transport {
 }
 
 impl CodexAppServer<Transport> {
-    /// Connect to a Codex app-server and complete the initialize handshake,
-    /// trying each attempt in preference order: the per-session broker socket
-    /// (warm) first, then the per-user daemon control socket, then a fresh
-    /// cold-spawned `app-server`. The first that handshakes wins. `None` when none
-    /// do (codex missing, not runnable, protocol mismatch) — best-effort.
-    pub(crate) fn connect(
+    /// Observe the login through the warmest app-server that serves it: the
+    /// per-session broker socket first (only when it confirms the login), then
+    /// the per-user daemon control socket, then a fresh cold-spawned
+    /// `app-server`. `None` when none do (codex missing, not runnable, protocol
+    /// mismatch) — best-effort.
+    pub(crate) fn observe_login(
         broker_socket: Option<&Path>,
         login_env: &BTreeMap<String, String>,
-    ) -> Option<Self> {
+        source: &str,
+        session_id: Option<&str>,
+        model_hint: Option<&str>,
+        observed_at: Timestamp,
+    ) -> Option<AppServerObservation> {
         let bin = codex_bin();
-        for attempt in connect_attempts(broker_socket, login_env) {
-            let budget = match attempt {
-                ConnectAttempt::Spawn => APP_SERVER_DEADLINE,
-                _ => DAEMON_PROBE_DEADLINE,
-            };
-            let transport = Transport::open(&attempt, &bin, login_env, budget);
-            let Ok(transport) = transport else {
-                continue;
-            };
-            let mut client = Self::new(transport);
-            if client.handshake().is_ok() {
-                return Some(client);
-            }
-        }
-        None
+        let expected = ServedBy::expected(login_env);
+        observe_from_attempts(
+            connect_attempts(broker_socket, login_env),
+            |attempt, budget| Transport::open(attempt, &bin, login_env, expected.as_ref(), budget),
+            source,
+            session_id,
+            model_hint,
+            observed_at,
+        )
+        .ok()
     }
 
     pub(super) fn fetch_catalog(
@@ -294,10 +349,13 @@ impl CodexAppServer<Transport> {
     ) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
         let deadline = Instant::now() + budget;
         let bin = codex_bin();
+        let expected = ServedBy::expected(login_env);
         catalog_from_attempts(
             connect_attempts(broker_socket, login_env),
             deadline,
-            |attempt, remaining| Transport::open(attempt, &bin, login_env, remaining),
+            |attempt, remaining| {
+                Transport::open(attempt, &bin, login_env, expected.as_ref(), remaining)
+            },
         )
     }
 }
@@ -328,7 +386,7 @@ impl CodexAppServer<WsTransport> {
     }
 }
 
-/// The attempts [`CodexAppServer::connect`] tries, in preference order, after
+/// The attempts [`CodexAppServer::observe_login`] tries, in preference order, after
 /// resolving which sockets actually exist on disk.
 fn connect_attempts(
     broker_socket: Option<&Path>,
@@ -369,6 +427,15 @@ fn daemon_socket(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
         None => Some(daemon::control_socket(
             &CodexAdapter.config_home(login_env)?,
         )),
+    }
+}
+
+/// A failed read yields the type's default, except one the broker did not
+/// confirm, which discards the attempt.
+fn best_effort<R: Default>(read: Result<R, AppServerErr>) -> Result<R, AppServerErr> {
+    match read {
+        Err(error) if !error.is_unconfirmed() => Ok(R::default()),
+        other => other,
     }
 }
 
@@ -480,17 +547,19 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// `thread/read` is direct by id; `thread/list` is the documented history UI
     /// surface that reliably carries `preview`, so it fills any missing field.
     /// Both reads are best-effort and read-only.
-    fn thread_summary(&mut self, session_id: &str) -> Option<ThreadSummary> {
-        let session_id = (!session_id.is_empty()).then_some(session_id)?;
-        let read = self.thread_read_summary(session_id).ok().flatten();
+    fn thread_summary(&mut self, session_id: &str) -> Result<Option<ThreadSummary>, AppServerErr> {
+        if session_id.is_empty() {
+            return Ok(None);
+        }
+        let read = best_effort(self.thread_read_summary(session_id))?;
         if read
             .as_ref()
             .is_some_and(|summary| summary.preview.is_some())
         {
-            return read;
+            return Ok(read);
         }
-        let listed = self.thread_list_summary(session_id).ok().flatten();
-        match (read, listed) {
+        let listed = best_effort(self.thread_list_summary(session_id))?;
+        Ok(match (read, listed) {
             (Some(mut read), Some(listed)) => {
                 if read.preview.is_none() {
                     read.preview = listed.preview;
@@ -503,7 +572,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             (Some(read), None) => Some(read),
             (None, Some(listed)) => Some(listed),
             (None, None) => None,
-        }
+        })
     }
 
     fn thread_read_summary(
@@ -542,18 +611,25 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// Read every read-only field the app-server exposes and project it onto an
     /// [`AgentContext`]. Each read is independent and best-effort: a failed
     /// `account/rateLimits/read` (e.g. API-key account) still yields the model
-    /// and version. Assumes [`Self::handshake`] already ran.
+    /// and version. A response the broker did not confirm is the one failure that
+    /// is not tolerated: it fails the whole observation. Assumes
+    /// [`Self::handshake`] already ran.
     pub(crate) fn observe(
         &mut self,
         source: &str,
         session_id: Option<&str>,
         model_hint: Option<&str>,
         observed_at: Timestamp,
-    ) -> AppServerObservation {
-        let (rate_limits, account, extra_credits, reset_credits) =
-            self.rate_limits().unwrap_or_default();
-        let model = model_hint.and_then(|hint| self.matched_model(hint).ok().flatten());
-        let thread = session_id.and_then(|id| self.thread_summary(id));
+    ) -> Result<AppServerObservation, AppServerErr> {
+        let (rate_limits, account, extra_credits, reset_credits) = best_effort(self.rate_limits())?;
+        let model = match model_hint {
+            Some(hint) => best_effort(self.matched_model(hint))?,
+            None => None,
+        };
+        let thread = match session_id {
+            Some(id) => self.thread_summary(id)?,
+            None => None,
+        };
         let agent_version = self
             .user_agent
             .as_deref()
@@ -567,11 +643,11 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             agent_version,
             observed_at,
         );
-        AppServerObservation {
+        Ok(AppServerObservation {
             context,
             extra_credits,
             reset_credits,
-        }
+        })
     }
 
     /// The thread ids the connected app-server currently holds in memory
