@@ -123,6 +123,57 @@ fn fix_leaves_the_notes_alone_when_judging_fails() {
     );
 }
 
+#[test]
+fn fix_reports_inside_hints_without_rewriting_them() {
+    let root = tempfile::tempdir().unwrap();
+    let notes = root.path().join("notes.md");
+    let servers = BTreeMap::from([(
+        "rust".into(),
+        serde_json::from_value(json!({
+            "command": ["stub"], "extensions": ["rs"], "root-markers": []
+        }))
+        .unwrap(),
+    )]);
+    let mut context = Context {
+        checkout: root.path(),
+        entries: &[],
+        servers: &servers,
+        files: vec!["a.rs".into()],
+        failures: BTreeMap::new(),
+        outlines: BTreeMap::from([(
+            "a.rs".into(),
+            FileOutline {
+                nodes: fixed_symbols(),
+                dirty: false,
+            },
+        )]),
+    };
+    let source = "`a.rs::Type::method` (~15)\n`a.rs::Type::method ~4-5`\n";
+    let expected = "`a.rs::Type::method` (~15)\n`a.rs::Type::method ~11-16`\n";
+    std::fs::write(&notes, source).unwrap();
+    let fixed = check_file(&notes, &mut context, Mode::Fix).unwrap();
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), expected);
+    assert_eq!(fixed.exit_code(), 7);
+    assert_eq!(fixed.fixes.as_ref().unwrap().len(), 1);
+    assert_eq!(fixed.fixes.as_ref().unwrap()[0].line, 2);
+    let checked = check_file(&notes, &mut context, Mode::Check).unwrap();
+    assert_eq!(checked.exit_code(), 7);
+    assert_eq!(
+        serde_json::to_value(&fixed.anchors).unwrap(),
+        serde_json::to_value(&checked.anchors).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(checked.anchors[0].status).unwrap(),
+        "line-inside"
+    );
+    for mode in [Mode::Fix, Mode::FixHints] {
+        let again = check_file(&notes, &mut context, mode).unwrap();
+        assert_eq!(again.exit_code(), 7);
+        assert!(again.fixes.unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(&notes).unwrap(), expected);
+    }
+}
+
 fn anchor(text: &str) -> Anchor {
     extract(&format!("`{text}`")).pop().unwrap()
 }
@@ -232,6 +283,16 @@ fn fix_completes_a_short_path_one_file_defines() {
             "`lib.rs::Type::method ~90`",
             "`two/lib.rs::Type::method ~11`",
             false,
+        ),
+        (
+            "`lib.rs::Type::method ~15`",
+            "`two/lib.rs::Type::method ~15`",
+            false,
+        ),
+        (
+            "`lib.rs::Type::method` (~15)",
+            "`two/lib.rs::Type::method` (~15)",
+            true,
         ),
         (
             "`lib.rs::Type::method` (~90-95)",
@@ -541,6 +602,59 @@ fn fix_preserves_hint_forms_and_every_other_byte() {
             }
         }
     }
+}
+
+#[test]
+fn fix_keeps_inside_hints_and_refreshes_other_forms() {
+    for (name, before, after, inside) in [
+        ("Type::method", "~15", "~15", true),
+        ("Type::method", "~16", "~16", true),
+        ("Type::method", ":15", ":15", true),
+        ("Type::method", ":~15", ":~15", true),
+        ("Type::method", "(15)", "(15)", true),
+        ("Type::method", "(~15)", "(~15)", true),
+        ("Type::method", "~11", "~11", false),
+        ("Type::method", "~14", "~11", false),
+        ("Type::method", "~17", "~11", false),
+        ("Type::method", "(~19)", "(~11)", false),
+        ("Type::method", "~15-16", "~11-16", false),
+        ("Type::method", "(~15-15)", "(~11-16)", false),
+        ("Type::method", ":15:3", ":12:5", false),
+        ("Type::method", "(15:3)", "(12:5)", false),
+        ("Type::field", "~5", "~2", false),
+        ("Type", "~20", "~20", true),
+    ] {
+        for source in [
+            format!("é `a.rs::{name} {before}` tail\r\n"),
+            format!("é `a.rs::{name}` {before} tail\n"),
+            format!("é `` a.rs::{name} {before} `` tail\n"),
+        ] {
+            for hints in [false, true] {
+                let (updated, fixes, _) = rewrite_with(&source, false, hints);
+                assert_eq!(updated, source.replace(before, after), "{source}");
+                assert_eq!(fixes.is_empty(), before == after, "{source}");
+                let checked =
+                    check_symbol(extract(&updated).remove(0), "a.rs".into(), &fixed_symbols());
+                assert_eq!(
+                    serde_json::to_value(checked.status).unwrap(),
+                    if inside { "line-inside" } else { "ok" },
+                    "{source}"
+                );
+                assert_eq!(rewrite_hints(&updated, false), updated);
+            }
+            assert_eq!(rewrite_hints(&source, true), source);
+        }
+    }
+    let mut nodes = fixed_symbols();
+    nodes.push(nodes[3].clone());
+    let source = "`a.rs::Type::method ~15`";
+    let (updated, fixes, _) = rewrite_in(source, vec![("a.rs", Some(nodes.clone()), false)], false);
+    assert_eq!(updated, source);
+    assert!(fixes.is_empty());
+    assert_eq!(
+        check_symbol(anchor("a.rs::Type::method ~15"), "a.rs".into(), &nodes).status,
+        Status::Ok
+    );
 }
 
 #[test]
@@ -1130,6 +1244,108 @@ fn hints_accept_three_lines_of_slack_and_report_actual_ranges() {
     assert_eq!(
         check_lines(anchor("a.rs:12-11"), "a.rs".into(), 12).status,
         Status::LineOutside
+    );
+}
+
+#[test]
+fn single_number_hints_inside_items_are_flagged() {
+    let nodes = symbols();
+    for (name, hint, line, range, kind, item) in [
+        (
+            "Type::method",
+            "(~15)",
+            15,
+            [11, 16],
+            "method",
+            "impl Type<'a>::method",
+        ),
+        (
+            "Type::method",
+            "~16",
+            16,
+            [11, 16],
+            "method",
+            "impl Type<'a>::method",
+        ),
+        (
+            "Type::method",
+            ":15",
+            15,
+            [11, 16],
+            "method",
+            "impl Type<'a>::method",
+        ),
+        (
+            "Type::method",
+            "(15)",
+            15,
+            [11, 16],
+            "method",
+            "impl Type<'a>::method",
+        ),
+        (
+            "Type::method",
+            ":~15",
+            15,
+            [11, 16],
+            "method",
+            "impl Type<'a>::method",
+        ),
+        ("Type", "~20", 20, [10, 31], "object", "impl Type<'a>"),
+    ] {
+        for source in [
+            format!("`a.rs::{name} {hint}`"),
+            format!("`a.rs::{name}` {hint}"),
+        ] {
+            let checked = check_symbol(extract(&source).remove(0), "a.rs".into(), &nodes);
+            assert_eq!(
+                serde_json::to_value(checked.status).unwrap(),
+                "line-inside",
+                "{source}"
+            );
+            assert_eq!(checked.range, Some(range));
+            assert_eq!(checked.hint, Some([line, line]));
+            assert!(checked.candidates.is_empty());
+            assert_eq!(
+                checked.detail,
+                format!(
+                    "line {line} is inside {kind} {item} at {}-{}; cite it as a.rs:~{line}",
+                    range[0], range[1]
+                )
+            );
+        }
+    }
+    for hint in [
+        "~11", "~14", "~17", "(~19)", "~15-16", "(~15-15)", ":15:3", "(15:3)",
+    ] {
+        assert_eq!(
+            check_symbol(
+                anchor(&format!("a.rs::Type::method {hint}")),
+                "a.rs".into(),
+                &nodes
+            )
+            .status,
+            Status::Ok,
+            "{hint}"
+        );
+    }
+}
+
+#[test]
+fn reports_render_inside_hints_as_failures() {
+    let checked = check_symbol(anchor("a.rs::Type::method ~15"), "a.rs".into(), &symbols());
+    let report = Report::new(Path::new("notes.md"), Path::new("/root"), vec![checked]);
+    assert_eq!(report.exit_code(), 7);
+    assert_eq!(report.summary.failed, 1);
+    assert_eq!(
+        report.render(false).unwrap(),
+        "notes.md:1  line-inside  a.rs::Type::method ~15  line 15 is inside method impl Type<'a>::method at 11-16; cite it as a.rs:~15\n1 anchors in notes.md: 0 ok, 1 failed, 0 unchecked, 0 external\n"
+    );
+    let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
+    assert_eq!(value["anchors"][0]["status"], "line-inside");
+    assert_eq!(
+        value["summary"],
+        json!({"anchors":1,"ok":0,"failed":1,"unchecked":0,"external":0})
     );
 }
 

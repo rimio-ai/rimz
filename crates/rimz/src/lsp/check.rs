@@ -311,10 +311,18 @@ struct Anchor {
     path: String,
     symbol: Option<Vec<String>>,
     hint: Option<[u32; 2]>,
+    hint_form: Option<HintForm>,
     hint_text: Option<std::ops::Range<usize>>,
     hint_source: Option<std::ops::Range<usize>>,
     path_source: Option<std::ops::Range<usize>>,
     span_end: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HintForm {
+    Single,
+    Range,
+    Position,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -356,6 +364,7 @@ enum Status {
     AmbiguousPath,
     MissingSymbol,
     LineOutside,
+    LineInside,
     Unchecked,
 }
 
@@ -395,7 +404,8 @@ impl Report {
                 | Status::MissingPath
                 | Status::AmbiguousPath
                 | Status::MissingSymbol
-                | Status::LineOutside => summary.failed += 1,
+                | Status::LineOutside
+                | Status::LineInside => summary.failed += 1,
             }
         }
         Self {
@@ -443,6 +453,7 @@ impl Report {
                 Status::AmbiguousPath => "ambiguous-path",
                 Status::MissingSymbol => "missing-symbol",
                 Status::LineOutside => "line-outside",
+                Status::LineInside => "line-inside",
                 Status::Unchecked => "unchecked",
             };
             text.push_str(&format!(
@@ -526,9 +537,10 @@ fn extract(notes: &str) -> Vec<Anchor> {
         }
         if anchor.hint.is_none()
             && let Some((Event::Text(following), following_offset)) = events.peek()
-            && let Some((found, end)) = parse_hint(following, false)
+            && let Some((found, form, end)) = parse_hint(following, false)
         {
             anchor.hint = Some(found);
+            anchor.hint_form = Some(form);
             anchor.hint_text = Some(anchor.text.len()..anchor.text.len() + end);
             if mapped && notes[following_offset.clone()].starts_with(&following[..end]) {
                 anchor.hint_source = Some(following_offset.start..following_offset.start + end);
@@ -545,7 +557,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     if !query::is_file_head(path) {
         return None;
     }
-    let (symbol, hint, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
+    let (symbol, hint, hint_form, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
         let mut depth = 0_u32;
         let end = raw
             .char_indices()
@@ -581,14 +593,19 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
                     .and_then(|tail| tail.split_once(')'))
                     .and_then(|(_, tail)| parse_hint(tail, false).map(|hint| (tail, hint)))
             });
-        let hint_text = hint.map(|(tail, (_, consumed))| {
+        let hint_text = hint.map(|(tail, (_, _, consumed))| {
             let start = code.len() - tail.len();
             start..start + consumed
         });
-        (Some(chain), hint.map(|(_, (lines, _))| lines), hint_text)
+        (
+            Some(chain),
+            hint.map(|(_, (lines, _, _))| lines),
+            hint.map(|(_, (_, form, _))| form),
+            hint_text,
+        )
     } else {
-        let (hint, _) = parse_hint(rest, true)?;
-        (None, Some(hint), None)
+        let (hint, form, _) = parse_hint(rest, true)?;
+        (None, Some(hint), Some(form), None)
     };
     Some(Anchor {
         qualifier: None,
@@ -597,6 +614,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         path: path.into(),
         symbol,
         hint,
+        hint_form,
         hint_text,
         hint_source: None,
         path_source: None,
@@ -604,7 +622,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     })
 }
 
-fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], usize)> {
+fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], HintForm, usize)> {
     let mut tail = raw.trim_start();
     if line_only {
         if !raw.starts_with(|ch: char| ch.is_ascii_digit() || ch == '~') {
@@ -626,19 +644,22 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], usize)> {
     let (start, end) = number(tail)?;
     tail = &tail[end..];
     let mut last = start;
+    let mut form = HintForm::Single;
     if let Some(rest) = tail.strip_prefix('-') {
+        form = HintForm::Range;
         let (value, end) = number(rest)?;
         last = value;
         tail = &rest[end..];
     } else if let Some(rest) = tail.strip_prefix(':') {
+        form = HintForm::Position;
         let (_, end) = number(rest)?;
         tail = &rest[end..];
         if line_only && tail.trim_start().starts_with('(') {
-            let (hint, consumed) = parse_hint(tail, false)?;
+            let (hint, form, consumed) = parse_hint(tail, false)?;
             if !tail[consumed..].trim().is_empty() {
                 return None;
             }
-            return Some((hint, raw.len() - tail.len() + consumed));
+            return Some((hint, form, raw.len() - tail.len() + consumed));
         }
     }
     if parenthesized {
@@ -647,7 +668,7 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], usize)> {
     if line_only && !tail.trim().is_empty() {
         return None;
     }
-    Some(([start, last], raw.len() - tail.len()))
+    Some(([start, last], form, raw.len() - tail.len()))
 }
 
 fn segments(name: &str) -> Vec<String> {
@@ -783,7 +804,23 @@ fn matches_chain(node: &Candidate, chain: &[String]) -> bool {
 fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
     // Symbol checks are only called for extracted nonempty chains.
     let chain = anchor.symbol.as_ref().expect("symbol anchor has a chain");
-    let hits: Vec<_> = symbol_hits(nodes, chain).into_iter().cloned().collect();
+    let hits = symbol_hits(nodes, chain);
+    if let Some(node) = named(&hits, chain, anchor.hint)
+        && let Some(line) = inside_line(&anchor, node)
+    {
+        let detail = format!(
+            "line {line} is inside {} {} at {}-{}; cite it as {}:~{line}",
+            node.kind,
+            node.name,
+            node.range[0],
+            node.range[1],
+            path.display()
+        );
+        let mut result = verdict(anchor, Some(path), Status::LineInside);
+        result.range = Some(node.range);
+        result.detail = detail;
+        return result;
+    }
     let found = hits
         .iter()
         .find(|node| anchor.hint.is_none_or(|hint| overlaps(node, hint)));
@@ -798,7 +835,7 @@ fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
     } else {
         Status::LineOutside
     };
-    let (candidates, detail) = candidate_details(nodes, chain, hits);
+    let (candidates, detail) = candidate_details(nodes, chain, hits.into_iter().cloned().collect());
     let mut result = verdict(anchor, Some(path), status);
     result.detail = detail;
     result.candidates = candidates;
@@ -888,6 +925,45 @@ fn hinted<'a>(hits: &[&'a Candidate], hint: Option<[u32; 2]>) -> Vec<&'a Candida
         .copied()
         .filter(|node| hint.is_some_and(|hint| overlaps(node, hint)))
         .collect()
+}
+
+/// The one item an anchor names. A hinted anchor names the single hit its hint
+/// overlaps, else the sole hit. A hintless anchor, or a hinted one whose hint
+/// overlaps no hit, names its sole hit, or the one hit whose own name is the
+/// anchor's last segment when every other hit matched only through its last
+/// token, as impl blocks of a type do. A hint overlapping only an impl block
+/// keeps naming that block: it may point there on purpose.
+fn named<'a>(
+    hits: &[&'a Candidate],
+    chain: &[String],
+    hint: Option<[u32; 2]>,
+) -> Option<&'a Candidate> {
+    if hint.is_some() {
+        match (hinted(hits, hint).as_slice(), hits) {
+            ([node], _) | (_, [node]) => return Some(*node),
+            ([], _) => {}
+            _ => return None,
+        }
+    }
+    let wanted = chain.last()?;
+    let mut direct = hits.iter().copied().filter(|node| {
+        node.path
+            .last()
+            .is_some_and(|name| query::without_generics(name) == *wanted)
+    });
+    match (hits, direct.next(), direct.next()) {
+        ([node], _, _) => Some(*node),
+        (_, Some(node), None) => Some(node),
+        _ => None,
+    }
+}
+
+fn inside_line(anchor: &Anchor, node: &Candidate) -> Option<u32> {
+    let [line, _] = anchor.hint?;
+    (anchor.hint_form == Some(HintForm::Single)
+        && line > node.range[0].saturating_add(LINE_SLACK)
+        && line <= node.range[1])
+        .then_some(line)
 }
 
 fn check_lines(anchor: Anchor, path: PathBuf, lines: usize) -> Verdict {

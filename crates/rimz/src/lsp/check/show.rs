@@ -103,6 +103,7 @@ fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Positi
                 path: path.display().to_string(),
                 symbol: None,
                 hint: None,
+                hint_form: None,
                 hint_text: None,
                 hint_source: None,
                 path_source: None,
