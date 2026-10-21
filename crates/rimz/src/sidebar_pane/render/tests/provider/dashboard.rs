@@ -76,6 +76,56 @@ fn render_provider_dashboard_two_logins() {
 }
 
 #[test]
+fn tab_rail_matches_painted_columns_at_unicode_label_drop_boundaries() {
+    let theme = Theme::fixed(false);
+    for (title, full_width) in [
+        ("Codex · 仕事", 38),
+        ("Codex · e\u{301}", 35),
+        ("Codex · wo\u{200b}rk", 38),
+    ] {
+        let panels = [
+            provider_panel("codex", title, 33, false, false, None),
+            provider_panel("claude", "Claude", 173, false, false, None),
+            provider_panel("pi", "Pi", 28, false, false, None),
+        ];
+        for width in full_width - 1..=full_width + 1 {
+            let block = Dashboard::tabbed(&theme, &panels)
+                .active("codex")
+                .width(width)
+                .block();
+            let rail = rail_text(&block.lines);
+            let hits = block.interactions.regions();
+            let expected = &panels[..if width < full_width { 2 } else { 3 }];
+            assert_eq!(
+                hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|panel| panel.kind.as_str())
+                    .collect::<Vec<_>>(),
+                "whole tabs at width {width}: {rail}"
+            );
+            assert_eq!(block.lines[0].width(), width, "{rail}");
+            assert_eq!(rail.contains(" Pi "), width >= full_width, "{rail}");
+            for (panel, hit) in expected.iter().zip(hits) {
+                let start = rail.find(&panel.product_name).expect("complete tab label");
+                let end = start + panel.product_name.len();
+                let column = Line::from(&rail[..start]).width() as u16;
+                let label_width = Line::from(panel.product_name.as_str()).width() as u16;
+                assert_eq!(
+                    hit.columns,
+                    column - 2..column + label_width + 2,
+                    "hit covers the painted tab at width {width}: {rail}"
+                );
+                assert_eq!(hit.rows, 0..1);
+                assert!(hit.columns.end as usize <= width, "{rail}");
+                assert!(rail[..start].ends_with("─ "), "{rail}");
+                assert!(rail[end..].starts_with(" ─"), "unclipped tab: {rail}");
+            }
+        }
+    }
+}
+
+#[test]
 fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.providers = two_provider_panels();
