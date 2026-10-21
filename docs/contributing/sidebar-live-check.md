@@ -398,6 +398,8 @@ The room restarts the stub agent when its process is killed, so an agent leaves 
 
 `a` runs a RimZ command as the agent and `rz` runs one as the plain user shell (`rz agents`). Keep each prefix in a function, not a variable: zsh does not split an unquoted variable into words, so `$PREFIX agents` fails there as one unknown command.
 
+A held room's provider has no folder-trust decision for its worktree, so the first `a subagents claude ...` refuses with `claude has no trust decision for ...` and names `rimz trust grant --agents claude` as the fix. Run that grant as `rz trust grant --agents claude`: the plain-shell prefix writes the sandbox's home, while a bare `rimz trust grant` from your shell writes your real provider config. The launch then succeeds.
+
 `--as-ancestor` starts the command below the stub, with exactly plain `in`'s environment: no `RIMZ_AGENT_*` or pane key. It relays stdin, stdout, and stderr through pipes, not a tty, and reports a failed command's exit status. An absent or dead serving seat refuses with the instruction to hold a fresh room with this build. Both modes default to the card's Worktree; `--cwd` overrides it. A relative program path containing `/` resolves from your checkout, as it does for plain `in`.
 
 Session-death recovery needs the same feed for every agent. The stub agents hold provisional session ids, which the producer leaves out of `records/live-roster.json`, so an unprimed room publishes an empty roster while its agents are alive and the next `rimz start` has nothing to recover. Feed one SessionStart per agent and wait for the roster to name them before ending the session.
