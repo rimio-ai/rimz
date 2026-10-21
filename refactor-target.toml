@@ -103,6 +103,7 @@ path = "crates/rimz/src/lsp"
 # Headroom and its read/fits methods, Shortfall::headroom, QueryErr::server_error,
 # and missing_column share admission figures and query error behavior with the CLI (+6).
 # NamedItem unifies column-less errors before and after outline enrichment (+1).
+# query::classification_outline bounds test-classification enrichment separately (+1).
 surface-budget = 92
 
 [[module]]
@@ -7080,6 +7081,11 @@ reason = "Queries, anchor checks, and source reads share the same per-server fai
 kind = "item"
 key = "lsp::query::missing_column"
 reason = "The CLI enriches a target error from an optional outline using the query renderer's kinds and names."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::classification_outline"
+reason = "The CLI's test-classification outlines use a short readiness wait without changing main queries."
 
 [[verdict]]
 kind = "item"

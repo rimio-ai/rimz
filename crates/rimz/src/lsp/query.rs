@@ -1,7 +1,7 @@
 //! Position and symbol resolution plus compact, provider-neutral query output.
 
 mod client;
-pub use client::{Output, execute, select};
+pub use client::{Output, classification_outline, execute, select};
 
 use super::protocol::{
     CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation, Symbols,
@@ -823,8 +823,14 @@ impl Candidate {
     }
 }
 
-fn render_find(root: &Path, symbols: &[SymbolInformation], options: ListOptions) -> Result<String> {
-    let mut lines = Vec::new();
+fn render_find(
+    root: &Path,
+    symbols: &[SymbolInformation],
+    options: ListOptions,
+    tests_last: bool,
+    outlines: &mut impl FnMut(&str) -> Result<Value>,
+) -> Result<String> {
+    let mut scoped = Vec::new();
     let mut external = Vec::new();
     let mut hidden = 0;
     for symbol in symbols {
@@ -832,16 +838,40 @@ fn render_find(root: &Path, symbols: &[SymbolInformation], options: ListOptions)
         if !options.scope.includes(&path) {
             hidden += 1;
         } else if Scope::Checkout.includes(&path) {
-            lines.push(Candidate::new(root, symbol)?.line());
+            scoped.push(symbol);
         } else {
-            external.push(Candidate::new(root, symbol)?.line());
+            external.push(symbol);
         }
     }
-    lines.extend(external);
-    let total = lines.len();
+    scoped.extend(external);
+    let total = scoped.len();
+    let partition = partition_tests(
+        root,
+        scoped,
+        options,
+        tests_last,
+        |symbol| (&symbol.location.uri, symbol.location.range.start),
+        outlines,
+    )?;
     let shown = options.shown(total);
-    lines.truncate(shown);
-    Ok(finish_list(lines, hidden, total, shown, "symbols", 0))
+    let mut lines = Vec::new();
+    let mut tests_started = false;
+    for (is_test, symbol) in partition.items.into_iter().take(shown) {
+        if is_test && !tests_started {
+            lines.push("tests:".into());
+            tests_started = true;
+        }
+        lines.push(Candidate::new(root, symbol)?.line());
+    }
+    Ok(finish_list(
+        lines,
+        hidden,
+        total,
+        shown,
+        "symbols",
+        partition.tests,
+        None,
+    ))
 }
 
 fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
@@ -1043,14 +1073,24 @@ fn finish_list(
     total: usize,
     shown: usize,
     noun: &str,
-    tests: usize,
+    tests: Option<usize>,
+    hidden_tests: Option<usize>,
 ) -> String {
     if shown < total {
-        lines.insert(0, format!("{total} {noun} (showing {shown})"));
+        let count = match tests.filter(|_| hidden_tests.is_none()) {
+            Some(tests) if tests > 0 => format!(", {tests} in tests"),
+            _ => String::new(),
+        };
+        let order = if hidden_tests.is_none() && tests != Some(0) {
+            ", tests last"
+        } else {
+            ""
+        };
+        lines.insert(0, format!("{total} {noun}{count} (showing {shown}{order})"));
         lines.push(format!("{} more; add --limit N or --all", total - shown));
     }
     let mut output = finish_scoped(lines, hidden);
-    if tests > 0 {
+    if let Some(tests) = hidden_tests.filter(|tests| *tests > 0) {
         output.push_str(&format!(
             "{tests} test {noun} hidden; drop --no-tests to show them\n"
         ));
@@ -1175,13 +1215,20 @@ pub fn dirty_documents(entry: &super::registry::Entry) -> BTreeSet<String> {
 
 fn grouped_position(
     lines: &mut Vec<String>,
-    previous: &mut Option<String>,
+    previous: &mut Option<(bool, String)>,
+    is_test: bool,
     path: String,
     position: Position,
 ) -> String {
-    if previous.as_ref() != Some(&path) {
+    if previous
+        .as_ref()
+        .is_none_or(|(test, previous)| *test != is_test || previous != &path)
+    {
+        if is_test && previous.as_ref().is_none_or(|(test, _)| !test) {
+            lines.push("tests:".into());
+        }
         lines.push(path.clone());
-        *previous = Some(path);
+        *previous = Some((is_test, path));
     }
     format!("  {}:{}", position.line + 1, position.character + 1)
 }
@@ -1217,42 +1264,79 @@ fn test_ranges(uri: &str, result: Value) -> Result<Vec<Range>> {
     }
 }
 
-fn filter_tests<K: Ord, V>(
+struct TestPartition<T> {
+    items: Vec<(bool, T)>,
+    tests: Option<usize>,
+    hidden: Option<usize>,
+}
+
+fn partition_tests<T>(
     root: &Path,
-    items: &mut BTreeMap<K, V>,
-    location: impl Fn(&V) -> (&str, Position),
+    items: impl IntoIterator<Item = T>,
+    options: ListOptions,
+    tests_last: bool,
+    location: impl Fn(&T) -> (&str, Position),
     symbols: &mut impl FnMut(&str) -> Result<Value>,
-) -> Result<usize> {
-    let total = items.len();
+) -> Result<TestPartition<T>> {
+    if !tests_last {
+        return Ok(TestPartition {
+            items: items.into_iter().map(|item| (false, item)).collect(),
+            tests: Some(0),
+            hidden: options.no_tests.then_some(0),
+        });
+    }
     let mut ranges = BTreeMap::new();
-    for (key, item) in std::mem::take(items) {
+    let mut pending = items.into_iter().peekable();
+    let mut production = Vec::new();
+    let mut tests = Vec::new();
+    let mut test_count = 0;
+    let mut outlines_failed = false;
+    for item in pending.by_ref() {
         let (uri, position) = location(&item);
         let path = PathBuf::from(displayed_path(root, uri)?);
-        if path
+        let is_test = path
             .components()
             .any(|part| part.as_os_str().to_str().is_some_and(is_test_name))
             || path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .is_some_and(is_test_name)
-        {
-            continue;
-        }
-        let ranges = match ranges.entry(DocumentKey::new(uri)) {
-            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(test_ranges(uri, symbols(uri)?)?)
+            || (!outlines_failed
+                && ranges
+                    .entry(DocumentKey::new(uri))
+                    .or_insert_with(|| {
+                        match symbols(uri).and_then(|outline| test_ranges(uri, outline)) {
+                            Ok(ranges) => ranges,
+                            Err(_) => {
+                                outlines_failed = true;
+                                Vec::new()
+                            }
+                        }
+                    })
+                    .iter()
+                    .any(|range| range.start <= position && position < range.end));
+        if is_test {
+            test_count += 1;
+            if !options.no_tests {
+                tests.push((true, item));
             }
-        };
-        if ranges
-            .iter()
-            .any(|range| range.start <= position && position < range.end)
-        {
-            continue;
+        } else {
+            production.push((false, item));
         }
-        items.insert(key, item);
+        if !options.no_tests
+            && options
+                .limit
+                .is_some_and(|limit| production.len() == limit.get())
+        {
+            break;
+        }
     }
-    Ok(total - items.len())
+    production.extend(tests);
+    Ok(TestPartition {
+        items: production,
+        tests: (!outlines_failed && pending.peek().is_none()).then_some(test_count),
+        hidden: options.no_tests.then_some(test_count),
+    })
 }
 
 #[expect(
@@ -1315,22 +1399,27 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _), _| scope.includes(path));
             let hidden = total - sorted.len();
-            let tests = if options.no_tests && verb == Verb::Refs {
-                filter_tests(
-                    root,
-                    &mut sorted,
-                    |location| (&location.uri, location.range.start),
-                    &mut symbols,
-                )?
-            } else {
-                0
-            };
             let total = sorted.len();
+            let partition = partition_tests(
+                root,
+                sorted,
+                options,
+                verb == Verb::Refs,
+                |(_, location)| (&location.uri, location.range.start),
+                &mut symbols,
+            )?;
+            let total = if options.no_tests {
+                partition.items.len()
+            } else {
+                total
+            };
             let shown = options.shown(total);
             let mut lines = Vec::new();
             let mut previous = None;
-            for ((_, path, position), location) in sorted.into_iter().take(shown) {
-                let line = grouped_position(&mut lines, &mut previous, path, position);
+            for (is_test, ((_, path, position), location)) in
+                partition.items.into_iter().take(shown)
+            {
+                let line = grouped_position(&mut lines, &mut previous, is_test, path, position);
                 lines.push(format!("{line}{}", source_suffix(&location)));
             }
             let noun = if verb == Verb::Refs {
@@ -1338,7 +1427,15 @@ fn render_with_source(
             } else {
                 "implementations"
             };
-            Ok(finish_list(lines, hidden, total, shown, noun, tests))
+            Ok(finish_list(
+                lines,
+                hidden,
+                total,
+                shown,
+                noun,
+                partition.tests,
+                partition.hidden,
+            ))
         }
         Verb::Hover => {
             #[derive(Deserialize)]
@@ -1346,22 +1443,33 @@ fn render_with_source(
                 contents: HoverContents,
             }
             let hover: Hover = serde_json::from_value(result)?;
-            Ok(format!("{}\n", hover.contents.text().trim()))
+            let text: String = hover
+                .contents
+                .text()
+                .trim_end()
+                .split_inclusive('\n')
+                .skip_while(|line| line.trim().is_empty())
+                .collect();
+            Ok(format!("{text}\n"))
         }
         Verb::Find => render_find(
             root,
             &serde_json::from_value::<Vec<SymbolInformation>>(result)?,
             options,
+            true,
+            &mut symbols,
         ),
         Verb::Symbols => match serde_json::from_value(result)? {
-            Symbols::Flat(symbols) => render_find(
+            Symbols::Flat(flat) => render_find(
                 root,
-                &symbols,
+                &flat,
                 ListOptions {
                     scope: Scope::External,
                     limit: None,
                     no_tests: false,
                 },
+                false,
+                &mut symbols,
             ),
             Symbols::Tree(symbols) => {
                 let uri = document_uri
@@ -1417,22 +1525,26 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _, _), _| scope.includes(path));
             let hidden = total - sorted.len();
-            let tests = if options.no_tests && verb == Verb::Callers {
-                filter_tests(
-                    root,
-                    &mut sorted,
-                    |item| (&item.uri, item.selection_range.start),
-                    &mut symbols,
-                )?
-            } else {
-                0
-            };
             let total = sorted.len();
+            let partition = partition_tests(
+                root,
+                sorted,
+                options,
+                verb == Verb::Callers,
+                |(_, item)| (&item.uri, item.selection_range.start),
+                &mut symbols,
+            )?;
+            let total = if options.no_tests {
+                partition.items.len()
+            } else {
+                total
+            };
             let shown = options.shown(total);
             let mut lines = Vec::new();
             let mut previous = None;
-            for ((_, path, position, _), item) in sorted.into_iter().take(shown) {
-                let line = grouped_position(&mut lines, &mut previous, path, position);
+            for (is_test, ((_, path, position, _), item)) in partition.items.into_iter().take(shown)
+            {
+                let line = grouped_position(&mut lines, &mut previous, is_test, path, position);
                 lines.push(format!("{line}  {}", item.name));
             }
             let noun = if verb == Verb::Callers {
@@ -1440,7 +1552,15 @@ fn render_with_source(
             } else {
                 "callees"
             };
-            Ok(finish_list(lines, hidden, total, shown, noun, tests))
+            Ok(finish_list(
+                lines,
+                hidden,
+                total,
+                shown,
+                noun,
+                partition.tests,
+                partition.hidden,
+            ))
         }
     }
 }
