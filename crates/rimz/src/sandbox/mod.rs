@@ -223,8 +223,6 @@ pub struct MountPlan {
     pub mounts: Vec<Mount>,
 }
 
-pub const HOOK_HOST_PATHS_ENV: &str = "RIMZ_SANDBOX_HOST_PATHS";
-
 impl MountPlan {
     pub fn host_bound_paths(&self) -> Vec<PathBuf> {
         self.mounts
@@ -481,7 +479,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     );
     let plan = MountPlan { mounts };
     pins.insert(
-        HOOK_HOST_PATHS_ENV.into(),
+        Isolation::SCOPED_HOST_PATHS_ENV.into(),
         EnvPin::Set(
             // validate_path checks identity-bind sources; rewrite::plan uses a validated skills_dir for copy paths.
             serde_json::to_string(&plan.host_bound_paths())

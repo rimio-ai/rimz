@@ -71,7 +71,7 @@ pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
     "RIMZ_AGENTS_HOME",
     "RIMZ_SHARED",
     "RIMZ_BIN",
-    "RIMZ_SANDBOX_HOST_PATHS",
+    crate::config::Isolation::SCOPED_HOST_PATHS_ENV,
     crate::config::Isolation::ENV,
     "RIMZ_USER_TMPDIR",
     "RIMZ_TEMP_ROOT_KEYS",

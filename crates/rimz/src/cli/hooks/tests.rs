@@ -411,7 +411,6 @@ fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
         cwd: home.clone(),
         hook_pid: std::process::id(),
         env: std::collections::BTreeMap::from([
-            ("RIMZ_ISOLATION".into(), "scoped".into()),
             ("RIMZ_AGENT_NAME".into(), "scout".into()),
             ("HOME".into(), home.display().to_string()),
             ("TMPDIR".into(), "/tmp".into()),
@@ -435,34 +434,38 @@ fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
         ],
     };
     frame.env.insert(
-        rimz::sandbox::HOOK_HOST_PATHS_ENV.into(),
+        rimz::config::Isolation::SCOPED_HOST_PATHS_ENV.into(),
         serde_json::to_string(&mounts.host_bound_paths()).unwrap(),
     );
-    super::map_sandbox_paths(&store, &mut frame).unwrap();
-    assert_eq!(frame.cwd, home);
-    assert_eq!(frame.env["HOME"], home.display().to_string());
-    assert_eq!(frame.env["TMPDIR"], unit.display().to_string());
-    assert_eq!(frame.env["ZELLIJ_SOCKET_DIR"], "/tmp/hook-zellij");
-    assert_eq!(frame.env["TMUX"], "/tmp/hook-tmux/default,123,0");
-    assert_eq!(
-        frame.env["PATH"],
-        format!("{}/bin:{}/tools:/usr/bin", unit.display(), unit.display())
-    );
-    assert_eq!(
-        frame.env["PI_AGENT_DIR"],
-        format!("{}/one,{}/two", unit.display(), unit.display())
-    );
-    assert_eq!(
-        frame.env["CLAUDE_CONFIG_DIR"],
-        format!("{}/account,{}/other", unit.display(), unit.display())
-    );
-    let payload: serde_json::Value = serde_json::from_str(&frame.payload).unwrap();
-    assert_eq!(payload["cwd"], unit.join("work").display().to_string());
-    assert_eq!(
-        payload["transcript_path"],
-        unit.join("tail.jsonl").display().to_string()
-    );
-    assert_eq!(payload["prompt"], "/tmp/user text");
+    for isolation in ["sandbox", "scoped"] {
+        let mut frame = frame.clone();
+        frame.env.insert("RIMZ_ISOLATION".into(), isolation.into());
+        super::map_sandbox_paths(&store, &mut frame).unwrap();
+        assert_eq!(frame.cwd, home);
+        assert_eq!(frame.env["HOME"], home.display().to_string());
+        assert_eq!(frame.env["TMPDIR"], unit.display().to_string());
+        assert_eq!(frame.env["ZELLIJ_SOCKET_DIR"], "/tmp/hook-zellij");
+        assert_eq!(frame.env["TMUX"], "/tmp/hook-tmux/default,123,0");
+        assert_eq!(
+            frame.env["PATH"],
+            format!("{}/bin:{}/tools:/usr/bin", unit.display(), unit.display())
+        );
+        assert_eq!(
+            frame.env["PI_AGENT_DIR"],
+            format!("{}/one,{}/two", unit.display(), unit.display())
+        );
+        assert_eq!(
+            frame.env["CLAUDE_CONFIG_DIR"],
+            format!("{}/account,{}/other", unit.display(), unit.display())
+        );
+        let payload: serde_json::Value = serde_json::from_str(&frame.payload).unwrap();
+        assert_eq!(payload["cwd"], unit.join("work").display().to_string());
+        assert_eq!(
+            payload["transcript_path"],
+            unit.join("tail.jsonl").display().to_string()
+        );
+        assert_eq!(payload["prompt"], "/tmp/user text");
+    }
 }
 
 #[test]

@@ -394,7 +394,14 @@ impl Isolation {
     /// The provider's isolation, stamped on every launch so a parent's value never leaks into a child.
     pub const ENV: &str = "RIMZ_ISOLATION";
 
+    /// The plan's host-bound paths, set only by `sandbox::plan` for the host drainer to map hook frames; presence marks a process as inside a scoped view.
+    pub const SCOPED_HOST_PATHS_ENV: &str = "RIMZ_SANDBOX_HOST_PATHS";
+
+    /// The mount pin wins over the launch stamp: it marks a bubblewrap view, and its meaning has not changed across isolation renames.
     pub fn ambient(env: &BTreeMap<String, String>) -> Option<Isolation> {
+        if env.contains_key(Self::SCOPED_HOST_PATHS_ENV) {
+            return Some(Self::Scoped);
+        }
         env.get(Self::ENV)?.parse().ok()
     }
 }
