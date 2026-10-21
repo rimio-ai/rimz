@@ -34,7 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 19);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 20);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
@@ -147,6 +147,27 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     assert!(fresh.is_fresh(1_000 + ttl_ms));
     assert!(!fresh.is_fresh(1_001 + ttl_ms));
     assert!(fresh.is_fresh(500));
+}
+
+#[test]
+fn v19_publication_preserves_spending_without_agent_roles() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    let spending = sample_spending();
+    let mut value = serde_json::to_value(ProviderSpendingCache {
+        version: 19,
+        spending: spending.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    value["roles"] = serde_json::json!({"subagents": {}, "recorded_since_secs": 123});
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let cache = read_provider_spending_cache(&path);
+    assert_eq!(cache.version, 19);
+    assert_eq!(cache.spending, spending);
+    assert_eq!(cache.roles.recorded_since_secs, Some(123));
+    let roles = serde_json::to_value(cache.roles).unwrap();
+    assert_eq!(roles["agents"], serde_json::json!({}));
 }
 
 #[test]
