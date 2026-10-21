@@ -43,6 +43,8 @@ mod timing;
 mod tmux_watch;
 mod transcript_watch;
 mod view_state;
+#[cfg(test)]
+mod views;
 mod width_control;
 
 use self::timing::FRAME_MIN_TIMEOUT;
