@@ -1423,10 +1423,7 @@ pub(super) fn companion_tmux_layout(panes: &[GridPane], chrome: &[GridPane]) -> 
         }
         _ => return None,
     };
-    let checksum = body.bytes().fold(0_u16, |sum, byte| {
-        sum.rotate_right(1).wrapping_add(u16::from(byte))
-    });
-    Some(format!("{checksum:04x},{body}"))
+    Some(super::layout::with_checksum(&body))
 }
 
 pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {

@@ -10,6 +10,7 @@
 //! caveats" — namely that the managed sidebar pane is the channel of record.
 
 mod backend;
+mod layout;
 mod options;
 mod parse;
 mod presence;

@@ -281,126 +281,19 @@ fn parse_layout_change(line: &str) -> Option<ControlLine> {
 }
 
 fn layout_geometry(layout: &str) -> Option<LayoutGeometry> {
-    let (_, tree) = layout.split_once(',')?;
-    let mut parser = LayoutParser {
-        input: tree.as_bytes(),
-        pos: 0,
-        panes: Vec::new(),
-    };
-    let window_width = parser.parse_cell()?;
-    // tmux 3.7 lists each floating pane twice: as a leaf of the root cell and
-    // again in a trailing `<leaf,...>` suffix. Only the suffix marks them, so
-    // drop its ids to report the tiled panes alone. A zoomed window writes no
-    // suffix, so its floating panes stay in the list.
-    let tiled = parser.panes.len();
-    if parser.peek() == Some(b'<') {
-        parser.parse_floating_suffix()?;
-    }
-    if parser.pos != parser.input.len() {
-        return None;
-    }
-    let floating = parser.panes.split_off(tiled);
-    let mut panes = parser.panes;
-    panes.retain(|pane| !floating.iter().any(|float| float.id == pane.id));
-    Some((window_width, panes))
-}
-
-struct LayoutParser<'a> {
-    input: &'a [u8],
-    pos: usize,
-    panes: Vec<TmuxLayoutPane>,
-}
-
-impl LayoutParser<'_> {
-    fn parse_cell(&mut self) -> Option<u64> {
-        let width = self.parse_number()?;
-        self.consume(b'x')?;
-        self.parse_number()?;
-        self.consume(b',')?;
-        let x = self.parse_number()?;
-        self.consume(b',')?;
-        self.parse_number()?;
-        match self.peek()? {
-            b'{' | b'[' => self.parse_group()?,
-            b',' => {
-                self.pos += 1;
-                let pane = self.parse_number()?;
-                self.panes.push(TmuxLayoutPane {
-                    id: format!("%{pane}"),
-                    x,
-                    width,
-                });
-            }
-            _ => return None,
-        }
-        Some(width)
-    }
-
-    fn parse_group(&mut self) -> Option<()> {
-        let opener = self.next()?;
-        let closer = match opener {
-            b'{' => b'}',
-            b'[' => b']',
-            _ => return None,
-        };
-        loop {
-            self.parse_cell()?;
-            match self.peek()? {
-                b',' => {
-                    self.pos += 1;
-                }
-                byte if byte == closer => {
-                    self.pos += 1;
-                    return Some(());
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn parse_floating_suffix(&mut self) -> Option<()> {
-        self.consume(b'<')?;
-        loop {
-            self.parse_cell()?;
-            match self.next()? {
-                b',' => {}
-                b'>' => return Some(()),
-                _ => return None,
-            }
-        }
-    }
-
-    fn parse_number(&mut self) -> Option<u64> {
-        let start = self.pos;
-        while self
-            .input
-            .get(self.pos)
-            .is_some_and(|byte| byte.is_ascii_digit())
-        {
-            self.pos += 1;
-        }
-        if self.pos == start {
-            return None;
-        }
-        std::str::from_utf8(&self.input[start..self.pos])
-            .ok()?
-            .parse()
-            .ok()
-    }
-
-    fn consume(&mut self, expected: u8) -> Option<()> {
-        (self.next()? == expected).then_some(())
-    }
-
-    fn next(&mut self) -> Option<u8> {
-        let byte = *self.input.get(self.pos)?;
-        self.pos += 1;
-        Some(byte)
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.input.get(self.pos).copied()
-    }
+    let layout = super::layout::Layout::parse(layout)?;
+    let panes = layout
+        .leaves()
+        .into_iter()
+        .map(|cell| {
+            Some(TmuxLayoutPane {
+                id: cell.pane_id()?.to_owned(),
+                x: u64::try_from(cell.x).ok()?,
+                width: cell.width,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((layout.root.width, panes))
 }
 
 #[cfg(test)]
