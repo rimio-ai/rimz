@@ -4,7 +4,7 @@
 
 use super::super::{
     admission::Shortfall,
-    query::{DocumentKey, QueryErr, UnavailableReason},
+    query::{DocumentKey, QueryErr},
     registry::{AttachedEditor, OpenDocument, StopReason},
 };
 use super::adaptation;
@@ -221,9 +221,10 @@ impl Clients {
                 self.server_message(json!({"jsonrpc": "2.0", "method": "experimental/serverStatus", "params": {"health": "warning", "quiescent": true, "message": status}}), &mut out);
             }
             Event::Refused(shortfall) => {
-                let message = QueryErr::Unavailable {
-                    root: shortfall.root,
-                    reason: UnavailableReason::MemoryShort,
+                let message = QueryErr::MemoryShort {
+                    root: shortfall.root.clone(),
+                    server: shortfall.server.clone(),
+                    shortfall: Some(Box::new(shortfall)),
                 }
                 .to_string();
                 self.cancel_requests(&message, 1, &mut out);

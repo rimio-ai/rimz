@@ -22,23 +22,6 @@ pub struct LspArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Connect an editor over stdio to the checkout's shared server.
-    Attach {
-        #[arg(long)]
-        server: Option<String>,
-        /// Use the stdio transport (the default).
-        #[arg(long)]
-        stdio: bool,
-        #[arg(long)]
-        version: bool,
-    },
-    /// Install an executable editor bridge for a configured server.
-    Shim {
-        #[arg(long)]
-        server: String,
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
     /// Find a definition by position, exact symbol name, or path::Symbol.
     Def(Query),
     /// Find references by position, exact symbol name, or path::Symbol.
@@ -52,11 +35,14 @@ enum Command {
     /// Find functions called by this symbol, by name or path::Symbol.
     Callees(ListQuery),
     /// Show a file's outline.
+    #[command(mut_arg("targets", |arg| arg.help("File paths to outline")))]
     Symbols(Query),
     /// Search workspace symbols.
+    #[command(mut_arg("targets", |arg| arg.help("Symbol-name search strings")))]
     Find(ListQuery),
     /// Read numbered source for one or more file anchors or positions.
     Show {
+        /// Source targets: path::Symbol, path:line[:col], or path:start-end.
         #[arg(value_name = "ANCHOR", required = true)]
         anchors: Vec<String>,
         /// Print the full body instead of an outline for large items.
@@ -65,8 +51,10 @@ enum Command {
     },
     /// Check every path::symbol anchor in Markdown files against the outline.
     Check {
+        /// Markdown files containing code anchors to verify.
         #[arg(value_name = "FILE", required = true)]
         files: Vec<PathBuf>,
+        /// Print structured anchor verdicts as JSON.
         #[arg(long)]
         json: bool,
         /// Complete unique short paths or those one file's symbol singles out, and rewrite existing hints for uniquely resolved saved symbols.
@@ -78,27 +66,55 @@ enum Command {
     },
     /// List the current room's shared servers.
     List {
-        /// List every shared server on this machine.
+        /// Also list servers that hold no memory.
         #[arg(long)]
         all: bool,
+        /// Print server registry entries as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Inspect a shared server and its attached editors.
     Status {
+        /// Checkout to inspect (default: the current checkout).
         checkout: Option<PathBuf>,
+        /// Select a server by name when several match.
         #[arg(long)]
         server: Option<String>,
+        /// Print the server registry entry as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Free a shared server's memory; the next query restarts it.
     Stop {
+        /// Checkout whose server to stop (default: the current checkout).
         checkout: Option<PathBuf>,
+        /// Select a server by name when several match.
         #[arg(long, conflicts_with = "all")]
         server: Option<String>,
+        /// Stop every server in this room.
         #[arg(long, conflicts_with = "checkout")]
         all: bool,
+    },
+    /// Connect an editor over stdio to the checkout's shared server.
+    Attach {
+        /// Select a configured server by name.
+        #[arg(long)]
+        server: Option<String>,
+        /// Use the stdio transport (the default).
+        #[arg(long)]
+        stdio: bool,
+        /// Print the editor bridge version and exit.
+        #[arg(long)]
+        version: bool,
+    },
+    /// Install an executable editor bridge for a configured server.
+    Shim {
+        /// Configured server for the editor bridge.
+        #[arg(long)]
+        server: String,
+        /// Installation directory (default: ~/.local/bin).
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
     #[command(hide = true)]
     Serve {
@@ -109,10 +125,13 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct Query {
+    /// Targets: path:line:col (1-based, column required), path::Symbol, or a name.
     #[arg(value_name = "TARGET", required = true)]
     targets: Vec<String>,
+    /// Select a configured or registered server by name.
     #[arg(long)]
     server: Option<String>,
+    /// Print the complete query result as JSON.
     #[arg(long)]
     json: bool,
 }
@@ -289,6 +308,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::Find(args) => (Verb::Find, args.query),
     };
     let context = query_context(globals)?;
+    context.validate_server(args.server.as_deref())?;
     let root = &context.root;
     let multiple = args.targets.len() > 1;
     let mut failures = QueryFailures::default();
@@ -298,7 +318,36 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = render::out();
     for (index, target) in args.targets.iter().enumerate() {
         let result = (|| {
-            let target = query::Target::parse(verb, target)?;
+            let target = match query::Target::parse(verb, target) {
+                Ok(target) => target,
+                Err(rimz::lsp::LspErr::MissingColumn { path, line, .. }) => {
+                    let outline = query::select(
+                        root,
+                        context.entries.clone(),
+                        &context.servers,
+                        args.server.as_deref(),
+                        Some(&path),
+                    )
+                    .ok()
+                    .and_then(|entry| {
+                        failures
+                            .execute(&entry.server, || {
+                                query::execute(
+                                    &entry,
+                                    Verb::Symbols,
+                                    &query::Target::File(path.clone()),
+                                )
+                            })
+                            .ok()
+                    })
+                    .and_then(|output| match output {
+                        query::Output::Answer { result, .. } => Some(result),
+                        _ => None,
+                    });
+                    return Err(query::missing_column(root, &path, line, outline));
+                }
+                Err(error) => return Err(error.into()),
+            };
             let entry = query::select(
                 root,
                 context.entries.clone(),
@@ -401,6 +450,37 @@ struct QueryContext {
     servers: std::collections::BTreeMap<String, rimz::config::LspServerConfig>,
 }
 
+impl QueryContext {
+    fn validate_server(&self, server: Option<&str>) -> Result<()> {
+        let Some(server) = server else {
+            return Ok(());
+        };
+        let names: std::collections::BTreeSet<_> = self
+            .servers
+            .keys()
+            .map(String::as_str)
+            .chain(
+                self.entries
+                    .iter()
+                    .filter(|entry| entry.root == self.root)
+                    .map(|entry| entry.server.as_str()),
+            )
+            .collect();
+        if names.contains(server) {
+            return Ok(());
+        }
+        let configured = if names.is_empty() {
+            "none configured".to_owned()
+        } else {
+            names.into_iter().collect::<Vec<_>>().join(", ")
+        };
+        Err(super::usage::UsageError::new(format!(
+            "no language server named {server}; configured: {configured}"
+        ))
+        .into())
+    }
+}
+
 fn query_exit(current: i32, next: i32) -> i32 {
     [3, 4, 1, 7, 6, 5, 0]
         .into_iter()
@@ -417,30 +497,16 @@ impl QueryFailures {
         server: &str,
         request: impl FnOnce() -> std::result::Result<query::Output, QueryErr>,
     ) -> std::result::Result<query::Output, QueryErr> {
-        if let Some(error) = self.0.get(server).and_then(Self::server_error) {
+        if let Some(error) = self.0.get(server).and_then(QueryErr::server_error) {
             return Err(error);
         }
         let result = request();
         if let Err(error) = &result
-            && let Some(error) = Self::server_error(error)
+            && let Some(error) = error.server_error()
         {
             self.0.insert(server.to_owned(), error);
         }
         result
-    }
-
-    fn server_error(error: &QueryErr) -> Option<QueryErr> {
-        match error {
-            QueryErr::Unavailable { root, reason } => Some(QueryErr::Unavailable {
-                root: root.clone(),
-                reason: reason.clone(),
-            }),
-            QueryErr::Indexing { server, seconds } => Some(QueryErr::Indexing {
-                server: server.clone(),
-                seconds: *seconds,
-            }),
-            QueryErr::Failed(_) => None,
-        }
     }
 }
 
@@ -817,6 +883,104 @@ mod tests {
     use render::status::{self, StateRole};
 
     #[test]
+    fn query_server_names_include_config_and_checkout_rows_only() {
+        let config = serde_json::from_value(
+            serde_json::json!({"command":["stub"],"extensions":["rs"],"root-markers":[]}),
+        )
+        .unwrap();
+        let mut context = QueryContext {
+            root: "/checkout".into(),
+            entries: vec![
+                entry("/checkout", "registered", State::Ready),
+                entry("/elsewhere", "elsewhere", State::Ready),
+            ],
+            servers: std::collections::BTreeMap::from([("configured".into(), config)]),
+        };
+        let error = context.validate_server(Some("nope")).unwrap_err();
+        assert!(error.is::<super::super::usage::UsageError>());
+        assert_eq!(
+            error.to_string(),
+            "no language server named nope; configured: configured, registered"
+        );
+        assert!(context.validate_server(None).is_ok());
+        assert!(context.validate_server(Some("configured")).is_ok());
+        assert!(context.validate_server(Some("registered")).is_ok());
+        assert!(context.validate_server(Some("elsewhere")).is_err());
+        context.servers.clear();
+        context.entries.clear();
+        assert_eq!(
+            context
+                .validate_server(Some("nope"))
+                .unwrap_err()
+                .to_string(),
+            "no language server named nope; configured: none configured"
+        );
+    }
+
+    #[test]
+    fn help_puts_queries_before_editor_bridges() {
+        use clap::CommandFactory;
+        let mut command = crate::cli::Cli::command();
+        command.build();
+        let lsp = command.find_subcommand("lsp").unwrap();
+        let names: Vec<_> = lsp
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set() && command.get_name() != "help")
+            .map(clap::Command::get_name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "def", "refs", "hover", "impl", "callers", "callees", "symbols", "find", "show",
+                "check", "list", "status", "stop", "attach", "shim"
+            ]
+        );
+    }
+
+    #[test]
+    fn visible_lsp_arguments_explain_their_input() {
+        use clap::CommandFactory;
+        let mut command = crate::cli::Cli::command();
+        command.build();
+        let lsp = command.find_subcommand("lsp").unwrap();
+        for command in lsp
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set() && command.get_name() != "help")
+        {
+            for argument in command
+                .get_arguments()
+                .filter(|argument| !argument.is_hide_set())
+            {
+                let help = argument
+                    .get_help()
+                    .expect("visible argument needs help")
+                    .to_string();
+                assert!(
+                    !help.is_empty(),
+                    "{} {}",
+                    command.get_name(),
+                    argument.get_id()
+                );
+                if argument.get_id() == "targets" {
+                    let expected = match command.get_name() {
+                        "symbols" => "File paths to outline",
+                        "find" => "Symbol-name search strings",
+                        _ => {
+                            "Targets: path:line:col (1-based, column required), path::Symbol, or a name"
+                        }
+                    };
+                    assert_eq!(
+                        help,
+                        expected,
+                        "{} TARGET help must match its accepted forms",
+                        command.get_name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn no_tests_is_refs_and_callers_only_and_conflicts_with_json() {
         use clap::Parser;
         for verb in ["refs", "callers"] {
@@ -863,7 +1027,7 @@ mod tests {
 
     #[test]
     fn query_failures_reuse_server_conditions_only() {
-        for code in [1, 3, 4] {
+        for code in [1, 3, 4, 8, 9] {
             let mut failures = QueryFailures::default();
             let mut requests = 0;
             for _ in 0..3 {
@@ -878,10 +1042,22 @@ mod tests {
                             server: "rust".into(),
                             seconds: 30,
                         },
+                        8 => QueryErr::MemoryShort {
+                            root: "/repo".into(),
+                            server: "rust".into(),
+                            shortfall: None,
+                        },
+                        9 => QueryErr::MemoryPressure {
+                            root: "/repo".into(),
+                            server: "rust".into(),
+                        },
                         _ => rimz::lsp::LspErr::Protocol("bad request".into()).into(),
                     })
                 });
-                assert_eq!(result.err().unwrap().exit_code(), code);
+                assert_eq!(
+                    result.err().unwrap().exit_code(),
+                    if code >= 8 { 4 } else { code }
+                );
             }
             assert_eq!(requests, if code == 1 { 3 } else { 1 });
             assert!(

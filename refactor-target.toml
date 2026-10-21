@@ -100,7 +100,10 @@ path = "crates/rimz/src/lsp"
 # check::Mode carries `--fix [--hints]` from the CLI into check::run (+1).
 # admission::revive lets a query bring back a lost broker for its live lease holders (+1).
 # memory::Reading and for_entry share RSS, swap, and peak accounting (+2).
-surface-budget = 84
+# Headroom and its read/fits methods, Shortfall::headroom, QueryErr::server_error,
+# and missing_column share admission figures and query error behavior with the CLI (+6).
+# NamedItem unifies column-less errors before and after outline enrichment (+1).
+surface-budget = 92
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -7041,6 +7044,41 @@ reason = "Queue outcome remains distinct from policy and the memory fit predicat
 kind = "item"
 key = "lsp::admission::revive"
 reason = "The query CLI revives a lost broker through admission's shared spawn path; registry cannot spawn."
+
+[[verdict]]
+kind = "item"
+key = "lsp::admission::Headroom"
+reason = "Admission and CLI memory explanations use one reading and one free-memory fragment."
+
+[[verdict]]
+kind = "item"
+key = "lsp::admission::Headroom::read"
+reason = "Read-only status and list use the same host sample and reserve calculation as admission."
+
+[[verdict]]
+kind = "item"
+key = "lsp::admission::Headroom::fits"
+reason = "CLI next-query predictions must preserve admission's overflow-safe fit check."
+
+[[verdict]]
+kind = "item"
+key = "lsp::admission::Shortfall::headroom"
+reason = "Query errors, editor messages, launch waits, and doctor render the broker's original figures."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::QueryErr::server_error"
+reason = "Queries, anchor checks, and source reads share the same per-server failure memo."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::missing_column"
+reason = "The CLI enriches a target error from an optional outline using the query renderer's kinds and names."
+
+[[verdict]]
+kind = "item"
+key = "lsp::NamedItem"
+reason = "Column-less target errors retain an optional outline item's kind, name and column across parsing and enrichment."
 
 [[verdict]]
 kind = "shape"

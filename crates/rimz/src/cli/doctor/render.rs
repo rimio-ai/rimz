@@ -609,16 +609,10 @@ fn render_lsp_refusal(
 ) -> io::Result<()> {
     let (reason, fix) = if let Some(shortfall) = super::refusal_shortfall(record) {
         let bytes = rimz::utils::size::decimal_bytes;
-        let swap = if shortfall.swap_free_bytes > 0 {
-            format!(" + {} free swap", bytes(shortfall.swap_free_bytes))
-        } else {
-            String::new()
-        };
         let mut text = format!(
-            "needs {}, {} available{swap}, {} reserved",
+            "needs {}, {}",
             bytes(shortfall.estimate_bytes),
-            bytes(shortfall.available_bytes),
-            bytes(shortfall.reserve_bytes)
+            shortfall.headroom()
         );
         if !shortfall.holders.is_empty() {
             let holders = shortfall

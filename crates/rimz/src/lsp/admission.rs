@@ -55,20 +55,72 @@ pub struct Shortfall {
     pub holders: Vec<Holder>,
 }
 
-impl Shortfall {
-    fn total_free_bytes(&self) -> u64 {
+#[derive(Clone, Copy, Debug)]
+pub struct Headroom {
+    pub available_bytes: u64,
+    pub swap_free_bytes: u64,
+    pub reserve_bytes: u64,
+}
+
+impl Headroom {
+    pub fn read(policy: &crate::config::LspConfig) -> Result<Self> {
+        let memory = memory::sample()?;
+        Ok(Self {
+            available_bytes: memory.available_bytes,
+            swap_free_bytes: memory.swap_free_bytes,
+            reserve_bytes: reserve_bytes(policy, memory.total_bytes)?,
+        })
+    }
+
+    fn free_bytes(&self) -> u64 {
         memory::free_bytes(self.available_bytes, self.swap_free_bytes)
+            .saturating_sub(self.reserve_bytes)
+    }
+
+    pub fn fits(&self, estimate_bytes: u64) -> bool {
+        estimate_bytes
+            .checked_add(self.reserve_bytes)
+            .is_some_and(|needed| {
+                needed <= memory::free_bytes(self.available_bytes, self.swap_free_bytes)
+            })
+    }
+}
+
+impl std::fmt::Display for Headroom {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} free ({} available",
+            decimal_bytes(self.free_bytes()),
+            decimal_bytes(self.available_bytes)
+        )?;
+        if self.swap_free_bytes > 0 {
+            write!(formatter, " + {} swap", decimal_bytes(self.swap_free_bytes))?;
+        }
+        write!(
+            formatter,
+            ", {} reserved)",
+            decimal_bytes(self.reserve_bytes)
+        )
+    }
+}
+
+impl Shortfall {
+    pub fn headroom(&self) -> Headroom {
+        Headroom {
+            available_bytes: self.available_bytes,
+            swap_free_bytes: self.swap_free_bytes,
+            reserve_bytes: self.reserve_bytes,
+        }
     }
 
     fn fits(&self) -> bool {
-        self.estimate_bytes
-            .checked_add(self.reserve_bytes)
-            .is_some_and(|needed| needed <= self.total_free_bytes())
+        self.headroom().fits(self.estimate_bytes)
     }
 
     /// Memory plus swap left after the reserve, the figure admission decided on.
     pub fn free_bytes(&self) -> u64 {
-        self.total_free_bytes().saturating_sub(self.reserve_bytes)
+        self.headroom().free_bytes()
     }
 }
 
@@ -79,14 +131,14 @@ fn measure_shortfall(
     entries: &[registry::Entry],
     policy: &crate::config::LspConfig,
 ) -> Result<Shortfall> {
-    let memory = memory::sample()?;
+    let headroom = Headroom::read(policy)?;
     Ok(Shortfall {
         root: root.to_owned(),
         server: server.to_owned(),
         estimate_bytes,
-        available_bytes: memory.available_bytes,
-        swap_free_bytes: memory.swap_free_bytes,
-        reserve_bytes: reserve_bytes(policy, memory.total_bytes)?,
+        available_bytes: headroom.available_bytes,
+        swap_free_bytes: headroom.swap_free_bytes,
+        reserve_bytes: headroom.reserve_bytes,
         holders: running_holders(entries),
     })
 }
@@ -237,11 +289,11 @@ impl std::fmt::Display for QueueTimeout {
         };
         write!(
             formatter,
-            "language server {} is required but memory stayed short for {}: needs {}, {} free{held_by}; stop one with rimz lsp stop, or lower [lsp] reserve-percent",
+            "language server {} is required but memory stayed short for {}: needs {}, {}{held_by}; stop one with rimz lsp stop, or lower [lsp] reserve-percent",
             shortfall.server,
             self.wait_timeout,
             decimal_bytes(shortfall.estimate_bytes),
-            decimal_bytes(shortfall.free_bytes())
+            shortfall.headroom()
         )
     }
 }
@@ -1058,7 +1110,7 @@ mod tests {
                 shortfall: shortfall.clone(),
             }))
             .to_string(),
-            "language server rust is required but memory stayed short for 20s: needs 8 KB, 4 KB free, held by /held rust (6 KB); stop one with rimz lsp stop, or lower [lsp] reserve-percent"
+            "language server rust is required but memory stayed short for 20s: needs 8 KB, 4 KB free (5 KB available, 1 KB reserved), held by /held rust (6 KB); stop one with rimz lsp stop, or lower [lsp] reserve-percent"
         );
         let record = serde_json::to_value(&shortfall).unwrap();
         assert_eq!(record["available_bytes"], 5000);
@@ -1080,6 +1132,15 @@ mod tests {
             (u64::MAX, 1, 1, 0, true),
         ] {
             assert_eq!(
+                Headroom {
+                    available_bytes: available,
+                    swap_free_bytes: swap,
+                    reserve_bytes: reserve
+                }
+                .fits(estimate),
+                expected
+            );
+            assert_eq!(
                 Shortfall {
                     root: "/new".into(),
                     server: "rust".into(),
@@ -1096,6 +1157,35 @@ mod tests {
                 .fits(),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn headroom_fragment_uses_admission_free_and_omits_zero_swap() {
+        for (available, swap, reserve, free, fragment) in [
+            (
+                5000,
+                50_000,
+                1000,
+                54_000,
+                "54 KB free (5 KB available + 50 KB swap, 1 KB reserved)",
+            ),
+            (
+                5000,
+                0,
+                1000,
+                4000,
+                "4 KB free (5 KB available, 1 KB reserved)",
+            ),
+            (5000, 0, 6000, 0, "0 B free (5 KB available, 6 KB reserved)"),
+        ] {
+            let headroom = Headroom {
+                available_bytes: available,
+                swap_free_bytes: swap,
+                reserve_bytes: reserve,
+            };
+            assert_eq!(headroom.to_string(), fragment);
+            assert_eq!(headroom.free_bytes(), free);
         }
     }
 
@@ -1127,7 +1217,7 @@ mod tests {
                 shortfall,
             }))
             .to_string()
-            .contains("needs 90 KB, 54 KB free")
+            .contains("needs 90 KB, 54 KB free (5 KB available + 50 KB swap, 1 KB reserved)")
         );
     }
 

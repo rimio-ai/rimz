@@ -67,6 +67,142 @@ fn editor_query(directory: &Path, name: &str) -> Value {
 }
 
 #[test]
+fn lsp_query_argument_mistakes_do_not_disable_the_server() {
+    let env = Env::new();
+    let (mut broker, directory) = editor_broker(&env, "20m");
+    for targets in [vec!["work"], vec!["work", "other"]] {
+        env.rimz()
+            .args(["lsp", "def"])
+            .args(targets)
+            .args(["--server", "nope"])
+            .assert()
+            .code(2)
+            .stdout("")
+            .stderr(predicates::str::contains(
+                "no language server named nope; configured: rust",
+            ));
+    }
+    env.rimz()
+        .args(["lsp", "def", "README.md::x", "missing"])
+        .assert()
+        .code(1)
+        .stdout(
+            predicates::str::contains(
+                "no language server handles .md files (rust covers .rs); use grep for this target",
+            )
+            .and(predicates::str::contains("==> missing <==")),
+        );
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_columnless_position_always_reports_a_target_error() {
+    let env = Env::new();
+    env.rimz()
+        .args(["lsp", "def", "src/lib.rs:12"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "src/lib.rs:12 has no column; use path:line:col with 1-based line and column",
+        ));
+}
+
+#[test]
+fn lsp_columnless_position_names_the_item_from_its_outline() {
+    let env = Env::new();
+    std::fs::write(
+        env.project_root.join("show.rs"),
+        "// fixture\nstruct Parent;\n\nfn child() {}\n",
+    )
+    .unwrap();
+    let (mut broker, directory) = editor_broker(&env, "20m");
+    env.rimz()
+        .args(["lsp", "def", "show.rs:4"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "show.rs:4 has no column; line 4 names method child at show.rs:4:4",
+        ));
+    env.rimz()
+        .args(["lsp", "def", "show.rs:3"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "show.rs:3 has no column; use path:line:col with 1-based line and column",
+        ));
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_queries_checks_and_show_explain_multiple_servers() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(env.project_root.join("show.rs"), "struct Parent;\n").unwrap();
+    std::fs::write(env.project_root.join("notes.md"), "`show.rs::Parent`\n").unwrap();
+    let (mut rust, rust_dir) = editor_broker(&env, "20m");
+    let mut machine: MachineConfig =
+        toml::from_str(&std::fs::read_to_string(env.rimz_home().join("config.toml")).unwrap())
+            .unwrap();
+    let config = machine.lsp.servers["rust"].clone();
+    machine.lsp.servers.insert("other".into(), config.clone());
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+    )
+    .unwrap();
+    let (mut other, other_dir) = spawn_test_broker(
+        &env,
+        &rimz::lsp::admission::ServeRequest {
+            root: env.project_root.canonicalize().unwrap(),
+            project: env.project_root.clone(),
+            server: "other".into(),
+            settings_hash: "multiple".into(),
+            config,
+            policy: machine.lsp,
+            eager: false,
+        },
+    );
+    let expected = format!(
+        "multiple language servers for {}: other, rust; choose --server NAME",
+        env.project_root.canonicalize().unwrap().display()
+    );
+    for (verb, target) in [("def", "show.rs::Parent"), ("check", "notes.md")] {
+        env.rimz()
+            .args(["lsp", verb, target])
+            .assert()
+            .code(1)
+            .stderr(predicates::str::contains(&expected));
+    }
+    env.rimz()
+        .args(["lsp", "show", "show.rs::Parent"])
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains(&expected));
+    for (broker, directory) in [(&mut rust, rust_dir), (&mut other, other_dir)] {
+        assert_eq!(
+            editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+            true
+        );
+        broker.wait().unwrap();
+    }
+}
+
+#[test]
 fn lsp_recycles_after_an_in_flight_agent_query_finishes() {
     assert_recycles_after_request(false);
 }
@@ -2311,10 +2447,9 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
             assert_eq!(String::from_utf8(output.stdout).unwrap(), blocks.join("\n"));
         }
     }
-    env.rimz().args(["lsp", "def", "alias", "x.py:1:1"]).assert().code(3).stderr("").stdout(format!(
-        "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server for {} (not running); use grep\n",
-        env.project_root.display()
-    ));
+    env.rimz().args(["lsp", "def", "alias", "x.py:1:1"]).assert().code(1).stderr("").stdout(
+        "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server handles .py files (rust covers .rs); use grep for this target\n"
+    );
     env.rimz().args(["lsp", "find", "work", "--limit", "1"]).assert().success().stdout("4 symbols (showing 1)\nfunction w::work  src/w.rs:1:1\n3 more; add --limit N or --all\n");
     for verb in ["refs", "impl", "callers", "callees", "find"] {
         for flags in [
@@ -2509,7 +2644,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     env.rimz()
         .args(["lsp", "find", "anything"])
         .assert()
-        .code(3)
+        .code(4)
         .stderr(predicates::str::contains("not started: memory short"));
     let status = rpc(json!({"op": "status"}));
     assert!(status["state"].get("dormant").is_some());

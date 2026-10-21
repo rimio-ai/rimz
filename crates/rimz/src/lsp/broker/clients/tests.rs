@@ -314,9 +314,9 @@ fn lifetime_end_and_refusal_cancel_requests_once() {
         1
     );
     assert!(out.iter().any(|v| {
-        v["params"]["message"]
-            .as_str()
-            .is_some_and(|s| s.contains("memory short"))
+        v["params"]["message"].as_str().is_some_and(|s| {
+            s.contains("memory short, needs 1 B, 0 B free (0 B available, 0 B reserved)")
+        })
     }));
 }
 

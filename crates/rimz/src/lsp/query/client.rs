@@ -88,6 +88,21 @@ pub fn select(
     path: Option<&Path>,
 ) -> std::result::Result<Entry, QueryErr> {
     let extension = path.and_then(Path::extension).and_then(|ext| ext.to_str());
+    if server.is_none()
+        && !servers.is_empty()
+        && let Some(extension) = extension
+        && !servers
+            .values()
+            .any(|config| config.extensions.iter().any(|ext| ext == extension))
+    {
+        return Err(QueryErr::UncoveredExtension {
+            extension: extension.into(),
+            coverage: servers
+                .iter()
+                .map(|(name, config)| (name.clone(), config.extensions.clone()))
+                .collect(),
+        });
+    }
     let mut entries: Vec<_> = entries
         .into_iter()
         .filter(|entry| entry.root == root)
@@ -103,10 +118,10 @@ pub fn select(
         })
         .collect();
     if entries.len() > 1 {
-        return Err(LspErr::Configuration(
-            "multiple language servers; choose --server NAME".into(),
-        )
-        .into());
+        return Err(QueryErr::MultipleServers {
+            root: root.into(),
+            servers: entries.iter().map(|entry| entry.server.clone()).collect(),
+        });
     }
     let entry = entries.pop().ok_or_else(|| QueryErr::Unavailable {
         root: root.into(),
@@ -117,10 +132,7 @@ pub fn select(
         },
     })?;
     if let State::Stopped { reason, .. } = &entry.state {
-        return Err(QueryErr::Unavailable {
-            root: root.into(),
-            reason: UnavailableReason::stopped(reason),
-        });
+        return Err(QueryErr::stopped(&entry, reason));
     }
     if !registry::is_live(&entry) {
         return Err(QueryErr::Unavailable {
@@ -138,10 +150,11 @@ fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Va
         // Outlasts the broker's 110s bound so exit 4 reports before a 120s agent shell timeout.
         Duration::from_secs(115),
     )?;
-    if response.get("refused").is_some() {
-        return Err(QueryErr::Unavailable {
+    if let Some(refused) = response.get("refused") {
+        return Err(QueryErr::MemoryShort {
             root: entry.root.clone(),
-            reason: UnavailableReason::MemoryShort,
+            server: entry.server.clone(),
+            shortfall: serde_json::from_value(refused.clone()).ok().map(Box::new),
         });
     }
     if let Some(indexing) = response.get("indexing") {
@@ -152,12 +165,8 @@ fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Va
     }
     if let Some(error) = response.get("error") {
         if error["code"] == -32003 {
-            return Err(QueryErr::Unavailable {
-                root: entry.root.clone(),
-                reason: UnavailableReason::stopped(
-                    &serde_json::from_value(error["message"].clone()).map_err(LspErr::from)?,
-                ),
-            });
+            let reason = serde_json::from_value(error["message"].clone()).map_err(LspErr::from)?;
+            return Err(QueryErr::stopped(entry, &reason));
         }
         return Err(LspErr::Protocol(error.to_string()).into());
     }
