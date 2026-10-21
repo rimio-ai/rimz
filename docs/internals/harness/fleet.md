@@ -271,6 +271,14 @@ On Unix every surviving wrapper replaces its startup image after spawning and bi
 
 Room birth also carries one adapter-enrichment environment map through the mux seam, so a stock agent typed directly into an ordinary work shell inherits the room baseline. RimZ-managed launches still apply their adapter `launch_env` last. A process or shell already running keeps the environment it started with; rebirth is the parity boundary on both backends.
 
+The environment a RimZ-started process gets depends on its route, so a claim about which processes can carry a variable starts from this table:
+
+| Route | Environment |
+| --- | --- |
+| Agent pane | The multiplexer session's baseline, the room identity pin from `crates/rimz/src/room/mod.rs::pane_identity_env`, and the launch's own variables. Never the calling process's environment. |
+| Headless loop check or workflow judge | The caller's whole environment minus `RIMZ_AGENT_*` and `RIMZ_CHANNEL`, plus the loop marker and the workspace pin (`crates/rimz/src/harness/headless.rs::AdmittedLaunch::execute_hosted`; per route in [loops.md](./loops.md)). A judge started inside a scoped view therefore carries that view's variables. |
+| Hook apply child of the host drainer | Only the environment recorded in the hook frame, on a cleared environment (`crates/rimz/src/cli/hooks.rs::process_in_child`). |
+
 ### Placement
 
 `crates/rimz/src/harness/ancestry.rs::LaunchFocus` resolves the shared focus policy from `--bg` and the caller identity: `Keep` for either an agent caller or `--bg`, otherwise `Take`. Interactive launch shares its caller resolution with ancestry stamping; fork, lane resume, and restart resolve from their loaded agents, and team restart passes one decision to every member. `Keep` also suppresses already-live cohort and lane jumps and downgrades in-place launches to splits. Restart skips pre-focus and anchors its unfocused replacement to the old pane in the room session. The supervised `-p` return-now meaning of `--bg` is unchanged. See [multiplexer focus behavior](../multiplexers.md) for the Zellij 0.44 transient.
