@@ -209,7 +209,15 @@ Local allocations are flat at about 3.68 KB per subscriber, both at fixed room s
 
 #### Hidden-pane fanout at 50 agents and 57 subscribers
 
-`crates/rimz/benches/fleet.rs::idle_cycle_hidden_fanout` places each subscriber in a distinct tab, watches one, and paints every attachment once before timing. Every measured cycle changes row content, delivers a real retained worker fold, and steps each renderer's frame timing twice. The 56 hidden panes now retain content until reveal; the watched pane applies every change. The historical comparison below measured inside the old data-tick deferral window, not sustained hidden skipping.
+`crates/rimz/benches/fleet.rs::idle_cycle_hidden_fanout` places each subscriber in a distinct tab, watches one, paints every attachment once, and waits two seconds, past the renderers' one-second data tick, before timing. Every measured cycle changes row content, delivers a real retained worker fold, and steps each renderer's frame timing twice. The 56 hidden panes retain content until reveal; the watched pane applies every change.
+
+Captured 2026-10-21 with `cargo xtask perf --bench fleet -- idle_cycle_hidden_fanout`, ten samples. Before is merge base `71e751a63b` with only the two-second wait added, where hidden panes folded once per data tick; after is the branch that stops hidden folds. Load average was near 22 for both runs, so the allocation counts carry the comparison.
+
+| Case | Before → after median, ms | Before → after allocation requests | Before → after requested bytes |
+| --- | ---: | ---: | ---: |
+| Painted hidden fanout, past the data tick | 8.826 → 2.402 | 91,565 → 25,315 | 9,119,101 → 2,956,692 |
+
+Hidden fanout past the data tick requests 72.4% fewer allocations and 67.6% fewer bytes. The historical comparison below measured inside the old data-tick deferral window, where hidden panes already coalesced, not sustained hidden skipping.
 
 Captured 2026-10-14 with `cargo xtask perf --bench fleet -- idle_cycle` and `cargo xtask perf --bench fleet -- publish`, ten samples per case. Before is `fb140708c`, after is `6c22a4b01`, on the same machine with the arena cap unchanged. Bytes include allocation and reallocation requests from the counting allocator, rather than Divan's allocation-only column. The other cases retain their 200-agent/100-subscriber fixtures.
 
@@ -257,7 +265,7 @@ Scale ceilings fail `cargo xtask perf --bench fleet`: publication at 200/100 may
 | --- | ---: | ---: | --- |
 | `fleet::produce_cold` 20 / 50 / 100 agents | 4.65 ms / 7.61 ms / 13.45 ms | 4.52 MB / 9.26 MB / 17.36 MB | 2026-07-05 |
 | `fleet::produce_warm` 20 / 50 / 100 agents | 520 µs / 792 µs / 1.32 ms | 1.53 MB / 2.09 MB / 2.98 MB | 2026-07-05 |
-| `fleet::idle_cycle_hidden_fanout` 50 agents / 57 subscribers, one watched | 5.115 ms | 2.92 MB requested | 2026-10-14 |
+| `fleet::idle_cycle_hidden_fanout` 50 agents / 57 subscribers, one watched | 2.402 ms | 2.96 MB requested | 2026-10-21 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents | 129 µs | 637.1 KB | 2026-07-05 |
 | `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, re-parsing carryover | 70.8 µs / 16.52 ms | 989 KB / 90.11 MB | 2026-09-14 |

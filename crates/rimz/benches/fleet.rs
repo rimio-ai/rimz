@@ -354,8 +354,9 @@ fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
 
 #[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
 fn idle_cycle_hidden_fanout(bencher: Bencher) {
-    // About 3x the lazy coalesced 22,319 requests, below the uncoalesced 116,624.
-    const MAX_ALLOCATIONS: usize = 67_000;
+    // About 1.5x the 25,315 requests with hidden panes skipping, below the
+    // 91,565 of hidden panes folding past the data tick.
+    const MAX_ALLOCATIONS: usize = 38_000;
     let mut counts = (0, 0);
     bencher
         .with_inputs(|| {
@@ -394,6 +395,8 @@ fn idle_cycle_hidden_fanout(bencher: Bencher) {
             cycle.enable_renderer_apply();
             cycle.run_cycle();
             cycle.paint_fanout();
+            // Measure past the renderers' 1 s data tick, where hidden panes settled.
+            std::thread::sleep(std::time::Duration::from_secs(2));
             (tempdir, cycle)
         })
         .bench_local_refs(|(_, cycle)| {
