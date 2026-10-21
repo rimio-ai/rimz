@@ -967,7 +967,7 @@ pub(super) fn model_cells(
 }
 
 pub(super) fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
-    folded_models(stats, active, None).len()
+    natural_size(model_rows(stats, active))
 }
 
 pub(super) fn model_breakdown(
@@ -975,30 +975,28 @@ pub(super) fn model_breakdown(
     active: Window,
     cap: usize,
 ) -> Vec<(String, SpendWindow, String)> {
-    folded_models(stats, active, Some(cap.min(MAX_MODELS)))
+    fold_breakdown(model_rows(stats, active), cap.min(MAX_MODELS))
         .into_iter()
         .map(|row| match row.key {
-            Some(id) => (
+            Some((id, kind)) => (
                 rimz::agents::model_display::display_model(id),
                 row.window,
-                stats.by_model[id].kind.clone(),
+                kind.to_owned(),
             ),
             None => ("Other".to_owned(), row.window, String::new()),
         })
         .collect()
 }
 
-fn folded_models(stats: &Stats, active: Window, cap: Option<usize>) -> Vec<BreakdownRow<'_>> {
-    let rows = breakdown_rows(
-        stats.by_model.iter().map(|(id, model)| {
-            (
-                (!id.is_empty()).then_some(id.as_str()),
-                active.select(&model.tally),
-            )
-        }),
-        active.select(&stats.total).usd,
-    );
-    fold_breakdown(rows, cap)
+/// Models keyed by id and producing kind; the empty id has no key, so it
+/// always folds.
+fn model_rows(stats: &Stats, active: Window) -> Vec<BreakdownRow<(&str, &str)>> {
+    breakdown_rows(stats.by_model.iter().map(|(id, model)| {
+        (
+            (!id.is_empty()).then_some((id.as_str(), model.kind.as_str())),
+            active.select(&model.tally),
+        )
+    }))
 }
 
 pub(super) struct AgentBreakdown<'a> {
@@ -1014,32 +1012,32 @@ pub(super) fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
 }
 
 fn breakdown_size(tallies: &BTreeMap<String, SpendTally>, active: Window) -> usize {
-    fold_breakdown(tally_breakdown_rows(tallies, active, 0.0, None), None).len()
+    natural_size(tally_rows(tallies, active))
 }
 
+/// With `cap: None`, every admitted row unfolded (the JSON path).
 pub(super) fn agent_breakdown(
     stats: &Stats,
     active: Window,
     cap: Option<usize>,
 ) -> Vec<AgentBreakdown<'_>> {
-    tally_breakdown_rows(
-        &stats.by_agent,
-        active,
-        active.select(&stats.total).usd,
-        cap,
-    )
-    .into_iter()
-    .map(|row| AgentBreakdown {
-        kind: row.key.unwrap_or(""),
-        name: row
-            .key
-            .map(agent_display_name)
-            .unwrap_or_else(|| "Other".to_owned()),
-        window: row.window,
-        share: row.share,
-        folded: row.key.is_none(),
-    })
-    .collect()
+    let total_usd = active.select(&stats.total).usd;
+    let mut rows = tally_rows(&stats.by_agent, active);
+    if let Some(cap) = cap {
+        rows = fold_breakdown(rows, cap.min(MAX_AGENTS));
+    }
+    rows.into_iter()
+        .map(|row| AgentBreakdown {
+            kind: row.key.unwrap_or(""),
+            name: row
+                .key
+                .map(agent_display_name)
+                .unwrap_or_else(|| "Other".to_owned()),
+            share: share_of(row.window.usd, total_usd),
+            window: row.window,
+            folded: row.key.is_none(),
+        })
+        .collect()
 }
 
 /// Profiles measure significance against their own dollars and work tokens,
@@ -1049,30 +1047,28 @@ pub(super) fn subagent_breakdown(
     active: Window,
     cap: Option<usize>,
 ) -> Vec<AgentBreakdown<'_>> {
-    tally_breakdown_rows(
-        &stats.subagents,
-        active,
-        active.select(&stats.total).usd,
-        cap,
-    )
-    .into_iter()
-    .map(|row| AgentBreakdown {
-        kind: "",
-        name: row.key.unwrap_or("Other").to_owned(),
-        window: row.window,
-        share: row.share,
-        folded: row.key.is_none(),
-    })
-    .collect()
+    let total_usd = active.select(&stats.total).usd;
+    let mut rows = tally_rows(&stats.subagents, active);
+    if let Some(cap) = cap {
+        rows = fold_breakdown(rows, cap.min(MAX_AGENTS));
+    }
+    rows.into_iter()
+        .map(|row| AgentBreakdown {
+            kind: "",
+            name: row.key.unwrap_or("Other").to_owned(),
+            share: share_of(row.window.usd, total_usd),
+            window: row.window,
+            folded: row.key.is_none(),
+        })
+        .collect()
 }
 
-struct BreakdownRow<'a> {
-    key: Option<&'a str>,
+struct BreakdownRow<K> {
+    key: Option<K>,
     window: SpendWindow,
-    share: f64,
 }
 
-impl BreakdownRow<'_> {
+impl<K: Ord> BreakdownRow<K> {
     fn display_cmp(&self, other: &Self) -> std::cmp::Ordering {
         other
             .window
@@ -1083,72 +1079,58 @@ impl BreakdownRow<'_> {
     }
 }
 
-fn breakdown_rows<'a>(
-    rows: impl Iterator<Item = (Option<&'a str>, SpendWindow)>,
-    total_usd: f64,
-) -> Vec<BreakdownRow<'a>> {
+/// Admits the rows with dollars or work tokens, in display order.
+fn breakdown_rows<K: Ord>(
+    rows: impl Iterator<Item = (Option<K>, SpendWindow)>,
+) -> Vec<BreakdownRow<K>> {
     let mut rows: Vec<_> = rows
-        .filter_map(|(key, window)| {
-            (window.usd > 0.0 || window.tokens > 0).then(|| BreakdownRow {
-                key,
-                share: share_of(window.usd, total_usd),
-                window,
-            })
-        })
+        .filter(|(_, window)| window.usd > 0.0 || window.tokens > 0)
+        .map(|(key, window)| BreakdownRow { key, window })
         .collect();
     rows.sort_by(BreakdownRow::display_cmp);
     rows
 }
 
-fn tally_breakdown_rows(
-    tallies: &BTreeMap<String, SpendTally>,
-    active: Window,
-    total_usd: f64,
-    cap: Option<usize>,
-) -> Vec<BreakdownRow<'_>> {
-    let rows = breakdown_rows(
+fn tally_rows(tallies: &BTreeMap<String, SpendTally>, active: Window) -> Vec<BreakdownRow<&str>> {
+    breakdown_rows(
         tallies
             .iter()
             .map(|(key, tally)| (Some(key.as_str()), active.select(tally))),
-        total_usd,
-    );
-    match cap {
-        Some(cap) => fold_breakdown(rows, Some(cap.min(MAX_AGENTS))),
-        None => rows,
-    }
+    )
 }
 
-fn fold_breakdown(rows: Vec<BreakdownRow<'_>>, cap: Option<usize>) -> Vec<BreakdownRow<'_>> {
-    if cap == Some(0) {
+/// A section's row count before any cap cut: `fit`'s proportional weight.
+fn natural_size<K: Ord>(rows: Vec<BreakdownRow<K>>) -> usize {
+    fold_breakdown(rows, usize::MAX).len()
+}
+
+/// Names the rows holding `MIN_BREAKDOWN_SHARE` of the section's dollars or
+/// work tokens and merges the rest, keyless rows included, into a trailing
+/// `Other` (key `None`). Past `cap`, the least significant named rows join it.
+fn fold_breakdown<K: Ord>(rows: Vec<BreakdownRow<K>>, cap: usize) -> Vec<BreakdownRow<K>> {
+    if cap == 0 {
         return Vec::new();
     }
     let total_usd: f64 = rows.iter().map(|row| row.window.usd).sum();
     let total_tokens: u64 = rows.iter().map(|row| row.window.tokens).sum();
-    let significance = |row: &BreakdownRow<'_>| {
+    let significance = |row: &BreakdownRow<K>| {
         share_of(row.window.usd, total_usd)
             .max(share_of(row.window.tokens as f64, total_tokens as f64))
     };
     let (mut named, mut folded): (Vec<_>, Vec<_>) = rows
         .into_iter()
         .partition(|row| row.key.is_some() && significance(row) >= MIN_BREAKDOWN_SHARE);
-    if let Some(cap) = cap
-        && named.len() + usize::from(!folded.is_empty()) > cap
-    {
+    if named.len() + usize::from(!folded.is_empty()) > cap {
         named.sort_by(|a, b| significance(b).total_cmp(&significance(a)));
         folded.extend(named.split_off(cap - 1));
         named.sort_by(BreakdownRow::display_cmp);
     }
     if !folded.is_empty() {
-        let mut other = BreakdownRow {
-            key: None,
-            window: SpendWindow::default(),
-            share: 0.0,
-        };
-        for row in folded {
-            other.window.merge(&row.window);
-            other.share += row.share;
+        let mut window = SpendWindow::default();
+        for row in &folded {
+            window.merge(&row.window);
         }
-        named.push(other);
+        named.push(BreakdownRow { key: None, window });
     }
     named
 }
