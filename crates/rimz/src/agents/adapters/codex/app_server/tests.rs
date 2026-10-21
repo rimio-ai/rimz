@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::rc::Rc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -15,6 +17,8 @@ struct CannedTransport {
     results: HashMap<&'static str, Value>,
     sequences: HashMap<&'static str, Vec<Value>>,
     errors: HashSet<&'static str>,
+    unconfirmed: HashSet<&'static str>,
+    trace: Option<(&'static str, Trace)>,
     calls: Vec<String>,
     params: Vec<Value>,
     notifications: Vec<Value>,
@@ -36,6 +40,8 @@ impl CannedTransport {
             results,
             sequences: HashMap::new(),
             errors: HashSet::new(),
+            unconfirmed: HashSet::new(),
+            trace: None,
             calls: Vec::new(),
             params: Vec::new(),
             notifications: Vec::new(),
@@ -56,12 +62,36 @@ impl CannedTransport {
         self.errors.insert(method);
         self
     }
+
+    /// The broker answers `method` without naming the expected child.
+    fn unconfirmed(mut self, method: &'static str) -> Self {
+        self.unconfirmed.insert(method);
+        self
+    }
+
+    /// Record every request and notification as `<label>:<call>` in `trace`.
+    fn traced(mut self, label: &'static str, trace: &Trace) -> Self {
+        self.trace = Some((label, Rc::clone(trace)));
+        self
+    }
+
+    fn record(&mut self, call: String) {
+        if let Some((label, trace)) = &self.trace {
+            trace.borrow_mut().push(format!("{label}:{call}"));
+        }
+        self.calls.push(call);
+    }
 }
+
+type Trace = Rc<RefCell<Vec<String>>>;
 
 impl JsonRpcTransport for CannedTransport {
     fn request(&mut self, method: &str, params: Value) -> Result<Value, AppServerErr> {
-        self.calls.push(method.to_owned());
+        self.record(method.to_owned());
         self.params.push(params);
+        if self.unconfirmed.contains(method) {
+            return Err(AppServerErr::Unconfirmed);
+        }
         if self.errors.contains(method) {
             return Err(AppServerErr::JsonRpc {
                 code: -32000,
@@ -78,7 +108,7 @@ impl JsonRpcTransport for CannedTransport {
 
     fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
         let method = frame["method"].as_str().unwrap();
-        self.calls.push(format!("notify:{method}"));
+        self.record(format!("notify:{method}"));
         self.notifications.push(frame.clone());
         Ok(())
     }
@@ -142,6 +172,7 @@ fn handshake_initializes_then_acknowledges_before_reads() {
     client.handshake().unwrap();
     let _ = client
         .observe("codex", None, Some("gpt-5.5-codex"), ts())
+        .unwrap()
         .context;
 
     assert_eq!(client.transport.calls[0], "initialize");
@@ -177,7 +208,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     let transport = CannedTransport::new().with("account/rateLimits/read", rate_limits_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", None, None, ts()).context;
+    let ctx = client.observe("codex", None, None, ts()).unwrap().context;
     let limits = ctx.rate_limits.expect("rate limits present");
     assert_eq!(limits.windows.len(), 2);
     assert_eq!(limits.windows[0].duration_mins, Some(300));
@@ -202,7 +233,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     let transport = CannedTransport::new().with("account/rateLimits/read", result);
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", None, None, ts()).context;
+    let ctx = client.observe("codex", None, None, ts()).unwrap().context;
     let limits = ctx.rate_limits.expect("single window");
     assert_eq!(limits.windows.len(), 2);
     assert_eq!(limits.windows[0].duration_mins, Some(300));
@@ -225,6 +256,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     client.handshake().unwrap();
     let limits = client
         .observe("codex", None, None, ts())
+        .unwrap()
         .context
         .rate_limits
         .unwrap();
@@ -237,7 +269,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
         CannedTransport::new().with("account/rateLimits/read", json!({ "rateLimits": {} }));
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", None, None, ts()).context;
+    let ctx = client.observe("codex", None, None, ts()).unwrap().context;
     assert_eq!(ctx.account, None);
     assert_eq!(ctx.rate_limits, None);
 }
@@ -274,7 +306,7 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
         let transport = CannedTransport::new().with("account/rateLimits/read", result);
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
-        let observation = client.observe("codex", None, None, ts());
+        let observation = client.observe("codex", None, None, ts()).unwrap();
         let credits = observation
             .extra_credits
             .unwrap_or_else(|| panic!("missing credits for {label}"));
@@ -291,7 +323,10 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(
-        client.observe("codex", None, None, ts()).extra_credits,
+        client
+            .observe("codex", None, None, ts())
+            .unwrap()
+            .extra_credits,
         None
     );
 
@@ -306,7 +341,7 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
     );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let observation = client.observe("codex", None, None, ts());
+    let observation = client.observe("codex", None, None, ts()).unwrap();
     assert_eq!(observation.extra_credits, None);
     assert_eq!(
         observation
@@ -359,7 +394,10 @@ fn rate_limits_response_maps_credit_state_fields() {
         let mut client = CodexAppServer::new(transport);
         client.handshake().unwrap();
         assert_eq!(
-            client.observe("codex", None, None, ts()).extra_credits,
+            client
+                .observe("codex", None, None, ts())
+                .unwrap()
+                .extra_credits,
             Some(expected),
             "{label}"
         );
@@ -377,7 +415,10 @@ fn rate_limits_response_maps_credit_state_fields() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(
-        client.observe("codex", None, None, ts()).extra_credits,
+        client
+            .observe("codex", None, None, ts())
+            .unwrap()
+            .extra_credits,
         Some(ExtraCredits::Disabled)
     );
 }
@@ -401,7 +442,10 @@ fn rate_limits_response_maps_reset_credit_summary() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(
-        client.observe("codex", None, None, ts()).reset_credits,
+        client
+            .observe("codex", None, None, ts())
+            .unwrap()
+            .reset_credits,
         Some(ResetCredits {
             count: 3,
             soonest_expiry: Timestamp::from_second(1_780_000_200).ok(),
@@ -423,7 +467,10 @@ fn rate_limits_response_maps_reset_credit_summary() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(
-        client.observe("codex", None, None, ts()).reset_credits,
+        client
+            .observe("codex", None, None, ts())
+            .unwrap()
+            .reset_credits,
         Some(ResetCredits {
             count: 0,
             soonest_expiry: None,
@@ -440,6 +487,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     client.handshake().unwrap();
     let ctx = client
         .observe("codex", None, Some("gpt-5.5-codex"), ts())
+        .unwrap()
         .context;
     assert_eq!(ctx.model_id.as_deref(), Some("gpt-5.5-codex"));
     assert_eq!(ctx.model_display_name.as_deref(), Some("GPT-5.5 Codex"));
@@ -454,7 +502,10 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
+    let ctx = client
+        .observe("codex", Some("sess-1"), None, ts())
+        .unwrap()
+        .context;
     assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
     assert_eq!(ctx.session_name.as_deref(), Some("TUI prototype"));
     assert!(
@@ -468,7 +519,10 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
+    let ctx = client
+        .observe("codex", Some("sess-1"), None, ts())
+        .unwrap()
+        .context;
     assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
     assert_eq!(ctx.session_name, None);
 
@@ -488,7 +542,10 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
         );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
+    let ctx = client
+        .observe("codex", Some("sess-1"), None, ts())
+        .unwrap()
+        .context;
     assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
     assert_eq!(ctx.session_name.as_deref(), Some("TUI prototype"));
 
@@ -497,7 +554,10 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
         .with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe("codex", None, Some("o4-mini"), ts()).context;
+    let ctx = client
+        .observe("codex", None, Some("o4-mini"), ts())
+        .unwrap()
+        .context;
     assert_eq!(ctx.rate_limits, None);
     assert_eq!(ctx.model_display_name.as_deref(), Some("o4-mini"));
     assert_eq!(ctx.agent_version.as_deref(), Some("0.135.0"));
@@ -509,6 +569,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     assert_eq!(
         client
             .observe("codex", None, Some("does-not-exist"), ts())
+            .unwrap()
             .context
             .model_display_name,
         None
@@ -516,6 +577,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     assert_eq!(
         client
             .observe("codex", None, None, ts())
+            .unwrap()
             .context
             .model_display_name,
         None
@@ -1005,4 +1067,214 @@ fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
     assert_eq!(merged.rate_limits_observed_at, Some(app_at));
     assert_eq!(merged.rich_observed_at, None);
     assert_eq!(merged.context.observed_at, app_at);
+}
+
+fn plan_result(plan: &str) -> Value {
+    json!({"rateLimits": {"limitId": "codex", "planType": plan,
+        "primary": { "usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1_780_092_691_i64 }}})
+}
+
+fn plan_of(observation: &AppServerObservation) -> Option<&str> {
+    observation
+        .context
+        .account
+        .as_ref()
+        .and_then(|account| account.plan.as_deref())
+}
+
+/// Observe through `attempts`, with `make` building each attempt's canned
+/// transport; returns the result, the attempts opened, and every call served.
+fn observe_ladder(
+    attempts: Vec<ConnectAttempt>,
+    session_id: Option<&str>,
+    make: impl Fn(&ConnectAttempt, &Trace) -> CannedTransport,
+) -> (Result<AppServerObservation, AppServerErr>, Vec<String>) {
+    let trace = Trace::default();
+    let result = observe_from_attempts(
+        attempts,
+        |attempt, _| Ok(make(attempt, &trace)),
+        "codex",
+        session_id,
+        Some("gpt-5.5-codex"),
+        ts(),
+    );
+    let calls = trace.borrow().clone();
+    (result, calls)
+}
+
+fn served(label: &'static str, plan: &str, trace: &Trace) -> CannedTransport {
+    CannedTransport::new()
+        .with("account/rateLimits/read", plan_result(plan))
+        .with("model/list", model_list_result())
+        .traced(label, trace)
+}
+
+fn all_attempts() -> Vec<ConnectAttempt> {
+    attempts_for(Some(Path::new("broker")), Some(Path::new("daemon")))
+}
+
+const HANDSHAKE_AND_READS: [&str; 4] = [
+    "initialize",
+    "notify:initialized",
+    "account/rateLimits/read",
+    "model/list",
+];
+
+fn calls_of(label: &str, calls: &[String]) -> Vec<String> {
+    calls
+        .iter()
+        .filter_map(|call| call.strip_prefix(label)?.strip_prefix(':'))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+#[test]
+fn an_unconfirmed_broker_is_skipped_after_its_handshake_request() {
+    let (result, calls) = observe_ladder(all_attempts(), None, |attempt, trace| match attempt {
+        ConnectAttempt::Broker(_) => served("broker", "wrong", trace).unconfirmed("initialize"),
+        ConnectAttempt::DaemonWs(_) => served("daemon", "team", trace),
+        ConnectAttempt::Spawn => served("spawn", "spawn", trace),
+    });
+    assert_eq!(plan_of(&result.unwrap()), Some("team"));
+    assert_eq!(calls_of("broker", &calls), ["initialize"]);
+    assert_eq!(calls_of("daemon", &calls), HANDSHAKE_AND_READS);
+    assert!(calls_of("spawn", &calls).is_empty());
+}
+
+#[test]
+fn a_broker_that_stops_confirming_mid_read_is_discarded_whole() {
+    for failing in ["account/rateLimits/read", "model/list", "thread/read"] {
+        let (result, calls) =
+            observe_ladder(
+                all_attempts(),
+                Some("sess-1"),
+                |attempt, trace| match attempt {
+                    ConnectAttempt::Broker(_) => served("broker", "wrong", trace)
+                        .with(
+                            "thread/read",
+                            json!({"thread": {"id": "sess-1", "name": "wrong"}}),
+                        )
+                        .unconfirmed(failing),
+                    ConnectAttempt::DaemonWs(_) => served("daemon", "team", trace),
+                    ConnectAttempt::Spawn => served("spawn", "spawn", trace),
+                },
+            );
+        let observation = result.unwrap();
+        assert_eq!(plan_of(&observation), Some("team"), "{failing}");
+        assert_eq!(observation.context.session_name, None, "{failing}");
+        assert!(
+            calls_of("broker", &calls).ends_with(&[failing.to_owned()]),
+            "{failing}: {calls:?}"
+        );
+        assert!(calls_of("spawn", &calls).is_empty(), "{failing}");
+    }
+}
+
+#[test]
+fn a_confirmed_broker_serves_the_whole_read_and_nothing_else_opens() {
+    let (result, calls) = observe_ladder(all_attempts(), None, |attempt, trace| match attempt {
+        ConnectAttempt::Broker(_) => served("broker", "pro", trace),
+        _ => served("other", "wrong", trace),
+    });
+    assert_eq!(plan_of(&result.unwrap()), Some("pro"));
+    assert_eq!(calls_of("broker", &calls), HANDSHAKE_AND_READS);
+    assert!(calls_of("other", &calls).is_empty());
+}
+
+#[test]
+fn an_unreachable_broker_falls_through_like_before() {
+    let opened = RefCell::new(Vec::new());
+    let result = observe_from_attempts(
+        all_attempts(),
+        |attempt, _| match attempt {
+            ConnectAttempt::Broker(_) => {
+                opened.borrow_mut().push("broker");
+                Err(AppServerErr::Closed)
+            }
+            ConnectAttempt::DaemonWs(_) => {
+                opened.borrow_mut().push("daemon");
+                Ok(CannedTransport::new().with("account/rateLimits/read", plan_result("team")))
+            }
+            ConnectAttempt::Spawn => {
+                opened.borrow_mut().push("spawn");
+                Ok(CannedTransport::new())
+            }
+        },
+        "codex",
+        None,
+        None,
+        ts(),
+    );
+    assert_eq!(plan_of(&result.unwrap()), Some("team"));
+    assert_eq!(*opened.borrow(), ["broker", "daemon"]);
+}
+
+#[test]
+fn a_tolerated_failed_read_still_ends_the_ladder_at_the_first_attempt() {
+    let (result, calls) = observe_ladder(all_attempts(), None, |attempt, trace| match attempt {
+        ConnectAttempt::Broker(_) => {
+            served("broker", "pro", trace).failing("account/rateLimits/read")
+        }
+        _ => served("other", "wrong", trace),
+    });
+    assert_eq!(plan_of(&result.unwrap()), None);
+    assert_eq!(calls_of("broker", &calls), HANDSHAKE_AND_READS);
+    assert!(calls_of("other", &calls).is_empty());
+}
+
+#[test]
+fn every_attempt_unconfirmed_reports_the_last_attempt() {
+    let (result, _) = observe_ladder(all_attempts(), None, |attempt, trace| {
+        served("any", "wrong", trace).unconfirmed(match attempt {
+            ConnectAttempt::Spawn => "account/rateLimits/read",
+            _ => "initialize",
+        })
+    });
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "cold spawn: codex app-server broker did not confirm it serves the login"
+    );
+}
+
+#[test]
+fn an_unconfirmed_broker_falls_through_for_the_model_catalog_too() {
+    let trace = Trace::default();
+    let entries = catalog_from_attempts(
+        attempts_for(Some(Path::new("broker")), None),
+        Instant::now() + Duration::from_secs(2),
+        |attempt, _| {
+            Ok(match attempt {
+                ConnectAttempt::Broker(_) => CannedTransport::new()
+                    .unconfirmed("initialize")
+                    .with("model/list", json!({"data": [{"id": "wrong"}]}))
+                    .traced("broker", &trace),
+                _ => CannedTransport::new()
+                    .with("model/list", model_list_result())
+                    .traced("spawn", &trace),
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(entries[0].id, "gpt-5.5-codex");
+    assert_eq!(
+        *trace.borrow(),
+        [
+            "broker:initialize",
+            "spawn:initialize",
+            "spawn:notify:initialized",
+            "spawn:model/list"
+        ]
+    );
+}
+
+#[test]
+fn a_broker_attempt_without_a_resolvable_home_is_unconfirmed_before_connecting() {
+    let result = Transport::open(
+        &ConnectAttempt::Broker(PathBuf::from("/nonexistent/broker.sock")),
+        Path::new("codex"),
+        &BTreeMap::new(),
+        None,
+        Duration::from_secs(1),
+    );
+    assert!(matches!(result, Err(AppServerErr::Unconfirmed)));
 }

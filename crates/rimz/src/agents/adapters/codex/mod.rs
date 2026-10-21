@@ -2076,8 +2076,14 @@ fn refresh_app_server_enrichment(
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
 ) -> Option<AppServerObservation> {
-    let mut client = CodexAppServer::connect(broker_socket, login_env)?;
-    Some(client.observe("codex", session_id, model_hint, Timestamp::now()))
+    CodexAppServer::observe_login(
+        broker_socket,
+        login_env,
+        "codex",
+        session_id,
+        model_hint,
+        Timestamp::now(),
+    )
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,

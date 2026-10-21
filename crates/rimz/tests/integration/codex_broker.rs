@@ -325,18 +325,18 @@ fn broker_respawns_after_credentials_stamp_changes() {
             .set_times(FileTimes::new().set_modified(mtime + Duration::from_secs(1)))
             .expect("set replacement auth stamp");
 
-        // Cached initialize precedes the stamp check; only an ordinary request respawns.
-        assert_eq!(rpc(&mut stream, &mut reader, 3, "initialize"), init);
-        let replacement = rpc(&mut stream, &mut reader, 4, "account/rateLimits/read");
-        assert_eq!(replacement["rimzFixture"]["auth"], auth_b);
-        let replacement_pid = replacement["rimzFixture"]["pid"]
+        // `initialize` re-resolves the login too, so the changed stamp respawns the child
+        // before the handshake is answered from the fresh child's cache.
+        let replacement_init = rpc(&mut stream, &mut reader, 3, "initialize");
+        assert_eq!(replacement_init["rimzFixture"]["auth"], auth_b);
+        let replacement_pid = replacement_init["rimzFixture"]["pid"]
             .as_u64()
             .expect("replacement child pid");
         assert_ne!(replacement_pid, original_pid);
+        let replacement = rpc(&mut stream, &mut reader, 4, "account/rateLimits/read");
+        assert_eq!(replacement["rimzFixture"], replacement_init["rimzFixture"]);
 
-        let replacement_init = rpc(&mut stream, &mut reader, 5, "initialize");
-        assert_eq!(replacement_init["rimzFixture"], replacement["rimzFixture"]);
-        let stable = rpc(&mut stream, &mut reader, 6, "account/rateLimits/read");
+        let stable = rpc(&mut stream, &mut reader, 5, "account/rateLimits/read");
         assert_eq!(stable["rimzFixture"], replacement["rimzFixture"]);
     }));
 
