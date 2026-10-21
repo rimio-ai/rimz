@@ -192,7 +192,10 @@ pub(super) fn stale_line(
         right.push(Span::raw("  "));
     }
     let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.last_activity, ctx.now));
-    right.push(Span::styled(format!("{age:>3}"), theme.muted()));
+    right.push(Span::styled(
+        format!("{age:>3}"),
+        cache_age_style(theme, row, ctx.now),
+    ));
     let mut left = vec![
         agent_lead_cell(
             theme,

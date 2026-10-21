@@ -414,6 +414,11 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
     }
 }
 
+/// The cache-clock tone every card age wears.
+pub(super) fn cache_age_style(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Style {
+    cache_age(row, now).phase(now).style(theme)
+}
+
 /// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
 /// the time since the last real turn ended, the face filling over the horizon
 /// in the steady `good` tone; otherwise the time since the agent's own activity
@@ -424,7 +429,7 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
 /// wears the meter's expired-cache tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
-    let style = age.phase(now).style(theme);
+    let style = cache_age_style(theme, row, now);
     match age {
         CacheAge::Held { ended, until } => {
             let label = activity_short(ended, now)?;

@@ -62,8 +62,8 @@ pub struct Palette {
     /// hotter than the bar's scaled-to-red health run. Derived like `heat_ramp`,
     /// not a tunable slot.
     pub(crate) expense: Tone,
-    /// The context meter's fixed expired-cache tone, also worn by its age clock;
-    /// derived, not a tunable slot.
+    /// The context meter's fixed expired-cache tone, also worn by its age clock
+    /// and the stale line's age; derived, not a tunable slot.
     pub(crate) cache_expired: Tone,
     pub(crate) accent: Tone,
     pub(crate) cool: Tone,
