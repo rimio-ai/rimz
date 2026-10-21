@@ -4,7 +4,9 @@
 //! results so the Codex context refresh (`rimz agents refresh-context`) can be
 //! exercised without the real `codex` binary. Tests point `RIMZ_CODEX_BIN` at
 //! this binary; the client spawns it as `<bin> app-server` with the internal marker.
-//! Notifications (no `id`) get no reply; the process exits on stdin EOF.
+//! Notifications (no `id`) get no reply; the process exits on stdin EOF. The
+//! reported plan is `team` unless the serving `CODEX_HOME` holds a `stub-plan`
+//! file naming another, so a test can tell which home answered.
 
 use std::io::{BufRead, Write};
 
@@ -23,7 +25,12 @@ fn main() {
             std::fs::read_to_string(std::path::PathBuf::from(home).join("auth.json")).ok()
         })
         .unwrap_or_default();
-    let fixture = json!({ "pid": std::process::id(), "auth": auth });
+    let plan = std::env::var_os("CODEX_HOME")
+        .and_then(|home| {
+            std::fs::read_to_string(std::path::PathBuf::from(home).join("stub-plan")).ok()
+        })
+        .map_or_else(|| "team".to_owned(), |plan| plan.trim().to_owned());
+    let fixture = json!({ "pid": std::process::id(), "auth": auth, "plan": plan });
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -64,7 +71,7 @@ fn response_for(method: &str, fixture: &Value) -> Value {
                 "primary": { "usedPercent": 42, "windowDurationMins": 300, "resetsAt": 1_790_000_000_i64 },
                 "secondary": { "usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 1_790_500_000_i64 },
                 "credits": { "balance": 18.5 },
-                "planType": "team"
+                "planType": fixture["plan"]
             }
         }),
         "model/list" => json!({
