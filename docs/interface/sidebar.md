@@ -647,7 +647,7 @@ Stacked blocks (`provider_tabs = "never"`):
  ▝▜█████▛▘ 7d  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h     ← spent: empty track, red on screen
    ▘▘ ▝▝   ex  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱      $43     ← paid extra usage, $43 left
 
- Codex v0.137.0 · ChatGPT Pro            ⟳ 2 · 3h  ⇅ rc
+ Codex v0.137.0 · ChatGPT Pro 200        ⟳ 2 · 3h  ⇅ rc
 
   ▗▛▀▀▀▜▖  ◎ 42  ◇ 16M ↘ 15M ↗ 1M ◌ 272M        $288.88
  ▐█ ▜▖  █▌ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰              ← not started: full bar, no countdown

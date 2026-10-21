@@ -265,7 +265,7 @@ Every key below is present, with `null` when unknown, except `problem`, `probe_e
 | `pool` | History pool as `kind@name`; deduplicate spend by this key. |
 | `product_name` | Display name, including a named account's suffix. |
 | `probed_at`, `probe_error` | Last probe's RFC 3339 timestamp; failure cause only after a failed probe. |
-| `plan`, `plan_label` | Raw plan tier and display label, both `null` while lapsed. |
+| `plan`, `plan_label` | Plan tier and display label, both `null` while lapsed. Claude may refine `max` to RimZ-normalized `max_5x` or `max_20x` from credential metadata, labeled `Claude Max 5x` or `Claude Max 20x`; these are not untouched `subscriptionType` values. Codex retains raw `prolite`, `pro`, and `promax`, labeled `ChatGPT Pro 100`, `ChatGPT Pro 200`, and `ChatGPT Pro 500`. |
 | `account_id`, `sub_provider` | Non-secret provider account id and backing provider name. |
 | `account_scope` | `{"kind":"kind_wide"}` or `{"kind":"sub_provider","provider":…,"variant":…}`. |
 | `version`, `metered` | CLI version; whether the account has subscription windows (`null` when unknown). |

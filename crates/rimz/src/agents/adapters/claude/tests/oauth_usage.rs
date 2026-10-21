@@ -2,6 +2,35 @@ use super::*;
 use crate::agents::credits::AccountUsageReportable;
 
 #[test]
+fn max_tier_metadata_needs_no_valid_token_but_rejects_contradictions() {
+    for tier in ["default_claude_max_5x", "default_claude_max_20x"] {
+        for subscription in [None, Some("max")] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "claudeAiOauth": {
+                    "subscriptionType": subscription,
+                    "rateLimitTier": tier,
+                    "expiresAt": 0,
+                    "scopes": []
+                }
+            }))
+            .unwrap();
+            assert_eq!(parse_max_rate_limit_tier(&bytes).as_deref(), Some(tier));
+        }
+    }
+    for bytes in [
+        &b"not json"[..],
+        b"{}",
+        br#"{"claudeAiOauth":null}"#,
+        br#"{"claudeAiOauth":{}}"#,
+        br#"{"claudeAiOauth":{"rateLimitTier":42}}"#,
+        br#"{"claudeAiOauth":{"subscriptionType":"pro","rateLimitTier":"default_claude_max_20x"}}"#,
+        br#"{"claudeAiOauth":{"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#,
+    ] {
+        assert_eq!(parse_max_rate_limit_tier(bytes), None, "{bytes:?}");
+    }
+}
+
+#[test]
 fn organization_usage_rejection_is_not_a_credentials_fault() {
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -108,7 +137,34 @@ fn named_login_env_reads_account_credentials_under_the_named_home() {
     let stamp = file_mtime_ms(&path).unwrap();
     assert_eq!(credentials_stamp(&login_env), Some(stamp));
     assert_eq!(credentials_stamp(&home_env), None);
-    assert_eq!(credentials_path(&login_env), Some(path));
+    assert_eq!(credentials_path(&login_env).as_ref(), Some(&path));
+
+    let native = home.join(".claude");
+    std::fs::create_dir_all(&native).unwrap();
+    std::fs::write(
+        native.join(".credentials.json"),
+        r#"{"claudeAiOauth":{"rateLimitTier":"default_claude_max_5x"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &path,
+        r#"{"claudeAiOauth":{"rateLimitTier":"default_claude_max_20x"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        read_max_rate_limit_tier(&login_env).as_deref(),
+        Some("default_claude_max_20x")
+    );
+    assert_eq!(
+        read_max_rate_limit_tier(&home_env).as_deref(),
+        Some("default_claude_max_5x")
+    );
+    std::fs::write(&path, "not json").unwrap();
+    assert_eq!(read_max_rate_limit_tier(&login_env), None);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(read_max_rate_limit_tier(&login_env), None);
+    std::fs::create_dir(&path).unwrap();
+    assert_eq!(read_max_rate_limit_tier(&login_env), None);
 }
 
 #[test]

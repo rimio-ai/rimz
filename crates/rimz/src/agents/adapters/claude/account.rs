@@ -83,8 +83,24 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut probe = exit_outcome(output.status.code(), &output.stdout);
     if let AccountProbe::Found(account) = &mut probe {
         account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
+        if account.plan.as_deref() == Some("max") {
+            let tier = super::oauth_usage::read_max_rate_limit_tier(login_env);
+            refine_max_plan(account, tier.as_deref());
+        }
     }
     probe
+}
+
+fn refine_max_plan(account: &mut AgentAccount, rate_limit_tier: Option<&str>) {
+    if account.plan.as_deref() != Some("max") {
+        return;
+    }
+    let plan = match rate_limit_tier {
+        Some("default_claude_max_5x") => "max_5x",
+        Some("default_claude_max_20x") => "max_20x",
+        _ => return,
+    };
+    account.plan = Some(plan.to_owned());
 }
 
 /// What one finished `claude auth status` run says. The CLI exits non-zero
@@ -143,6 +159,28 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refines_only_max_plans_with_known_credential_tiers() {
+        for (plan, tier, expected) in [
+            (Some("max"), Some("default_claude_max_5x"), Some("max_5x")),
+            (Some("max"), Some("default_claude_max_20x"), Some("max_20x")),
+            (Some("max"), None, Some("max")),
+            (Some("max"), Some("future_tier"), Some("max")),
+            (Some("pro"), Some("default_claude_max_20x"), Some("pro")),
+            (Some("team"), Some("default_claude_max_5x"), Some("team")),
+            (None, Some("default_claude_max_20x"), None),
+        ] {
+            let mut account = AgentAccount {
+                plan: plan.map(str::to_owned),
+                metered: Some(true),
+                ..Default::default()
+            };
+            refine_max_plan(&mut account, tier);
+            assert_eq!(account.plan.as_deref(), expected, "{plan:?}: {tier:?}");
+            assert_eq!(account.metered, Some(true));
+        }
+    }
 
     /// Pull the account out of a `Found` outcome, or fail the test with `label`.
     fn found(probe: AccountProbe, label: &str) -> AgentAccount {

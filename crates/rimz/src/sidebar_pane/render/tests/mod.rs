@@ -816,7 +816,7 @@ fn two_provider_panels() -> Vec<SidebarProviderPanel> {
         provider_panel("claude", "Claude", 173, true, true, Some((25, 40))),
         {
             let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
-            codex.plan = Some("ChatGPT Pro".to_owned());
+            codex.plan = Some(crate::store::snapshot::format_plan_label("codex", "pro"));
             codex.version = Some("0.135.0".to_owned());
             codex.spending = Some(
                 crate::SpendTally {

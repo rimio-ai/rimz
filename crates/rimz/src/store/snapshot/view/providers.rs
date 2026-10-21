@@ -435,8 +435,8 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
 
 /// Format a raw provider plan tier into its brand label, per the adapter's
 /// [`crate::agents::PlanLabel`]: Claude's tiers prefix `Claude` (`max` →
-/// `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT Pro`); any other
-/// provider just title-cases the tier.
+/// `Claude Max`), Codex names its Pro subtiers (`pro` → `ChatGPT Pro 200`);
+/// unknown kinds just title-case the tier.
 pub(crate) fn format_plan_label(kind: &str, raw: &str) -> String {
     match crate::agents::spec_by_kind(kind).map(|definition| &definition.plan_label) {
         Some(label) => label.format(raw),
