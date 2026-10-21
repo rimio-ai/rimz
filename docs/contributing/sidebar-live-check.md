@@ -440,6 +440,16 @@ This check proves caller resolution, not delivery of the wait's result to the ag
 
 The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming. `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm.
 
+## Cache clock band
+
+A card's cache-age pin and its `cache expires in Nm` line move with the agent's quiet time against the provider's prompt-cache lifetime, an hour for Claude. Scenario playback cannot show them: a story's cards carry no cache lifetime, so every pin reads muted. In a held room, shorten the lifetime so the warning band arrives within minutes. The room picks the setting up without a restart. With the `rz` prefix from [Run a command as an agent](#run-a-command-as-an-agent):
+
+```sh
+rz config set harness.prompt_cache_ttl.claude 24m
+```
+
+With a 24-minute lifetime the band starts at 12 minutes quiet (half the lifetime, which comes before its last ten minutes) and the cache expires at 24. Prime the agent as that section does: a SessionStart, then `UserPromptSubmit` and `Stop` for the same session. Select the card with the sidebar's Click command so its stats and cache line show. Confirm that the card's row reads `cache.ceiling_secs` 1440 ([Inspect the data behind a card](#inspect-the-data-behind-a-card)), then run Look and Capture from a detached script at each quiet age you check, as the time rules there say. The pin stays muted before 12 minutes. From 12 it turns yellow and the countdown line appears, it is orange near 18 and red near 24, and past 24 it reads a greyed-red `◉` with `cache expired`.
+
 ## Capture kitty graphics
 
 A held room draws cell bars, never pixel meters or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
