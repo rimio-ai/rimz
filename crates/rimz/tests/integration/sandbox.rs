@@ -524,6 +524,7 @@ fn skill_prepare(
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -654,6 +655,7 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
         cwd: &cwd,
         project_root: &env.project_root,
         worktree: Some(&checkout),
+        checkout: Some(&checkout),
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -706,6 +708,132 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn scoped_protection_keeps_provider_homes_writable() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let home = &env.home_root;
+    let output = std::process::Command::new("git")
+        .args(["init", home.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let native = home.join("accounts/codex/default");
+    let account = home.join("accounts/codex/work");
+    std::fs::create_dir_all(native.join("sessions")).unwrap();
+    std::fs::create_dir_all(&account).unwrap();
+    std::os::unix::fs::symlink(&native, home.join(".codex")).unwrap();
+    std::os::unix::fs::symlink(home.join(".codex/sessions"), account.join("sessions")).unwrap();
+    std::fs::write(home.join(".mcp.json"), "original").unwrap();
+    std::fs::create_dir(home.join(".claude")).unwrap();
+    let state = env.store();
+    let vars = environment(&env);
+    let mut inputs = SandboxInputs {
+        env: &vars,
+        cwd: home,
+        project_root: home,
+        worktree: None,
+        checkout: Some(home),
+        read_only: Vec::new(),
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        provider_home: Some(rimz::sandbox::ProviderHome {
+            source: account.clone(),
+            target: account.clone(),
+        }),
+        provider_home_env_keys: &["CODEX_HOME"],
+        default_home: Some(home.join(".codex")),
+        skills: SkillInputs {
+            kind: "codex",
+            home: None,
+            manual: ManualSkill::Unsupported,
+            callable: None,
+        },
+    };
+    for contains_home in [false, true] {
+        if contains_home {
+            std::fs::remove_file(home.join(".codex")).unwrap();
+            std::fs::create_dir_all(home.join(".codex/account")).unwrap();
+            let account = home.join(".codex/account");
+            inputs.provider_home = Some(rimz::sandbox::ProviderHome {
+                source: account.clone(),
+                target: account,
+            });
+            inputs.default_home = None;
+        }
+        let skills = home.join(".codex/skills");
+        std::fs::create_dir_all(skills.join("hidden")).unwrap();
+        std::fs::write(skills.join("hidden/SKILL.md"), "skill body\n").unwrap();
+        inputs.skills.home = Some(skills.clone());
+        inputs.skills.manual = ManualSkill::OpenAiPolicy;
+        inputs.skills.callable = Some(&[]);
+        let plan = rimz::sandbox::plan(&inputs).unwrap();
+        rimz::sandbox::apply(&plan).unwrap();
+        let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, home, &[]);
+        let provider = &inputs.provider_home.as_ref().unwrap().target;
+        let mut writes = vec![
+            provider.join("written"),
+            home.join(".codex/direct"),
+            skills.join("added"),
+        ];
+        if !contains_home {
+            writes.extend([account.join("sessions/rollout"), native.join("direct")]);
+        }
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .args([
+                "sh",
+                "-c",
+                "for path do printf ok > \"$path\" || exit 1; done",
+                "writable",
+            ])
+            .args(&writes)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let protected = if contains_home {
+            home.join(".codex")
+        } else {
+            native.clone()
+        };
+        for mount in &plan.plan.mounts {
+            if let rimz::sandbox::Mount::RoBind { target, .. }
+            | rimz::sandbox::Mount::RemountRo { target } = mount
+            {
+                assert_ne!(
+                    target.canonicalize().unwrap(),
+                    protected.canonicalize().unwrap(),
+                    "provider home must stay writable"
+                );
+            }
+        }
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .args([
+                "sh",
+                "-c",
+                "for path do if (printf bad >> \"$path\") 2>/dev/null; then exit 1; fi; done",
+                "protected",
+            ])
+            .args([
+                home.join(".mcp.json"),
+                home.join(".claude/added"),
+                home.join(".git/hooks/x"),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(!home.join(".agents").exists());
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn scoped_protects_separate_git_directory() {
     if !available() {
         return;
@@ -732,6 +860,7 @@ fn scoped_protects_separate_git_directory() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: Some(&env.project_root),
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -890,6 +1019,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -1396,6 +1526,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -1666,6 +1797,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
@@ -1975,14 +2107,22 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
 
 #[test]
 fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolations() {
-    for isolation in ["host", "scoped"] {
+    for (isolation, empty_dir) in [("host", false), ("scoped", false), ("scoped", true)] {
         if isolation == "scoped" && !available() {
             continue;
         }
         let env = Env::new();
         env.record(&env.project_root);
         let work = env.home_root.join("work");
-        let native = env.home_root.join(".codex");
+        let native = if empty_dir {
+            std::fs::create_dir(env.home_root.join(".git")).unwrap();
+            let native = env.home_root.join("accounts/codex/default");
+            std::fs::create_dir_all(&native).unwrap();
+            std::os::unix::fs::symlink(&native, env.home_root.join(".codex")).unwrap();
+            native
+        } else {
+            env.home_root.join(".codex")
+        };
         std::fs::create_dir_all(native.join("sessions")).unwrap();
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(work.join("auth.json"), "work").unwrap();
@@ -2015,14 +2155,24 @@ fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolatio
             .assert_success_within_timeout("grant trusted provider PATH");
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
         request.identity.params.login = Some("work".parse().unwrap());
+        let cwd = if empty_dir {
+            let cwd = env.store().paths().empty_agent_dir("reader");
+            std::fs::create_dir_all(&cwd).unwrap();
+            cwd
+        } else {
+            env.project_root.clone()
+        };
         env.rimz()
+            .current_dir(&cwd)
+            .arg("--root")
+            .arg(&env.project_root)
             .args(exec_args(&env, &request))
             .env_remove("CODEX_HOME")
             .env("SHELL", "/definitely/not/a/shell")
             .assert_success_within_timeout("launch on a shared account");
         assert_eq!(
             std::fs::read_link(work.join("sessions")).unwrap(),
-            native.join("sessions"),
+            env.home_root.join(".codex/sessions"),
             "{isolation}"
         );
         assert_eq!(
@@ -2032,7 +2182,7 @@ fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolatio
         );
         assert_eq!(
             std::fs::read_to_string(native.join("sessions/databases")).unwrap(),
-            native.to_str().unwrap(),
+            env.home_root.join(".codex").to_str().unwrap(),
             "{isolation}"
         );
         assert!(!work.join("auth.json").is_symlink(), "{isolation}");
@@ -2795,6 +2945,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,

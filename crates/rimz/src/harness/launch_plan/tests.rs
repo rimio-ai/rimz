@@ -186,6 +186,7 @@ fn workflow_env_pins_survive_both_isolations() {
     let common = metadata.path().join(".git");
     let admin = common.join("worktrees/judge");
     std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::write(
         project.path().join(".git"),
         format!("gitdir: {}\n", admin.display()),
@@ -270,6 +271,110 @@ fn workflow_env_pins_survive_both_isolations() {
                     )), "judge Git metadata must be read-only: {}", path.display());
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn scoped_empty_directory_does_not_inherit_ancestor_git_protection() {
+    for symlinked_home in [true, false] {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".git/hooks")).unwrap();
+        std::fs::create_dir(project.path().join(".codex")).unwrap();
+        std::fs::write(project.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(project.path().join(".git/config"), "").unwrap();
+        let id = crate::WorkspaceId::from_project_root(project.path());
+        let alias = project.path().join("home-link");
+        std::os::unix::fs::symlink(project.path(), &alias).unwrap();
+        let home = if symlinked_home {
+            alias.as_path()
+        } else {
+            project.path()
+        };
+        let state = StatePaths::under(id.clone(), home).unwrap();
+        let runtime = RuntimePaths::under(id, project.path()).unwrap();
+        let cwd = state.empty_agent_dir("reader");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = cwd.canonicalize().unwrap();
+        let request = request("codex", action_with_args("launch", vec![]));
+        let machine = crate::config::MachineConfig::default();
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: &cwd,
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Scoped,
+            bwrap: Some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        let mounts = &plan.sandbox.unwrap().plan.mounts;
+        assert!(mounts.iter().any(|mount| matches!(mount,
+            sandbox::Mount::RoBind { target, .. } if target == &project.path().join(".codex")
+        )));
+        for entry in [".git/hooks", ".git/config"] {
+            assert!(
+                !mounts.iter().any(|mount| matches!(mount,
+                    sandbox::Mount::RoBind { target, .. } if target == &project.path().join(entry)
+                )),
+                "empty-dir launch must not protect ancestor {entry}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unreadable_checkout_metadata_refuses_only_scoped_launches() {
+    let project = tempfile::tempdir().unwrap();
+    let cwd = project.path().join("nested");
+    std::fs::create_dir(&cwd).unwrap();
+    let dot_git = project.path().join(".git");
+    std::os::unix::fs::symlink(".git", &dot_git).unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let state = StatePaths::under(id.clone(), project.path()).unwrap();
+    let runtime = RuntimePaths::under(id, project.path()).unwrap();
+    let request = request("codex", action_with_args("launch", vec![]));
+    let machine = crate::config::MachineConfig::default();
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let result = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: &cwd,
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation,
+            bwrap: isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        });
+        if isolation == Isolation::Host {
+            assert!(result.is_ok());
+        } else {
+            let error = result
+                .err()
+                .expect("unreadable .git must refuse scoped launch")
+                .to_string();
+            assert!(
+                error.contains(&format!("scoped view cannot access {}:", dot_git.display())),
+                "{error}"
+            );
+            assert!(error.contains("fix the path before launching"), "{error}");
         }
     }
 }

@@ -818,6 +818,22 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     };
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
+            let empty_root = inputs.state.empty_dir_root();
+            let in_empty_root = inputs.cwd.starts_with(&empty_root)
+                || matches!(
+                    (inputs.cwd.canonicalize(), empty_root.canonicalize()),
+                    (Ok(cwd), Ok(root)) if cwd.starts_with(&root)
+                );
+            let checkout = if in_empty_root {
+                None
+            } else {
+                crate::worktree::discover_checkout(inputs.cwd).map_err(|error| {
+                    sandbox::SandboxErr::Io {
+                        path: error.path,
+                        source: error.source,
+                    }
+                })?
+            };
             let provider_home = adapter.config_home(&env).map(|path| sandbox::ProviderHome {
                 source: path.clone(),
                 target: path,
@@ -827,7 +843,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 cwd: inputs.cwd,
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
-                read_only: judge_read_only(&request, inputs.cwd)?,
+                checkout: checkout.as_deref(),
+                read_only: judge_read_only(&request, inputs.cwd, checkout.as_deref())?,
                 tmp_dir: &unit,
                 skills_dir: &inputs
                     .state
@@ -878,7 +895,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     })
 }
 
-fn judge_read_only(request: &ExecRequest, cwd: &Path) -> Result<Vec<PathBuf>, LaunchPlanErr> {
+fn judge_read_only(
+    request: &ExecRequest,
+    cwd: &Path,
+    checkout: Option<&Path>,
+) -> Result<Vec<PathBuf>, LaunchPlanErr> {
     if !request
         .identity
         .params
@@ -889,7 +910,7 @@ fn judge_read_only(request: &ExecRequest, cwd: &Path) -> Result<Vec<PathBuf>, La
         return Ok(Vec::new());
     }
     let mut paths = vec![cwd.to_path_buf()];
-    let Some(checkout) = cwd.ancestors().find(|dir| dir.join(".git").exists()) else {
+    let Some(checkout) = checkout else {
         return Ok(paths);
     };
     let metadata_error = |source| sandbox::SandboxErr::Io {

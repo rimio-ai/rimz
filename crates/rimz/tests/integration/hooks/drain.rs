@@ -3031,6 +3031,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
         cwd: &frame.cwd,
         project_root: &env.project_root,
         worktree: Some(checkout.path()),
+        checkout: None,
         tmp_dir: &store.paths().temp_unit_dir(Some("scout")),
         skills_dir: &checkout.path().join("skills"),
         provider_home: Some(ProviderHome {
@@ -3183,6 +3184,7 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
+        checkout: None,
         tmp_dir: &unit,
         skills_dir: &unit,
         provider_home: None,
