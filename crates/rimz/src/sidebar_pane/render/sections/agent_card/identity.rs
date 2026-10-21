@@ -2,25 +2,19 @@ use super::*;
 
 /// The agent handle's spans under the row's card emphasis, sharing the unread
 /// treatment with the lead glyph and description so the three move as one group:
-/// matches wear the provider brand color and context uses the muted tone. An unread row carries the chosen
+/// names wear the provider brand color. An unread row carries the chosen
 /// effect as one styled span for blink/bright or one span per character for the
 /// flowing shimmer.
 pub(super) fn attention_name_spans(
     theme: &Theme,
     display: &str,
     kind: &str,
-    matched: bool,
     attention: CardAttention,
 ) -> Vec<Span<'static>> {
-    let color = if matched {
-        Some(theme.provider_brand_tone(kind))
-    } else {
-        theme.muted().fg
-    };
+    let color = Some(theme.provider_brand_tone(kind));
     let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, color, attention.anim, &text),
-        _ if !matched => vec![Span::styled(text, theme.muted())],
         _ => vec![Span::styled(
             text,
             emphasize(theme, color, attention.emphasis, attention.anim),
@@ -127,7 +121,6 @@ pub(super) fn agent_identity_line(
         theme,
         row.display_name(),
         &row.name,
-        row_ctx.matched,
         attention,
     ));
     // The capability cluster is the model and its properties: effort or thinking
@@ -214,7 +207,6 @@ pub(super) fn stale_line(
         theme,
         row.display_name(),
         &row.name,
-        ctx.matched,
         attention,
     ));
     left.push(Span::styled(value_seam(theme), theme.muted()));
@@ -270,33 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn context_name_keeps_muted_tone_at_both_color_depths() {
-        for theme in [Theme::fixed(false), truecolor_theme()] {
-            let spans = attention_name_spans(
-                &theme,
-                "context",
-                "claude",
-                false,
-                CardAttention {
-                    emphasis: CardEmphasis::Soft,
-                    ..normal_attention()
-                },
-            );
-            assert_eq!(spans[0].style.fg, theme.muted().fg);
-        }
-    }
-
-    #[test]
     fn attention_name_keeps_kind_role_handle_in_full() {
         let theme = truecolor_theme();
 
-        let spans = attention_name_spans(
-            &theme,
-            "claude-docsmith",
-            "claude",
-            true,
-            normal_attention(),
-        );
+        let spans = attention_name_spans(&theme, "claude-docsmith", "claude", normal_attention());
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content.as_ref(), "claude-docsmith");
@@ -310,7 +279,6 @@ mod tests {
             &theme,
             "opencode-docsmithery",
             "opencode",
-            true,
             normal_attention(),
         );
 
@@ -323,7 +291,7 @@ mod tests {
     fn attention_name_registered_kind_uses_descriptor_brand_without_provider_panel() {
         let theme = truecolor_theme();
 
-        let spans = attention_name_spans(&theme, "claude", "claude", true, normal_attention());
+        let spans = attention_name_spans(&theme, "claude", "claude", normal_attention());
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(theme.clay()));
@@ -334,7 +302,7 @@ mod tests {
     fn attention_name_unregistered_kind_without_provider_panel_uses_unknown_brand() {
         let theme = truecolor_theme();
 
-        let spans = attention_name_spans(&theme, "nope", "nope", true, normal_attention());
+        let spans = attention_name_spans(&theme, "nope", "nope", normal_attention());
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(Color::Indexed(244)));
@@ -354,7 +322,7 @@ mod tests {
             },
         );
         let theme = Theme::fixed_for_theme(false, &theme_config);
-        let spans = attention_name_spans(&theme, "claude", "claude", true, normal_attention());
+        let spans = attention_name_spans(&theme, "claude", "claude", normal_attention());
         assert_eq!(spans[0].style.fg, Some(Color::Rgb(1, 2, 3)));
     }
 }

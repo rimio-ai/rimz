@@ -136,49 +136,20 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
         End::Top => 0,
         End::Bottom => len - 1,
     };
-    select_to_index_in(ui, &roster, target, matches!(end, End::Bottom))
+    select_to_index_in(ui, &roster, target)
 }
 
-fn select_to_index(
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    target: usize,
-    forward: bool,
-) -> InputOutcome {
+fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
-    select_to_index_in(ui, &roster, target, forward)
+    select_to_index_in(ui, &roster, target)
 }
 
-/// The matching ordinal nearest `target` in the direction of travel, else the
-/// nearest one behind it.
-fn nearest_match(roster: &VisibleRoster<'_>, target: usize, forward: bool) -> Option<usize> {
-    let len = roster.len();
-    let matched = |index: &usize| roster.is_match(*index);
-    if forward {
-        (target..len)
-            .find(matched)
-            .or_else(|| (0..target).rev().find(matched))
-    } else {
-        (0..=target)
-            .rev()
-            .find(matched)
-            .or_else(|| (target + 1..len).find(matched))
-    }
-}
-
-fn select_to_index_in(
-    ui: &mut UiState,
-    roster: &VisibleRoster<'_>,
-    target: usize,
-    forward: bool,
-) -> InputOutcome {
+fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usize) -> InputOutcome {
     let len = roster.len();
     if len == 0 {
         return InputOutcome::default();
     }
-    let Some(target) = nearest_match(roster, target.min(len - 1), forward) else {
-        return InputOutcome::default();
-    };
+    let target = target.min(len - 1);
     if ui.selected_index == Some(target) {
         return InputOutcome::default();
     }
@@ -195,12 +166,12 @@ fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) ->
         End::Top => first,
         End::Bottom => last,
     };
-    select_to_index(ui, snapshot, target, matches!(end, End::Bottom))
+    select_to_index(ui, snapshot, target)
 }
 
 fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
     let Some(selected) = ui.selected_index else {
-        return select_to_index(ui, snapshot, 0, down);
+        return select_to_index(ui, snapshot, 0);
     };
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
@@ -211,7 +182,7 @@ fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> Inpu
     } else {
         selected.saturating_sub(page)
     };
-    select_to_index(ui, snapshot, target, down)
+    select_to_index(ui, snapshot, target)
 }
 
 pub(super) fn handle_key(
@@ -265,13 +236,11 @@ pub(super) fn handle_key(
             ui,
             snapshot,
             ui.selected_index.map_or(0, |index| index.saturating_sub(1)),
-            false,
         ),
         KeyAction::Down => select_to_index(
             ui,
             snapshot,
             ui.selected_index.map_or(0, |index| index.saturating_add(1)),
-            true,
         ),
         KeyAction::WorktreeUp => select_adjacent_worktree(ui, snapshot, -1),
         KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
@@ -341,7 +310,7 @@ pub(super) fn handle_key(
 
 fn select_first_search_match(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     let roster = ui.visible_roster(snapshot);
-    select_row_in(ui, &roster, nearest_match(&roster, 0, true).unwrap_or(0));
+    select_row_in(ui, &roster, 0);
     ui.browse = None;
 }
 
@@ -560,8 +529,7 @@ fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_i
 /// back to show-all, any other becomes the pick. A pure toggle — no captured
 /// baseline, unlike [`DashboardTab`], because there is no derived default to
 /// fall back to. The body reshapes and the selection re-anchors at once: a
-/// highlight whose row the filter hides drops to a clamped index, re-seated by
-/// the held baseline when the filter clears.
+/// highlight whose row the filter hides clears, or clamps during a search draft.
 fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
     let target = if ui.make_up_filter.filter == Some(filter) {
         None
@@ -585,16 +553,10 @@ pub(super) fn set_make_up_filter(
     }
     ui.make_up_filter = lens;
     anchor_selection(ui, snapshot);
-    let roster = ui.visible_roster(snapshot);
-    if let Some(index) = ui.selected_index
-        && !roster.is_match(index)
-    {
-        select_to_index_in(ui, &roster, index, true);
-    }
     true
 }
 
-/// Jump the browse pick to the first matching row of the neighbouring worktree.
+/// Jump the browse pick to the first shown row of the neighbouring worktree.
 /// The walk uses the same filtered row universe as ordinary selection, so an
 /// active make-up filter skips groups it emptied and the line map stays 1:1
 /// with the highlighted row.
@@ -605,13 +567,13 @@ fn select_adjacent_worktree(
 ) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     let Some(selected) = ui.selected_index else {
-        return select_to_index_in(ui, &roster, 0, true);
+        return select_to_index_in(ui, &roster, 0);
     };
     let selected = selected.min(roster.len().saturating_sub(1));
     let Some(target) = roster.neighboring_group_head(selected, step) else {
         return InputOutcome::default();
     };
-    select_to_index_in(ui, &roster, target, true)
+    select_to_index_in(ui, &roster, target)
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection

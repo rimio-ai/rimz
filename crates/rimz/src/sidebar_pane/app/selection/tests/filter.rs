@@ -32,7 +32,7 @@ fn filtered_team_snapshot() -> SidebarSnapshot {
 }
 
 #[test]
-fn selection_walkers_snap_to_matches_in_their_direction() {
+fn selection_walkers_reach_every_shown_row() {
     use crate::agents::AgentStatus;
     let snapshot = filtered_team_snapshot();
     let mut ui = UiState::default();
@@ -54,12 +54,12 @@ fn selection_walkers_snap_to_matches_in_their_direction() {
         BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
     );
     for (action, expected) in [
-        (KeyAction::Down, 3),
+        (KeyAction::Down, 2),
         (KeyAction::Up, 1),
-        (KeyAction::Bottom, 8),
-        (KeyAction::Top, 1),
-        (KeyAction::WorktreeDown, 6),
-        (KeyAction::WorktreeUp, 1),
+        (KeyAction::Bottom, 9),
+        (KeyAction::Top, 0),
+        (KeyAction::WorktreeDown, 5),
+        (KeyAction::WorktreeUp, 0),
     ] {
         handle_key(action, &mut ui, &snapshot);
         assert_eq!(ui.selected_index, Some(expected), "{action:?}");
@@ -67,16 +67,16 @@ fn selection_walkers_snap_to_matches_in_their_direction() {
     paint(&mut ui, &snapshot, 64);
     for action in [KeyAction::PageDown, KeyAction::ScreenBottom] {
         handle_key(action, &mut ui, &snapshot);
-        assert_eq!(ui.selected_index, Some(8), "{action:?}");
+        assert_eq!(ui.selected_index, Some(9), "{action:?}");
     }
     for action in [KeyAction::PageUp, KeyAction::ScreenTop] {
         handle_key(action, &mut ui, &snapshot);
-        assert_eq!(ui.selected_index, Some(1), "{action:?}");
+        assert_eq!(ui.selected_index, Some(0), "{action:?}");
     }
 }
 
 #[test]
-fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
+fn lens_change_keeps_a_shown_selection_without_starting_browse() {
     use crate::agents::AgentStatus;
     let snapshot = filtered_team_snapshot();
     let context = snapshot.worktree_groups[0].rows[0]
@@ -92,9 +92,10 @@ fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
         &snapshot,
         BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
     );
-    assert_eq!(ui.selected_index, Some(1));
+    assert_eq!(ui.selected_index, Some(0));
+    assert_eq!(ui.browse, None, "a lens change is not a browse pick");
     reconcile_selection(&mut ui, &snapshot, Some(context.clone()));
-    assert_eq!(ui.selected_index, Some(1), "lens snap is a browse pick");
+    assert_eq!(ui.selected_index, Some(0));
     paint(&mut ui, &snapshot, 64);
     let row = (0..64)
         .find(|row| ui.interactions.target_at(1, *row) == Some(HitTarget::Row(0)))
@@ -132,7 +133,7 @@ fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
 }
 
 #[test]
-fn draft_search_under_a_status_lens_highlights_a_match_and_cancel_keeps_one() {
+fn draft_search_under_a_status_lens_highlights_the_first_shown_row() {
     use crate::agents::AgentStatus;
     use ratatui::crossterm::event::KeyCode;
     let snapshot = filtered_team_snapshot();
@@ -146,16 +147,11 @@ fn draft_search_under_a_status_lens_highlights_a_match_and_cancel_keeps_one() {
     for ch in "main".chars() {
         search_key(&mut ui, &snapshot, KeyCode::Char(ch));
     }
-    let roster = ui.visible_roster(&snapshot);
-    assert!(
-        !roster.is_match(0),
-        "the group-label query keeps context first"
-    );
-    assert_eq!(ui.selected_index, Some(1));
+    assert_eq!(ui.selected_index, Some(0));
     assert_search_selection(&ui, &snapshot);
     search_key(&mut ui, &snapshot, KeyCode::Esc);
     let selected = ui.selected_index.expect("cancel keeps a selection");
-    assert!(ui.visible_roster(&snapshot).is_match(selected));
+    assert!(ui.visible_roster(&snapshot).row(selected).is_some());
 }
 
 fn assert_search_selection(ui: &UiState, snapshot: &SidebarSnapshot) {

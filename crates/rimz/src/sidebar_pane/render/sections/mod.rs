@@ -79,7 +79,6 @@ impl SelectionReach {
 
 /// The strongest reach from the live selection and held rows. A sibling is a
 /// teammate only when both rows belong to the same unit in this projected group.
-/// Unselected context rows never open through live or held teammate reach.
 pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
@@ -93,9 +92,6 @@ pub(super) fn row_selection_reach(
     }
     if selected_index == Some(row_index) {
         return SelectionReach::Selected;
-    }
-    if !roster.is_match(row_index) {
-        return SelectionReach::Unreached;
     }
     let sources = selected_index.into_iter().chain(
         held_expansions
@@ -162,7 +158,6 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
     pub(in crate::sidebar_pane::render) stale_after_secs: u64,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
-    pub(in crate::sidebar_pane::render) matched: bool,
     pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
     pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
