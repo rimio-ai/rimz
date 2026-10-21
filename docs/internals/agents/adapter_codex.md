@@ -91,7 +91,7 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
 
-`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every launch with roots, including Plan and mode-less launches, passing cwd, a linked checkout's main Git root, and the resolved isolation. Preflight and managed process compiles without roots append nothing. At host and scoped levels the adapter never selects a sandbox or changes network policy; at sandbox level it replaces a full-access selection with workspace-write. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
+`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every launch with roots, including Plan and mode-less launches, passing cwd, a linked checkout's main Git root, and the resolved isolation. Preflight and managed process compiles without roots append nothing. At host and scoped levels the adapter never selects a sandbox or changes network policy. At sandbox level it appends `--sandbox workspace-write` only when the selection below finds no mode. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
 
 Selection follows this order, using `PresetArgMatcher` for valued arguments. Repeated flags or config keys use their last occurrence; config values parse as TOML with a bare-string fallback:
 
@@ -104,7 +104,7 @@ Selection follows this order, using `PresetArgMatcher` for valued arguments. Rep
 
 The grant follows that selection, appended after the user's args:
 
-Under sandbox isolation only, legacy `danger-full-access` or profile `:danger-full-access` first removes argv sandbox/default-permission selectors and appends `--sandbox workspace-write`, then receives the legacy grant. Yolo stays unchanged with a wall-removed launch warning. Bare permission profiles keep their rules without inspecting whether those rules provide confinement.
+Under sandbox isolation only, case 6 (no selection) appends `--sandbox workspace-write` and then receives the legacy `workspace-write` grant. Cases 1 to 5 stay as selected, `danger-full-access`, `:danger-full-access`, and Yolo included, and RimZ adds no sandbox argument and no warning.
 
 | Selection | Grant |
 | --- | --- |

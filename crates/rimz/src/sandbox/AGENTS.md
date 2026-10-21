@@ -4,7 +4,8 @@ Local contract for `crates/rimz/src/sandbox/` — opt-in agent filesystem views.
 
 ## Boundaries
 
-- Sandbox owns isolation admission (provider-declared prerequisites for native sandboxes), bubblewrap admission, ordered mount plans, profile skill views, and the environment pins those plans require. The scoped view is not containment.
+- Sandbox owns isolation admission, bubblewrap admission, ordered mount plans, profile skill views, and the environment pins those plans require. The scoped view is not containment.
+- The `sandbox` isolation level is provider flag mapping, owned by the adapters. Admission at that level probes nothing: no PATH check, no namespace probe, and no refusal for a provider without a switch, which warns and launches. Do not add a check here that the provider itself makes or skips.
 - `TmpView` owns the one mapping between an agent's temp unit and what the agent sees: under scoped isolation the unit is `/tmp` (and `/var/tmp` maps back to it); paths stay host paths otherwise. It is built at the launch compile site and for a caller's own paths (`cli::caller_host_path`), never to print a result path. The host state path remains accessible; a temp unit is separate from host `/tmp`, not hidden from the host.
 - Provider home resolution and native override keys belong to the agent capability seam; multiplexer endpoint resolution belongs to the mux domain. Do not duplicate either resolver here.
 - Skill roots and the user-only marker come from the adapter (`skills_home`, `manual_skill`); rewritten copies live under the handle's owned unit, or under the room cache for handleless launches (`StatePaths::agent_skills_dir`). Preserve provider-root symlinks and non-skill entries; shadow rewritten skills at canonical paths reached through preserved symlinks, including outside the root, and refuse conflicting alias policies.
