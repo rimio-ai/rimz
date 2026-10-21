@@ -103,7 +103,6 @@ fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Positi
                 path: path.display().to_string(),
                 symbol: None,
                 hint: None,
-                hint_form: None,
                 hint_text: None,
                 hint_source: None,
                 path_source: None,
@@ -187,7 +186,7 @@ fn render_item(
     } else if is_line_target(anchor) {
         anchor
             .hint
-            .and_then(|[line, _]| line.checked_sub(1))
+            .and_then(|hint| hint.lines[0].checked_sub(1))
             .filter(|line| (*line as usize) < source.lines().count())
             .and_then(|line| {
                 nodes
@@ -220,7 +219,7 @@ fn render_selected(
     let argument = &anchor.text;
     let [start, end] = selected
         .map(|node| node.range)
-        .or(anchor.hint)
+        .or(anchor.hint.map(|hint| hint.lines))
         .expect("line anchor has a hint");
     let lines: Vec<_> = source.lines().collect();
     if start == 0 || start > end || start as usize > lines.len() {

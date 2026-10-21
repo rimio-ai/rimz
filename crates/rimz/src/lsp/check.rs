@@ -310,12 +310,17 @@ struct Anchor {
     text: String,
     path: String,
     symbol: Option<Vec<String>>,
-    hint: Option<[u32; 2]>,
-    hint_form: Option<HintForm>,
+    hint: Option<Hint>,
     hint_text: Option<std::ops::Range<usize>>,
     hint_source: Option<std::ops::Range<usize>>,
     path_source: Option<std::ops::Range<usize>>,
     span_end: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Hint {
+    lines: [u32; 2],
+    form: HintForm,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -537,10 +542,9 @@ fn extract(notes: &str) -> Vec<Anchor> {
         }
         if anchor.hint.is_none()
             && let Some((Event::Text(following), following_offset)) = events.peek()
-            && let Some((found, form, end)) = parse_hint(following, false)
+            && let Some((found, end)) = parse_hint(following, false)
         {
             anchor.hint = Some(found);
-            anchor.hint_form = Some(form);
             anchor.hint_text = Some(anchor.text.len()..anchor.text.len() + end);
             if mapped && notes[following_offset.clone()].starts_with(&following[..end]) {
                 anchor.hint_source = Some(following_offset.start..following_offset.start + end);
@@ -557,7 +561,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     if !query::is_file_head(path) {
         return None;
     }
-    let (symbol, hint, hint_form, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
+    let (symbol, hint, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
         let mut depth = 0_u32;
         let end = raw
             .char_indices()
@@ -593,19 +597,14 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
                     .and_then(|tail| tail.split_once(')'))
                     .and_then(|(_, tail)| parse_hint(tail, false).map(|hint| (tail, hint)))
             });
-        let hint_text = hint.map(|(tail, (_, _, consumed))| {
+        let hint_text = hint.map(|(tail, (_, consumed))| {
             let start = code.len() - tail.len();
             start..start + consumed
         });
-        (
-            Some(chain),
-            hint.map(|(_, (lines, _, _))| lines),
-            hint.map(|(_, (_, form, _))| form),
-            hint_text,
-        )
+        (Some(chain), hint.map(|(_, (hint, _))| hint), hint_text)
     } else {
-        let (hint, form, _) = parse_hint(rest, true)?;
-        (None, Some(hint), Some(form), None)
+        let (hint, _) = parse_hint(rest, true)?;
+        (None, Some(hint), None)
     };
     Some(Anchor {
         qualifier: None,
@@ -614,7 +613,6 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         path: path.into(),
         symbol,
         hint,
-        hint_form,
         hint_text,
         hint_source: None,
         path_source: None,
@@ -622,7 +620,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     })
 }
 
-fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], HintForm, usize)> {
+fn parse_hint(raw: &str, line_only: bool) -> Option<(Hint, usize)> {
     let mut tail = raw.trim_start();
     if line_only {
         if !raw.starts_with(|ch: char| ch.is_ascii_digit() || ch == '~') {
@@ -655,11 +653,11 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], HintForm, usize)>
         let (_, end) = number(rest)?;
         tail = &rest[end..];
         if line_only && tail.trim_start().starts_with('(') {
-            let (hint, form, consumed) = parse_hint(tail, false)?;
+            let (hint, consumed) = parse_hint(tail, false)?;
             if !tail[consumed..].trim().is_empty() {
                 return None;
             }
-            return Some((hint, form, raw.len() - tail.len() + consumed));
+            return Some((hint, raw.len() - tail.len() + consumed));
         }
     }
     if parenthesized {
@@ -668,7 +666,13 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], HintForm, usize)>
     if line_only && !tail.trim().is_empty() {
         return None;
     }
-    Some(([start, last], form, raw.len() - tail.len()))
+    Some((
+        Hint {
+            lines: [start, last],
+            form,
+        },
+        raw.len() - tail.len(),
+    ))
 }
 
 fn segments(name: &str) -> Vec<String> {
@@ -772,7 +776,7 @@ fn verdict(anchor: Anchor, path: Option<PathBuf>, status: Status) -> Verdict {
         status,
         path,
         symbol: anchor.symbol,
-        hint: anchor.hint,
+        hint: anchor.hint.map(|hint| hint.lines),
         range: None,
         candidates: Vec::new(),
         files: Vec::new(),
@@ -823,7 +827,7 @@ fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
     }
     let found = hits
         .iter()
-        .find(|node| anchor.hint.is_none_or(|hint| overlaps(node, hint)));
+        .find(|node| anchor.hint.is_none_or(|hint| overlaps(node, hint.lines)));
     if let Some(found) = found {
         let range = found.range;
         let mut result = verdict(anchor, Some(path), Status::Ok);
@@ -920,10 +924,10 @@ fn overlaps(node: &Candidate, [start, end]: [u32; 2]) -> bool {
         && end >= node.range[0].saturating_sub(LINE_SLACK)
 }
 
-fn hinted<'a>(hits: &[&'a Candidate], hint: Option<[u32; 2]>) -> Vec<&'a Candidate> {
+fn hinted<'a>(hits: &[&'a Candidate], hint: Option<Hint>) -> Vec<&'a Candidate> {
     hits.iter()
         .copied()
-        .filter(|node| hint.is_some_and(|hint| overlaps(node, hint)))
+        .filter(|node| hint.is_some_and(|hint| overlaps(node, hint.lines)))
         .collect()
 }
 
@@ -936,7 +940,7 @@ fn hinted<'a>(hits: &[&'a Candidate], hint: Option<[u32; 2]>) -> Vec<&'a Candida
 fn named<'a>(
     hits: &[&'a Candidate],
     chain: &[String],
-    hint: Option<[u32; 2]>,
+    hint: Option<Hint>,
 ) -> Option<&'a Candidate> {
     if hint.is_some() {
         match (hinted(hits, hint).as_slice(), hits) {
@@ -959,17 +963,19 @@ fn named<'a>(
 }
 
 fn inside_line(anchor: &Anchor, node: &Candidate) -> Option<u32> {
-    let [line, _] = anchor.hint?;
-    (anchor.hint_form == Some(HintForm::Single)
+    let hint = anchor.hint?;
+    let [line, _] = hint.lines;
+    (hint.form == HintForm::Single
         && line > node.range[0].saturating_add(LINE_SLACK)
         && line <= node.range[1])
         .then_some(line)
 }
 
 fn check_lines(anchor: Anchor, path: PathBuf, lines: usize) -> Verdict {
-    let valid = anchor
-        .hint
-        .is_some_and(|[start, end]| start > 0 && start <= end && end as usize <= lines);
+    let valid = anchor.hint.is_some_and(|hint| {
+        let [start, end] = hint.lines;
+        start > 0 && start <= end && end as usize <= lines
+    });
     let mut result = verdict(
         anchor,
         Some(path),

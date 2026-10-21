@@ -157,9 +157,9 @@ fn hint_edit(
         };
         let mut trial = source.to_owned();
         trial.insert_str(at, &format!(" {hint}"));
-        let reads_back = extract(&trial)
-            .get(index)
-            .is_some_and(|read| read.hint == Some(node.range) && read.hint_source.is_some());
+        let reads_back = extract(&trial).get(index).is_some_and(|read| {
+            read.hint.map(|hint| hint.lines) == Some(node.range) && read.hint_source.is_some()
+        });
         if !reads_back {
             return Ok(None);
         }
@@ -170,7 +170,10 @@ fn hint_edit(
         return Ok(None);
     };
     let hint = &source[source_range.clone()];
-    let values = if anchor.hint_form == Some(HintForm::Position) {
+    let values = if anchor
+        .hint
+        .is_some_and(|hint| hint.form == HintForm::Position)
+    {
         [
             node.selection.start.line + 1,
             node.selection.start.character + 1,
