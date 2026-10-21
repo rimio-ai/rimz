@@ -1,5 +1,6 @@
-//! `rimz stats` — account-global spend, local-day activity, and model, agent,
-//! and subagent breakdowns, readable in or out of a room or project.
+//! `rimz stats` — account-global spend, local-day activity, and model,
+//! provider, agent-profile, and subagent-profile breakdowns, readable in or out
+//! of a room or project.
 //! The wordmark and activity insights remain in the held dashboard.
 //! Internals: `docs/internals/stats.md`.
 //!
@@ -9,7 +10,7 @@
 //! then subsequent runs return from a cache aggregated for the same local day.
 //!
 //! Windows: the heatmap always reads the full available history (the cache spans
-//! the trailing year). `--window` scopes model, provider, and subagent breakdowns
+//! the trailing year). `--window` scopes model, provider, and profile breakdowns
 //! in every mode, defaulting to today. It sets the held dashboard's initial tab.
 //! `--refresh` recomputes on a background thread, retries an unavailable first
 //! frame after five seconds, then repaints in place every minute and re-centres
@@ -55,7 +56,7 @@ const MIN_WEEKS: usize = 4;
 const GUTTER: usize = 6;
 /// Breakdown rows shown before the tail folds into the final "Other" row.
 const MAX_MODELS: usize = 6;
-const MAX_AGENTS: usize = 6;
+const MAX_SPEND_ROWS: usize = 6;
 /// A named breakdown row must carry at least one percent of its section's
 /// dollars or work tokens (input plus output, excluding cache reads).
 const MIN_BREAKDOWN_SHARE: f64 = 0.01;
@@ -85,12 +86,15 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
-    /// Window for the model, agent, and subagent breakdowns (the Spend row always shows all four).
+    /// Window for model, provider, and profile breakdowns (the Spend row always shows all four).
     #[arg(long, value_enum, default_value = "today", conflicts_with = "assists")]
     window: Window,
     /// Print effective system assists, newest first.
     #[arg(long, conflicts_with_all = ["subagents", "refresh"])]
     pub assists: bool,
+    /// Show every agent profile's spend in the selected window.
+    #[arg(long, conflicts_with_all = ["subagents", "refresh", "assists"])]
+    agents: bool,
     /// Show every subagent profile's spend in the selected window.
     #[arg(long, conflicts_with = "refresh")]
     pub subagents: bool,
@@ -107,6 +111,49 @@ pub struct StatsArgs {
     /// Set only by the view.
     #[arg(long, hide = true, requires = "refresh")]
     pub hold: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoleView {
+    Agents,
+    Subagents,
+}
+
+impl RoleView {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Agents => "Agents",
+            Self::Subagents => "Subagents",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Agents => "agents",
+            Self::Subagents => "subagents",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Agents => "agent",
+            Self::Subagents => "subagent",
+        }
+    }
+
+    fn count_header(self) -> &'static str {
+        match self {
+            Self::Agents => "SESSIONS",
+            Self::Subagents => "RUNS",
+        }
+    }
+
+    fn tallies(self, stats: &Stats) -> &BTreeMap<String, SpendTally> {
+        match self {
+            Self::Agents => &stats.agents,
+            Self::Subagents => &stats.subagents,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
@@ -178,21 +225,17 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     let stats = load_stats(!args.json)?;
     let today_day = stats.today_day(unix_secs_now());
-    if args.subagents {
-        if args.json {
-            return json::emit_subagents(&stats, args.window);
-        }
-        return panel::render_spend(
-            &mut render::out(),
-            &stats,
-            today_day,
-            args.dollars,
-            true,
-            args.window,
-            "\n",
-        );
-    }
+    let role = if args.agents {
+        Some(RoleView::Agents)
+    } else if args.subagents {
+        Some(RoleView::Subagents)
+    } else {
+        None
+    };
     if args.json {
+        if let Some(role) = role {
+            return json::emit_roles(&stats, args.window, role);
+        }
         let assists =
             AssistStats::load(&logs_dir(), args.window, Timestamp::now(), &stats.timezone);
         return emit_json(&stats, &assists, today_day, args.dollars, args.window);
@@ -202,7 +245,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         &stats,
         today_day,
         args.dollars,
-        false,
+        role,
         args.window,
         "\n",
     )
@@ -220,16 +263,17 @@ use json::emit_json;
 #[cfg(test)]
 use {assists::*, fmt::*, hold::*, panel::*};
 /// The deduplicated account-global history `rimz stats` renders: per-day buckets,
-/// the per-model and per-agent breakdowns, and producer-priced trailing windows.
+/// the model, provider, and profile breakdowns, and producer-priced trailing windows.
 struct Stats {
     timezone: String,
     refreshed_at_ms: u64,
     day_cutoff_secs: u64,
+    agents: BTreeMap<String, SpendTally>,
     subagents: BTreeMap<String, SpendTally>,
     recorded_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, ModelTally>,
-    by_agent: BTreeMap<String, SpendTally>,
+    by_provider: BTreeMap<String, SpendTally>,
     total: SpendTally,
 }
 
@@ -252,11 +296,12 @@ impl Stats {
             timezone,
             refreshed_at_ms,
             day_cutoff_secs,
+            agents: roles.agents,
             subagents: roles.subagents,
             recorded_since_secs: roles.recorded_since_secs,
             by_day: days,
             by_model: models,
-            by_agent: by_provider,
+            by_provider,
             total,
         }
     }

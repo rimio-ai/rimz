@@ -6,7 +6,7 @@ struct StatsJson<'a> {
     as_of: String,
     window: Window,
     #[serde(skip_serializing_if = "Option::is_none")]
-    subagents_since: Option<String>,
+    roles_since: Option<String>,
     timezone: &'a str,
     unit: &'static str,
     sessions: u32,
@@ -17,8 +17,9 @@ struct StatsJson<'a> {
     most_active_day: Option<String>,
     windows: WindowsJson,
     models: Vec<ModelJson>,
-    agents: Vec<AgentJson>,
-    subagents: Vec<SubagentJson>,
+    providers: Vec<ProviderJson>,
+    agents: Vec<RoleJson>,
+    subagents: Vec<RoleJson>,
     days: Vec<DayJson>,
     assists: &'a assists::AssistRollup,
 }
@@ -32,9 +33,17 @@ struct WindowsJson {
 }
 
 #[derive(Serialize)]
-struct SubagentJson {
+#[serde(untagged)]
+enum RoleCount {
+    Sessions { sessions: u32 },
+    Runs { runs: u32 },
+}
+
+#[derive(Serialize)]
+struct RoleJson {
     profile: String,
-    runs: u32,
+    #[serde(flatten)]
+    count: RoleCount,
     input: u64,
     output: u64,
     cached: u64,
@@ -44,16 +53,23 @@ struct SubagentJson {
     share: f64,
 }
 
-fn subagents(stats: &Stats, active: Window) -> Vec<SubagentJson> {
+fn role_rows(stats: &Stats, active: Window, role: RoleView) -> Vec<RoleJson> {
     let total_usd = active.select(&stats.total).usd;
-    let mut rows: Vec<_> = stats
-        .subagents
+    let mut rows: Vec<_> = role
+        .tallies(stats)
         .iter()
         .map(|(profile, tally)| (profile, active.select(tally)))
         .filter(|(_, spend)| spend.usd > 0.0 || spend.tokens > 0)
-        .map(|(profile, spend)| SubagentJson {
+        .map(|(profile, spend)| RoleJson {
             profile: profile.clone(),
-            runs: spend.sessions,
+            count: match role {
+                RoleView::Agents => RoleCount::Sessions {
+                    sessions: spend.sessions,
+                },
+                RoleView::Subagents => RoleCount::Runs {
+                    runs: spend.sessions,
+                },
+            },
             input: spend.input,
             output: spend.output,
             cached: spend.cache_read,
@@ -79,20 +95,20 @@ fn stamp(at: &jiff::Zoned) -> String {
     at.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
 
-pub(super) fn subagents_value(stats: &Stats, active: Window) -> serde_json::Value {
+pub(super) fn roles_value(stats: &Stats, active: Window, role: RoleView) -> serde_json::Value {
     let mut value = serde_json::json!({
         "as_of": stamp(&stats.as_of()),
         "window": active,
-        "subagents": subagents(stats, active),
+        (role.key()): role_rows(stats, active, role),
     });
     if let Some(since) = stats.recorded_since() {
-        value["subagents_since"] = since.strftime("%Y-%m-%d").to_string().into();
+        value["roles_since"] = since.strftime("%Y-%m-%d").to_string().into();
     }
     value
 }
 
-pub(super) fn emit_subagents(stats: &Stats, active: Window) -> Result<()> {
-    render::json_pretty(&subagents_value(stats, active))
+pub(super) fn emit_roles(stats: &Stats, active: Window, role: RoleView) -> Result<()> {
+    render::json_pretty(&roles_value(stats, active, role))
 }
 
 /// The `--assists --json` envelope, stamped in the zone spend history uses.
@@ -142,7 +158,7 @@ struct ModelJson {
 }
 
 #[derive(Serialize)]
-struct AgentJson {
+struct ProviderJson {
     kind: String,
     name: String,
     tokens: u64,
@@ -221,19 +237,19 @@ fn stats_json<'a>(
             .then_with(|| b.tokens.cmp(&a.tokens))
     });
 
-    let agents = agent_breakdown(stats, active, None)
+    let providers = provider_breakdown(stats, active, None)
         .into_iter()
-        .map(|agent| AgentJson {
-            cache_hit_pct: agent.window.cache_hit_percent(),
-            tokens_per_sec: agent.window.tokens_per_sec(),
-            kind: agent.kind.to_owned(),
-            name: agent.name,
-            tokens: agent.window.display_tokens(),
-            usd: agent.window.usd,
-            sessions: agent.window.sessions,
-            tool_calls: agent.window.tool_calls,
-            tools: agent.window.tools,
-            share: agent.share,
+        .map(|provider| ProviderJson {
+            cache_hit_pct: provider.window.cache_hit_percent(),
+            tokens_per_sec: provider.window.tokens_per_sec(),
+            kind: provider.kind.to_owned(),
+            name: provider.name,
+            tokens: provider.window.display_tokens(),
+            usd: provider.window.usd,
+            sessions: provider.window.sessions,
+            tool_calls: provider.window.tool_calls,
+            tools: provider.window.tools,
+            share: provider.share,
         })
         .collect();
 
@@ -250,7 +266,7 @@ fn stats_json<'a>(
     StatsJson {
         as_of: stamp(&stats.as_of()),
         window: active,
-        subagents_since: stats
+        roles_since: stats
             .recorded_since()
             .map(|since| since.strftime("%Y-%m-%d").to_string()),
         timezone: &stats.timezone,
@@ -289,8 +305,9 @@ fn stats_json<'a>(
             },
         },
         models,
-        agents,
-        subagents: subagents(stats, active),
+        providers,
+        agents: role_rows(stats, active, RoleView::Agents),
+        subagents: role_rows(stats, active, RoleView::Subagents),
         days,
         assists: &assists.rollup,
     }
