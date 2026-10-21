@@ -198,7 +198,7 @@ aggressive_resize = true
 
 [lsp]
 # Shared language servers are off until declared, then start on the first query. Memory and idle policy are machine-only; trusted projects may override server entries by name.
-# reserve-percent = 10                # keep at least this percentage of total memory free
+# reserve-percent = 10                # keep at least this percentage of RAM free (free swap counts as free)
 # reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
 # idle-timeout = "10m"                # stop ready servers after this long without queries (s/m/h)
 ## [lsp.servers.rust]

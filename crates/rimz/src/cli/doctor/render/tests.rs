@@ -248,6 +248,35 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
 }
 
 #[test]
+fn refusal_shows_free_swap_only_when_present() {
+    let render = |details| {
+        let record = rimz::diag::lsp::Record {
+            at: Timestamp::now(),
+            root: "/project".into(),
+            server: "rust".into(),
+            event: "refused".into(),
+            details,
+        };
+        strip(|w| render_lsp_refusal(w, &record, &mut Tally::default()))
+    };
+    let mut details = shortfall_details();
+    details["swap_free_bytes"] = serde_json::json!(50_000_000_000_u64);
+    let body = render(details.clone());
+    assert!(
+        body.contains(
+            "needs 8 GB, 3 GB available + 50 GB free swap, 1 GB reserved; held by /holder rust (4 GB)"
+        ),
+        "{body}"
+    );
+    details["swap_free_bytes"] = serde_json::json!(0);
+    let body = render(details);
+    assert!(
+        body.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by"),
+        "{body}"
+    );
+}
+
+#[test]
 fn shared_language_servers_read_like_lsp_list() {
     use rimz::lsp::registry::{State, StopReason};
     let server = |root: &str, name: &str, state| super::super::model::LspServer {

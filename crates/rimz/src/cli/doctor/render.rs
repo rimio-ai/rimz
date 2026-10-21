@@ -600,8 +600,13 @@ fn render_lsp_refusal(
         serde_json::from_value::<rimz::lsp::admission::Shortfall>(record.details.clone())
     {
         let bytes = rimz::utils::size::decimal_bytes;
+        let swap = if shortfall.swap_free_bytes > 0 {
+            format!(" + {} free swap", bytes(shortfall.swap_free_bytes))
+        } else {
+            String::new()
+        };
         let mut text = format!(
-            "needs {}, {} available, {} reserved",
+            "needs {}, {} available{swap}, {} reserved",
             bytes(shortfall.estimate_bytes),
             bytes(shortfall.available_bytes),
             bytes(shortfall.reserve_bytes)

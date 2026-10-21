@@ -17,6 +17,13 @@ fn tree_peak_kb_with(
     peak(pid).unwrap_or(0).max(rss(pid).unwrap_or(0))
 }
 
+/// What a server can draw on: available memory plus free swap, both from one `proc::memory`
+/// sample and so already clamped to cgroup headroom. Admission and the watchdog compare this
+/// figure, never `available_bytes` alone, against the reserve.
+pub(super) fn free_bytes(available_bytes: u64, swap_free_bytes: u64) -> u64 {
+    available_bytes.saturating_add(swap_free_bytes)
+}
+
 pub(super) fn sample() -> Result<crate::proc::memory::Memory> {
     crate::proc::memory::sample().map_err(|error| match error {
         crate::proc::memory::MemoryErr::Io(error) => error.into(),
