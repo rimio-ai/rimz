@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use crate::MuxName;
 use crate::ids::PaneId;
 use crate::osc;
+use crate::sidebar::notify::NotificationKind;
 use crate::store::snapshot::SidebarSnapshot;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -31,7 +32,15 @@ pub(super) fn emit_terminal_notification<B: Backend + Write>(
 ) -> io::Result<bool> {
     let prefs = &config.notification_prefs;
     let mut bytes = Vec::new();
-    if prefs.enabled && desktop_notification_targets_renderer(config.mux, snapshot, notice.panes) {
+    let desktop =
+        if config.mux == MuxName::Zellij && notice.kind == NotificationKind::Reminder.as_str() {
+            // One room reminder carries every scope pane: only the pane on the
+            // watched tab writes its banner, as tmux passthrough does.
+            own_tab_watched(snapshot, config.own_pane.as_ref())
+        } else {
+            desktop_notification_targets_renderer(config.mux, snapshot, notice.panes)
+        };
+    if prefs.enabled && desktop {
         bytes.extend(osc::desktop_notification_bytes(
             config.mux,
             prefs.desktop,
@@ -137,6 +146,16 @@ pub(super) fn desktop_notification_targets_renderer(
         MuxName::Tmux => snapshot.own_view.is_some(),
         MuxName::Zellij => notification_targets_own_view(snapshot, panes),
     }
+}
+
+fn own_tab_watched(snapshot: &SidebarSnapshot, own_pane: Option<&PaneId>) -> bool {
+    snapshot
+        .own_view
+        .as_ref()
+        .zip(own_pane)
+        .is_some_and(|(view, own_pane)| {
+            super::loop_state::own_tab_viewed(&snapshot.viewed_panes, view, own_pane)
+        })
 }
 
 pub(super) fn notification_targets_own_view(snapshot: &SidebarSnapshot, panes: &[PaneId]) -> bool {

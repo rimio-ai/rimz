@@ -59,7 +59,6 @@ use super::lifecycle::{
 };
 use super::notify::{BellNotice, emit_terminal_notification};
 use super::paint::FramePainter;
-use super::remind::RemindState;
 use super::selection::{
     InputEffect, InputOutcome, finish_search, handle_key, handle_mouse_click, handle_scroll,
     reconcile_selection, row_index_of_pane, set_make_up_filter,
@@ -89,7 +88,11 @@ struct FetchApplication {
     source: Option<SnapshotSource>,
 }
 
-fn own_tab_viewed(viewed_panes: &[PaneId], own_view: &SidebarOwnView, own_pane: &PaneId) -> bool {
+pub(super) fn own_tab_viewed(
+    viewed_panes: &[PaneId],
+    own_view: &SidebarOwnView,
+    own_pane: &PaneId,
+) -> bool {
     viewed_panes
         .iter()
         .any(|pane| pane == own_pane || own_view.working_pane_ids.contains(pane))
@@ -219,7 +222,6 @@ pub(super) struct LoopState {
     last_published_viewport: Option<ViewportState>,
     viewport_pending: bool,
     pub(super) wake: Option<SyncSender<Wakeup>>,
-    remind: RemindState,
     dirty: bool,
     paint_hold: PaintHold,
     next_frame: Instant,
@@ -445,7 +447,6 @@ impl LoopState {
             last_published_viewport: None,
             viewport_pending: false,
             wake: None,
-            remind: RemindState::default(),
             dirty: true,
             paint_hold: PaintHold::default(),
             next_frame: now,
@@ -527,7 +528,6 @@ impl LoopState {
 
         self.run_maintenance(fetch, terminal);
         self.run_width_control_backstop(terminal);
-        self.maybe_remind(fetch, terminal);
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)?;
         let (_, timeout) = self.frame_timing();
@@ -854,12 +854,11 @@ impl LoopState {
             hold_expired_since_paint: _,
             optimistic_watch_until: _,
             own_input_since_fold: _,
-            // Maintenance stamps and reminders, read against `current`.
+            // Maintenance stamps, read against `current`.
             fetched_at: _,
             last_content_fold: _,
             last_self_close_check: _,
             last_heartbeat: _,
-            remind: _,
             // Exit detail and baseline reporting, set beside `should_exit` or
             // from `ui` outside the fold.
             exit_cause: _,
@@ -1334,8 +1333,7 @@ impl LoopState {
             },
             &self.diag,
         ) {
-            Ok(true) => self.remind.note_ring(self.clock.now_ms()),
-            Ok(false) => {}
+            Ok(_) => {}
             Err(err) => debug!(error = %err, "terminal notification emit failed"),
         }
     }
@@ -2045,24 +2043,6 @@ impl LoopState {
         {
             fetch.request(FetchRequest::default(), false);
         }
-    }
-
-    fn maybe_remind(&mut self, fetch: &mut FetchDispatcher, terminal: &mut Terminal<PaneBackend>) {
-        // Scope is checked after flushing; consult only the timer here.
-        if self.remind.due(
-            self.clock.now_ms(),
-            1,
-            self.config.notification_prefs.remind_secs,
-        ) {
-            self.drain_snapshot(fetch, false);
-        }
-        self.remind.maybe_remind(
-            &self.clock,
-            &self.config,
-            terminal,
-            &self.current,
-            &self.diag,
-        );
     }
 
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<PaneBackend>) {

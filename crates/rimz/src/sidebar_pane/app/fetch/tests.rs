@@ -7,6 +7,152 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
 
 #[test]
+fn room_reminder_delivery_fans_out_once_with_the_room_count() {
+    let fixture = FetchFixture::new();
+    let mut worker = fixture.worker();
+    let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let group = &mut Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    let mut row = group.rows[0].clone();
+    row.unread = true;
+    let crate::store::snapshot::RowCard::Agent(card) = &mut row.card else {
+        panic!("agent")
+    };
+    Arc::make_mut(card).status = crate::agents::AgentStatus::Waiting;
+    let mut other = row.clone();
+    other.id = "agent-2".into();
+    other.pane = Some(pane("terminal_10", "tab_1", false));
+    group.rows = vec![row, other].into();
+    snapshot.viewed_panes.clear();
+    worker.config.notification_prefs.remind_secs = 1;
+    let log = fixture._dir.path().join("reminder.log");
+    worker.config.notification_prefs.command = Some(format!(
+        "printf '%s:%s\\n' \"$RIMZ_NOTIFY_KIND\" \"$RIMZ_NOTIFY_UNREAD\" >> {}",
+        shlex::try_quote(log.to_str().unwrap()).unwrap(),
+    ));
+    worker.clock = super::super::clock::LoopClock::play(snapshot.now);
+    let (tx, _rx) = result_channel();
+    let (wake, events) = wake_channel();
+    let mut sink = ResultSink::new(tx, wake, None);
+    let publish = |worker: &mut FetchWorker, sink: &mut ResultSink| {
+        worker.publish_snapshot(
+            &fixture.state,
+            SnapshotPublication {
+                snapshot: snapshot.clone(),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Cached,
+            },
+            sink,
+        );
+    };
+    publish(&mut worker, &mut sink);
+    assert!(
+        events
+            .try_iter()
+            .all(|event| !matches!(event, Wakeup::Event(_)))
+    );
+    worker.clock.advance(Duration::from_secs(1));
+    publish(&mut worker, &mut sink);
+    let notices: Vec<_> = events
+        .try_iter()
+        .filter_map(|event| match event {
+            Wakeup::Event(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "one room reminder per interval, without an agent notification"
+    );
+    let event = &notices[0];
+    assert!(
+        matches!(event.event, SidebarEvent::Notify { recheck_unread: false, notification_kind: Some(ref kind), .. } if kind == "reminder")
+    );
+    publish(&mut worker, &mut sink);
+    assert!(
+        events
+            .try_iter()
+            .all(|event| !matches!(event, Wakeup::Event(_)))
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::fs::read_to_string(&log).unwrap_or_default() != "reminder:2\n"
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read_to_string(log).unwrap(), "reminder:2\n");
+}
+
+#[test]
+fn agent_delivery_pushes_the_room_reminder_out_by_an_interval() {
+    let fixture = FetchFixture::new();
+    let mut worker = fixture.worker();
+    let mut snapshot = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    let set_status = |snapshot: &mut SidebarSnapshot, index: usize, status| {
+        let row =
+            &mut Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[index];
+        let crate::store::snapshot::RowCard::Agent(card) = &mut row.card else {
+            panic!("agent")
+        };
+        Arc::make_mut(card).status = status;
+    };
+    let group = &mut Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    let mut row = group.rows[0].clone();
+    row.unread = true;
+    let mut other = row.clone();
+    other.id = "agent-2".into();
+    other.pane = Some(pane("terminal_10", "tab_1", false));
+    group.rows = vec![row, other].into();
+    set_status(&mut snapshot, 0, crate::agents::AgentStatus::Waiting);
+    set_status(&mut snapshot, 1, crate::agents::AgentStatus::Running);
+    snapshot.viewed_panes.clear();
+    worker.config.notification_prefs.remind_secs = 2;
+    worker.config.notification_prefs.coalesce_ms = 0;
+    worker.clock = super::super::clock::LoopClock::play(snapshot.now);
+    let (tx, _rx) = result_channel();
+    let (wake, events) = wake_channel();
+    let mut sink = ResultSink::new(tx, wake, None);
+    let mut publish = |worker: &mut FetchWorker, snapshot: &SidebarSnapshot| {
+        worker.publish_snapshot(
+            &fixture.state,
+            SnapshotPublication {
+                snapshot: snapshot.clone(),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Cached,
+            },
+            &mut sink,
+        );
+        events
+            .try_iter()
+            .filter_map(|event| match event {
+                Wakeup::Event(event) => match event.event {
+                    SidebarEvent::Notify {
+                        notification_kind, ..
+                    } => notification_kind,
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(publish(&mut worker, &snapshot).is_empty(), "arms at t");
+    worker.clock.advance(Duration::from_secs(1));
+    set_status(&mut snapshot, 1, crate::agents::AgentStatus::Waiting);
+    let rung = publish(&mut worker, &snapshot);
+    assert!(
+        !rung.is_empty() && rung.iter().all(|kind| kind != "reminder"),
+        "an agent notification rings at t+1: {rung:?}"
+    );
+    worker.clock.advance(Duration::from_secs(1));
+    assert!(
+        publish(&mut worker, &snapshot).is_empty(),
+        "the ring re-armed the reminder past t+2"
+    );
+    worker.clock.advance(Duration::from_secs(1));
+    assert_eq!(publish(&mut worker, &snapshot), ["reminder"]);
+}
+
+#[test]
 fn parked_workflows_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();

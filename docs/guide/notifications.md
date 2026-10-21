@@ -14,7 +14,7 @@ The same push writes a bell, which rings if your terminal makes a sound and mark
 
 Three rules keep that from becoming noise, and the same three explain a flip that stayed silent. A card whose pane you are already watching never pushes. Agents that flip within the same second are batched into one banner, `RimZ: 2 agents need attention`, whose body names each. And one agent cannot push twice inside five seconds. Attaching to a room that ran without you is quiet in the same spirit: the first pass renders everything that happened while you were away as unread cards, with no burst of banners behind them.
 
-What you leave unread keeps nudging. Every 60 seconds, for as long as an unread card is `waiting` or `failed`, the sidebar rings again with `RimZ: 2 unread rows need you`. Unread `paused` and `success` cards stay emphasized in the column and never nudge. The nudging stops when you look at the card, which is also when the tab marker and the card's unread state clear.
+What you leave unread keeps nudging. Every 60 seconds, for as long as an unread card is `waiting` or `failed`, the sidebar rings again with `RimZ: 2 unread rows need you`. The count spans the room, and matching reminder handlers run once per interval, not once per tab. Unread `paused` and `success` cards stay emphasized in the column and never nudge. The nudging stops when you look at the card, which is also when the tab marker and the card's unread state clear.
 
 A banner your terminal never draws costs you nothing: the card stays unread and ranked in the sidebar until you look at it.
 

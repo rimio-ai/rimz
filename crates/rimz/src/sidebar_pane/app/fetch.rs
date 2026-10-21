@@ -491,6 +491,8 @@ struct FetchWorker {
     last_projection: Option<crate::sidebar::agent_projection::AgentProjectionPublication>,
     producer_cadence: ProducerCadence,
     notifications: NotificationState,
+    remind: super::remind::RemindState,
+    clock: super::clock::LoopClock,
     link_notifications: LinkNotificationState,
     meter: TickMeter,
     window: FetchWindow,
@@ -744,6 +746,8 @@ impl FetchWorker {
             last_projection,
             producer_cadence: ProducerCadence::default(),
             notifications: NotificationState::default(),
+            remind: super::remind::RemindState::default(),
+            clock: super::clock::LoopClock::wall(),
             link_notifications: LinkNotificationState::default(),
             meter,
             window: FetchWindow::default(),
@@ -1013,7 +1017,7 @@ impl FetchWorker {
         let final_snapshot = phase == FetchPhase::Final;
         let roster = (final_snapshot && source == SnapshotSource::Produced)
             .then(|| crate::sidebar::produce::live_roster_from_snapshot(&snapshot));
-        let deliveries = if final_snapshot {
+        let mut deliveries = if final_snapshot {
             evaluate_notifications(
                 &self.runtime,
                 &self.config.notification_prefs,
@@ -1025,6 +1029,22 @@ impl FetchWorker {
         } else {
             Vec::new()
         };
+        if final_snapshot {
+            let now_ms = self.clock.now_ms();
+            if !deliveries.is_empty() {
+                self.remind.note_ring(now_ms);
+            }
+            if let Some((notification, panes)) =
+                self.remind
+                    .evaluate(now_ms, &snapshot, &self.config.notification_prefs)
+            {
+                deliveries.push(NotificationDelivery {
+                    notification_kind: notification.kind_env().to_owned(),
+                    notification,
+                    panes,
+                });
+            }
+        }
         if final_snapshot && let Some((fold, _)) = &mut sink.staged {
             let unread: HashMap<_, _> = snapshot
                 .rows()
@@ -1146,7 +1166,8 @@ fn deliver_notifications(
                 title: notification.title,
                 body: notification.body,
                 panes: delivery.panes,
-                recheck_unread: true,
+                recheck_unread: notification.notification_kind
+                    != crate::sidebar::notify::NotificationKind::Reminder,
                 notification_kind: Some(delivery.notification_kind),
             },
         );

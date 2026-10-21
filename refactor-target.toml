@@ -2707,7 +2707,7 @@ reason = "The host's heavy refresher owns periodic cache deadlines and daemon-vi
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::app::remind::RemindState"
-reason = "Renderer-scoped repeated attention over the current own view differs from producer episode triggers and preserves the consumer-time unread check (4fe7d2d83; pass 11)."
+reason = "The fetch worker owns room-wide repeated attention after unread reconciliation, separately from agent episode triggers."
 
 [[verdict]]
 kind = "item"

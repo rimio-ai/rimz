@@ -97,14 +97,8 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
     rig.state.config.notification_prefs.enabled = true;
     rig.state.config.notification_prefs.remind_secs = 1;
     rig.state.config.notification_prefs.command = Some("exit 99".into());
-    rig.state.maybe_remind(&mut rig.fetch, &mut rig.terminal);
     clock.advance(Duration::from_secs(1));
     assert_eq!(rig.state.clock.timestamp(), epoch + Duration::from_secs(1));
-    rig.state.maybe_remind(&mut rig.fetch, &mut rig.terminal);
-    assert!(
-        !rig.state.remind.due(clock.now_ms(), 1, 1),
-        "due reminder was processed"
-    );
     rig.state.handle_notification(
         &mut rig.terminal,
         SidebarEvent::Notify {
@@ -149,7 +143,6 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         clock.now_ms() as i64
     );
     assert_eq!(clock.focus_calls.load(Ordering::Relaxed), 0);
-    assert_eq!(clock.notify_calls.load(Ordering::Relaxed), 0);
     rig.state
         .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
         .unwrap();
@@ -160,7 +153,5 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
 
     let wall = LoopClock::wall();
     wall.focus(|| {});
-    wall.notify(|| {});
     assert_eq!(wall.focus_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(wall.notify_calls.load(Ordering::Relaxed), 1);
 }

@@ -284,26 +284,3 @@ fn notification_rings_against_the_deferred_unread_fold() {
         assert_eq!(*output.0.lock().unwrap(), b"\x07");
     }
 }
-
-#[test]
-fn due_reminder_flushes_a_deferred_unread_clear_before_ringing() {
-    let mut rig = hidden_rig();
-    rig.state.last_content_fold -= Duration::from_secs(60);
-    rig.lazy_fold(unread_snapshot(&rig, true), SnapshotSource::Produced);
-    assert!(rig.state.current.rows().next().unwrap().unread);
-    let output = capture_bells(&mut rig);
-    rig.state
-        .remind
-        .note_ring(crate::utils::time::unix_now_ms() - 61_000);
-    rig.lazy_fold(unread_snapshot(&rig, false), SnapshotSource::Produced);
-    assert!(
-        rig.state.current.rows().next().unwrap().unread,
-        "clear deferred"
-    );
-    rig.state.maybe_remind(&mut rig.fetch, &mut rig.terminal);
-    assert!(
-        output.0.lock().unwrap().is_empty(),
-        "fresh read row must not ring"
-    );
-    assert!(!rig.state.current.rows().next().unwrap().unread);
-}

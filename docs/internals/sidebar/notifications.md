@@ -12,7 +12,7 @@ This page owns the push path: who decides a notification, who delivers it on eac
 | [`sidebar/unread.rs`](../../../crates/rimz/src/sidebar/unread.rs) | `UnreadEpisodes`: `unread.json`, `reconcile`, and the `OpenedUnread` records the policy consumes |
 | [`sidebar_pane/app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | `evaluate_notifications` and `deliver_notifications`, run by the host on its fetch cycle |
 | [`sidebar_pane/app/notify.rs`](../../../crates/rimz/src/sidebar_pane/app/notify.rs) | `emit_terminal_notification`: the renderer's desktop targeting and `bell_decision` |
-| [`sidebar_pane/app/remind.rs`](../../../crates/rimz/src/sidebar_pane/app/remind.rs) | `RemindState`: renderer-local unread reminders |
+| [`sidebar_pane/app/remind.rs`](../../../crates/rimz/src/sidebar_pane/app/remind.rs) | `RemindState`: the fetch worker's room-wide unread reminder timer |
 | [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
 | [`config/notifications.rs`](../../../crates/rimz/src/config/notifications.rs) | `NotificationsPrefs`, `NotificationKind`, handler conditions, template rendering and validation |
 | [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `audit/notify.log.jsonl` record schema |
@@ -35,12 +35,12 @@ Five code paths construct a notification, and each sets its `NotificationKind`. 
 | Kind | Emitter | Channels |
 | --- | --- | --- |
 | `waiting`, `failed`, `paused`, `success`, `coalesced` | The host, over newly opened unread episodes ([the host](#the-host)) | Handlers, then `SidebarEvent::Notify` to every renderer for OSC and bell |
-| `reminder` | Each renderer, over its own unread scope ([reminders](#unread-reminders)) | The renderer's own OSC and bell, and handlers |
+| `reminder` | The host, over the room's unread scope ([reminders](#unread-reminders)) | Handlers once, then `SidebarEvent::Notify` to renderers for OSC and bell |
 | `link_lost`, `link_restored` | The local `rimz remote connect` supervisor ([remote link alerts](#remote-link-alerts)) | OSC and BEL on the supervisor's stderr, and handlers |
 | `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`notify_loop_disabled` in `cli/loop_cmd/run.rs`) | Handlers, then a `Notify` event with no panes |
 | any | `rimz sidebar notify-test <target>`, a hidden verb in `cli/sidebar.rs` (`--kind`, default `waiting`; `--force-bell`; `--no-command`) | Handlers, then a `Notify` event for the target rows' panes |
 
-Only the producer path applies triggers, debounce, coalescing, and focus suppression, and only the producer writes `notification_emitted` trace records.
+Only the agent episode path applies triggers, debounce, and coalescing. Agent notifications and reminders both honor focus suppression, and the host writes their `notification_emitted` trace records.
 
 ## The host
 
@@ -79,24 +79,24 @@ A renderer turns a `Notify` event into terminal bytes in `emit_terminal_notifica
 
 A bell that passes writes BEL when `sound = "bell"`. Because the unread bit stays set until a read receipt reaches the episode, the tab marker and the unread card clear together when the user looks. A `Notify` event with no panes (`loop_disabled`) never rings. `notify-test --force-bell` and reminders send `recheck_unread: false`.
 
-**The desktop banner is a reachability channel.** Under tmux, every renderer with an own view writes the DCS-wrapped OSC 777, so the banner reaches the active client stream even when the agent sits in a background window. Under Zellij, only a renderer whose view holds a target pane writes it, and only with `desktop = "osc"`. `desktop = "auto"` skips desktop OSC under Zellij (`mux::drops_desktop_osc`), and `off` skips it everywhere. The text passes through `osc_text`, which strips control bytes and turns `;` into `:`.
+**The desktop banner is a reachability channel.** Under tmux, every renderer with an own view writes the DCS-wrapped OSC 777, so the banner reaches the active client stream even when the agent sits in a background window. Under Zellij, only a renderer whose view holds a target pane writes it, and only with `desktop = "osc"`. A reminder targets every scope pane at once, so on Zellij only the renderer on the watched tab writes its banner, one per reminder as under tmux, while every owning renderer still rings its bell. `desktop = "auto"` skips desktop OSC under Zellij (`mux::drops_desktop_osc`), and `off` skips it everywhere. The text passes through `osc_text`, which strips control bytes and turns `;` into `:`.
 
 tmux forwards the wrapped payload (`ESC P tmux; ... ESC \`, inner escapes doubled) only when `allow-passthrough` is on, and RimZ turns it on for its rooms by default (`[tmux] allow_passthrough`). Passthrough from an inactive pane and delivery to a detached session are up to the multiplexer and client, so handlers are the deterministic path for a user who is away from the terminal.
 
-When a `Notify` event writes any bytes, the renderer restarts its reminder clock.
+Delivering an agent notification restarts the host's reminder clock.
 
 ## Unread reminders
 
-Reminders are renderer-local and re-ring actionable rows the user has not read. Each renderer runs `RemindState::maybe_remind` on its serve loop, independent of the producer, and no reminder is broadcast as a `Notify` event.
+The fetch worker owns one `RemindState` per room and evaluates it on final snapshots, after unread reconciliation. Reminders re-ring actionable rows the user has not read.
 
-The reminder scope is the renderer's unread rows whose status is `waiting` or `failed` (`AgentStatus::is_actionable`); unread `paused` and `success` rows stay emphasized in the sidebar but never remind.
+The reminder scope is the room's unread rows whose status is `waiting` or `failed` (`AgentStatus::is_actionable`); unread `paused` and `success` rows stay emphasized in the sidebar but never remind.
 
-- A row counts when its pane is one of the view's working panes.
+- A row counts when it carries a pane, regardless of its tab.
 - With `suppress_focused`, a row whose pane is in `viewed_panes` does not count.
 
-The clock arms when the scope first becomes non-empty or when a `Notify` event writes bytes, and a reminder fires `remind_secs` (default 60) after the later of the arming and the previous reminder. An empty scope, `enabled = false`, or `remind_secs = 0` clears the clock.
+The clock arms when the scope first becomes non-empty or when an agent notification is delivered, and a reminder fires `remind_secs` (default 60) after the later of the arming and the previous reminder. An empty scope, `enabled = false`, or `remind_secs = 0` clears the clock.
 
-A reminder writes through `emit_terminal_notification` with `recheck_unread: false`, since its scope is already unread; the daemon-view and in-view checks still apply. It then spawns matching handlers with kind `reminder`, title `RimZ: <N> unread rows need you`, and `RIMZ_NOTIFY_UNREAD` set to the count. Pane ownership keeps renderers from double-counting a row.
+A reminder spawns matching handlers once with kind `reminder`, title `RimZ: <N> unread rows need you`, and `RIMZ_NOTIFY_UNREAD` set to the room count. The host then fans out `SidebarEvent::Notify` with `recheck_unread: false`, since its scope is already unread. Each renderer writes terminal bytes through `emit_terminal_notification`; the daemon-view and in-view bell checks still apply.
 
 ## Remote link alerts
 
