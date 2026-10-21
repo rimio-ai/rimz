@@ -289,6 +289,12 @@ criteria = "safe-to-deploy"
 delta = "1.26.1 -> 1.28.0"
 notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from uuid 1.26.1 to 1.28.0: parser.rs and error.rs now accept the `urn:uuid:` prefix case-insensitively, behind length checks of 45 and at least 9 bytes; timestamp.rs changes the v7 ReseedingTimestamp::advance so that a timestamp from an earlier millisecond keeps the stored state and relies on the counter for monotonicity; serde_support.rs adds `option` serialize/deserialize helpers for each format and routes the existing byte encoding through a private wrapper; the rest is version strings, the bundled lockfile, and tests. No unsafe code, build script, proc-macro, filesystem, network, process, or environment access is added or changed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.webpki-roots]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.8 -> 1.0.10"
+notes = "AI source review by Opus 5.5. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from webpki-roots 1.0.8 to 1.0.10, the fix for RUSTSEC-2026-0381: src/lib.rs only edits the generated TLS_SERVER_ROOTS data, removing the `emSign ECC Root CA - G3` and `Atos TrustedRoot 2011` TrustAnchor entries and adding `Telia EC TLS Root CA v3`, `Telia RSA TLS Root CA v3`, `SECOM TLS RSA Root CA 2024` and `SECOM TLS ECC Root CA 2024`, each as the existing static Der subject/SPKI shape with no name constraints; the manifests change only the crate version and rust-version (1.70 -> 1.71), and the VCS info and bundled lockfile only their hashes and versions. No code, unsafe, build script, proc-macro, dependency, filesystem, network, process, or environment change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. The certificate contents were not checked against the Mozilla root store. No upstream test execution was performed for this source review."
+
 [[audits.winnow]]
 who = "GPT 6.1 Sol <noreply@openai.com>"
 criteria = "safe-to-deploy"

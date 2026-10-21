@@ -157,8 +157,8 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.tokio]]
-version = "1.54.0"
-when = "2026-10-19"
+version = "1.54.1"
+when = "2026-10-21"
 user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
@@ -728,6 +728,12 @@ who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
 delta = "0.9.2 -> 0.9.4"
 notes = "Minor bugfix release"
+
+[[audits.bytecode-alliance.audits.rustls-webpki]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.103.15 -> 0.103.16"
+notes = "Updated with new certificates"
 
 [[audits.bytecode-alliance.audits.sharded-slab]]
 who = "Pat Hickey <phickey@fastly.com>"
