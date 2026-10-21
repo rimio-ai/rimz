@@ -1104,7 +1104,8 @@ upward-dependencies = [
 # Native Linux boot identity serves provider PID record validation (+1).
 # MemoryStat and memory_stat share anonymous-memory and refault readings with hibernation (+2).
 # input_tty provides the detached focus helper's non-consuming pty probe (+1).
-surface-budget = 137
+# `memory::Pressure` and `memory::pressure` give the lsp kill and eviction records the memory stall averages (+2).
+surface-budget = 139
 
 [[verdict]]
 kind = "item"

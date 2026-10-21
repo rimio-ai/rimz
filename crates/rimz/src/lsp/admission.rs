@@ -44,19 +44,26 @@ pub struct Shortfall {
     pub server: String,
     pub estimate_bytes: u64,
     pub available_bytes: u64,
+    #[serde(default)]
+    pub swap_free_bytes: u64,
     pub reserve_bytes: u64,
     pub holders: Vec<Holder>,
 }
 
 impl Shortfall {
+    fn total_free_bytes(&self) -> u64 {
+        memory::free_bytes(self.available_bytes, self.swap_free_bytes)
+    }
+
     fn fits(&self) -> bool {
         self.estimate_bytes
             .checked_add(self.reserve_bytes)
-            .is_some_and(|needed| needed <= self.available_bytes)
+            .is_some_and(|needed| needed <= self.total_free_bytes())
     }
 
+    /// Memory plus swap left after the reserve, the figure admission decided on.
     pub fn free_bytes(&self) -> u64 {
-        self.available_bytes.saturating_sub(self.reserve_bytes)
+        self.total_free_bytes().saturating_sub(self.reserve_bytes)
     }
 }
 
@@ -73,6 +80,7 @@ fn measure_shortfall(
         server: server.to_owned(),
         estimate_bytes,
         available_bytes: memory.available_bytes,
+        swap_free_bytes: memory.swap_free_bytes,
         reserve_bytes: reserve_bytes(policy, memory.total_bytes)?,
         holders: running_holders(entries),
     })
@@ -372,6 +380,8 @@ pub(super) fn admit_query(
             .and_then(crate::proc::tree_totals)
             .map_or(0, |totals| totals.rss_kb);
         if super::broker::watchdog::stop_victim(&victim, registry::StopReason::Evicted, false)? {
+            let after = memory::sample()?;
+            let pressure = crate::proc::memory::pressure();
             crate::diag::lsp::append(&crate::diag::lsp::Record {
                 at: jiff::Timestamp::now(),
                 root: victim.root,
@@ -379,7 +389,9 @@ pub(super) fn admit_query(
                 event: "evicted".into(),
                 details: serde_json::json!({"reason": registry::StopReason::Evicted, "peak_rss_kb": victim.peak_rss_kb,
                     "estimate_bytes": shortfall.estimate_bytes, "reserve_bytes": shortfall.reserve_bytes,
-                    "free_before_bytes": shortfall.available_bytes, "free_after_bytes": memory::sample()?.available_bytes,
+                    "free_before_bytes": shortfall.available_bytes, "free_after_bytes": after.available_bytes,
+                    "swap_free_before_bytes": shortfall.swap_free_bytes, "swap_free_after_bytes": after.swap_free_bytes,
+                    "pressure_some_avg10": pressure.map(|p| p.some_avg10), "pressure_full_avg10": pressure.map(|p| p.full_avg10),
                     "victim_rss_kb": rss, "for": {"root": request.root, "server": request.server}}),
             });
         }
@@ -1010,6 +1022,7 @@ mod tests {
             server: "rust".into(),
             estimate_bytes: 8000,
             available_bytes: 5000,
+            swap_free_bytes: 0,
             reserve_bytes: 1000,
             holders: vec![Holder {
                 root: "/held".into(),
@@ -1028,23 +1041,28 @@ mod tests {
         let record = serde_json::to_value(&shortfall).unwrap();
         assert_eq!(record["available_bytes"], 5000);
         assert_eq!(record["reserve_bytes"], 1000);
-        assert_eq!(record.as_object().unwrap().len(), 6);
+        assert_eq!(record["swap_free_bytes"], 0);
+        assert_eq!(record.as_object().unwrap().len(), 7);
     }
 
     #[test]
     fn memory_admission_preserves_reserve_and_rejects_overflow() {
-        for (available, estimate, reserve, expected) in [
-            (40, 20, 20, true),
-            (39, 20, 20, false),
-            (1, 20, 0, false),
-            (1, 2, 0, false),
-            (u64::MAX, u64::MAX, 1, false),
+        for (available, swap, estimate, reserve, expected) in [
+            (40, 0, 20, 20, true),
+            (39, 0, 20, 20, false),
+            (1, 0, 20, 0, false),
+            (1, 0, 2, 0, false),
+            (u64::MAX, 0, u64::MAX, 1, false),
+            (10, 30, 20, 20, true),
+            (10, 29, 20, 20, false),
+            (u64::MAX, 1, 1, 0, true),
         ] {
             assert_eq!(
                 Shortfall {
                     root: "/new".into(),
                     server: "rust".into(),
                     available_bytes: available,
+                    swap_free_bytes: swap,
                     estimate_bytes: estimate,
                     reserve_bytes: reserve,
                     holders: vec![Holder {
@@ -1057,6 +1075,38 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn refusal_without_swap_field_deserializes_with_zero_swap() {
+        let shortfall: Shortfall = serde_json::from_value(serde_json::json!({
+            "root": "/new", "server": "rust", "estimate_bytes": 8, "available_bytes": 3,
+            "reserve_bytes": 1, "holders": []
+        }))
+        .unwrap();
+        assert_eq!(shortfall.swap_free_bytes, 0);
+    }
+
+    #[test]
+    fn queue_timeout_free_figure_counts_swap_beyond_the_reserve() {
+        let shortfall = Shortfall {
+            root: "/new".into(),
+            server: "rust".into(),
+            estimate_bytes: 90_000,
+            available_bytes: 5000,
+            swap_free_bytes: 50_000,
+            reserve_bytes: 1000,
+            holders: vec![],
+        };
+        assert_eq!(shortfall.free_bytes(), 54_000);
+        assert!(
+            LspErr::QueueTimeout(Box::new(QueueTimeout {
+                wait_timeout: "20s".into(),
+                shortfall,
+            }))
+            .to_string()
+            .contains("needs 90 KB, 54 KB free")
+        );
     }
 
     #[test]

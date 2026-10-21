@@ -304,6 +304,7 @@ fn lifetime_end_and_refusal_cancel_requests_once() {
         server: "rust".into(),
         estimate_bytes: 1,
         available_bytes: 0,
+        swap_free_bytes: 0,
         reserve_bytes: 0,
         holders: vec![],
     };
@@ -378,6 +379,7 @@ fn refusal_answers_requests_before_editor_readiness() {
         server: "rust".into(),
         estimate_bytes: 1,
         available_bytes: 0,
+        swap_free_bytes: 0,
         reserve_bytes: 0,
         holders: vec![],
     }));
