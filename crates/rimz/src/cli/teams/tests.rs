@@ -508,3 +508,29 @@ fn show_accepts_lane_only_targets() {
     assert!(show_target(Some("#".into()), None).is_err());
     assert!(show_target(Some("#feat-x".into()), Some("other".into())).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn board_worktree_takes_the_nearest_team_link_below_the_git_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("checkout");
+    let sub = root.join("app");
+    let deep = sub.join("src");
+    let run = temp.path().join("run");
+    std::fs::create_dir_all(&deep).expect("create checkout dirs");
+    std::fs::create_dir_all(&run).expect("create run dir");
+    std::fs::create_dir_all(sub.join(".rimz")).expect("create link parent");
+
+    assert_eq!(board_context::nearest_team_checkout(&deep, &root), root);
+
+    std::os::unix::fs::symlink(&run, sub.join(".rimz/team")).expect("link run");
+    assert_eq!(board_context::nearest_team_checkout(&deep, &root), sub);
+    assert_eq!(board_context::nearest_team_checkout(&root, &root), root);
+
+    std::fs::remove_dir(&run).expect("drop run dir");
+    assert_eq!(
+        board_context::nearest_team_checkout(&deep, &root),
+        root,
+        "a dangling link is no team board"
+    );
+}

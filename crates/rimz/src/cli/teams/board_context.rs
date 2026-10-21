@@ -92,9 +92,10 @@ pub(super) fn worktree() -> Result<PathBuf> {
     let worktree = match std::env::var_os(rimz::workspace::ENV_WORKTREE_PATH) {
         Some(path) => normalize_path_lexical(Path::new(&path)),
         None => {
+            let cwd = std::env::current_dir()?;
             let output = Command::new("git")
                 .args(["rev-parse", "--show-toplevel"])
-                .current_dir(std::env::current_dir()?)
+                .current_dir(&cwd)
                 .output()
                 .context("resolve the current worktree with git")?;
             if !output.status.success() {
@@ -102,10 +103,26 @@ pub(super) fn worktree() -> Result<PathBuf> {
             }
             let path =
                 String::from_utf8(output.stdout).context("git worktree path is not UTF-8")?;
-            normalize_path_lexical(Path::new(path.trim()))
+            let root = normalize_path_lexical(Path::new(path.trim()));
+            nearest_team_checkout(&normalize_path_lexical(&cwd), &root)
         }
     };
     Ok(worktree)
+}
+
+/// The nearest directory from `cwd` up to the Git `root` whose team link
+/// resolves, so a user in a `--cwd` team's subdirectory reaches that team's
+/// board; `root` when none does.
+pub(super) fn nearest_team_checkout(cwd: &Path, root: &Path) -> PathBuf {
+    cwd.ancestors()
+        .take_while(|dir| dir.starts_with(root))
+        .find(|dir| {
+            rimz::harness::scratch::board_path(dir)
+                .parent()
+                .is_some_and(Path::is_dir)
+        })
+        .unwrap_or(root)
+        .to_path_buf()
 }
 
 pub(super) fn caller(agents: &[AgentState]) -> Result<Option<&AgentState>> {
