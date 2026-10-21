@@ -156,7 +156,7 @@ Roles with a resolved [keep-warm](../definitions.md#keep-warm) policy also show 
 
 ### Cohort state
 
-A cohort's state is the first rule that matches its members' projected card statuses, including the sidebar's attention lift when a provider-native child waits or fails:
+A cohort's state is the first rule that matches its members' projected card statuses, including the sidebar's attention lift when a current child of either origin waits or a provider-native child fails:
 
 | State | When |
 | --- | --- |

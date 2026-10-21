@@ -25,6 +25,113 @@ fn remember_roster(ui: &mut UiState, snapshot: &SidebarSnapshot) {
         .collect();
 }
 
+#[test]
+fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
+    use crate::agents::AgentStatus;
+    for (native, child_pane, own_status, target_child) in [
+        (
+            false,
+            Some("zellij:terminal_child"),
+            AgentStatus::Idle,
+            true,
+        ),
+        (true, None, AgentStatus::Idle, false),
+        (false, None, AgentStatus::Idle, false),
+        (
+            false,
+            Some("zellij:terminal_child"),
+            AgentStatus::Waiting,
+            false,
+        ),
+        (
+            false,
+            Some("zellij:terminal_child"),
+            AgentStatus::Failed,
+            false,
+        ),
+    ] {
+        let mut snapshot = clickable_block_snapshot(&workspace());
+        let now = snapshot.now;
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
+        let card = row.as_agent_mut().unwrap();
+        card.status = own_status;
+        card.sub_agents = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "child", "name": "child", "status": "waiting",
+                "last_activity": now, "provider_native": native, "pane": child_pane,
+            }))
+            .unwrap(),
+        ];
+        let expected = if target_child {
+            child_pane.unwrap().parse().unwrap()
+        } else {
+            snapshot.worktree_groups[0].rows[0]
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .clone()
+        };
+        for action in [KeyAction::InboxNext, KeyAction::InboxPrev] {
+            assert_eq!(
+                handle_key(action, &mut UiState::default(), &snapshot),
+                InputOutcome::focus(expected.clone()),
+                "native={native}, pane={child_pane:?}, own={own_status:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let now = snapshot.now;
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let mut next = rows[0].clone();
+    next.id = "next-agent".into();
+    next.pane = Some(pane("terminal_11", "tab_0", false));
+    next.last_activity = now + std::time::Duration::from_secs(1);
+    next.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    let card = rows[0].as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Idle;
+    card.sub_agents = [
+        ("old", true),
+        ("paneless", false),
+        ("first", false),
+        ("second", false),
+    ]
+    .into_iter()
+    .map(|(id, prior)| {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "status": "waiting", "last_activity": now,
+            "pane": (id != "paneless").then(|| format!("zellij:terminal_{id}")),
+            "prior_turn": prior,
+        }))
+        .unwrap()
+    })
+    .collect();
+    rows[0].last_activity = now;
+    rows.push(next);
+    let child: PaneId = "zellij:terminal_first".parse().unwrap();
+    let mut ui = UiState::default();
+    assert_eq!(
+        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        InputOutcome::focus(child.clone())
+    );
+    snapshot.focused_pane = Some(child);
+    let baseline = crate::sidebar_pane::app::state::session_focus_baseline(&snapshot, None);
+    reconcile_selection(&mut ui, &snapshot, baseline);
+    assert_eq!(ui.selected_index, Some(0));
+    assert_eq!(
+        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
+    );
+}
+
 /// A browse pick of `pane`, begun while the derived baseline was `baseline`.
 fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
     Browse {

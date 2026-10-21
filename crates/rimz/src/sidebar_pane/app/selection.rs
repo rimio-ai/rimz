@@ -103,16 +103,13 @@ impl InputOutcome {
     }
 }
 
-/// Step the inbox triage list `forward` or backward from the current selection
-/// and focus that row's pane — the `n`/`N` (and `Space`) walk through the rows
-/// that need you in the visible roster, oldest episode first. A walk with
-/// nothing to triage does nothing.
+/// Step the inbox triage list `forward` or backward from the current selection and focus its attention pane: the `n`/`N` (and `Space`) walk through rows that need you in the visible roster, oldest episode first. A walk with nothing to triage does nothing.
 fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
-        && let Some(pane) = roster.pane_at_ordinal(index)
+        && let Some(pane) = roster.row(index).and_then(|row| row.attention_pane())
     {
-        return InputOutcome::focus(pane);
+        return InputOutcome::focus(pane.clone());
     }
     InputOutcome::default()
 }
@@ -588,11 +585,7 @@ fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     .then_some(index);
 }
 
-/// The id and unread bit of the visible agent row at `index` — the read/unread
-/// toggle target, unlike the jump target, which is the row's pane. `m` acts on
-/// inbox rows only, so a process row (no status) and an out-of-range
-/// index both yield `None`, making the key a no-op rather than a durable write
-/// the unread path would have to reject.
+/// The id and unread bit of the visible agent row at `index`: the read/unread toggle target, unlike attention jumps, which may focus a waiting child's pane. `m` acts on inbox rows only, so a process row (no status) and an out-of-range index both yield `None`, making the key a no-op rather than a durable write the unread path would have to reject.
 struct RowMarkTarget {
     row_id: String,
     unread: bool,

@@ -1500,7 +1500,13 @@ path = "crates/rimz/src/store"
 # pending_recovery::{seed, confirm} share locked tab-confirmation transitions with rebirth (+2).
 # idle_stop::withdraw_before and message::human_opened_turn share conditional withdrawal and authorship with hooks (+2).
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
-surface-budget = 481
+# SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
+surface-budget = 482
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::SidebarRow::attention_pane"
+reason = "The inbox walk and later jump readers share the waiting child's live-pane target without changing ordinary card focus."
 
 [[verdict]]
 kind = "item"
