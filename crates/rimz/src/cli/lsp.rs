@@ -392,32 +392,21 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                     query::Output::Answer {
                         result,
                         document_uri,
-                    } => {
-                        query::render(
-                            verb,
-                            root,
-                            document_uri.as_deref(),
-                            result,
-                            options,
-                            &dirty,
-                            |path| {
-                                let output = query::execute(
-                                    &entry,
-                                    Verb::Symbols,
-                                    &query::Target::File(path.to_owned()),
-                                )
-                                .map_err(|error| match error {
-                                    QueryErr::Failed(error) => error,
-                                    error => rimz::lsp::LspErr::Protocol(error.to_string()),
-                                })?;
-                                // File-symbol queries return answers directly, without name resolution.
-                                let query::Output::Answer { result, .. } = output else {
-                                    unreachable!("file-symbol queries do not resolve names")
-                                };
-                                Ok(result)
-                            },
-                        )?
-                    }
+                    } => query::render(
+                        verb,
+                        root,
+                        document_uri.as_deref(),
+                        result,
+                        options,
+                        &dirty,
+                        |path| {
+                            query::classification_outline(&entry, path).map_err(|error| match error
+                            {
+                                QueryErr::Failed(error) => error,
+                                error => rimz::lsp::LspErr::Protocol(error.to_string()),
+                            })
+                        },
+                    )?,
                     output => query::render_outcome(root, &output, args.json)?,
                 }
             }

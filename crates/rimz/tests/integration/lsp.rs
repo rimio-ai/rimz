@@ -2450,7 +2450,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     env.rimz().args(["lsp", "def", "alias", "x.py:1:1"]).assert().code(1).stderr("").stdout(
         "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server handles .py files (rust covers .rs); use grep for this target\n"
     );
-    env.rimz().args(["lsp", "find", "work", "--limit", "1"]).assert().success().stdout("4 symbols (showing 1)\nfunction w::work  src/w.rs:1:1\n3 more; add --limit N or --all\n");
+    env.rimz().args(["lsp", "find", "work", "--limit", "1"]).assert().success().stdout("4 symbols (showing 1, tests last)\nfunction w::work  src/w.rs:1:1\n3 more; add --limit N or --all\n");
     for verb in ["refs", "impl", "callers", "callees", "find"] {
         for flags in [
             &["--limit", "1", "--json"][..],

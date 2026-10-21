@@ -395,7 +395,7 @@ fn missing_source_does_not_discard_locations() {
         Scope::Checkout.into(),
         &BTreeSet::new(),
         |_, _| Err(LspErr::Protocol("missing line".into())),
-        |_| panic!("no flag must not request symbols"),
+        |_| Ok(json!(null)),
     );
     assert_eq!(result.unwrap(), "gone.rs\n  2:3\n");
 }
@@ -525,7 +525,7 @@ fn dirty_locations_never_read_disk_source() {
                 consulted.push(uri.to_owned());
                 Ok("disk source".into())
             },
-            |_| panic!("no flag must not request symbols"),
+            |_| { assert_eq!(verb, Verb::Refs); Ok(json!([])) },
         )
         .unwrap();
         assert_eq!(
@@ -655,7 +655,10 @@ fn dirty_locations_match_equivalent_uri_spellings() {
                 Scope::Checkout.into(),
                 &BTreeSet::from([dirty.to_owned()]),
                 |_, _| panic!("dirty location must not read disk"),
-                |_| panic!("no flag must not request symbols"),
+                |_| {
+                    assert_eq!(verb, Verb::Refs);
+                    Ok(json!([]))
+                },
             )
             .unwrap();
             assert!(rendered.contains("(unsaved in editor)"));
@@ -855,7 +858,7 @@ fn find_ranks_exact_prefix_contains_then_other() {
             result,
             Scope::Checkout.into(),
             &BTreeSet::new(),
-            |_| panic!("no flag must not request symbols")
+            |_| Ok(json!([]))
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction unrelated  lib.rs:2:3\n"
@@ -1168,20 +1171,32 @@ fn missing_column_understands_flat_outlines() {
 
 #[test]
 fn hover_text_trims_leading_blank_lines() {
-    let result = json!({"contents":{"kind":"markdown","value":"\n\n```rust\nfn work()\n```  \n"}});
-    assert_eq!(
-        render(
-            Verb::Hover,
-            Path::new("/checkout"),
-            None,
-            result,
-            Scope::Checkout.into(),
-            &BTreeSet::new(),
-            |_| panic!("hover needs no outline")
-        )
-        .unwrap(),
-        "```rust\nfn work()\n```\n"
-    );
+    for (text, expected) in [
+        (
+            "\n\n```rust\nfn work()\n```  \n",
+            "```rust\nfn work()\n```\n",
+        ),
+        ("\n\n    first\n    second\n", "    first\n    second\n"),
+        (
+            "\n \t\r\n    first\r\n    second \n",
+            "    first\r\n    second\n",
+        ),
+    ] {
+        let result = json!({"contents":{"kind":"markdown","value":text}});
+        assert_eq!(
+            render(
+                Verb::Hover,
+                Path::new("/checkout"),
+                None,
+                result,
+                Scope::Checkout.into(),
+                &BTreeSet::new(),
+                |_| panic!("hover needs no outline")
+            )
+            .unwrap(),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -1272,6 +1287,374 @@ fn collapsed_candidates_keep_names_accepted_by_workspace_search() {
     }
 }
 
+fn list_item(verb: Verb, uri: &str, line: u32) -> Value {
+    let range = json!({"start":{"line":line,"character":0},"end":{"line":line,"character":1}});
+    let location = json!({"uri":uri,"range":range});
+    let call = json!({"name":"work","kind":12,"uri":uri,"range":range,"selectionRange":range});
+    match verb {
+        Verb::Refs | Verb::Impl => location,
+        Verb::Find => json!({"name":"work","kind":12,"location":location}),
+        Verb::Callers => json!({"from":call}),
+        Verb::Callees => json!({"to":call}),
+        _ => unreachable!(),
+    }
+}
+
+fn inline_tests() -> Value {
+    json!([{"name":"tests","kind":2,"range":{"start":{"line":0,"character":0},"end":{"line":2,"character":0}},"selectionRange":range()}])
+}
+
+fn assert_test_last_groups(verb: Verb, noun: &str) {
+    let items: Vec<_> = [
+        ("file:///external/tests/a.rs", 0),
+        ("file:///checkout/z.rs", 2),
+        ("file:///external/a.rs", 0),
+        ("file:///checkout/a.rs", 0),
+        ("file:///checkout/tests/a.rs", 0),
+        ("file:///checkout/a.rs", 2),
+        ("file:///external/a.rs", 2),
+    ]
+    .into_iter()
+    .map(|(uri, line)| list_item(verb, uri, line))
+    .collect();
+    let suffix = if verb == Verb::Refs { "source" } else { "work" };
+    let production =
+        format!("a.rs\n  3:1  {suffix}\nz.rs\n  3:1  {suffix}\n/external/a.rs\n  3:1  {suffix}\n");
+    for limit in [None, NonZeroUsize::new(4)] {
+        let mut outlines = Vec::new();
+        let rendered = render_with_source(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!(items),
+            ListOptions {
+                scope: Scope::External,
+                limit,
+                no_tests: false,
+            },
+            &BTreeSet::new(),
+            |_, _| Ok("source".into()),
+            |uri| {
+                outlines.push(uri.to_owned());
+                Ok(inline_tests())
+            },
+        )
+        .unwrap();
+        let expected = if limit.is_some() {
+            format!(
+                "7 {noun}, 4 in tests (showing 4, tests last)\n{production}tests:\na.rs\n  1:1  {suffix}\n3 more; add --limit N or --all\n"
+            )
+        } else {
+            format!(
+                "{production}tests:\na.rs\n  1:1  {suffix}\ntests/a.rs\n  1:1  {suffix}\n/external/a.rs\n  1:1  {suffix}\n/external/tests/a.rs\n  1:1  {suffix}\n"
+            )
+        };
+        assert_eq!(rendered, expected);
+        assert_eq!(
+            outlines,
+            [
+                "file:///checkout/a.rs",
+                "file:///checkout/z.rs",
+                "file:///external/a.rs"
+            ]
+        );
+    }
+}
+
+#[test]
+fn refs_put_production_before_inline_and_path_tests() {
+    assert_test_last_groups(Verb::Refs, "references");
+}
+
+#[test]
+fn callers_put_production_before_inline_and_path_tests() {
+    assert_test_last_groups(Verb::Callers, "callers");
+}
+
+#[test]
+fn find_keeps_rank_within_production_and_tests() {
+    let root = Path::new("/checkout");
+    let symbol = |name, uri, line| {
+        let mut symbol = list_item(Verb::Find, uri, line);
+        symbol["name"] = json!(name);
+        symbol
+    };
+    let ranked = rank_find(
+        root,
+        "work",
+        json!([
+            symbol("work", "file:///checkout/tests/a.rs", 0),
+            symbol("worker", "file:///checkout/z.rs", 2),
+            symbol("rework", "file:///checkout/a.rs", 0),
+            symbol("unrelated", "file:///checkout/a.rs", 2),
+            symbol("work", "file:///external/a.rs", 2),
+            symbol("worker", "file:///external/tests/a.rs", 0),
+        ]),
+    )
+    .unwrap();
+    let mut outlines = Vec::new();
+    let rendered = render(
+        Verb::Find,
+        root,
+        None,
+        ranked,
+        ListOptions {
+            scope: Scope::External,
+            limit: None,
+            no_tests: false,
+        },
+        &BTreeSet::new(),
+        |path| {
+            outlines.push(path.to_owned());
+            Ok(inline_tests())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rendered,
+        "function z::worker  z.rs:3:1\nfunction a::unrelated  a.rs:3:1\nfunction work  /external/a.rs:3:1\ntests:\nfunction tests::a::work  tests/a.rs:1:1\nfunction a::rework  a.rs:1:1\nfunction worker  /external/tests/a.rs:1:1\n"
+    );
+    assert_eq!(
+        outlines,
+        [
+            Path::new("/checkout/z.rs"),
+            Path::new("/checkout/a.rs"),
+            Path::new("/external/a.rs")
+        ]
+    );
+}
+
+#[test]
+fn capped_test_walk_stops_at_production_limit() {
+    for (verb, noun) in [
+        (Verb::Refs, "references"),
+        (Verb::Callers, "callers"),
+        (Verb::Find, "symbols"),
+    ] {
+        let items: Vec<_> = ["a.rs", "b_tests.rs", "c.rs", "d.rs"]
+            .map(|path| list_item(verb, &format!("file:///checkout/{path}"), 0))
+            .into();
+        let mut outlines = Vec::new();
+        let mut reads = Vec::new();
+        let rendered = render_with_source(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!(items),
+            ListOptions {
+                limit: NonZeroUsize::new(1),
+                ..Scope::Checkout.into()
+            },
+            &BTreeSet::new(),
+            |uri, line| {
+                reads.push((uri.to_owned(), line));
+                Ok("source".into())
+            },
+            |uri| {
+                outlines.push(uri.to_owned());
+                Ok(if uri.ends_with("/a.rs") {
+                    inline_tests()
+                } else {
+                    json!([])
+                })
+            },
+        )
+        .unwrap();
+        let entry = match verb {
+            Verb::Refs => "c.rs\n  1:1  source\n",
+            Verb::Callers => "c.rs\n  1:1  work\n",
+            _ => "function c::work  c.rs:1:1\n",
+        };
+        assert_eq!(
+            rendered,
+            format!("4 {noun} (showing 1, tests last)\n{entry}3 more; add --limit N or --all\n")
+        );
+        assert_eq!(outlines, ["file:///checkout/a.rs", "file:///checkout/c.rs"]);
+        assert_eq!(
+            reads,
+            if verb == Verb::Refs {
+                vec![("file:///checkout/c.rs".into(), 0)]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+fn assert_outline_fallback(no_tests: bool) {
+    for verb in [Verb::Refs, Verb::Callers, Verb::Find] {
+        if no_tests && verb == Verb::Find {
+            continue;
+        }
+        for malformed in [false, true] {
+            let mut outlines = Vec::new();
+            let items: Vec<_> = [("a.rs", 0), ("a.rs", 1), ("other.rs", 0), ("tests/a.rs", 0)]
+                .map(|(path, line)| list_item(verb, &format!("file:///checkout/{path}"), line))
+                .into();
+            let rendered = render_with_source(
+                verb,
+                Path::new("/checkout"),
+                None,
+                json!(items),
+                ListOptions {
+                    limit: None,
+                    no_tests,
+                    ..Scope::Checkout.into()
+                },
+                &BTreeSet::new(),
+                |_, _| Ok("source".into()),
+                |uri| {
+                    outlines.push(uri.to_owned());
+                    if uri.ends_with("/other.rs") {
+                        return Ok(inline_tests());
+                    }
+                    if malformed {
+                        return Ok(json!({"invalid":"outline"}));
+                    }
+                    Err(LspErr::Protocol("outline unavailable".into()))
+                },
+            );
+            assert!(
+                rendered.is_ok(),
+                "outline failures must keep path-classified results: {rendered:?}"
+            );
+            let rendered = rendered.unwrap();
+            assert_eq!(outlines, ["file:///checkout/a.rs"]);
+            if verb == Verb::Find {
+                assert_eq!(
+                    rendered.matches("function a::work  a.rs:").count(),
+                    2,
+                    "{rendered}"
+                );
+            } else {
+                let suffix = if verb == Verb::Refs { "source" } else { "work" };
+                assert!(
+                    rendered.starts_with(&format!("a.rs\n  1:1  {suffix}\n  2:1  {suffix}\n")),
+                    "{rendered}"
+                );
+            }
+            if no_tests {
+                let noun = if verb == Verb::Refs {
+                    "references"
+                } else {
+                    "callers"
+                };
+                assert!(rendered.contains("other.rs"), "{rendered}");
+                assert!(!rendered.contains("tests/a.rs"), "{rendered}");
+                assert!(
+                    rendered.ends_with(&format!(
+                        "1 test {noun} hidden; drop --no-tests to show them\n"
+                    )),
+                    "{rendered}"
+                );
+            } else {
+                assert_eq!(rendered.matches("tests:\n").count(), 1, "{rendered}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_last_outline_failure_falls_back_to_paths() {
+    assert_outline_fallback(false);
+}
+
+#[test]
+fn no_tests_outline_failure_falls_back_to_paths() {
+    assert_outline_fallback(true);
+}
+
+#[test]
+fn failed_test_outlines_disable_enrichment_and_counts() {
+    for no_tests in [false, true] {
+        let items =
+            ["a.rs", "b.rs", "c.rs", "tests/a.rs"].map(|path| format!("file:///checkout/{path}"));
+        let mut requests = 0;
+        let partition = partition_tests(
+            Path::new("/checkout"),
+            items,
+            ListOptions {
+                limit: None,
+                no_tests,
+                ..Scope::Checkout.into()
+            },
+            true,
+            |uri| {
+                (
+                    uri,
+                    Position {
+                        line: 0,
+                        character: 0,
+                    },
+                )
+            },
+            &mut |_| {
+                requests += 1;
+                Err(LspErr::Protocol("outline unavailable".into()))
+            },
+        )
+        .unwrap();
+        assert_eq!(requests, 1, "stop enrichment after the first outline error");
+        assert_eq!(partition.tests, None, "module-test count is unknown");
+        assert_eq!(partition.items.len(), if no_tests { 3 } else { 4 });
+        assert_eq!(partition.hidden, no_tests.then_some(1), "path-rule tests");
+        let header = finish_list(
+            vec![],
+            0,
+            4,
+            3,
+            "references",
+            partition.tests,
+            partition.hidden,
+        );
+        assert!(!header.contains("in tests"), "{header}");
+        assert_eq!(header.contains("tests last"), !no_tests, "{header}");
+        assert_eq!(
+            header.ends_with("1 test references hidden; drop --no-tests to show them\n"),
+            no_tests,
+            "{header}"
+        );
+    }
+}
+
+#[test]
+fn test_only_lists_keep_counts_and_boundary() {
+    for (verb, noun) in [
+        (Verb::Refs, "references"),
+        (Verb::Callers, "callers"),
+        (Verb::Find, "symbols"),
+    ] {
+        let rendered = render_with_source(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!([
+                list_item(verb, "file:///checkout/tests/a.rs", 0),
+                list_item(verb, "file:///checkout/tests/a.rs", 1)
+            ]),
+            ListOptions {
+                limit: NonZeroUsize::new(1),
+                ..Scope::Checkout.into()
+            },
+            &BTreeSet::new(),
+            |_, _| Ok("source".into()),
+            |_| panic!("test paths need no outline"),
+        )
+        .unwrap();
+        let entry = match verb {
+            Verb::Refs => "tests/a.rs\n  1:1  source\n",
+            Verb::Callers => "tests/a.rs\n  1:1  work\n",
+            _ => "function tests::a::work  tests/a.rs:1:1\n",
+        };
+        assert_eq!(
+            rendered,
+            format!(
+                "2 {noun}, 2 in tests (showing 1, tests last)\ntests:\n{entry}1 more; add --limit N or --all\n"
+            )
+        );
+    }
+}
+
 #[test]
 fn list_caps_count_locations_and_only_read_displayed_source() {
     for (verb, noun) in [
@@ -1281,20 +1664,8 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
         (Verb::Callees, "callees"),
         (Verb::Find, "symbols"),
     ] {
-        let item = |line, uri| {
-            let range =
-                json!({"start":{"line":line,"character":0},"end":{"line":line,"character":1}});
-            let location = json!({"uri":uri,"range":range});
-            let call =
-                json!({"name":"work","kind":12,"uri":uri,"range":range,"selectionRange":range});
-            match verb {
-                Verb::Refs | Verb::Impl => location,
-                Verb::Find => json!({"name":"work","kind":12,"location":location}),
-                Verb::Callers => json!({"from":call}),
-                Verb::Callees => json!({"to":call}),
-                _ => unreachable!(),
-            }
-        };
+        let item = |line, uri| list_item(verb, uri, line);
+        let tests_last = matches!(verb, Verb::Refs | Verb::Callers | Verb::Find);
         let items: Vec<_> = std::iter::once(item(0, "file:///external/a.rs"))
             .chain((0..52).map(|line| item(line, "file:///checkout/z.rs")))
             .collect();
@@ -1304,6 +1675,7 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
             (None, 52),
         ] {
             let mut reads = Vec::new();
+            let mut outlines = Vec::new();
             let rendered = render_with_source(
                 verb,
                 Path::new("/checkout"),
@@ -1319,12 +1691,18 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
                     reads.push((uri.to_owned(), line));
                     Ok("source".into())
                 },
-                |_| panic!("no flag must not request symbols"),
+                |uri| {
+                    outlines.push(uri.to_owned());
+                    Ok(json!([]))
+                },
             )
             .unwrap();
             if shown < 52 {
                 assert!(
-                    rendered.starts_with(&format!("52 {noun} (showing {shown})\n")),
+                    rendered.starts_with(&format!(
+                        "52 {noun} (showing {shown}{})\n",
+                        if tests_last { ", tests last" } else { "" }
+                    )),
                     "{rendered}"
                 );
                 assert!(rendered.ends_with(&format!("{} more; add --limit N or --all\n1 outside the checkout hidden; add --external to show them\n", 52 - shown)));
@@ -1332,6 +1710,14 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
                 assert!(!rendered.contains("showing"));
                 assert!(!rendered.contains("more;"));
             }
+            assert_eq!(
+                outlines,
+                if tests_last {
+                    vec!["file:///checkout/z.rs"]
+                } else {
+                    vec![]
+                }
+            );
             assert_eq!(
                 rendered
                     .lines()
@@ -1357,10 +1743,16 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
             json!(items),
             Scope::External.into(),
             &BTreeSet::new(),
-            |_| panic!("no flag must not request symbols"),
+            |_| {
+                assert!(tests_last);
+                Ok(json!([]))
+            },
         )
         .unwrap();
-        assert!(rendered.starts_with(&format!("53 {noun} (showing 50)\n")));
+        assert!(rendered.starts_with(&format!(
+            "53 {noun} (showing 50{})\n",
+            if tests_last { ", tests last" } else { "" }
+        )));
         assert!(!rendered.contains("/external/"));
         assert!(rendered.ends_with("3 more; add --limit N or --all\n"));
     }
@@ -1382,7 +1774,7 @@ fn grouped_locations_trim_unicode_snippets_and_sort_positions() {
         Scope::External.into(),
         &BTreeSet::new(),
         |_, _| Ok(text.clone()),
-        |_| panic!("no flag must not request symbols"),
+        |_| Ok(json!([])),
     )
     .unwrap();
     let snippet = format!("{}é…", "a".repeat(98));
@@ -1406,7 +1798,10 @@ fn verb_text_renderers() {
             Scope::Checkout.into(),
             &BTreeSet::new(),
             |_, _| Ok("  fn work() {}  ".into()),
-            |_| panic!("no flag must not request symbols"),
+            |_| {
+                assert!(matches!(verb, Verb::Refs | Verb::Callers | Verb::Find));
+                Ok(json!([]))
+            },
         )
         .unwrap()
     };
@@ -1495,7 +1890,10 @@ fn list_verbs_hide_external_items() {
                 calls.clone(),
                 Scope::Checkout.into(),
                 &BTreeSet::new(),
-                |_| panic!("no flag must not request symbols")
+                |_| {
+                    assert!(matches!(verb, Verb::Refs | Verb::Callers | Verb::Find));
+                    Ok(json!([]))
+                }
             )
             .unwrap(),
             format!(
@@ -1511,7 +1909,10 @@ fn list_verbs_hide_external_items() {
                 calls,
                 Scope::External.into(),
                 &BTreeSet::new(),
-                |_| panic!("no flag must not request symbols")
+                |_| {
+                    assert!(matches!(verb, Verb::Refs | Verb::Callers | Verb::Find));
+                    Ok(json!([]))
+                }
             )
             .unwrap(),
             if verb == Verb::Find {
@@ -1571,7 +1972,7 @@ fn find_scope_preserves_ranked_order() {
             ranked.clone(),
             Scope::External.into(),
             &BTreeSet::new(),
-            |_| panic!("no flag must not request symbols")
+            |_| Ok(json!([]))
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction work  /outside/lib.rs:2:3\n"
@@ -1584,7 +1985,7 @@ fn find_scope_preserves_ranked_order() {
             ranked,
             Scope::Checkout.into(),
             &BTreeSet::new(),
-            |_| panic!("no flag must not request symbols")
+            |_| Ok(json!([]))
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\n1 outside the checkout hidden; add --external to show them\n"

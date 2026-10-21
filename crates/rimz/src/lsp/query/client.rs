@@ -12,6 +12,7 @@ use std::time::Duration;
 const MEMBER_CONTAINER_CAP: usize = 20;
 
 const QUERY_WORKERS: usize = 4;
+const CLASSIFICATION_WAIT_MS: u64 = 5_000;
 
 fn bounded_map<T: Sync, R: Send, E: Send>(
     items: &[T],
@@ -144,11 +145,20 @@ pub fn select(
 }
 
 fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Value, QueryErr> {
+    request_with_wait(entry, method, params, 110_000)
+}
+
+fn request_with_wait(
+    entry: &Entry,
+    method: &str,
+    params: Value,
+    wait_ms: u64,
+) -> std::result::Result<Value, QueryErr> {
     let response = registry::request(
         entry,
-        &json!({"op": "query", "method": method, "params": params, "wait_ms": 110_000}),
-        // Outlasts the broker's 110s bound so exit 4 reports before a 120s agent shell timeout.
-        Duration::from_secs(115),
+        &json!({"op": "query", "method": method, "params": params, "wait_ms": wait_ms}),
+        // Outlast readiness by 5s; main queries still report before a 120s agent shell timeout.
+        Duration::from_millis(wait_ms) + Duration::from_secs(5),
     )?;
     if let Some(refused) = response.get("refused") {
         return Err(QueryErr::MemoryShort {
@@ -181,6 +191,17 @@ fn uri(root: &Path, path: &Path) -> Result<String> {
     url::Url::from_file_path(path)
         .map(|uri| uri.to_string())
         .map_err(|()| LspErr::Protocol("invalid file URI".into()))
+}
+
+/// Fetch a test-classification outline with a short readiness wait.
+pub fn classification_outline(entry: &Entry, path: &Path) -> std::result::Result<Value, QueryErr> {
+    let uri = uri(&entry.root, path)?;
+    request_with_wait(
+        entry,
+        "textDocument/documentSymbol",
+        json!({"textDocument": {"uri": uri}}),
+        CLASSIFICATION_WAIT_MS,
+    )
 }
 
 fn request_outlines(
