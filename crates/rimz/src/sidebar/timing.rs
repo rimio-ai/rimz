@@ -103,7 +103,7 @@ pub(super) const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 /// How long a focused worktree's edit-sensitive git facts stay cached:
 /// working-tree churn, dirty/untracked state, and live branch label. A viewed
 /// worktree gets a near-realtime edit tick while the rest of the fleet stays on
-/// the hot/idle tiers.
+/// the hot/idle/settled tiers.
 pub(super) const DIFF_STATS_FOCUSED_LOCAL_TTL: Duration = Duration::from_secs(3);
 
 /// How long a focused worktree's commit/PR-shaped git facts stay cached:
@@ -113,19 +113,28 @@ pub(super) const DIFF_STATS_FOCUSED_LOCAL_TTL: Duration = Duration::from_secs(3)
 pub(super) const DIFF_STATS_FOCUSED_COMMIT_TTL: Duration = Duration::from_secs(10);
 
 /// How long an *idle* worktree's diff stats stay cached. A worktree with no
-/// running or recently-active agent decays to this slow cadence — almost all
-/// of a large fleet's git forks were measuring worktrees nothing had touched.
+/// running or recently-active agent decays to this slow cadence (or to
+/// [`DIFF_STATS_SETTLED_TTL`] once clean and landed) — almost all of a large
+/// fleet's git forks were measuring worktrees nothing had touched.
 /// A human hand-editing an idle worktree sees header stats lag up to this
 /// bound; accepted, the headers track fleet progress, not keystrokes.
 pub(super) const DIFF_STATS_IDLE_TTL: Duration = Duration::from_secs(60);
+
+/// How long a *settled* worktree's diff stats stay cached: unviewed, not hot,
+/// with a clean tree whose committed content is proven landed. Nothing in it
+/// has work to report, so it refreshes at the pace of `PR_STATE_TTL`. A HEAD
+/// move in a settled checkout reaches the display, and the PR lane's HEAD
+/// nudge, up to this bound late.
+pub(super) const DIFF_STATS_SETTLED_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// How often a finished collapsed cohort rechecks its durable transcript effort.
 pub(super) const COHORT_SPEND_TTL: Duration = Duration::from_secs(60);
 
 /// How recently one of a worktree's agent rows must have been active for the
 /// worktree to count as hot — refreshed on [`DIFF_STATS_TTL`] rather than
-/// decaying to [`DIFF_STATS_IDLE_TTL`]. Generous against the fast TTL so a
-/// worktree stays hot across an agent's think pauses, not just its tool calls.
+/// decaying to [`DIFF_STATS_IDLE_TTL`] or [`DIFF_STATS_SETTLED_TTL`]. Generous
+/// against the fast TTL so a worktree stays hot across an agent's think pauses,
+/// not just its tool calls.
 pub(super) const GIT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
 
 /// How long the producer trusts the cached `git worktree list` enumeration.
