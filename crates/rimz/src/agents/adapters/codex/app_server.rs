@@ -54,8 +54,8 @@ use super::CodexAdapter;
 use crate::agents::capabilities::LaunchCapability;
 use transport::WsTransport;
 pub(super) use transport::{
-    AppServerErr, FramedTransport, JsonRpcTransport, codex_bin, initialize, installed_codex_bin,
-    write_frame,
+    AppServerErr, FramedTransport, JsonRpcTransport, ServedBy, codex_bin, initialize,
+    installed_codex_bin, write_frame,
 };
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
