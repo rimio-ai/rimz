@@ -218,6 +218,77 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert!(cache.is_fresh(500));
 }
 
+#[test]
+fn settled_tier_boundaries_and_precedence() {
+    let path = "/wt";
+    let settled = DiffStatsCacheEntry {
+        refreshed_at_ms: 1_000,
+        commit_refreshed_at_ms: Some(1_000),
+        clean: Some(true),
+        landed: Some(true),
+        ..DiffStatsCacheEntry::default()
+    };
+    let none = BTreeSet::new();
+    let only = BTreeSet::from([path.to_owned()]);
+    let needed = [path.to_owned()];
+    let due_at = |entry: &DiffStatsCacheEntry,
+                  focused: &BTreeSet<String>,
+                  hot: &BTreeSet<String>,
+                  at: u64| {
+        let cache = DiffStatsCache {
+            entries: BTreeMap::from([(path.to_owned(), entry.clone())]),
+            worktrees: None,
+        };
+        !stale_paths(&cache, &needed, focused, hot, at).is_empty()
+    };
+    let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
+    let settled_ttl = DIFF_STATS_SETTLED_TTL.as_millis() as u64;
+    assert_eq!(DIFF_STATS_SETTLED_TTL, Duration::from_secs(300));
+
+    assert!(!due_at(&settled, &none, &none, 1_000 + idle + 1));
+    assert!(!due_at(&settled, &none, &none, 1_000 + settled_ttl));
+    assert!(due_at(&settled, &none, &none, 1_001 + settled_ttl));
+
+    // Focused and hot win over settled.
+    assert!(due_at(&settled, &only, &none, 1_000 + 11_000));
+    assert!(due_at(
+        &settled,
+        &none,
+        &only,
+        1_001 + DIFF_STATS_TTL.as_millis() as u64
+    ));
+
+    // Anything short of clean-and-landed reads idle.
+    for unsettled in [
+        DiffStatsCacheEntry {
+            clean: None,
+            ..settled.clone()
+        },
+        DiffStatsCacheEntry {
+            clean: Some(false),
+            ..settled.clone()
+        },
+        DiffStatsCacheEntry {
+            landed: None,
+            ..settled.clone()
+        },
+        DiffStatsCacheEntry {
+            landed: Some(false),
+            ..settled.clone()
+        },
+    ] {
+        assert!(!due_at(&unsettled, &none, &none, 1_000 + idle));
+        assert!(due_at(&unsettled, &none, &none, 1_001 + idle));
+    }
+
+    // A missing entry is due in full.
+    let empty = DiffStatsCache::default();
+    assert_eq!(
+        stale_paths(&empty, &needed, &none, &none, 1),
+        vec![(path.to_owned(), DueFacts::all())]
+    );
+}
+
 /// A minimal agent/process row for the hot-set tests: only the fields
 /// `hot_worktree_paths` reads vary.
 /// The hot set, boundary-exact at `GIT_ACTIVITY_WINDOW`: running rows are hot

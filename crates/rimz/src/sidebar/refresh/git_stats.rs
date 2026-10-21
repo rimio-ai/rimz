@@ -21,7 +21,7 @@ use crate::disk::atomic;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
-    DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
+    DIFF_STATS_SETTLED_TTL, DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 use crate::utils::time::unix_now_ms;
@@ -212,7 +212,8 @@ pub(super) fn refresh_diff_stats_for(
     let cache_path = runtime.diff_stats_path();
     let now_ms = unix_now_ms();
     // Focus tiers edit-sensitive facts first; activity still keeps recently
-    // worked background worktrees on the hot TTL while the rest decay to idle.
+    // worked background worktrees on the hot TTL while the rest decay to idle, or
+    // to settled once clean and landed.
     let condition_scopes =
         crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
     let needed = needed_worktree_paths(snapshot, condition_scopes.into_keys().collect());
@@ -357,29 +358,11 @@ fn refresh_diff_stats(
     state: &mut GitRefreshState,
 ) -> DiffStatsCache {
     state.retain_needed(needed);
-    // One closure carries the focus/activity tiering, and every freshness verdict —
-    // the no-lock fast path, the single-flight loser's probe, and both produce
-    // arms — goes through it, so the tiers cannot disagree and a loser never
-    // spin-produces what the winner correctly skipped.
-    let stale = |cache: &DiffStatsCache| -> Vec<(String, DueFacts)> {
-        needed
-            .iter()
-            .filter_map(|path| {
-                let (local_ttl, commit_ttl) = diff_stats_tier(path, focused, hot);
-                let Some(entry) = cache.entries.get(path.as_str()) else {
-                    return Some((path.clone(), DueFacts::all()));
-                };
-                let mut due = DueFacts {
-                    local: !entry.local_fresh_for(now_ms, local_ttl),
-                    commit: !entry.commit_fresh_for(now_ms, commit_ttl),
-                };
-                if local_ttl == commit_ttl {
-                    due = DueFacts::same(due.local || due.commit);
-                }
-                due.any().then(|| (path.clone(), due))
-            })
-            .collect()
-    };
+    // One function carries the focus/activity/settled tiering, and every freshness
+    // verdict — the no-lock fast path, the single-flight loser's probe, and both
+    // produce arms — goes through it, so the tiers cannot disagree and a loser
+    // never spin-produces what the winner correctly skipped.
+    let stale = |cache: &DiffStatsCache| stale_paths(cache, needed, focused, hot, now_ms);
 
     let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
     // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
@@ -433,8 +416,41 @@ fn refresh_diff_stats(
     }
 }
 
+/// The `needed` paths whose cached entry is due under their tier, with which
+/// fact groups are due, in `needed` order.
+fn stale_paths(
+    cache: &DiffStatsCache,
+    needed: &[String],
+    focused: &BTreeSet<String>,
+    hot: &BTreeSet<String>,
+    now_ms: u64,
+) -> Vec<(String, DueFacts)> {
+    needed
+        .iter()
+        .filter_map(|path| {
+            let entry = cache.entries.get(path.as_str());
+            let Some(entry) = entry else {
+                return Some((path.clone(), DueFacts::all()));
+            };
+            let (local_ttl, commit_ttl) = diff_stats_tier(path, Some(entry), focused, hot);
+            let mut due = DueFacts {
+                local: !entry.local_fresh_for(now_ms, local_ttl),
+                commit: !entry.commit_fresh_for(now_ms, commit_ttl),
+            };
+            if local_ttl == commit_ttl {
+                due = DueFacts::same(due.local || due.commit);
+            }
+            due.any().then(|| (path.clone(), due))
+        })
+        .collect()
+}
+
+/// `(local, commit)` TTLs for one path: focused, then hot, then settled (the
+/// cached entry is clean and landed), else idle. A missing entry, or `None` in
+/// either fact, is never settled.
 fn diff_stats_tier(
     path: &str,
+    entry: Option<&DiffStatsCacheEntry>,
     focused: &BTreeSet<String>,
     hot: &BTreeSet<String>,
 ) -> (Duration, Duration) {
@@ -442,6 +458,8 @@ fn diff_stats_tier(
         (DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_FOCUSED_COMMIT_TTL)
     } else if hot.contains(path) {
         (DIFF_STATS_TTL, DIFF_STATS_TTL)
+    } else if entry.is_some_and(|entry| entry.clean == Some(true) && entry.landed == Some(true)) {
+        (DIFF_STATS_SETTLED_TTL, DIFF_STATS_SETTLED_TTL)
     } else {
         (DIFF_STATS_IDLE_TTL, DIFF_STATS_IDLE_TTL)
     }
