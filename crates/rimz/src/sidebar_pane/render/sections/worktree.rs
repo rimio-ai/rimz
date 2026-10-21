@@ -12,7 +12,7 @@ use std::ops::Range;
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
-    PipelinePosition, SidebarPipeline, SidebarStatusCount, SidebarWorktreeGroup,
+    PipelinePosition, SidebarPipeline, SidebarRow, SidebarStatusCount, SidebarWorktreeGroup,
     SidebarWorktreeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
@@ -126,6 +126,16 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
     let folded = finished_folded(visible_group);
+    let group_target = folded
+        .then(|| finished_members(visible_group, roster).next())
+        .flatten()
+        .map_or_else(
+            || HitTarget::ToggleGroup(group.key.clone()),
+            |(row, _)| HitTarget::ExpandGroup {
+                key: group.key.clone(),
+                row: row.id.clone(),
+            },
+        );
     let pipeline = group.pipeline.as_ref().filter(|_| !folded);
     let team = group
         .team
@@ -145,8 +155,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     if walk.contains(block.lines.len()) {
         let (header, header_link) =
             group_header(ctx.theme, group, header_team, ctx.width, group_selected);
-        let header_hit =
-            collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
+        let header_hit = collapses.then(|| (0..u16::MAX, group_target.clone()));
         let header_link = header_link.into_iter().map(|(columns, url)| {
             (
                 columns.start.saturating_add(1)..columns.end.saturating_add(1),
@@ -268,14 +277,13 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         );
         block.sections[start..].fill(SectionLabel(format!("{identity}#{}", group.label)));
     }
-    let target = HitTarget::ToggleGroup(group.key.clone());
     for line in worktree_tail(ctx, roster, visible_group)
         .into_iter()
         .flatten()
     {
         block.push_target(
             with_gutter(ctx.theme, line, lane, None, ctx.width),
-            target.clone(),
+            group_target.clone(),
         );
     }
     block.tag(&format!("#{}", group.label));
@@ -421,27 +429,31 @@ fn worktree_tail(
     }
 }
 
+fn finished_members<'a>(
+    visible_group: &VisibleGroup<'a>,
+    roster: &VisibleRoster<'a>,
+) -> impl Iterator<Item = (&'a SidebarRow, AgentStatus)> {
+    let visible_ids = visible_group
+        .rows(roster)
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<HashSet<_>>();
+    visible_group
+        .source()
+        .rows
+        .iter()
+        .filter(move |row| !visible_ids.contains(row.id.as_str()))
+        .filter_map(|row| row.status().map(|status| (row, status)))
+}
+
 fn finished_roster_line(
     ctx: &RowCtx<'_>,
     visible_group: &VisibleGroup<'_>,
     roster: &VisibleRoster<'_>,
 ) -> Line<'static> {
     let group = visible_group.source();
-    let visible_ids = visible_group
-        .rows(roster)
-        .iter()
-        .map(|row| row.id.as_str())
-        .collect::<HashSet<_>>();
-    let hidden_rows = group
-        .rows
-        .iter()
-        .filter(|row| !visible_ids.contains(row.id.as_str()))
-        .collect::<Vec<_>>();
-    let members = hidden_rows
-        .iter()
-        .filter_map(|row| row.status().map(|status| (*row, status)))
-        .collect::<Vec<_>>();
-    let process_count = hidden_rows.len().saturating_sub(members.len());
+    let members = finished_members(visible_group, roster).collect::<Vec<_>>();
+    let process_count = visible_group.hidden_count().saturating_sub(members.len());
 
     let team = group.team.as_deref();
     let cost_spans = if let Some(cost) = group
@@ -450,9 +462,9 @@ fn finished_roster_line(
         .map_or_else(
             || {
                 Some(
-                    hidden_rows
+                    members
                         .iter()
-                        .filter_map(|row| row.as_agent()?.cost_usd())
+                        .filter_map(|(row, _)| row.as_agent()?.cost_usd())
                         .sum::<f64>(),
                 )
             },
@@ -520,7 +532,7 @@ fn finished_roster_line(
 
     if placed == 0 {
         spans.push(Span::styled(
-            format!("+{} done", hidden_rows.len()),
+            format!("+{} done", visible_group.hidden_count()),
             ctx.theme.muted(),
         ));
     } else {

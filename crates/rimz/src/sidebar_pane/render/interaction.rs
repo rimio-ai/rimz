@@ -14,6 +14,10 @@ pub(in crate::sidebar_pane) enum HitTarget {
     ProviderTab(crate::ids::LoginKey),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
+    ExpandGroup {
+        key: String,
+        row: String,
+    },
     ToggleLanded,
     /// A delegation header click; `open` is the state the click sets.
     ToggleDelegation {
@@ -194,6 +198,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::UnreadBanner | HitTarget::FocusMarker => 2,
         HitTarget::SubAgentPane(_)
         | HitTarget::ToggleGroup(_)
+        | HitTarget::ExpandGroup { .. }
         | HitTarget::ToggleLanded
         | HitTarget::ToggleDelegation { .. }
         | HitTarget::ToggleDelegationHistory(_) => 3,

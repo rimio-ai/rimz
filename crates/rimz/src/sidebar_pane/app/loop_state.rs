@@ -60,8 +60,8 @@ use super::lifecycle::{
 use super::notify::{BellNotice, emit_terminal_notification};
 use super::paint::FramePainter;
 use super::selection::{
-    InputEffect, InputOutcome, finish_search, handle_key, handle_mouse_click, handle_scroll,
-    reconcile_selection, row_index_of_pane, set_make_up_filter,
+    InputEffect, InputOutcome, click_focus_pane, finish_search, handle_key, handle_mouse_click,
+    handle_scroll, reconcile_selection, row_index_of_pane, set_make_up_filter,
 };
 use super::socket::{heartbeat_write_due, write_heartbeat};
 use super::state::{
@@ -285,17 +285,10 @@ pub(super) fn handle_wakeup(
             }
             if ui.search_draft.is_some() {
                 // Resolve the pane against the painted draft before clearing widens the roster.
-                let pane = match ui.interactions.target_at(column, row) {
-                    Some(render::HitTarget::Row(index)) => {
-                        let roster = ui.visible_roster(snapshot);
-                        ui.painted_roster
-                            .get(index)
-                            .and_then(|id| roster.ordinal_of_id(id))
-                            .and_then(|index| roster.pane_at_ordinal(index))
-                    }
-                    Some(render::HitTarget::SubAgentPane(pane)) => Some(pane),
-                    _ => None,
-                };
+                let pane = ui
+                    .interactions
+                    .target_at(column, row)
+                    .and_then(|target| click_focus_pane(&target, ui, snapshot));
                 if pane.is_some() {
                     let click = handle_mouse_click(column, row, ui, snapshot);
                     let mut outcome = finish_search(ui, snapshot, false);

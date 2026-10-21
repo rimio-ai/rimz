@@ -299,12 +299,17 @@ fn click_delegation_header(
     let (_, line) = ui.interactions.line_for_target(&target).unwrap();
     assert_eq!(
         handle_mouse_click(10, line, ui, snapshot),
-        InputOutcome::redraw()
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(pane_of(snapshot, 0))],
+        }
     );
+    assert_eq!(ui.selected_pane, Some(pane_of(snapshot, 0)));
+    assert_eq!(ui.selected_index, Some(0));
 }
 
 #[test]
-fn delegation_line_click_toggles_entries_without_focus() {
+fn delegation_line_click_toggles_entries_and_focuses_parent() {
     let snapshot = delegation_snapshot();
     let other = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
@@ -316,8 +321,12 @@ fn delegation_line_click_toggles_entries_without_focus() {
     let collapsed = compose(&ui);
     assert!(!shows(&collapsed.lines, "live-child"));
     click_delegation_header(&mut ui, &snapshot, collapsed.interactions, &row_id, true);
-    assert_eq!(ui.selected_pane, Some(other.clone()));
-    assert_eq!(ui.selected_index, Some(1));
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
+    assert_eq!(ui.selected_index, Some(0));
+    assert_eq!(
+        ui.browse.as_ref().map(|browse| &browse.pane),
+        ui.selected_pane.as_ref()
+    );
     let opened = compose(&ui);
     assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
@@ -334,7 +343,7 @@ fn delegation_line_click_toggles_entries_without_focus() {
     assert!(shows(&selected.lines, "live-child"));
     click_delegation_header(&mut ui, &snapshot, selected.interactions, &row_id, false);
     assert!(!shows(&compose(&ui).lines, "live-child"));
-    reconcile_selection(&mut ui, &snapshot, Some(other));
+    reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
     reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
     let closed = compose(&ui);
     assert!(!shows(&closed.lines, "live-child"));
@@ -352,10 +361,15 @@ fn delegation_line_click_toggles_entries_without_focus() {
         ui.interactions.target_at(10, tail as u16),
         Some(HitTarget::ToggleDelegationHistory(row_id.clone()))
     );
+    reconcile_selection(&mut ui, &snapshot, Some(other));
     assert_eq!(
         handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
-        InputOutcome::redraw()
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(pane_of(&snapshot, 0))],
+        }
     );
+    assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
     let history = compose(&ui);
     assert!(shows(&history.lines, "live-child"));
     assert!(shows(&history.lines, "old-child"));
@@ -369,6 +383,42 @@ fn delegation_line_click_toggles_entries_without_focus() {
     // Closing the section folds the history, so reopening starts from the bands.
     click_delegation_header(&mut ui, &snapshot, history.interactions, &row_id, false);
     assert!(!ui.delegation_history.contains_key(&row_id));
+}
+
+#[test]
+fn delegation_click_without_a_parent_pane_only_toggles() {
+    let mut snapshot = delegation_snapshot();
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .pane = None;
+    let other = pane_of(&snapshot, 1);
+    for target in [
+        HitTarget::ToggleDelegation {
+            row: row_id.clone(),
+            open: true,
+        },
+        HitTarget::ToggleDelegationHistory(row_id.clone()),
+    ] {
+        let mut ui = UiState::default();
+        reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
+        ui.interactions = render::FrameInteractions::from_parts(
+            Vec::new(),
+            vec![render::HitRegion::whole_line(0, target.clone())],
+        );
+        assert_eq!(
+            handle_mouse_click(1, 0, &mut ui, &snapshot),
+            InputOutcome::redraw()
+        );
+        assert_eq!(ui.selected_pane, Some(other.clone()));
+        match target {
+            HitTarget::ToggleDelegation { .. } => {
+                assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true))
+            }
+            _ => assert!(ui.delegation_history.contains_key(&row_id)),
+        }
+    }
 }
 
 #[test]
@@ -605,9 +655,21 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
     paint(&mut ui, &snapshot, 24);
     let (_, header) = ui
         .interactions
-        .line_for_target(&HitTarget::ToggleGroup("landed".to_owned()))
+        .line_for_target(&HitTarget::ExpandGroup {
+            key: "landed".into(),
+            row: "done".into(),
+        })
         .expect("singleton header/receipt hit");
-    handle_mouse_click(0, header, &mut ui, &snapshot);
+    assert_eq!(
+        handle_mouse_click(0, header, &mut ui, &snapshot),
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_done"
+            ))],
+        }
+    );
     assert!(ui.expanded_groups.contains("landed"));
     paint(&mut ui, &snapshot, 24);
     let (_, header) = ui
@@ -616,6 +678,159 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
         .unwrap();
     handle_mouse_click(0, header, &mut ui, &snapshot);
     assert!(!ui.expanded_groups.contains("landed"));
+}
+
+fn finished_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
+    let (mut snapshot, selected) = landed_click_snapshot(open_groups);
+    let group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .last_mut()
+        .unwrap();
+    group.label = "finished-click".into();
+    std::sync::Arc::make_mut(&mut group.rows).push(filter_row(
+        true,
+        "second",
+        "claude",
+        Some(crate::agents::AgentStatus::Success),
+        "terminal_second",
+        "/repo/landed",
+    ));
+    (snapshot, selected)
+}
+
+#[test]
+fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
+    let (snapshot, selected) = finished_click_snapshot(0);
+    let mut results = Vec::new();
+    for line_offset in 0..3 {
+        let mut ui = UiState {
+            landed_open: true,
+            ..Default::default()
+        };
+        reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+        assert!(ui.visible_roster(&snapshot).ordinal_of_id("done").is_none());
+        let theme = ui.theme(&snapshot.theme);
+        let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+        let header = composed
+            .lines
+            .iter()
+            .position(|line| line.to_string().contains("finished-click"))
+            .unwrap();
+        ui.interactions = composed.interactions;
+        remember_roster(&mut ui, &snapshot);
+        let outcome = handle_mouse_click(0, (header + line_offset) as u16, &mut ui, &snapshot);
+        assert!(ui.expanded_groups.contains("landed"));
+        results.push((
+            outcome,
+            ui.selected_pane.clone(),
+            ui.browse.map(|browse| browse.pane),
+        ));
+    }
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_done");
+    assert_eq!(
+        results,
+        vec![
+            (
+                InputOutcome {
+                    redraw: true,
+                    effects: vec![InputEffect::Focus(first.clone())]
+                },
+                Some(first.clone()),
+                Some(first)
+            );
+            3
+        ]
+    );
+}
+
+#[test]
+fn folded_finished_click_without_first_members_pane_expands_without_focus() {
+    let (mut snapshot, selected) = finished_click_snapshot(0);
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+            .last_mut()
+            .unwrap()
+            .rows,
+    )[0]
+    .pane = None;
+    let mut ui = UiState {
+        landed_open: true,
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    ui.interactions = render::FrameInteractions::from_parts(
+        Vec::new(),
+        vec![render::HitRegion::whole_line(
+            0,
+            HitTarget::ExpandGroup {
+                key: "landed".into(),
+                row: "done".into(),
+            },
+        )],
+    );
+    assert_eq!(
+        handle_mouse_click(1, 0, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert!(ui.expanded_groups.contains("landed"));
+    assert_eq!(ui.selected_pane, Some(selected));
+}
+
+#[test]
+fn stale_folded_target_keeps_an_already_expanded_group_open() {
+    let (snapshot, _) = finished_click_snapshot(0);
+    let mut ui = UiState {
+        expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
+        interactions: render::FrameInteractions::from_parts(
+            Vec::new(),
+            vec![render::HitRegion::whole_line(
+                0,
+                HitTarget::ExpandGroup {
+                    key: "landed".into(),
+                    row: "done".into(),
+                },
+            )],
+        ),
+        ..Default::default()
+    };
+    assert_eq!(
+        handle_mouse_click(1, 0, &mut ui, &snapshot),
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_done"
+            ))],
+        }
+    );
+    assert!(ui.expanded_groups.contains("landed"));
+}
+
+#[test]
+fn folded_header_on_viewports_last_line_reveals_focused_member() {
+    let (snapshot, selected) = finished_click_snapshot(6);
+    let mut ui = UiState {
+        landed_open: true,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, Some(selected));
+    let theme = ui.theme(&snapshot.theme);
+    let full = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 128);
+    let header = full
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("finished-click"))
+        .unwrap();
+    let height = (header + 1 + full.bottom_height) as u16;
+    paint(&mut ui, &snapshot, height);
+    assert!(ui.interactions.target_at(0, header as u16).is_some());
+    handle_mouse_click(0, header as u16, &mut ui, &snapshot);
+    paint(&mut ui, &snapshot, height);
+    let member = ui.visible_roster(&snapshot).ordinal_of_id("done").unwrap();
+    assert!(
+        ui.interactions.line_for_row(member).is_some(),
+        "the focused card must enter the viewport after unfolding"
+    );
 }
 
 #[test]
@@ -820,7 +1035,10 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
         .expect("finished group header hit");
 
-    handle_mouse_click(0, header_line, &mut ui, &snapshot);
+    assert_eq!(
+        handle_mouse_click(0, header_line, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
 
     assert!(!ui.expanded_groups.contains(&group_key));
     assert_eq!(ui.selected_pane, None);

@@ -2812,6 +2812,11 @@ reason = "Production passes no filter but this capped-roster lookup cannot becom
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::app::selection::click_focus_pane"
+reason = "Mouse selection and search-draft handling share one focus decision for every painted click target."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::app::state::compute_next_state"
 reason = "The health-recovery split with commit_fetch preserves producer fast-fold provenance; a provenance-aware reducer is a deferred deepen (732161ced, 25a16ed5c; pass 11)."
 

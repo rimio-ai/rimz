@@ -374,7 +374,11 @@ pub(super) fn handle_mouse_click(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    match ui.interactions.target_at(column, row) {
+    let target = ui.interactions.target_at(column, row);
+    let pane = target
+        .as_ref()
+        .and_then(|target| click_focus_pane(target, ui, snapshot));
+    let mut outcome = match target {
         Some(HitTarget::ProviderTab(kind)) => {
             pick_dashboard_tab(ui, snapshot, kind);
             InputOutcome::redraw()
@@ -411,6 +415,14 @@ pub(super) fn handle_mouse_click(
             toggle_group_expanded(ui, snapshot, group_key);
             InputOutcome::redraw()
         }
+        Some(HitTarget::ExpandGroup { key, row }) => {
+            ui.expanded_groups.insert(key);
+            anchor_selection(ui, snapshot);
+            ui.offset_authoritative = true;
+            ui.scroll_ease.cancel();
+            ui.reveal_row = Some(row);
+            InputOutcome::redraw()
+        }
         Some(HitTarget::ToggleLanded) => {
             ui.landed_open = !ui.landed_open;
             ui.landed_reveal = ui.landed_open;
@@ -427,19 +439,46 @@ pub(super) fn handle_mouse_click(
             toggle_delegation_history(ui, snapshot, row_id);
             InputOutcome::redraw()
         }
-        Some(HitTarget::Row(index)) => {
+        Some(HitTarget::Row(_) | HitTarget::SubAgentPane(_) | HitTarget::Hyperlink(_)) | None => {
+            InputOutcome::default()
+        }
+    };
+    if let Some(pane) = pane {
+        let focus = select_clicked_pane(ui, snapshot, pane);
+        outcome.redraw |= focus.redraw;
+        outcome.effects.extend(focus.effects);
+    }
+    outcome
+}
+
+pub(super) fn click_focus_pane(
+    target: &HitTarget,
+    ui: &UiState,
+    snapshot: &SidebarSnapshot,
+) -> Option<PaneId> {
+    match target {
+        HitTarget::Row(index) => {
             let roster = ui.visible_roster(snapshot);
             ui.painted_roster
-                .get(index)
+                .get(*index)
                 .and_then(|id| roster.ordinal_of_id(id))
                 .and_then(|index| roster.pane_at_ordinal(index))
-                .map_or_else(InputOutcome::default, |pane| {
-                    select_clicked_pane(ui, snapshot, pane)
-                })
         }
-        Some(HitTarget::SubAgentPane(pane)) => select_clicked_pane(ui, snapshot, pane),
-        Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
-        None => InputOutcome::default(),
+        HitTarget::SubAgentPane(pane) => Some(pane.clone()),
+        HitTarget::ToggleDelegation { row, .. }
+        | HitTarget::ToggleDelegationHistory(row)
+        | HitTarget::ExpandGroup { row, .. } => snapshot
+            .rows()
+            .find(|candidate| candidate.id == *row)
+            .and_then(|row| row.pane.as_ref())
+            .map(|pane| pane.pane_id.clone()),
+        HitTarget::ProviderTab(_)
+        | HitTarget::BodyFilter(_)
+        | HitTarget::ToggleGroup(_)
+        | HitTarget::ToggleLanded
+        | HitTarget::UnreadBanner
+        | HitTarget::FocusMarker
+        | HitTarget::Hyperlink(_) => None,
     }
 }
 
