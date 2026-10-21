@@ -382,7 +382,7 @@ fn sub_agent_entry_lines(
     let model_col = grid
         .iter()
         .filter_map(|sub| sub.model.as_deref())
-        .map(|model| model_label_parts(model).0.chars().count())
+        .map(|model| text_width(&model_label_parts(model).0))
         .max()
         .unwrap_or(0);
     for sub in rows {
@@ -605,8 +605,12 @@ fn append_sub_agent_model(
             } else {
                 left.push(Span::raw(" ".repeat(seam)));
             }
+            // Pad by painted width, not chars: a provider's model name may
+            // hold wide characters, and `{:<N}` pads by char count.
+            let label = model_label_parts(model).0;
+            let pad = model_col.saturating_sub(text_width(&label));
             left.push(Span::styled(
-                format!("{:<model_col$}", model_label_parts(model).0),
+                format!("{label}{}", " ".repeat(pad)),
                 theme.muted(),
             ));
             *prev_rendered = true;
