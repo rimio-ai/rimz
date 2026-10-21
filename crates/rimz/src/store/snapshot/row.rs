@@ -833,6 +833,7 @@ pub enum SubAgentTokens {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
     pub id: String,
+    pub kind: AgentKind,
     /// The child's live pane while it is bound in this frame; absent for provider-native children.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<PaneId>,
@@ -881,6 +882,9 @@ pub struct SidebarSubAgent {
     /// `Window` tokens; absent when the child reported none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Completed compactions in the child's own context.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub compaction_count: u32,
     /// Exact cumulative cost from a provider-native child feed, or from a
     /// pane-backed child's own session sidecar. Provider-native cost is already
     /// included in the parent transcript; pane-backed cost is added separately.

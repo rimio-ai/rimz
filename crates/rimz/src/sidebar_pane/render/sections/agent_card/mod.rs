@@ -429,7 +429,10 @@ fn sub_agent_entry_lines(
             Entry {
                 focused,
                 lead,
-                kind: sub.name.clone(),
+                kind: Span::styled(
+                    sub.name.clone(),
+                    theme.body_brand(theme.provider_brand_tone(sub.kind.as_str())),
+                ),
                 headline: sub
                     .turn_error_label
                     .as_deref()
@@ -486,7 +489,12 @@ fn sub_agent_metadata_line(
     let clock = sub_agent_clock(ctx, sub);
     let model = sub.model.as_deref();
     let effort = sub.effort.as_deref();
-    if tokens.is_none() && model.is_none() && effort.is_none() && (finished || clock.is_none()) {
+    if tokens.is_none()
+        && model.is_none()
+        && effort.is_none()
+        && sub.compaction_count == 0
+        && (finished || clock.is_none())
+    {
         return None;
     }
     let mut left = entry_indent(theme, focused);
@@ -508,6 +516,16 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
+    let mut compactions = context_compaction_spans(theme, sub.compaction_count);
+    if !prev_rendered && effort.is_none() && !compactions.is_empty() {
+        // The leading seam has no figure before it to separate.
+        compactions.remove(0);
+    }
+    let left_width = content_width(ctx.width)
+        .saturating_sub(clock.as_ref().map_or(0, |clock| clock.width() + 1));
+    if spans_width(&left) + spans_width(&compactions) <= left_width {
+        left.extend(compactions);
+    }
     Some(pin_right(
         left,
         clock.into_iter().collect(),

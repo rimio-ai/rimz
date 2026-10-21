@@ -330,7 +330,7 @@ fn finished_group_reveals_when_a_members_child_is_focused() {
         .sub_agents
         .push(
             serde_json::from_value(serde_json::json!({
-                "id": "child", "name": "explorer", "status": "running",
+                "id": "child", "kind": "claude", "name": "explorer", "status": "running",
                 "last_activity": now, "pane": child,
             }))
             .unwrap(),

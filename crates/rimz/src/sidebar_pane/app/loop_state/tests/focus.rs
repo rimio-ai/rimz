@@ -25,7 +25,7 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
         .enumerate()
         .map(|(index, pane)| {
             serde_json::from_value(serde_json::json!({
-                "id": format!("child-{index}"), "name": format!("child-{index}"),
+                "id": format!("child-{index}"), "kind": "claude", "name": format!("child-{index}"),
                 "status": "running", "last_activity": snapshot.now, "pane": pane,
             }))
             .unwrap()
@@ -1911,7 +1911,7 @@ fn fresh_child_focus_anchor_selects_parent_and_queues_placement_and_hold() {
     row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
     row.as_agent_mut().unwrap().sub_agents.push(
         serde_json::from_value(serde_json::json!({
-            "id": "child", "name": "explorer", "status": "running",
+            "id": "child", "kind": "claude", "name": "explorer", "status": "running",
             "last_activity": snapshot.now, "pane": child,
         }))
         .unwrap(),

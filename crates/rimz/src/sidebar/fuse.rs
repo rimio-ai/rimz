@@ -573,7 +573,7 @@ mod tests {
         row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
         row.as_agent_mut().unwrap().sub_agents.push(
             serde_json::from_value(serde_json::json!({
-                "id": "child", "name": "explorer", "status": "running",
+                "id": "child", "kind": "claude", "name": "explorer", "status": "running",
                 "last_activity": snapshot.now, "pane": target,
             }))
             .unwrap(),

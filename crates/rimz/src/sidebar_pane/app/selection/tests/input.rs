@@ -129,7 +129,7 @@ fn delegation_snapshot() -> SidebarSnapshot {
     .into_iter()
     .map(|(name, status, last_activity)| {
         serde_json::from_value(serde_json::json!({
-            "id": name, "name": name, "status": status, "last_activity": last_activity,
+            "id": name, "kind": "claude", "name": name, "status": status, "last_activity": last_activity,
         }))
         .unwrap()
     })

@@ -3,6 +3,20 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::store::snapshot::SubAgentTokens;
 
 #[test]
+fn subagent_projection_carries_the_child_kind_and_completed_compactions() {
+    for (kind, launched) in [("claude", false), ("codex", false), ("codex", true)] {
+        let mut child = child_state("root", "child", AgentStatus::Running, 0);
+        child.kind = AgentKind::new_unchecked(kind);
+        child.launch_depth = launched.then_some(1);
+        child.compaction_count = 12;
+        let sub = sub_agent_from_state(&child, epoch(), false, 1_800);
+        let encoded = serde_json::to_value(sub).unwrap();
+        assert_eq!(encoded["kind"], kind);
+        assert_eq!(encoded["compaction_count"], 12);
+    }
+}
+
+#[test]
 fn silent_native_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0).worktree("/repo/main");
     let mut child = child_state("root", "child", AgentStatus::Running, 1_800);

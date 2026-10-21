@@ -461,7 +461,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     agent.sub_agent_count = 1;
     agent.sub_agents = vec![
         serde_json::from_value(serde_json::json!({
-            "id": "child", "name": "child", "status": "running",
+            "id": "child", "kind": "claude", "name": "child", "status": "running",
             "last_activity": snapshot.now,
         }))
         .unwrap(),
@@ -964,6 +964,7 @@ fn selected_pet_action_follows_the_focused_card() {
         pane: None,
         turn_error_label: None,
         id: "child-1".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
         prior_turn: false,
         name: "Explore".to_owned(),
         petname: None,
@@ -978,6 +979,7 @@ fn selected_pet_action_follows_the_focused_card() {
         description: None,
         tokens: None,
         context_window: None,
+        compaction_count: 0,
         cost_usd: None,
         elapsed_secs: None,
         started_at: None,

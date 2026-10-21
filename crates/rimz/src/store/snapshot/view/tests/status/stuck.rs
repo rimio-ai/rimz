@@ -80,7 +80,7 @@ fn stuck_stage_preserves_a_waiting_childs_attention_and_jump() {
         .unwrap();
     card.sub_agents.push(
         serde_json::from_value(serde_json::json!({
-            "id": "asking-child", "name": "claude", "status": "waiting",
+            "id": "asking-child", "kind": "claude", "name": "claude", "status": "waiting",
             "pane": child_pane, "last_activity": ago(default_stall_secs() + 60),
         }))
         .unwrap(),

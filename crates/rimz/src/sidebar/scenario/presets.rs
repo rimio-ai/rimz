@@ -165,6 +165,7 @@ fn add_clock_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp, state
             let mut child = sub_agent(
                 SubAgentSpec {
                     id,
+                    kind: if id == "healthy" { "codex" } else { "claude" },
                     name: "explorer",
                     status,
                     phase: if status == AgentStatus::Running {
@@ -183,6 +184,15 @@ fn add_clock_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp, state
                 },
                 now,
             );
+            if id == "healthy" {
+                child.provider_native = false;
+                child.profile = Some("explorer".to_owned());
+                child.pane = Some(crate::PaneId::from_parts(
+                    crate::MuxName::Zellij,
+                    "terminal_1",
+                ));
+                child.compaction_count = 2;
+            }
             if id == "silent" {
                 child.stalled = true;
                 child.turn_error_label = Some("silent 30m".to_owned());
@@ -881,6 +891,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:general:test",
+                        kind: "codex",
                         name: "general-purpose",
                         status: crate::agents::AgentStatus::Running,
                         phase: crate::agents::TurnPhase::Acting,
@@ -898,6 +909,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:general:review",
+                        kind: "codex",
                         name: "general-purpose",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -939,6 +951,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:explore:routes",
+                        kind: "claude",
                         name: "Explore",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -956,6 +969,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:explore:middleware",
+                        kind: "claude",
                         name: "Explore",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -973,6 +987,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:explore:docs",
+                        kind: "claude",
                         name: "Explore",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -990,6 +1005,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:plan:rollout",
+                        kind: "claude",
                         name: "Plan",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -1007,6 +1023,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
                 sub_agent(
                     SubAgentSpec {
                         id: "child:plan:review",
+                        kind: "claude",
                         name: "Plan",
                         status: crate::agents::AgentStatus::Success,
                         phase: crate::agents::TurnPhase::Idle,
@@ -2179,6 +2196,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
         sub_agent(
             SubAgentSpec {
                 id: "child:explore",
+                kind,
                 name: "Explore",
                 status: crate::agents::AgentStatus::Success,
                 phase: crate::agents::TurnPhase::Idle,
@@ -2196,6 +2214,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
         sub_agent(
             SubAgentSpec {
                 id: "child:plan",
+                kind,
                 name: "Plan",
                 status: crate::agents::AgentStatus::Running,
                 phase: crate::agents::TurnPhase::Reasoning,
@@ -2217,6 +2236,7 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
 
 struct SubAgentSpec<'a> {
     id: &'a str,
+    kind: &'a str,
     name: &'a str,
     status: crate::agents::AgentStatus,
     phase: crate::agents::TurnPhase,
@@ -2244,6 +2264,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         pane: None,
         turn_error_label: None,
         id: spec.id.to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked(spec.kind),
         name: spec.name.to_owned(),
         petname: None,
         provider_native: true,
@@ -2258,6 +2279,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         description: spec.description.map(ToOwned::to_owned),
         tokens: spec.tokens,
         context_window: spec.context_window,
+        compaction_count: 0,
         cost_usd: spec.cost_usd,
         elapsed_secs: spec.elapsed_secs,
         started_at: Some(registered_at),
@@ -2691,6 +2713,7 @@ pub(super) fn scenario_child(row: &SidebarRow, now: jiff::Timestamp) -> SidebarS
     let mut child = sub_agent(
         SubAgentSpec {
             id: &row.id,
+            kind: &row.name,
             name: &row.name,
             status: card.status,
             phase: card.phase,
@@ -2714,6 +2737,7 @@ pub(super) fn scenario_child(row: &SidebarRow, now: jiff::Timestamp) -> SidebarS
     child.started_at = Some(started_at);
     child.last_activity = row.last_activity;
     child.registered_at = card.registered_at;
+    child.compaction_count = card.compaction_count;
     child.turn_error_label = card.turn_error_label.clone();
     child
 }

@@ -333,6 +333,7 @@ fn project_sub_agent(
     });
     SidebarSubAgent {
         id: child.agent_id.to_string(),
+        kind: child.kind.clone(),
         pane: child.is_launched_child().then_some(pane).flatten(),
         prior_turn,
         name,
@@ -356,6 +357,7 @@ fn project_sub_agent(
             .or_else(|| child.description.clone()),
         tokens,
         context_window,
+        compaction_count: child.compaction_count,
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,

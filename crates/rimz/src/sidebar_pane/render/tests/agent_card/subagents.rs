@@ -2,6 +2,166 @@ use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
 
+#[test]
+fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() {
+    for status in [AgentStatus::Running, AgentStatus::Success] {
+        for count in [0, 1, 12] {
+            let mut parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
+            parent.compaction_count = 9;
+            let mut child = agent("child", "claude", status, None, None, Some("Explore"));
+            child.parent_agent_id = Some("parent".into());
+            child.compaction_count = count;
+            child.model = Some("Haiku".to_owned());
+            let snapshot = snapshot_with(vec![parent, child]);
+            let theme = Theme::fixed(false);
+            let lines = group_lines(&snapshot, &theme, 0);
+            let metadata = lines
+                .iter()
+                .find(|line| line.to_string().contains("Haiku"))
+                .unwrap();
+            let text = metadata.to_string();
+            let glyph = theme.glyph(GlyphRole::TokensCompaction);
+            assert_eq!(
+                text.contains(glyph),
+                count > 0,
+                "{status:?}, {count}: {text}"
+            );
+            if count > 0 {
+                assert!(text.contains(&format!("{glyph} {count}")), "{text}");
+                let marker = metadata
+                    .spans
+                    .iter()
+                    .find(|span| span.content == glyph)
+                    .unwrap();
+                let parent_marker = lines
+                    .iter()
+                    .flat_map(|line| &line.spans)
+                    .find(|span| span.content == glyph)
+                    .unwrap();
+                assert_eq!(marker.style, parent_marker.style);
+            }
+        }
+    }
+}
+
+#[test]
+fn child_compaction_count_drops_whole_at_the_clock_boundary_without_moving_columns() {
+    let parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    child.compaction_count = 12;
+    child.usage.fresh_input_tokens = Some(12_000);
+    child.model = Some("Haiku".to_owned());
+    child.effort = Some("high".to_owned());
+    child.subagent_started_at = Some(fixed_now() - Duration::from_secs(120));
+    let mut sibling = child.clone();
+    sibling.agent_id = "sibling".into();
+    sibling.compaction_count = 0;
+    let snapshot = snapshot_with(vec![parent, child, sibling]);
+    let theme = Theme::fixed(false);
+    for (width, visible) in [(39, false), (40, false), (41, true), (42, true)] {
+        let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+        let metadata = lines
+            .iter()
+            .map(Line::to_string)
+            .filter(|line| line.contains("Haiku"))
+            .collect::<Vec<_>>();
+        let [compacted, fresh] = metadata.as_slice() else {
+            panic!("two metadata lines: {metadata:?}")
+        };
+        assert_eq!(
+            compacted.contains("↻ 12"),
+            visible,
+            "width={width}: {compacted}"
+        );
+        assert_eq!(
+            compacted.contains('↻'),
+            visible,
+            "no partial count: {compacted}"
+        );
+        assert!(!fresh.contains('↻'));
+        if !visible {
+            assert_eq!(compacted, fresh, "the seam drops with the count");
+        }
+        for word in ["Haiku", "high"] {
+            assert_eq!(
+                compacted.find(word),
+                fresh.find(word),
+                "width={width}: {metadata:?}"
+            );
+        }
+        assert!(compacted.ends_with("   2m▐"), "{compacted}");
+        assert_eq!(compacted.chars().count(), width);
+    }
+}
+
+#[test]
+fn child_type_uses_its_own_provider_tone_and_keeps_the_model_muted() {
+    for (kind, launched, name) in [("codex", true, "implementer"), ("claude", false, "Explore")] {
+        let parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
+        let mut child = agent("child", kind, AgentStatus::Running, None, None, Some(name));
+        child.parent_agent_id = Some("parent".into());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        let model = if launched { "GPT 5.5" } else { "Haiku" };
+        child.model = Some(model.to_owned());
+        if launched {
+            child.launch_depth = Some(1);
+            child.profile = Some(name.to_owned());
+        }
+        let snapshot = snapshot_with(vec![parent, child]);
+        let theme = Theme::fixed(false);
+        for selected in [0, usize::MAX] {
+            let mut snapshot = snapshot.clone();
+            snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+            let lines = group_lines(&snapshot, &theme, selected);
+            let spans = lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .collect::<Vec<_>>();
+            let type_word = spans.iter().find(|span| span.content == name).unwrap();
+            assert_eq!(
+                type_word.style.fg,
+                theme.body_brand(theme.provider_brand_tone(kind)).fg,
+                "{kind}"
+            );
+            let model_span = spans.iter().find(|span| span.content == model).unwrap();
+            assert_eq!(model_span.style.fg, theme.muted().fg);
+        }
+    }
+}
+
+#[test]
+fn completed_compactions_keep_an_otherwise_metadata_free_finished_child_second_line() {
+    let parent = agent("parent", "claude", AgentStatus::Running, None, None, None);
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    child.compaction_count = 1;
+    let snapshot = snapshot_with(vec![parent, child]);
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let metadata = lines
+        .iter()
+        .map(Line::to_string)
+        .find(|line| line.contains("↻ 1"))
+        .unwrap();
+    let left = metadata.trim_start_matches(['▌', ' ']);
+    assert!(left.starts_with('↻'), "no orphan seam: {metadata}");
+}
+
 fn focused_child_snapshot() -> SidebarSnapshot {
     let parent = agent(
         "parent",
@@ -26,7 +186,7 @@ fn focused_child_snapshot() -> SidebarSnapshot {
     .into_iter()
     .map(|(name, pane, description)| {
         serde_json::from_value(serde_json::json!({
-            "id": name, "name": name, "status": "running", "last_activity": snapshot.now,
+            "id": name, "kind": "codex", "name": name, "status": "running", "last_activity": snapshot.now,
             "pane": pane, "description": description, "model": "Haiku", "phase": "reasoning",
         }))
         .unwrap()
@@ -492,6 +652,7 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
     child.model = Some("claude-opus-4-8".to_owned());
     // Claude reports the child's effort on its `SubagentStop`.
     child.effort = Some("high".to_owned());
+    child.compaction_count = 2;
 
     let mut fresh = agent(
         "child-2",
@@ -565,6 +726,7 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
         .lines()
         .find(|line| line.contains("▤ 12k"))
         .expect("finished child metadata line");
+    assert!(finished_line.contains("↻ 2"), "{finished_line}");
     assert!(
         finished_line.ends_with("   1m▐"),
         "the finished child's frozen runtime pins right on line 2:\n{rendered}"
