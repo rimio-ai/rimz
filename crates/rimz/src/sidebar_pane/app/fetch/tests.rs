@@ -1684,6 +1684,43 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
 }
 
 #[test]
+fn a_delivered_fold_is_already_the_hosts_latest_fold() {
+    let (tx, rx) = result_channel();
+    let mut sink = ResultSink::new(tx, wake_channel().0, None);
+    let host_data = sink.host_data.clone();
+    sink.on_delivery = Some(Box::new(move || {
+        let update = rx.take().snapshot.expect("the delivered snapshot");
+        let FetchUpdate::Snapshot { snapshot, .. } = update else {
+            panic!("snapshot delivery")
+        };
+        let data = host_data.lock().unwrap();
+        assert_eq!(
+            data.last_fold
+                .as_ref()
+                .map(|fold| fold.workspace.snapshot().display_name.as_str()),
+            Some(snapshot.display_name.as_str()),
+            "a woken painter must read the fold that woke it, not its predecessor"
+        );
+    }));
+    for name in ["first", "second"] {
+        let mut snapshot = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+        snapshot.display_name = name.into();
+        sink.staged = Some((
+            WorkspaceFold {
+                workspace: WorkspaceSnapshot(snapshot.clone()),
+                frame: None,
+            },
+            None,
+        ));
+        sink.publish(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        });
+    }
+}
+
+#[test]
 fn fast_fold_retains_its_fold_for_new_attachments() {
     let fixture = FetchFixture::new();
     fixture.write_pane_frame();
