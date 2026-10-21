@@ -825,16 +825,16 @@ fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
 }
 
 #[test]
-fn held_source_handles_cross_tab_click_before_dispatch() {
-    held_source_click(true);
+fn source_handles_cross_tab_click_without_holding_content() {
+    source_click(true);
 }
 
 #[test]
-fn held_source_handles_same_tab_click_before_dispatch() {
-    held_source_click(false);
+fn source_handles_same_tab_click_without_holding_content() {
+    source_click(false);
 }
 
-fn held_source_click(cross_tab: bool) {
+fn source_click(cross_tab: bool) {
     let (mut source, _, _) = viewport_pair(MuxName::Zellij);
     source.state.clock.skip_focus = true;
     let peers = source.focus_plane.focus_peers(
@@ -844,7 +844,7 @@ fn held_source_click(cross_tab: bool) {
     source.state.focus_peers = Some(peers.clone());
     let old_target = pane("terminal_19", "tab_1", false).pane_id;
     let old = peers.arm(old_target.clone(), Instant::now());
-    assert!(source.state.jump_hold().is_some());
+    assert!(old.is_current());
     let index = usize::from(cross_tab);
     let (row_id, row) = source.state.ui.painted_rows[index].clone();
     let target = source
@@ -874,7 +874,7 @@ fn held_source_click(cross_tab: bool) {
             source: SnapshotSource::Produced,
         })
         .unwrap();
-    let projections = source.state.projections;
+    let applications = source.state.content_applications;
     source
         .state
         .advance(&mut inbox, &mut source.fetch, &mut source.terminal)
@@ -882,7 +882,7 @@ fn held_source_click(cross_tab: bool) {
     assert_eq!(
         source.state.pending_input_focus,
         Some(target),
-        "a held source must handle the new click before dispatch"
+        "the source must handle the new click before dispatch"
     );
     assert_eq!(
         source
@@ -901,8 +901,9 @@ fn held_source_click(cross_tab: bool) {
         .is_none()
     );
     assert_eq!(
-        source.state.projections, projections,
-        "room work stays held"
+        source.state.content_applications,
+        applications + 1,
+        "input flushes content even during an active jump"
     );
 }
 
@@ -944,7 +945,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
             .push(&anchor, first.clicked().unwrap(), Instant::now)
             .unwrap();
         rx.try_iter().for_each(drop);
-        assert!(source.state.jump_hold().is_some());
+        assert!(first.is_current());
         let (_, row) = source.state.ui.painted_rows[0].clone();
         let input = if keyboard {
             source.state.ui.selected_index = Some(0);
@@ -975,10 +976,6 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
             !first.is_current(),
             "same-tab focus must revoke the older lease"
         );
-        assert!(
-            peers.active(Instant::now()).is_none(),
-            "same-tab focus arms no hold"
-        );
         assert!(destination_peers.take_push().is_none());
         let report = ack
             .try_iter()
@@ -987,7 +984,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         assert_eq!(report.verdict, Some(PushVerdict::Superseded));
         assert!(
             matches!(rx.try_recv(), Ok(Wakeup::Tick)),
-            "release wakes held peers"
+            "release wakes peers"
         );
         assert!(first.request(|| panic!("obsolete request")).is_none());
         assert!(
@@ -1029,95 +1026,89 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
 }
 
 #[test]
-fn jump_hold_retains_ordinary_work_until_release_or_virtual_deadline() {
-    for release in [false, true] {
-        let (mut source, mut rig, output) = viewport_pair(MuxName::Zellij);
-        let clock = LoopClock::play(Timestamp::now());
-        rig.state.clock = clock.clone();
-        rig.state.current.pane_session_name = Some("rimz-test".into());
-        let plane = super::super::super::plane::DataPlane::detached();
-        let peers = plane.focus_peers(
-            source.state.config.instance_id.clone(),
-            crate::diag::DiagSink::disabled(),
-        );
-        rig.state.focus_peers = Some(plane.focus_peers(
-            rig.state.config.instance_id.clone(),
-            crate::diag::DiagSink::disabled(),
-        ));
-        let target = pane("terminal_0", "tab_0", false).pane_id;
-        let lease = peers.arm(target.clone(), clock.now());
-        publish_scrolled(&mut source, 12);
+fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
+    let (mut target, _, _) = viewport_pair(MuxName::Zellij);
+    target.state.current.pane_session_name = Some("rimz-test".into());
+    let peers = target
+        .focus_plane
+        .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled());
+    let start = std::sync::Barrier::new(2);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let start = &start;
+        let work = scope.spawn(move || {
+            let (_, mut hidden, output) = viewport_pair(MuxName::Zellij);
+            hidden.state.focus_peers = Some(peers);
+            hidden.state.filter_observed_at = None;
+            hidden.state.titled = true;
+            let event = SidebarEventEnvelope::new(
+                hidden.ws.clone(),
+                Some("rimz-test".into()),
+                crate::utils::time::unix_now_ms(),
+                SidebarEvent::BodyFilterChanged,
+            );
+            let mut inbox = queued([Wakeup::Event(event), Wakeup::Snapshot]);
+            hidden
+                .result_tx
+                .send(FetchUpdate::Snapshot {
+                    snapshot: Box::new(hidden.state.current.clone()),
+                    phase: FetchPhase::Final,
+                    source: SnapshotSource::Produced,
+                })
+                .unwrap();
+            let before = (hidden.state.projections, hidden.state.content_applications);
+            ready_tx.send(()).unwrap();
+            start.wait();
+            assert!(
+                hidden
+                    .state
+                    .known_non_owner(&pane("terminal_0", "tab_0", false).pane_id)
+            );
+            assert!(
+                !hidden
+                    .state
+                    .focus_peers
+                    .as_ref()
+                    .unwrap()
+                    .accepts(None, hidden.state.clock.now())
+            );
+            hidden
+                .state
+                .advance(&mut inbox, &mut hidden.fetch, &mut hidden.terminal)
+                .unwrap();
+            assert!(
+                hidden.state.filter_observed_at.is_some(),
+                "an active jump must not hold ordinary room work"
+            );
+            assert_eq!(
+                (hidden.state.projections, hidden.state.content_applications),
+                before
+            );
+            assert_eq!(paints(&output), 0, "a hidden non-owner still never paints");
+        });
+        ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let (_, _, mut anchor) = hidden_destination();
-        anchor.pane_id = target.clone();
-        anchor.placement = None;
+        anchor.pane_id = pane("terminal_0", "tab_0", false).pane_id;
+        anchor.placement = Some(crate::mux::focus_anchor::FocusPlacement {
+            row_id: "agent-0".into(),
+            viewport_row: 0,
+            held: Default::default(),
+        });
         anchor.order = None;
-        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
-        let event = SidebarEventEnvelope::new(
-            rig.ws.clone(),
-            Some("rimz-test".into()),
-            crate::utils::time::unix_now_ms(),
-            SidebarEvent::FocusIntent {
-                pane_id: target,
-                nonce: anchor.nonce,
-            },
-        );
-        let mut inbox = queued([Wakeup::Event(event), Wakeup::Tick, Wakeup::Snapshot]);
-        rig.result_tx
-            .send(FetchUpdate::Snapshot {
-                snapshot: Box::new(rig.state.current.clone()),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Produced,
-            })
+        let (push, ack) = focus_push(&mut target, anchor);
+        start.wait();
+        target
+            .state
+            .on_focus_push(push, &mut target.fetch, &mut target.terminal)
             .unwrap();
-        let before = (
-            rig.state.content_applications,
-            rig.state.projections,
-            rig.state.viewport_seen,
-            rig.state.last_folded_focus_intent,
-        );
-        let paints_before = rig.state.paints;
-        rig.state.adopt_viewport(&mut rig.fetch, &mut rig.terminal);
-        for _ in 0..3 {
-            rig.state
-                .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
-                .unwrap();
-        }
-        assert_eq!(
-            (
-                rig.state.content_applications,
-                rig.state.projections,
-                rig.state.viewport_seen,
-                rig.state.last_folded_focus_intent
-            ),
-            before,
-            "held work must not reach its consumer"
-        );
-        assert_eq!(paints(&output), 0);
-        if release {
-            lease.release();
-        } else {
-            clock.advance(Duration::from_millis(500));
-        }
-        rig.state
-            .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
-        assert_eq!(
-            rig.state.last_folded_focus_intent, None,
-            "a foreign intent stays unfurled after release"
-        );
-        for _ in 0..3 {
-            rig.state
-                .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
-                .unwrap();
-        }
-        assert_eq!(rig.state.viewport_seen, before.2);
+        work.join().unwrap();
+        let report = assert_push_report(&ack, &target, PushVerdict::Painted, true);
         assert!(
-            rig.state.paints == paints_before,
-            "hidden catch-up never paints a publication"
+            report.finished_ms.unwrap() < 500,
+            "target paint must finish inside PAINT_WAIT"
         );
-    }
+    });
 }
-
 #[test]
 fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
     let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
@@ -1143,7 +1134,7 @@ fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
         )
         .unwrap();
     assert!(
-        peers.active(source.state.clock.now()).is_some(),
+        source.state.input_jump.as_ref().unwrap().is_current(),
         "lease must precede click publication"
     );
     assert!(

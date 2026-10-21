@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Instant;
 
 use super::{DiagSink, FocusPush, FocusTraceEvent, PAINT_WAIT, PushPeer, PushVerdict};
@@ -15,7 +15,6 @@ pub(in crate::sidebar_pane::app) struct JumpHost {
     current: Arc<AtomicU64>,
     requests: Mutex<()>,
     state: Mutex<JumpState>,
-    changed: Condvar,
 }
 
 #[derive(Default)]
@@ -115,7 +114,6 @@ impl JumpHost {
             nonce: None,
         });
         drop(state);
-        self.changed.notify_all();
         Arc::new(JumpLease {
             host: self.clone(),
             subscribers,
@@ -176,7 +174,6 @@ impl JumpHost {
     }
 
     fn wake_peers(&self, subscribers: &Subscribers) {
-        self.changed.notify_all();
         for peer in subscribers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -184,14 +181,6 @@ impl JumpHost {
         {
             let _ = peer.wake.try_send(Wakeup::Tick);
         }
-    }
-
-    pub(super) fn active(&self, now: Instant) -> Option<(PaneId, Instant)> {
-        self.lock()
-            .active
-            .as_ref()
-            .filter(|active| now < active.until)
-            .map(|active| (active.target.clone(), active.until))
     }
 
     pub(super) fn request<T>(&self, stamp: &LeaseStamp, request: impl FnOnce() -> T) -> Option<T> {
@@ -241,39 +230,11 @@ impl JumpHost {
         self.lock().pushes.remove(instance.as_str());
     }
 
-    pub(super) fn wake(&self) {
-        // Input uses a separate channel: pair its notification with wait registration.
-        let _state = self.lock();
-        self.changed.notify_all();
-    }
-
     pub(super) fn accepts(&self, nonce: Option<crate::ids::FocusNonce>, now: Instant) -> bool {
         self.lock()
             .active
             .as_ref()
             .filter(|active| now < active.until)
             .is_none_or(|active| active.nonce.is_some() && active.nonce == nonce)
-    }
-
-    pub(super) fn wait(
-        &self,
-        instance: &SidebarInstanceId,
-        target: &PaneId,
-        until: Instant,
-        mut input_ready: impl FnMut() -> bool,
-    ) {
-        let state = self.lock();
-        let _ = self.changed.wait_timeout_while(
-            state,
-            until.saturating_duration_since(Instant::now()),
-            |state| {
-                !input_ready()
-                    && !state.pushes.contains_key(instance.as_str())
-                    && state
-                        .active
-                        .as_ref()
-                        .is_some_and(|active| active.until == until && active.target == *target)
-            },
-        );
     }
 }

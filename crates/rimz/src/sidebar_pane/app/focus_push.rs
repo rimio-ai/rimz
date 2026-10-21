@@ -134,10 +134,6 @@ impl FocusPeers {
         );
     }
 
-    pub(super) fn active(&self, now: Instant) -> Option<(PaneId, Instant)> {
-        self.jumps.active(now)
-    }
-
     pub(super) fn release(&self) {
         if let Some(lease) = &self.lease {
             lease.release();
@@ -208,14 +204,6 @@ impl FocusPeers {
 
     pub(super) fn take_push(&self) -> Option<FocusPush> {
         self.jumps.take(&self.source)
-    }
-
-    pub(in crate::sidebar_pane) fn wake_input(&self) {
-        self.jumps.wake();
-    }
-
-    pub(super) fn wait(&self, target: &PaneId, until: Instant, input_ready: impl FnMut() -> bool) {
-        self.jumps.wait(&self.source, target, until, input_ready);
     }
 
     pub(super) fn accepts(&self, nonce: Option<crate::ids::FocusNonce>, now: Instant) -> bool {
@@ -362,8 +350,6 @@ impl FocusPeers {
             traces.push(trace);
         }
         drop(peers);
-        // One all-peer wake per fan-out, not per slot.
-        self.jumps.wake();
         drop(ack);
         let fit_ms = self
             .fit
