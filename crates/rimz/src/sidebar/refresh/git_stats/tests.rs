@@ -1199,6 +1199,7 @@ fn focused_diff_stats_refreshes_local_facts_before_commit_facts() {
         &BTreeSet::new(),
         1_000 + DIFF_STATS_FOCUSED_LOCAL_TTL.as_millis() as u64 + 1,
         None,
+        GitPass::OneShot,
         &mut GitRefreshState::default(),
     );
     let entry = refreshed.entries.get(&path).unwrap();
@@ -1265,6 +1266,7 @@ fn non_focused_diff_stats_refreshes_local_and_commit_facts_together() {
         &BTreeSet::from([path.clone()]),
         now_ms,
         None,
+        GitPass::OneShot,
         &mut GitRefreshState::default(),
     );
     let entry = refreshed.entries.get(&path).unwrap();
@@ -1844,4 +1846,248 @@ fn trunk_ladder_prefers_a_configured_branch_that_resolves() {
         Some("main")
     );
     assert_eq!(trunk_ref(repo.path(), None).as_deref(), Some("main"));
+}
+
+/// Idle, dirty (never settled) entries for `count` scratch directories that are
+/// not git repositories: a refresh stamps them without needing a fixture. All
+/// are due at `BACKLOG_NOW_MS`, entry `i` stamped `1_000 + i`.
+const BACKLOG_NOW_MS: u64 = 1_000_000;
+
+fn backlog_fixture(count: usize) -> (tempfile::TempDir, Vec<String>, DiffStatsCache) {
+    let root = tempfile::tempdir().unwrap();
+    let needed: Vec<String> = (0..count)
+        .map(|index| {
+            let dir = root.path().join(format!("wt{index:02}"));
+            std::fs::create_dir(&dir).unwrap();
+            dir.to_str().unwrap().to_owned()
+        })
+        .collect();
+    let mut cache = DiffStatsCache::default();
+    for (index, path) in needed.iter().enumerate() {
+        cache.entries.insert(
+            path.clone(),
+            DiffStatsCacheEntry {
+                refreshed_at_ms: 1_000 + index as u64,
+                commit_refreshed_at_ms: Some(1_000 + index as u64),
+                clean: Some(false),
+                ..DiffStatsCacheEntry::default()
+            },
+        );
+    }
+    (root, needed, cache)
+}
+
+fn refreshed_paths(cache: &DiffStatsCache) -> Vec<&str> {
+    cache
+        .entries
+        .iter()
+        .filter(|(_, entry)| entry.refreshed_at_ms > BACKLOG_NOW_MS)
+        .map(|(path, _)| path.as_str())
+        .collect()
+}
+
+fn run_pass(
+    runtime: &crate::RuntimePaths,
+    needed: &[String],
+    focused: &BTreeSet<String>,
+    hot: &BTreeSet<String>,
+    pass: GitPass,
+) -> DiffStatsCache {
+    refresh_diff_stats(
+        &runtime.diff_stats_path(),
+        runtime,
+        needed,
+        focused,
+        hot,
+        BACKLOG_NOW_MS,
+        None,
+        pass,
+        &mut GitRefreshState::default(),
+    )
+}
+
+#[test]
+fn selection_puts_priority_first_then_oldest_and_caps_the_rest() {
+    let paths: Vec<String> = (0..6).map(|index| format!("/wt{index}")).collect();
+    let stamped = |at: Option<u64>, commit: Option<u64>| DiffStatsCacheEntry {
+        refreshed_at_ms: at.unwrap_or(0),
+        commit_refreshed_at_ms: commit,
+        ..DiffStatsCacheEntry::default()
+    };
+    let mut cache = DiffStatsCache::default();
+    // wt0 hot, wt1 newest, wt2 oldest by its commit stamp, wt3 ties wt4, wt5 absent.
+    cache
+        .entries
+        .insert(paths[0].clone(), stamped(Some(1), Some(1)));
+    cache
+        .entries
+        .insert(paths[1].clone(), stamped(Some(900), Some(900)));
+    cache
+        .entries
+        .insert(paths[2].clone(), stamped(Some(500), Some(100)));
+    cache
+        .entries
+        .insert(paths[3].clone(), stamped(Some(300), Some(300)));
+    cache
+        .entries
+        .insert(paths[4].clone(), stamped(Some(300), Some(300)));
+    let due = || -> Vec<(String, DueFacts)> {
+        paths
+            .iter()
+            .map(|path| (path.clone(), DueFacts::all()))
+            .collect()
+    };
+    let hot = BTreeSet::from([paths[0].clone()]);
+    let focused = BTreeSet::from([paths[1].clone()]);
+    let order = |limit| -> Vec<String> {
+        select_for_pass(due(), &cache, &focused, &hot, limit)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    };
+    let by = |indexes: &[usize]| -> Vec<String> {
+        indexes.iter().map(|index| paths[*index].clone()).collect()
+    };
+
+    // Focused, hot, then the missing entry (stamp 0), oldest stamp, tie in `needed` order.
+    assert_eq!(order(None), by(&[1, 0, 5, 2, 3, 4]));
+    assert_eq!(order(Some(4)), by(&[1, 0, 5, 2]));
+    // Priority entries are never dropped, even past the limit.
+    assert_eq!(order(Some(1)), by(&[1, 0]));
+    assert_eq!(order(Some(0)), by(&[1, 0]));
+}
+
+#[test]
+fn host_pass_refreshes_a_capped_oldest_first_share_and_one_shot_all() {
+    let total = MAX_HOST_PASS_ENTRIES + 4;
+    let (root, needed, cache) = backlog_fixture(total);
+    let (_runtime_dir, runtime) = runtime_for(root.path());
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    let none = BTreeSet::new();
+
+    let host = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    assert_eq!(
+        refreshed_paths(&host),
+        needed[..MAX_HOST_PASS_ENTRIES]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "the oldest entries go first"
+    );
+
+    // The next passes drain the backlog without repeating an entry.
+    let second = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    assert_eq!(refreshed_paths(&second).len(), total);
+    assert!(
+        needed
+            .iter()
+            .all(|path| second.entries[path].refreshed_at_ms > BACKLOG_NOW_MS)
+    );
+    let first_wave = host.entries[&needed[0]].refreshed_at_ms;
+    assert_eq!(
+        second.entries[&needed[0]].refreshed_at_ms, first_wave,
+        "an entry refreshed in the first pass is not refreshed again"
+    );
+
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    let one_shot = run_pass(&runtime, &needed, &none, &none, GitPass::OneShot);
+    assert_eq!(
+        refreshed_paths(&one_shot).len(),
+        total,
+        "one-shot is uncapped"
+    );
+}
+
+#[test]
+fn host_pass_always_takes_every_due_focused_and_hot_entry() {
+    let total = MAX_HOST_PASS_ENTRIES + 4;
+    let (root, needed, cache) = backlog_fixture(total);
+    let (_runtime_dir, runtime) = runtime_for(root.path());
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    // The two newest entries are the last the age order would reach.
+    let focused = BTreeSet::from([needed[total - 1].clone()]);
+    let hot = BTreeSet::from([needed[total - 2].clone()]);
+
+    let pass = run_pass(&runtime, &needed, &focused, &hot, GitPass::Host);
+
+    let refreshed = refreshed_paths(&pass);
+    assert_eq!(refreshed.len(), MAX_HOST_PASS_ENTRIES);
+    assert!(refreshed.contains(&needed[total - 1].as_str()));
+    assert!(refreshed.contains(&needed[total - 2].as_str()));
+}
+
+fn hold_diff_stats_lock(runtime: &crate::RuntimePaths) -> single_flight::ProducerGuard {
+    match single_flight::coalesce(
+        &runtime.lock_path("diff-stats.lock"),
+        Duration::from_millis(1),
+        1,
+        || None::<()>,
+    ) {
+        Coalesced::Produce(guard) => guard,
+        _ => panic!("the test takes the lock first"),
+    }
+}
+
+#[test]
+fn loser_returns_a_peers_publication_of_its_selection_without_forking() {
+    let total = MAX_HOST_PASS_ENTRIES + 4;
+    let (root, needed, cache) = backlog_fixture(total);
+    let (_runtime_dir, runtime) = runtime_for(root.path());
+    let cache_path = runtime.diff_stats_path();
+    atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
+    let guard = hold_diff_stats_lock(&runtime);
+
+    // The peer's capped pass lands later: the loser's selection is fresh, the
+    // rest of the backlog stays due.
+    let mut published = cache.clone();
+    for path in &needed[..MAX_HOST_PASS_ENTRIES] {
+        published.entries.get_mut(path).unwrap().refreshed_at_ms = BACKLOG_NOW_MS;
+        published
+            .entries
+            .get_mut(path)
+            .unwrap()
+            .commit_refreshed_at_ms = Some(BACKLOG_NOW_MS);
+    }
+    let writer_path = cache_path.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        atomic::write_temp_then_rename_cache(&writer_path, &published).unwrap();
+    });
+
+    let none = BTreeSet::new();
+    let before = crate::proc::testkit::spawn_count();
+    let loser = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    writer.join().unwrap();
+    drop(guard);
+
+    assert_eq!(crate::proc::testkit::spawn_count() - before, 0);
+    assert!(
+        loser.entries[&needed[total - 1]].refreshed_at_ms < BACKLOG_NOW_MS,
+        "entries outside the selection stay due"
+    );
+    assert_eq!(
+        loser.entries[&needed[0]].refreshed_at_ms, BACKLOG_NOW_MS,
+        "the peer's publication is what the loser returns"
+    );
+}
+
+#[test]
+fn timed_out_loser_refreshes_at_most_its_own_selection_and_writes_nothing() {
+    let total = MAX_HOST_PASS_ENTRIES + 4;
+    let (root, needed, cache) = backlog_fixture(total);
+    let (_runtime_dir, runtime) = runtime_for(root.path());
+    let cache_path = runtime.diff_stats_path();
+    atomic::write_temp_then_rename_cache(&cache_path, &cache).unwrap();
+    let guard = hold_diff_stats_lock(&runtime);
+    let none = BTreeSet::new();
+
+    let loser = run_pass(&runtime, &needed, &none, &none, GitPass::Host);
+    drop(guard);
+
+    assert_eq!(refreshed_paths(&loser).len(), MAX_HOST_PASS_ENTRIES);
+    let on_disk: DiffStatsCache = atomic::read_json_cache(&cache_path);
+    assert!(
+        refreshed_paths(&on_disk).is_empty(),
+        "a local fallback never writes the shared cache"
+    );
 }
