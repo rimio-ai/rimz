@@ -161,6 +161,8 @@ pub(super) fn passthrough_names() -> &'static [&'static str] {
         names.extend(["MUSE_SESSION_ID", "MUSE_THREAD_ID"]);
         names.remove("RIMZ_AGENT_PID");
         names.remove("RIMZ_HOOK_OWNER_KIND");
+        // Muse passes `SHELL` to every hook itself (docs/externals/agent-adapter/muse-reference.md).
+        names.remove("SHELL");
         names.into_iter().collect()
     })
 }
