@@ -145,6 +145,9 @@ fn hint_edit(
         }
         return Ok(None);
     };
+    if inside_line(&anchor, node).is_some() {
+        return Ok(None);
+    }
     if let Some(at) = insert_at {
         let [start, end] = node.range;
         let hint = if start == end {
@@ -167,10 +170,7 @@ fn hint_edit(
         return Ok(None);
     };
     let hint = &source[source_range.clone()];
-    let values = if hint
-        .trim_start_matches(|ch: char| !ch.is_ascii_digit())
-        .contains(':')
-    {
+    let values = if anchor.hint_form == Some(HintForm::Position) {
         [
             node.selection.start.line + 1,
             node.selection.start.character + 1,
@@ -195,35 +195,4 @@ fn hint_edit(
     let mut after = anchor.text;
     after.replace_range(text_range, &replacement);
     Ok(Some((source_range, replacement, after)))
-}
-
-/// The one item an anchor names. A hinted anchor names the single hit its hint
-/// overlaps, else the sole hit. A hintless anchor, or a hinted one whose hint
-/// overlaps no hit, names its sole hit, or the one hit whose own name is the
-/// anchor's last segment when every other hit matched only through its last
-/// token, as impl blocks of a type do. A hint overlapping only an impl block
-/// keeps naming that block: it may point there on purpose.
-fn named<'a>(
-    hits: &[&'a Candidate],
-    chain: &[String],
-    hint: Option<[u32; 2]>,
-) -> Option<&'a Candidate> {
-    if hint.is_some() {
-        match (hinted(hits, hint).as_slice(), hits) {
-            ([node], _) | (_, [node]) => return Some(*node),
-            ([], _) => {}
-            _ => return None,
-        }
-    }
-    let wanted = chain.last()?;
-    let mut direct = hits.iter().copied().filter(|node| {
-        node.path
-            .last()
-            .is_some_and(|name| query::without_generics(name) == *wanted)
-    });
-    match (hits, direct.next(), direct.next()) {
-        ([node], _, _) => Some(*node),
-        (_, Some(node), None) => Some(node),
-        _ => None,
-    }
 }
