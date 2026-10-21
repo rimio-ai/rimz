@@ -56,6 +56,7 @@ use self::rate_limits::refresh_rate_limits;
 use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
 use super::enrich::{PanelScope, RemoteControlServerHealth, fold_machine_config_with};
+use super::meter::PassSpawns;
 use crate::utils::time::unix_now_ms;
 
 const ORPHAN_SWEEP_SCAN_TTL: Duration = Duration::from_secs(60);
@@ -100,6 +101,17 @@ pub struct ProducerRefreshState {
     cohort_effort: crate::agents::spending::EffortParseMemo,
     orphan_sweep_checked_at_ms: Option<u64>,
     auto_gc: crate::harness::auto_gc::AutoGcMemo,
+    /// Spawns per step of the last `refresh_heavy_lanes` pass, handed to the
+    /// tick meter once.
+    pass_spawns: BTreeMap<String, u64>,
+}
+
+impl ProducerRefreshState {
+    /// The last pass's per-step spawn counts; empty when no pass ran since the
+    /// previous call.
+    pub(crate) fn take_pass_spawns(&mut self) -> BTreeMap<String, u64> {
+        std::mem::take(&mut self.pass_spawns)
+    }
 }
 
 /// Supply sidebar workspace scope to the account-global spending service. A
@@ -232,55 +244,62 @@ pub(super) fn refresh_heavy_lanes(
         &config.remote_control,
         &state_paths.workspace_record,
     );
-    refresh_codex_daemon_reap_cache(
-        daemon_probe_agents,
-        runtime,
-        &logins,
-        unix_now_ms(),
-        room_remote_control.enabled_for("codex"),
-    );
+    let mut steps = PassSpawns::default();
+    steps.step("codex_daemon_reap", || {
+        refresh_codex_daemon_reap_cache(
+            daemon_probe_agents,
+            runtime,
+            &logins,
+            unix_now_ms(),
+            room_remote_control.enabled_for("codex"),
+        )
+    });
 
-    let accounts = produce_accounts(base, runtime, &logins);
-    let spending = compute_fleet_spending_via_service(
-        runtime,
-        base,
-        &config.headline_spec(),
-        spending_startup,
-    );
-    // Rate-limit persistence and same-pass usage scheduling use resolved
-    // provider panels, not the bare rollup. Final folds merge the just-written
-    // cache read-only.
-    let mut panels = fold_machine_config_with(
-        base.clone(),
-        config,
-        accounts.clone(),
-        &spending.provider.spending.by_login,
-        // This scoped fold is not returned as the final snapshot.
-        RemoteControlServerHealth::default(),
-        &room_remote_control,
-        &logins,
-        PanelScope::InUse,
-    );
-    refresh_rate_limits(&mut panels, runtime, &logins);
-    // `with_provider_aggregates` rebuilds panels with empty credit fields; the
-    // scoped producer fold must reapply the shared cache before auto-redeem can
-    // evaluate the already-known reset credits.
-    credits::apply_credits_cache(&mut panels, runtime, &config.accounts, &logins);
+    let accounts = steps.step("accounts", || produce_accounts(base, runtime, &logins));
+    let spending = steps.step("spending", || {
+        compute_fleet_spending_via_service(runtime, base, &config.headline_spec(), spending_startup)
+    });
+    let panels = steps.step("rate_limits", || {
+        // Rate-limit persistence and same-pass usage scheduling use resolved
+        // provider panels, not the bare rollup. Final folds merge the
+        // just-written cache read-only.
+        let mut panels = fold_machine_config_with(
+            base.clone(),
+            config,
+            accounts.clone(),
+            &spending.provider.spending.by_login,
+            // This scoped fold is not returned as the final snapshot.
+            RemoteControlServerHealth::default(),
+            &room_remote_control,
+            &logins,
+            PanelScope::InUse,
+        );
+        refresh_rate_limits(&mut panels, runtime, &logins);
+        // `with_provider_aggregates` rebuilds panels with empty credit fields;
+        // the scoped producer fold must reapply the shared cache before
+        // auto-redeem can evaluate the already-known reset credits.
+        credits::apply_credits_cache(&mut panels, runtime, &config.accounts, &logins);
+        panels
+    });
 
-    refresh_live_sessions(base, runtime);
-    refresh_account_usage(&panels, runtime, &logins);
-    let resume_messages = crate::harness::auto_continue::read_resume_messages(
-        store.as_ref(),
-        &config.resume,
-        base.resume_outcomes.as_deref().unwrap_or_default(),
-    );
-    crate::harness::auto_continue::resume_parked(
-        base,
-        runtime,
-        &logins,
-        &config.resume,
-        &resume_messages,
-    );
+    steps.step("sessions", || refresh_live_sessions(base, runtime));
+    steps.step("account_usage", || {
+        refresh_account_usage(&panels, runtime, &logins)
+    });
+    steps.step("auto_continue", || {
+        let resume_messages = crate::harness::auto_continue::read_resume_messages(
+            store.as_ref(),
+            &config.resume,
+            base.resume_outcomes.as_deref().unwrap_or_default(),
+        );
+        crate::harness::auto_continue::resume_parked(
+            base,
+            runtime,
+            &logins,
+            &config.resume,
+            &resume_messages,
+        )
+    });
     let policy = if base
         .agents
         .iter()
@@ -291,81 +310,117 @@ pub(super) fn refresh_heavy_lanes(
         SeatPolicy::default()
     };
     let teams = &policy.teams;
-    crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy);
-    crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime);
-    crate::harness::hibernate::hibernate_idle_agents(base, state_paths, runtime, config, &policy);
-    crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness, &policy);
-    keep_warm::publish(base, runtime, &config.harness, &policy);
-    crate::harness::auto_redeem::redeem_credits(
-        &panels.providers,
-        &credits::idle_reset_credits(runtime, &logins),
-        runtime,
-        &logins,
-        &config.resume,
-        base.now,
-    );
-    let mut budget_snapshot = base.clone();
-    apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
-    crate::harness::budget::enforce(&budget_snapshot, runtime, store.as_ref(), config);
-    let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
-    if let Some(runs) = &runs {
-        crate::harness::park_notice::notify_parents(runs, &base.agents, runtime);
-        crate::harness::stall_notice::notify_parents(
-            runs,
-            &base.agents,
-            runtime,
-            base.now,
-            config.agents.attention.stalled_after_secs.get(),
-        );
-    }
-    let now_ms = base.now.as_millisecond().max(0) as u64;
-    if let Some(runs) = runs
-        && orphan_sweep_due(state.orphan_sweep_checked_at_ms, now_ms)
-    {
-        state.orphan_sweep_checked_at_ms = Some(now_ms);
-        crate::harness::orphan_sweep::enforce(
+    steps.step("idle_compact", || {
+        crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy)
+    });
+    steps.step("idle_stop", || {
+        crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime)
+    });
+    steps.step("hibernate", || {
+        crate::harness::hibernate::hibernate_idle_agents(
+            base,
             state_paths,
             runtime,
-            &runs,
+            config,
+            &policy,
+        )
+    });
+    steps.step("cache_keepalive", || {
+        crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness, &policy)
+    });
+    steps.step("keep_warm", || {
+        keep_warm::publish(base, runtime, &config.harness, &policy)
+    });
+    steps.step("auto_redeem", || {
+        crate::harness::auto_redeem::redeem_credits(
+            &panels.providers,
+            &credits::idle_reset_credits(runtime, &logins),
+            runtime,
+            &logins,
+            &config.resume,
             base.now,
-            &mut state.rollup,
+        )
+    });
+    steps.step("budget", || {
+        let mut budget_snapshot = base.clone();
+        apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
+        crate::harness::budget::enforce(&budget_snapshot, runtime, store.as_ref(), config)
+    });
+    let runs = steps.step("run_timeout", || {
+        let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
+        if let Some(runs) = &runs {
+            crate::harness::park_notice::notify_parents(runs, &base.agents, runtime);
+            crate::harness::stall_notice::notify_parents(
+                runs,
+                &base.agents,
+                runtime,
+                base.now,
+                config.agents.attention.stalled_after_secs.get(),
+            );
+        }
+        runs
+    });
+    let now_ms = base.now.as_millisecond().max(0) as u64;
+    steps.step("orphan_sweep", || {
+        if let Some(runs) = runs
+            && orphan_sweep_due(state.orphan_sweep_checked_at_ms, now_ms)
+        {
+            state.orphan_sweep_checked_at_ms = Some(now_ms);
+            crate::harness::orphan_sweep::enforce(
+                state_paths,
+                runtime,
+                &runs,
+                base.now,
+                &mut state.rollup,
+            );
+        }
+    });
+    steps.step("auto_gc", || {
+        crate::harness::auto_gc::sweep_if_due(
+            state_paths,
+            runtime,
+            base.project_root.as_deref(),
+            &config.gc,
+            base.now,
+            &mut state.auto_gc,
         );
-    }
-    crate::harness::auto_gc::sweep_if_due(
-        state_paths,
-        runtime,
-        base.project_root.as_deref(),
-        &config.gc,
-        base.now,
-        &mut state.auto_gc,
-    );
-    crate::harness::auto_gc::tmp_floor_if_due(
-        state_paths,
-        runtime,
-        base.project_root.as_deref(),
-        &config.gc,
-        base.now,
-        &mut state.auto_gc,
-    );
-    refresh_diff_stats_for(
-        base,
-        runtime,
-        config.sidebar.trunk.as_deref(),
-        git_pass,
-        &mut state.git,
-    );
-    refresh_cohort_spend_for(
-        base,
-        state_paths,
-        runtime,
-        config.agents.attention.active_grace_secs.get(),
-        unix_now_ms(),
-        &mut state.rollup,
-        &mut state.cohort_effort,
-    );
-    pipeline::refresh_pipeline_for(base, runtime, config, teams);
-    let pr_cache = produce_pr_states(base, runtime, state);
-    trunk::produce_trunk_state(base, runtime, config.sidebar.trunk.as_deref());
+        crate::harness::auto_gc::tmp_floor_if_due(
+            state_paths,
+            runtime,
+            base.project_root.as_deref(),
+            &config.gc,
+            base.now,
+            &mut state.auto_gc,
+        );
+    });
+    steps.step("diff_stats", || {
+        refresh_diff_stats_for(
+            base,
+            runtime,
+            config.sidebar.trunk.as_deref(),
+            git_pass,
+            &mut state.git,
+        )
+    });
+    steps.step("cohort_spend", || {
+        refresh_cohort_spend_for(
+            base,
+            state_paths,
+            runtime,
+            config.agents.attention.active_grace_secs.get(),
+            unix_now_ms(),
+            &mut state.rollup,
+            &mut state.cohort_effort,
+        )
+    });
+    steps.step("pipeline", || {
+        pipeline::refresh_pipeline_for(base, runtime, config, teams)
+    });
+    let pr_cache = steps.step("pr_states", || produce_pr_states(base, runtime, state));
+    steps.step("trunk", || {
+        trunk::produce_trunk_state(base, runtime, config.sidebar.trunk.as_deref())
+    });
+    state.pass_spawns = steps.into_steps();
 
     RefreshedLanes {
         spending,

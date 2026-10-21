@@ -82,7 +82,8 @@ fn refresh_loop(
                 &mut refresh_state,
             )
         });
-        if let Some(event) = meter.finish(tick, crate::utils::time::unix_now_ms()) {
+        let steps = refresh_state.take_pass_spawns();
+        if let Some(event) = meter.finish(tick, crate::utils::time::unix_now_ms(), steps) {
             crate::sidebar::meter::report(&diag, event);
         }
         if let Err(err) = result {

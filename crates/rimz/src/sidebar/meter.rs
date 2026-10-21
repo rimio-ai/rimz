@@ -9,6 +9,7 @@
 //! recovery, so one cheap tick inside a saturated episode does not flap the
 //! diagnostic identity.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
@@ -72,6 +73,33 @@ pub(crate) struct TickMeter {
     since_ms: u64,
     last: TickSample,
     worst: TickSample,
+    /// Per-step spawns of the streak's pass with the most spawns, so they sum
+    /// to `worst.spawns` rather than mixing per-step maxima across passes.
+    worst_steps: BTreeMap<String, u64>,
+}
+
+/// Spawns per named step of one cache-refresh pass, each measured as the lane's
+/// spawn-count delta around the step.
+#[derive(Debug, Default)]
+pub(crate) struct PassSpawns {
+    steps: BTreeMap<String, u64>,
+}
+
+impl PassSpawns {
+    pub(crate) fn step<T>(&mut self, name: &str, run: impl FnOnce() -> T) -> T {
+        let lane = crate::lane::current();
+        let before = crate::lane::spawn_count(lane);
+        let value = run();
+        let spawned = crate::lane::spawn_count(lane).saturating_sub(before);
+        if spawned > 0 {
+            *self.steps.entry(name.to_owned()).or_default() += spawned;
+        }
+        value
+    }
+
+    pub(crate) fn into_steps(self) -> BTreeMap<String, u64> {
+        self.steps
+    }
 }
 
 impl TickMeter {
@@ -88,6 +116,7 @@ impl TickMeter {
             since_ms: 0,
             last: TickSample::default(),
             worst: TickSample::default(),
+            worst_steps: BTreeMap::new(),
         }
     }
 
@@ -100,7 +129,14 @@ impl TickMeter {
         }
     }
 
-    pub(crate) fn finish(&mut self, start: TickStart, at_ms: u64) -> Option<DiagEvent> {
+    /// `steps` is the pass's named-step spawn breakdown; only the cache-refresh
+    /// loop keeps it, and the work outside any named step joins it as `other`.
+    pub(crate) fn finish(
+        &mut self,
+        start: TickStart,
+        at_ms: u64,
+        steps: BTreeMap<String, u64>,
+    ) -> Option<DiagEvent> {
         let sample = TickSample {
             wall_ms: duration_ms(start.started_at.elapsed()),
             mux_wait_ms: crate::lane::mux_wait_ms(self.work_lane).saturating_sub(start.mux_wait_ms),
@@ -108,10 +144,31 @@ impl TickMeter {
                 .saturating_sub(start.bytes_read),
             spawns: crate::lane::spawn_count(self.work_lane).saturating_sub(start.spawns),
         };
-        self.finish_sample(sample, at_ms)
+        let steps = self.complete_steps(sample.spawns, steps);
+        self.finish_sample(sample, steps, at_ms)
     }
 
-    fn finish_sample(&mut self, sample: TickSample, at_ms: u64) -> Option<DiagEvent> {
+    fn complete_steps(
+        &self,
+        spawns: u64,
+        mut steps: BTreeMap<String, u64>,
+    ) -> BTreeMap<String, u64> {
+        if self.tick_loop != TickLoop::CacheRefresh {
+            return BTreeMap::new();
+        }
+        let other = spawns.saturating_sub(steps.values().sum());
+        if other > 0 {
+            steps.insert("other".to_owned(), other);
+        }
+        steps
+    }
+
+    fn finish_sample(
+        &mut self,
+        sample: TickSample,
+        steps: BTreeMap<String, u64>,
+        at_ms: u64,
+    ) -> Option<DiagEvent> {
         self.last = sample;
         if !sample.exceeds_budget(self.budget_wall_ms) {
             return self.finish_under_budget(at_ms);
@@ -121,7 +178,11 @@ impl TickMeter {
         if self.streak == 0 {
             self.since_ms = at_ms;
             self.worst = sample;
+            self.worst_steps = steps;
         } else {
+            if sample.spawns > self.worst.spawns {
+                self.worst_steps = steps;
+            }
             self.worst = self.worst.max(sample);
         }
         self.streak = self.streak.saturating_add(1);
@@ -161,6 +222,7 @@ impl TickMeter {
             budget_spawns: TICK_SPAWN_BUDGET,
             since_ms: self.since_ms,
             recovered_after_ms,
+            spawns_by_step: self.worst_steps.clone(),
         }
     }
 
@@ -170,6 +232,7 @@ impl TickMeter {
         self.since_ms = 0;
         self.last = TickSample::default();
         self.worst = TickSample::default();
+        self.worst_steps.clear();
     }
 }
 
@@ -304,7 +367,7 @@ mod tests {
         let mut meter = meter(TickLoop::Fetch);
 
         for at_ms in 0..10 {
-            assert_eq!(meter.finish_sample(under(), at_ms), None);
+            assert_eq!(meter.finish_sample(under(), BTreeMap::new(), at_ms), None);
         }
 
         assert_eq!(meter.streak, 0);
@@ -315,10 +378,13 @@ mod tests {
         let mut meter = meter(TickLoop::Fetch);
 
         for at_ms in 0..TICK_BUDGET_BREACH_TICKS - 1 {
-            assert_eq!(meter.finish_sample(over_wall(), u64::from(at_ms)), None);
+            assert_eq!(
+                meter.finish_sample(over_wall(), BTreeMap::new(), u64::from(at_ms)),
+                None
+            );
         }
 
-        assert_eq!(meter.finish_sample(under(), 99), None);
+        assert_eq!(meter.finish_sample(under(), BTreeMap::new(), 99), None);
         assert_eq!(meter.streak, 0);
     }
 
@@ -329,6 +395,7 @@ mod tests {
             assert_eq!(
                 meter.finish_sample(
                     sample(DEFAULT_WALL_MS + u64::from(at_ms), 0, 1),
+                    BTreeMap::new(),
                     u64::from(at_ms)
                 ),
                 None
@@ -342,6 +409,7 @@ mod tests {
                     TICK_FOLD_BYTES_BUDGET + 5,
                     TICK_SPAWN_BUDGET + 2,
                 ),
+                BTreeMap::new(),
                 14,
             )
             .expect("threshold breach");
@@ -369,11 +437,11 @@ mod tests {
     fn persistent_breach_keeps_emitting_active_records() {
         let mut meter = meter(TickLoop::Fetch);
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
-            let _ = meter.finish_sample(over_wall(), u64::from(at_ms));
+            let _ = meter.finish_sample(over_wall(), BTreeMap::new(), u64::from(at_ms));
         }
 
         let event = meter
-            .finish_sample(sample(DEFAULT_WALL_MS + 50, 0, 0), 20)
+            .finish_sample(sample(DEFAULT_WALL_MS + 50, 0, 0), BTreeMap::new(), 20)
             .expect("persistent breach");
 
         assert_eq!(
@@ -399,14 +467,21 @@ mod tests {
     fn recovery_emits_info_once_and_resets() {
         let mut meter = meter(TickLoop::CacheRefresh);
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
-            let _ = meter.finish_sample(over_wall(), u64::from(at_ms));
+            let _ = meter.finish_sample(over_wall(), BTreeMap::new(), u64::from(at_ms));
         }
 
         for at_ms in 30..30 + TICK_BUDGET_BREACH_TICKS - 1 {
-            assert_eq!(meter.finish_sample(under(), u64::from(at_ms)), None);
+            assert_eq!(
+                meter.finish_sample(under(), BTreeMap::new(), u64::from(at_ms)),
+                None
+            );
         }
         let event = meter
-            .finish_sample(under(), 30 + u64::from(TICK_BUDGET_BREACH_TICKS - 1))
+            .finish_sample(
+                under(),
+                BTreeMap::new(),
+                30 + u64::from(TICK_BUDGET_BREACH_TICKS - 1),
+            )
             .expect("recovery after active breach");
 
         assert_eq!(
@@ -426,7 +501,7 @@ mod tests {
                 recovered_after_ms: Some(24),
             }
         );
-        assert_eq!(meter.finish_sample(under(), 35), None);
+        assert_eq!(meter.finish_sample(under(), BTreeMap::new(), 35), None);
         assert_eq!(meter.streak, 0);
     }
 
@@ -436,15 +511,20 @@ mod tests {
         for at_ms in 10..10 + TICK_BUDGET_BREACH_TICKS {
             let _ = meter.finish_sample(
                 sample(DEFAULT_WALL_MS + 1, TICK_FOLD_BYTES_BUDGET + 9, 0),
+                BTreeMap::new(),
                 u64::from(at_ms),
             );
         }
 
-        assert_eq!(meter.finish_sample(under(), 20), None);
+        assert_eq!(meter.finish_sample(under(), BTreeMap::new(), 20), None);
 
         let mut event = None;
         for at_ms in 21..21 + TICK_BUDGET_BREACH_TICKS {
-            event = meter.finish_sample(sample(DEFAULT_WALL_MS + 50, 0, 0), u64::from(at_ms));
+            event = meter.finish_sample(
+                sample(DEFAULT_WALL_MS + 50, 0, 0),
+                BTreeMap::new(),
+                u64::from(at_ms),
+            );
         }
         let event = event.expect("active breach continues after one under-budget tick");
 
@@ -483,7 +563,7 @@ mod tests {
             let mut meter = meter(TickLoop::Fetch);
             let mut event = None;
             for at_ms in 0..TICK_BUDGET_BREACH_TICKS {
-                event = meter.finish_sample(sample, u64::from(at_ms));
+                event = meter.finish_sample(sample, BTreeMap::new(), u64::from(at_ms));
             }
             assert!(event.is_some());
         }
@@ -494,7 +574,10 @@ mod tests {
         let mut meter = meter(TickLoop::Fetch);
         let sample = sample_with_mux(DEFAULT_WALL_MS + 1_000, 1_500, 0, 0);
         for at_ms in 0..TICK_BUDGET_BREACH_TICKS {
-            assert_eq!(meter.finish_sample(sample, u64::from(at_ms)), None);
+            assert_eq!(
+                meter.finish_sample(sample, BTreeMap::new(), u64::from(at_ms)),
+                None
+            );
         }
         assert_eq!(meter.streak, 0);
     }
@@ -508,8 +591,8 @@ mod tests {
         let mut default_event = None;
         let mut long_event = None;
         for at_ms in 0..TICK_BUDGET_BREACH_TICKS {
-            default_event = default_tick.finish_sample(sample, u64::from(at_ms));
-            long_event = long_tick.finish_sample(sample, u64::from(at_ms));
+            default_event = default_tick.finish_sample(sample, BTreeMap::new(), u64::from(at_ms));
+            long_event = long_tick.finish_sample(sample, BTreeMap::new(), u64::from(at_ms));
         }
 
         let default_event = default_event.expect("1.5s exceeds a 1s tick");
@@ -521,5 +604,83 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
         assert_eq!(long_tick.streak, 0);
+    }
+
+    fn steps(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
+        pairs
+            .iter()
+            .map(|(name, spawns)| ((*name).to_owned(), *spawns))
+            .collect()
+    }
+
+    fn breakdown(event: DiagEvent) -> BTreeMap<String, u64> {
+        match event {
+            DiagEvent::TickBudgetBreach { spawns_by_step, .. } => spawns_by_step,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn breach_and_recovery_carry_the_breakdown_of_the_max_spawn_pass() {
+        let mut meter = meter(TickLoop::CacheRefresh);
+        let passes = [
+            (10, steps(&[("diff_stats", 10)])),
+            (40, steps(&[("diff_stats", 30), ("pr_states", 10)])),
+            (20, steps(&[("accounts", 20)])),
+            (40, steps(&[("pipeline", 40)])),
+            (5, steps(&[("budget", 5)])),
+        ];
+        let mut event = None;
+        for (at_ms, (spawns, pass)) in (10..).zip(passes) {
+            event = meter.finish_sample(sample(DEFAULT_WALL_MS + 1, 0, spawns), pass, at_ms);
+        }
+        let event = event.expect("threshold breach");
+        let by_step = breakdown(event.clone());
+        assert_eq!(
+            by_step,
+            steps(&[("diff_stats", 30), ("pr_states", 10)]),
+            "the first pass to reach the worst spawn count keeps its breakdown"
+        );
+        let DiagEvent::TickBudgetBreach { spawns, .. } = event else {
+            unreachable!();
+        };
+        assert_eq!(by_step.values().sum::<u64>(), spawns);
+
+        let mut recovery = None;
+        for at_ms in 30..30 + TICK_BUDGET_BREACH_TICKS {
+            recovery = meter.finish_sample(under(), BTreeMap::new(), u64::from(at_ms));
+        }
+        assert_eq!(breakdown(recovery.expect("recovery")), by_step);
+        assert!(
+            meter.worst_steps.is_empty(),
+            "recovery resets the breakdown"
+        );
+    }
+
+    #[test]
+    fn only_the_cache_refresh_loop_keeps_a_breakdown_and_names_the_remainder() {
+        let named = steps(&[("diff_stats", 30)]);
+        let cache = meter(TickLoop::CacheRefresh);
+        assert_eq!(
+            cache.complete_steps(34, named.clone()),
+            steps(&[("diff_stats", 30), ("other", 4)])
+        );
+        assert_eq!(cache.complete_steps(30, named.clone()), named);
+        assert!(meter(TickLoop::Fetch).complete_steps(34, named).is_empty());
+    }
+
+    #[test]
+    fn pass_spawns_attribute_lane_spawns_to_the_step_that_made_them() {
+        crate::lane::set(WorkLane::CacheRefresh);
+        let mut pass = PassSpawns::default();
+        let value = pass.step("git", || {
+            crate::lane::count_spawn();
+            crate::lane::count_spawn();
+            7
+        });
+        pass.step("quiet", || ());
+        pass.step("git", crate::lane::count_spawn);
+        assert_eq!(value, 7);
+        assert_eq!(pass.into_steps(), steps(&[("git", 3)]));
     }
 }

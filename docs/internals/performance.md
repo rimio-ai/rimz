@@ -163,7 +163,7 @@ The fetch worker and the cache refresher each meter their ticks against budgets 
 
 Byte and spawn limits are absolute because they describe the shape of a storm, not a cadence. Fork and byte counts are attributed to the loop that caused them, so the two metered loops do not charge each other.
 
-Five consecutive over-budget ticks (`TICK_BUDGET_BREACH_TICKS`) write a `tick_budget_breach` diagnostic ([diagnostics.md](./diagnostics.md)) and emit one `warn!` through the observability bridge. The same streak window filters recovery, so one cheap tick inside a saturated episode does not flap the record. The meter only observes; the tick's work proceeds unchanged.
+Five consecutive over-budget ticks (`TICK_BUDGET_BREACH_TICKS`) write a `tick_budget_breach` diagnostic ([diagnostics.md](./diagnostics.md)) and emit one `warn!` through the observability bridge. The same streak window filters recovery, so one cheap tick inside a saturated episode does not flap the record. A cache-refresh record also names which refresh step the spawns came from (`spawns_by_step`), so a spawn breach points at a lane rather than at the pass. The meter only observes; the tick's work proceeds unchanged.
 
 The budgets mirror the cost map. A change to the cost map revisits them in the same PR.
 
