@@ -34,6 +34,7 @@ fn main() {
     let mut requests = Vec::new();
     let mut cancellations = Vec::new();
     let mut configuration_changes = 0;
+    let mut retained_memory = Vec::new();
     let alias_location = |file| json!({"uri": format!("file:///fixture/{file}.rs"), "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}});
     while let Ok(message) = read_frame(&mut input) {
         if let Some(id) = message.get("id") {
@@ -120,7 +121,13 @@ fn main() {
                 if message["params"]["query"] == "slow" {
                     std::thread::sleep(std::time::Duration::from_secs(8));
                 }
-                if message["params"]["query"] == "open" {
+                if message["params"]["query"] == "grow-and-hold" {
+                    retained_memory.push(vec![1_u8; 64 * 1024 * 1024]);
+                    std::hint::black_box(&retained_memory);
+                    // Keep the request outstanding across three housekeeping intervals.
+                    std::thread::sleep(std::time::Duration::from_secs(16));
+                    json!([{"name":"grown","kind":12,"location":{"uri":format!("{root}/lib.rs"),"range":alias_location("grown")["range"]}}])
+                } else if message["params"]["query"] == "open" {
                     json!(documents)
                 } else if message["params"]["query"] == "opened" {
                     json!(documents.iter().map(|d| json!({"name":"opened","kind":12,"location":{"uri":d["uri"],"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":6}}}})).collect::<Vec<_>>())

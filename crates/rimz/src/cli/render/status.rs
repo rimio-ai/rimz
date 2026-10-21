@@ -32,6 +32,7 @@ pub(crate) fn lsp(state: &rimz::lsp::registry::State) -> StateRole {
             None
             | Some(
                 StopReason::Idle
+                | StopReason::Recycled
                 | StopReason::MemoryPressure
                 | StopReason::Evicted
                 | StopReason::TeamDone
@@ -197,6 +198,7 @@ mod tests {
             (StopReason::Crashed, StateRole::Failed),
             (StopReason::MemoryPressure, StateRole::Neutral),
             (StopReason::Idle, StateRole::Neutral),
+            (StopReason::Recycled, StateRole::Neutral),
             (StopReason::Evicted, StateRole::Neutral),
             (StopReason::TeamDone, StateRole::Neutral),
             (StopReason::StoppedByHand, StateRole::Neutral),

@@ -18,6 +18,11 @@ pub(super) fn reserve_bytes(policy: &crate::config::LspConfig, total: u64) -> Re
     )
 }
 
+pub(super) fn recycle_min_bytes(policy: &crate::config::LspConfig) -> Result<u64> {
+    crate::utils::size::parse_byte_size(&policy.recycle_min)
+        .map_err(|error| LspErr::Configuration(format!("lsp.recycle-min: {error}")))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServeRequest {
     pub root: PathBuf,
@@ -718,7 +723,8 @@ fn validate_policy(policy: &crate::config::LspConfig) -> Result<()> {
             "lsp reserve-percent must be between 0 and 100".into(),
         ));
     }
-    reserve_bytes(policy, 0).map(|_| ())
+    reserve_bytes(policy, 0)?;
+    recycle_min_bytes(policy).map(|_| ())
 }
 
 fn validate_server(
@@ -801,6 +807,22 @@ mod tests {
         let error = idle_timeout(&policy).unwrap_err().to_string();
         assert!(error.contains("idle-timeout"), "{error}");
         assert!(error.contains("s/m/h"), "{error}");
+    }
+
+    #[test]
+    fn recycle_min_validation_names_machine_key_and_units() {
+        for raw in ["lots", "2X"] {
+            let policy = serde_json::from_value(serde_json::json!({"recycle-min": raw})).unwrap();
+            let result = validate_policy(&policy);
+            assert!(result.is_err(), "invalid recycle-min must reject policy");
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("lsp.recycle-min"), "{error}");
+            assert_eq!(
+                error.matches("B/KB/KiB/MB/MiB/GB/GiB").count(),
+                1,
+                "{error}"
+            );
+        }
     }
 
     #[test]

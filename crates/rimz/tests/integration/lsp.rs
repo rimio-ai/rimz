@@ -67,6 +67,144 @@ fn editor_query(directory: &Path, name: &str) -> Value {
 }
 
 #[test]
+fn lsp_recycles_after_an_in_flight_agent_query_finishes() {
+    assert_recycles_after_request(false);
+}
+
+#[test]
+fn lsp_recycles_after_an_outstanding_editor_request_finishes() {
+    assert_recycles_after_request(true);
+}
+
+fn assert_recycles_after_request(with_editor: bool) {
+    let env = Env::new();
+    let request = rimz::lsp::admission::ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: "recycle-test".into(),
+        config: serde_json::from_value(json!({
+            "command": [crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"))],
+            "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
+        })).unwrap(),
+        policy: serde_json::from_value(json!({
+            "reserve-percent": 0, "reserve-min": "0", "recycle-min": "0"
+        })).unwrap(),
+        eager: false,
+    };
+    let (mut broker, directory) = spawn_test_broker(&env, &request);
+    let mut editor = with_editor.then(|| {
+        let mut editor = Editor::attach(&directory, "recycle-editor");
+        editor.ready();
+        editor
+    });
+    let result = if let Some(editor) = &mut editor {
+        // An agent's readiness wait also ensures the editor growth cannot inflate the baseline.
+        assert_eq!(editor_query(&directory, "x")[0]["name"], "x");
+        editor
+            .0
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(40)))
+            .unwrap();
+        editor.send(json!({"jsonrpc":"2.0","id":1,"method":"workspace/symbol","params":{"query":"grow-and-hold"}}));
+        loop {
+            let frame = rimz::lsp::protocol::read_frame(&mut editor.0).unwrap();
+            assert_ne!(frame["method"], "window/showMessage", "{frame}");
+            if frame["id"] == 1 {
+                assert!(
+                    frame.get("error").is_none(),
+                    "outstanding request was cancelled: {frame}"
+                );
+                break frame["result"].clone();
+            }
+        }
+    } else {
+        let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(40)))
+            .unwrap();
+        writeln!(stream, "{}", json!({"op":"query","method":"workspace/symbol","params":{"query":"grow-and-hold"},"wait_ms":35000})).unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert!(
+            reply.get("error").is_none(),
+            "in-flight query was cancelled: {reply}"
+        );
+        reply["result"].clone()
+    };
+    assert_eq!(result[0]["name"], "grown");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let history_path = env.rimz_home().join("lsp-history.jsonl");
+    let mut next_request = 2;
+    let mut recycled_warning = false;
+    let history = loop {
+        let history = std::fs::read_to_string(&history_path)
+            .ok()
+            .filter(|history| history.ends_with('\n'));
+        if let Some(editor) = &mut editor {
+            editor.send(json!({"jsonrpc":"2.0","id":next_request,"method":"workspace/symbol","params":{"query":"x"}}));
+            loop {
+                let frame = rimz::lsp::protocol::read_frame(&mut editor.0).unwrap();
+                assert_ne!(frame["method"], "window/showMessage", "{frame}");
+                assert!(
+                    frame.get("error").is_none(),
+                    "request across recycle failed: {frame}"
+                );
+                if frame["method"] == "experimental/serverStatus"
+                    && frame["params"]["health"] == "warning"
+                {
+                    assert_eq!(
+                        frame["params"]["message"],
+                        "language server rust stopped: recycled; the next request restarts it"
+                    );
+                    recycled_warning = true;
+                }
+                if frame["id"] == next_request {
+                    assert_eq!(frame["result"][0]["name"], "x");
+                    break;
+                }
+            }
+            // The history was read before this request, so its reply proves the restart path.
+            if recycled_warning && let Some(history) = history {
+                break history;
+            }
+            next_request += 1;
+        } else {
+            let status = editor_rpc(&directory, json!({"op":"status"}));
+            if status["state"]["dormant"]["reason"] == "recycled"
+                && let Some(history) = history
+            {
+                break history;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "over-ceiling ready server must recycle and answer the next request"
+        );
+        std::thread::sleep(Duration::from_millis(if with_editor { 2 } else { 20 }));
+    };
+    let last: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
+    assert_eq!(last["reason"], "recycled");
+    let records = lsp_records(&env, "recycled");
+    assert_eq!(records.len(), 1, "one diagnostic per recycle: {records:?}");
+    let details = &records[0]["details"];
+    let ceiling = details["ceiling_kb"].as_u64().unwrap();
+    assert!(details["rss_kb"].as_u64().unwrap() + details["swap_kb"].as_u64().unwrap() > ceiling);
+    assert_eq!(ceiling, 2 * details["ready_footprint_kb"].as_u64().unwrap());
+    assert_eq!(editor_query(&directory, "x")[0]["name"], "x");
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"status"}))["restarts"],
+        1
+    );
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    assert!(broker.wait().unwrap().success());
+}
+
+#[test]
 fn lsp_idle_broker_blocks_when_dormant_and_ready() {
     use std::io::Read;
     use std::os::unix::net::UnixListener;

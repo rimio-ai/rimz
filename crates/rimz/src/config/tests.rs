@@ -2344,6 +2344,8 @@ fn lsp_configuration_has_documented_defaults() {
     assert_eq!(value["lsp"]["reserve-min"], "8G");
     assert!(value["lsp"].get("kill-floor-percent").is_none());
     assert_eq!(value["lsp"]["idle-timeout"], "10m");
+    assert_eq!(value["lsp"]["recycle-factor"], 2);
+    assert_eq!(value["lsp"]["recycle-min"], "2G");
     assert_eq!(value["lsp"]["servers"]["rust"]["policy"], "optional");
     assert_eq!(value["lsp"]["servers"]["rust"]["wait-timeout"], "10m");
     assert_eq!(value["lsp"]["servers"]["rust"]["memory-estimate"], "8G");

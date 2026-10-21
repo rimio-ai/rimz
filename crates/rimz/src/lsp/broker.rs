@@ -82,13 +82,22 @@ impl Settings {
     }
 }
 
+#[derive(Default)]
+struct HousekeepingPolicy {
+    idle_timeout_ms: u64,
+    recycle_factor: u64,
+    recycle_min_kb: u64,
+}
+
 struct Shared {
+    policy: HousekeepingPolicy,
     settings: Arc<Mutex<Settings>>,
     router: mpsc::Sender<router::RouterEvent>,
     model: Mutex<Model>,
     changed: Condvar,
     started: Instant,
     in_flight: std::sync::atomic::AtomicUsize,
+    editor_forwarding: std::sync::atomic::AtomicUsize,
     requests: socket::Requests,
     #[cfg(feature = "testkit")]
     ticks: Mutex<Option<std::os::unix::net::UnixStream>>,
@@ -105,6 +114,7 @@ struct Model {
     stop_epoch: u64,
     refusal: Option<super::admission::Shortfall>,
     lifetime_peak_kb: u64,
+    ready_footprint_kb: Option<u64>,
     dormant_ms: Option<u64>,
     watch_due: Option<Instant>,
 }
@@ -226,7 +236,11 @@ fn serve_inner(
     if request.config.command.is_empty() {
         return Err(LspErr::Configuration("empty server command".into()));
     }
-    super::admission::idle_timeout(&request.policy)?;
+    let policy = HousekeepingPolicy {
+        idle_timeout_ms: super::admission::idle_timeout(&request.policy)?.as_millis() as u64,
+        recycle_factor: request.policy.recycle_factor,
+        recycle_min_kb: super::admission::recycle_min_bytes(&request.policy)? / 1024,
+    };
     nix::unistd::setsid().map_err(std::io::Error::from)?;
     let pid = std::process::id();
     let kind = request.config.resolved_kind();
@@ -301,6 +315,7 @@ fn serve_inner(
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     let (router_tx, router_rx) = mpsc::channel();
     let shared = Arc::new(Shared {
+        policy,
         settings: Arc::new(Mutex::new(Settings {
             kind,
             options: request.config.init_options.clone().unwrap_or(Value::Null),
@@ -318,12 +333,14 @@ fn serve_inner(
             stop_epoch: 0,
             refusal: None,
             lifetime_peak_kb: 0,
+            ready_footprint_kb: None,
             dormant_ms: None,
             watch_due: None,
         }),
         changed: Condvar::new(),
         started: Instant::now(),
         in_flight: std::sync::atomic::AtomicUsize::new(0),
+        editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
         requests: socket::Requests::default(),
         #[cfg(feature = "testkit")]
         ticks: Mutex::new(
@@ -475,6 +492,7 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
     model.entry.ready_at_ms = None;
     model.entry.estimate_bytes = estimate;
     model.lifetime_peak_kb = 0;
+    model.ready_footprint_kb = None;
     model.readiness = Readiness::default();
     model.watch_due = None;
     registry::publish(&model.entry)?;
@@ -666,6 +684,11 @@ fn run(
                         .entry
                         .ready_at_ms
                         .get_or_insert(crate::utils::time::unix_now_ms());
+                    if model.ready_footprint_kb.is_none() {
+                        let reading = memory::tree(server.child.id());
+                        let footprint = reading.rss_kb.saturating_add(reading.swap_kb);
+                        model.ready_footprint_kb = (footprint != 0).then_some(footprint);
+                    }
                 }
                 model.entry.state = state;
                 registry::publish(&model.entry)?;
@@ -772,8 +795,7 @@ fn run(
 }
 
 fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
-    let idle_timeout = super::admission::idle_timeout(&request.policy)?.as_millis() as u64;
-    {
+    let recycled = {
         let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
         let model = &mut *model;
         model
@@ -781,12 +803,11 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
             .retain(&mut model.entry.leases, shared.elapsed(), |lease| {
                 crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
             });
-        model.lifetime_peak_kb = model.lifetime_peak_kb.max(
-            model
-                .entry
-                .server_pid
-                .map_or(0, |pid| memory::tree(pid).peak_kb),
-        );
+        let reading = model
+            .entry
+            .server_pid
+            .map_or_else(memory::Reading::default, memory::tree);
+        model.lifetime_peak_kb = model.lifetime_peak_kb.max(reading.peak_kb);
         model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
         let reason = if !request.root.exists() {
             Some(StopReason::CheckoutRemoved)
@@ -801,10 +822,27 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
                 model.entry.ready_at_ms,
                 model.entry.last_request_at_ms,
                 shared.in_flight.load(std::sync::atomic::Ordering::SeqCst),
-                idle_timeout,
+                shared.policy.idle_timeout_ms,
             )
         {
             Some(StopReason::Idle)
+        } else if model.entry.state == State::Ready
+            && lifecycle::recycle_due(
+                reading.rss_kb.saturating_add(reading.swap_kb),
+                model.ready_footprint_kb,
+                shared.policy.recycle_factor,
+                shared.policy.recycle_min_kb,
+                shared.in_flight.load(std::sync::atomic::Ordering::SeqCst),
+                shared
+                    .editor_forwarding
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                model
+                    .transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.has_outstanding()),
+            )
+        {
+            Some(StopReason::Recycled)
         } else {
             None
         };
@@ -812,7 +850,29 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
             model.stop(reason);
             shared.changed.notify_all();
         }
+        let recycled = (reason == Some(StopReason::Recycled)).then(|| {
+            json!({
+                "rss_kb": reading.rss_kb,
+                "swap_kb": reading.swap_kb,
+                "ready_footprint_kb": model.ready_footprint_kb,
+                "ceiling_kb": model.ready_footprint_kb.map(|ready| lifecycle::recycle_ceiling(
+                    ready,
+                    shared.policy.recycle_factor,
+                    shared.policy.recycle_min_kb,
+                )),
+            })
+        });
         registry::publish(&model.entry)?;
+        recycled
+    };
+    if let Some(details) = recycled {
+        crate::diag::lsp::append(&crate::diag::lsp::Record {
+            at: jiff::Timestamp::now(),
+            root: request.root.clone(),
+            server: request.server.clone(),
+            event: "recycled".into(),
+            details,
+        });
     }
     if let Err(error) = watchdog::check(&request.policy) {
         tracing::warn!(%error, "language-server pressure check failed");
@@ -906,6 +966,7 @@ mod tests {
             stop_epoch: 0,
             refusal: None,
             lifetime_peak_kb: 0,
+            ready_footprint_kb: None,
             dormant_ms: None,
             watch_due: None,
         }

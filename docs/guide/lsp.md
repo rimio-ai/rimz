@@ -183,6 +183,7 @@ If a configured server cannot start, run `rimz doctor` in that checkout. It chec
 A server can free its memory while agents remain:
 
 - **Nobody queries it.** After ten minutes without a query, a ready server becomes `dormant: idle`. Set machine `[lsp] idle-timeout` to change that duration. Startup, indexing, and queries in flight are protected; the check runs every five seconds.
+- **It outgrows itself.** Every five seconds, a ready server above the larger of twice its first-ready footprint (RSS + swap) and 2 GB becomes `dormant: recycled`, once no agent query or editor request is waiting on the server. This also applies with editors attached: they receive a status warning, and their next request restarts the server and can wait for re-indexing. Machine `[lsp] recycle-factor` and `recycle-min` set the ceiling; `recycle-factor = 0` turns recycling off.
 - **The team finishes.** Flipping a cohort to `Done` stops its checkout's servers to `dormant: team done`, without changing the flip's output or stopping agents.
 - **You stop it.** Run `rimz lsp stop --server rust` from the checkout, or `rimz lsp stop --all` for the machine. The server becomes `dormant: stopped by hand`; the next query can restart it.
 - **Another query needs the memory.** Admission can evict an older, idle server to make room, leaving it `dormant: evicted`.
@@ -197,7 +198,7 @@ By default a server is enrichment: `policy = "optional"` defers startup and memo
 
 `required` gates initial launch admission only. Joining an existing broker, including a dormant one, does not repeat that check. After a stop, both policies restart on a query and can refuse for memory, because RimZ never stops agents to keep a server alive.
 
-Machine-only keys control memory: `reserve-percent` and `reserve-min` set both the memory a start must leave untouched and the watchdog's recovery target, and `idle-timeout` controls how long an unused ready server stays resident. Their defaults are in the [reference](../reference/cli/lsp.md#configuration); lower the reserve only on a machine whose agents leave headroom you can see in `rimz lsp list`.
+Machine-only keys control memory: `reserve-percent` and `reserve-min` set both the memory a start must leave untouched and the watchdog's recovery target, `idle-timeout` controls how long an unused ready server stays resident, and `recycle-factor` and `recycle-min` bound growth after readiness. Their defaults are in the [reference](../reference/cli/lsp.md#configuration); lower the reserve only on a machine whose agents leave headroom you can see in `rimz lsp list`.
 
 ## See also
 

@@ -477,6 +477,7 @@ mod tests {
     fn query_at_consumer_never_returns_empty_results_while_indexing() {
         let entry: Entry = serde_json::from_value(json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "indexing", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
         let shared = Shared {
+            policy: Default::default(),
             settings: Arc::new(Mutex::new(super::super::Settings {
                 kind: crate::config::LspServerKind::Generic,
                 options: Value::Null,
@@ -494,12 +495,14 @@ mod tests {
                 stop_epoch: 0,
                 refusal: None,
                 lifetime_peak_kb: 0,
+                ready_footprint_kb: None,
                 dormant_ms: None,
                 watch_due: None,
             }),
             changed: Condvar::new(),
             started: Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
+            editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
             requests: Requests::default(),
             #[cfg(feature = "testkit")]
             ticks: Mutex::new(None),

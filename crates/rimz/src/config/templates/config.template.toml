@@ -201,6 +201,8 @@ aggressive_resize = true
 # reserve-percent = 10                # keep at least this percentage of RAM free (free swap counts as free)
 # reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
 # idle-timeout = "10m"                # stop ready servers after this long without queries (s/m/h)
+# recycle-factor = 2                  # recycle above this multiple of the first ready RSS + swap; 0 disables
+# recycle-min = "2G"                  # minimum recycle ceiling; 0 allows the factor alone
 ## [lsp.servers.rust]
 ## command = ["rust-analyzer"]
 ## extensions = ["rs"]

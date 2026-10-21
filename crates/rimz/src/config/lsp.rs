@@ -10,6 +10,8 @@ pub struct LspConfig {
     pub reserve_percent: u8,
     pub reserve_min: String,
     pub idle_timeout: String,
+    pub recycle_factor: u64,
+    pub recycle_min: String,
     pub servers: BTreeMap<String, LspServerConfig>,
 }
 
@@ -19,6 +21,8 @@ impl Default for LspConfig {
             reserve_percent: 10,
             reserve_min: "8G".to_owned(),
             idle_timeout: "10m".to_owned(),
+            recycle_factor: 2,
+            recycle_min: "2G".to_owned(),
             servers: BTreeMap::new(),
         }
     }

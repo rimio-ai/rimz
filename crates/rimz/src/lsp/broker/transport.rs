@@ -17,6 +17,14 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    pub(super) fn has_outstanding(&self) -> bool {
+        !self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
