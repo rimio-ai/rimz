@@ -15,6 +15,7 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 - A tmux command nested inside another (`if-shell`, `run-shell -C`) resolves an omitted `-t` against the session's current window, not the pane the outer command targets, and managed commands clear `$TMUX`, so the caller's pane does not steer it either. Give every nested window or pane command its own `-t`, and test it against a window that is not current.
 - `resize-pane -x`/`-y` takes space from the nearest ancestor container of that direction, which can hold panes RimZ did not create. Resize only a pane whose container RimZ built, and test the resize with a foreign pane beside or above it.
 - tmux layout behaviour differs across the versions RimZ supports (pane minimums, title rows). A change to the tmux commands RimZ issues runs `cargo xtask test -E 'binary(integration) & test(/^backend::tmux::/)' --retries 0` against the tmux that CI builds (`TMUX_VERSION` in `ci/Dockerfile`) and against the 3.5 floor, each put first on `PATH`, as well as against the local tmux.
+- When a required tmux version is absent, build it from its release tarball (`https://github.com/tmux/tmux/releases/download/<v>/tmux-<v>.tar.gz`, as `ci/Dockerfile` does) with `./configure && make` under `$TMPDIR`, then put the directory holding the built `tmux` first on `PATH`.
 
 ## Ownership and direction
 
