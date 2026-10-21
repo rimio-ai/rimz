@@ -297,6 +297,33 @@ Two rules for a check whose subject is time:
 - A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and do not delegate work to provider subagents, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
 - Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
 
+### Age a card into a stale line with an expired cache
+
+A stale line or an expired cache clock takes a day or an hour at the defaults. Shorten both in the held room, with `$ROOT` and `$BIN` from the room card (`config set` writes `theme.display` keys to the room's `theme.toml` and the rest to `config.toml`; `rimz doctor` confirms both parse):
+
+```sh
+rz() { target/debug/xtask sandbox in "$ROOT" -- "$BIN" --tmux "$@"; }
+rz config set theme.display.stale_after_secs 60
+rz config set harness.prompt_cache_margin 5s
+rz config set harness.prompt_cache_ttl.claude 1m
+rz config set harness.cache_keepalive false
+rz config set harness.idle_compact off
+```
+
+The stub agents carry no session, so feed each one a Claude turn that ends (a statusline gives its card a meter, which is where the full card pins its age clock), then mark it read, since an unread card never shrinks:
+
+```sh
+s=$(uuidgen); w="$ROOT/home/room-worktrees/probe"
+feed() { target/debug/xtask sandbox in "$ROOT" --as '@coder#probe' -- "$BIN" --tmux "$@"; }
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"SessionStart",session_id:$s,cwd:$w,source:"startup"}' | feed hooks feed --source claude
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"UserPromptSubmit",session_id:$s,cwd:$w,prompt:"stale probe"}' | feed hooks feed --source claude
+jq -nc --arg s "$s" '{session_id:$s,model:{id:"claude-sonnet-4-6",display_name:"Sonnet 4.6"},context_window:{context_window_size:200000,used_percentage:20,current_usage:{input_tokens:10000,cache_read_input_tokens:30000,cache_creation_input_tokens:0,output_tokens:100}},cost:{total_cost_usd:0.01}}' | feed statusline feed --source claude
+jq -nc --arg s "$s" --arg w "$w" '{hook_event_name:"Stop",session_id:$s,cwd:$w,last_assistant_message:"done"}' | feed hooks feed --source claude
+rz sidebar mark-read '@coder#probe'
+```
+
+After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the cache clock away for the unknown-lifetime case.
+
 ## Land the team's worktree
 
 A fresh room's `probe` worktree is pristine, not finished, so it draws no receipt and no landed chip. To check a folded finished group, give each agent a finished turn, close the board, and merge a commit from the worktree into the trunk. The `--no-ff` merge matters: the branch commit that is not on the trunk's first-parent line is the evidence that the worktree did work. Run this with `$ROOT`, `$BIN` and `<mux>` from the room card:
