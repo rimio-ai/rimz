@@ -308,13 +308,17 @@ fn refusal_recovered(
     entries: &[rimz::lsp::registry::Entry],
 ) -> bool {
     use rimz::lsp::broker::probe::Outcome;
+    // The startup probe spawns without admission, so its `Started` proves a
+    // configuration repair but says nothing about memory.
+    let memory = refusal_shortfall(record).is_some();
     checks.iter().any(|check| {
         check.root == record.root
             && check.server == record.server
-            && matches!(
-                check.outcome,
-                Outcome::Running { .. } | Outcome::Started { .. }
-            )
+            && match check.outcome {
+                Outcome::Running { .. } => true,
+                Outcome::Started { .. } => !memory,
+                _ => false,
+            }
     }) || entries.iter().any(|entry| {
         entry.root == record.root
             && entry.server == record.server
@@ -322,6 +326,12 @@ fn refusal_recovered(
             && i128::from(entry.ready_at_ms.unwrap_or(entry.started_at_ms))
                 > i128::from(record.at.as_millisecond())
     })
+}
+
+/// The memory figures of a refusal admission recorded for lack of memory;
+/// `None` for a configuration refusal, whose details carry only its reason.
+fn refusal_shortfall(record: &rimz::diag::lsp::Record) -> Option<rimz::lsp::admission::Shortfall> {
+    serde_json::from_value(record.details.clone()).ok()
 }
 
 fn collect_home() -> model::Home {

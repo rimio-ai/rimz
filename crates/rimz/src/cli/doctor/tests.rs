@@ -18,20 +18,41 @@ fn progress_label_tracks_oldest_in_flight_check() {
 
 #[test]
 fn refusals_clear_only_for_matching_success_or_later_start() {
+    let shortfall = serde_json::json!({
+        "root": "/checkout", "server": "rust", "estimate_bytes": 8_000_000_000_u64,
+        "available_bytes": 3_000_000_000_u64, "reserve_bytes": 1_000_000_000_u64,
+        "holders": [{"root": "/holder", "server": "rust", "rss_bytes": 4_000_000_000_u64}]
+    });
+    for (event, details, memory) in [
+        (
+            "refused",
+            serde_json::json!({"reason": "server exited"}),
+            false,
+        ),
+        ("refused", shortfall.clone(), true),
+        ("queue_timeout", shortfall, true),
+    ] {
+        let record = rimz::diag::lsp::Record {
+            at: jiff::Timestamp::from_millisecond(1000).unwrap(),
+            root: "/checkout".into(),
+            server: "rust".into(),
+            event: event.into(),
+            details,
+        };
+        refusal_clears(&record, memory);
+    }
+}
+
+/// A probe `Started` bypasses admission, so it clears only a configuration
+/// refusal; a running server or a later start clears either kind.
+fn refusal_clears(record: &rimz::diag::lsp::Record, memory: bool) {
     use rimz::lsp::broker::probe::{Check, Outcome};
-    let record = rimz::diag::lsp::Record {
-        at: jiff::Timestamp::from_millisecond(1000).unwrap(),
-        root: "/checkout".into(),
-        server: "rust".into(),
-        event: "refused".into(),
-        details: serde_json::json!({}),
-    };
     for (root, server, outcome, expected) in [
         (
             "/checkout",
             "rust",
             Outcome::Started { version: None },
-            true,
+            !memory,
         ),
         (
             "/checkout",
@@ -60,7 +81,7 @@ fn refusals_clear_only_for_matching_success_or_later_start() {
     ] {
         assert_eq!(
             super::refusal_recovered(
-                &record,
+                record,
                 &[Check {
                     root: root.into(),
                     server: server.into(),
@@ -69,7 +90,8 @@ fn refusals_clear_only_for_matching_success_or_later_start() {
                 &[]
             ),
             expected,
-            "{root} {server}"
+            "{} {root} {server}",
+            record.event
         );
     }
     for (root, server, started, expected) in [
@@ -84,7 +106,7 @@ fn refusals_clear_only_for_matching_success_or_later_start() {
             "state": "ready", "started_at_ms": started, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
         })).unwrap();
         assert_eq!(
-            super::refusal_recovered(&record, &[], &[entry]),
+            super::refusal_recovered(record, &[], &[entry]),
             expected,
             "{root} {server} {started}"
         );
@@ -104,7 +126,7 @@ fn refusals_clear_only_for_matching_success_or_later_start() {
             "root": "/checkout", "server": "rust", "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
             "state": state, "started_at_ms": started, "ready_at_ms": ready, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
         })).unwrap();
-        assert_eq!(super::refusal_recovered(&record, &[], &[entry]), expected);
+        assert_eq!(super::refusal_recovered(record, &[], &[entry]), expected);
     }
 }
 
