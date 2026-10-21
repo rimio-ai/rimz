@@ -1877,7 +1877,37 @@ fn marker_path_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>
     Ok(git_admin_dir_from_checkout_metadata(worktree)?.map(|path| path.join(MARKER_FILE)))
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("cannot read checkout metadata at {path}: {source}")]
+pub(crate) struct CheckoutDiscoveryErr {
+    pub(crate) path: PathBuf,
+    pub(crate) source: std::io::Error,
+}
+
+/// Find the enclosing checkout by resolving `.git` metadata and requiring HEAD.
+pub(crate) fn discover_checkout(
+    start: &Path,
+) -> std::result::Result<Option<PathBuf>, CheckoutDiscoveryErr> {
+    for ancestor in start.ancestors() {
+        let git = git_admin_dir_from_checkout_metadata(ancestor).map_err(|error| {
+            CheckoutDiscoveryErr {
+                path: ancestor.join(".git"),
+                source: match error {
+                    WorktreeErr::Io(source) => source,
+                    error => std::io::Error::other(error),
+                },
+            }
+        })?;
+        if git.is_some_and(|dir| dir.join("HEAD").is_file()) {
+            return Ok(Some(ancestor.to_path_buf()));
+        }
+    }
+    Ok(None)
+}
+
 /// Resolve a checkout's Git admin directory without spawning Git.
+///
+/// This does not validate repository contents: even an empty `.git` directory passes.
 pub(crate) fn git_admin_dir_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>> {
     let dot_git = worktree.join(".git");
     if dot_git.is_dir() {

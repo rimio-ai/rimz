@@ -1612,7 +1612,18 @@ path = "crates/rimz/src/worktree"
 # Typed state, holders, shared inspection and LandedMemo serve all CLI verbs.
 # LandingPlan, landing_plan and land replace merge_to_main (+2).
 # discover_owned_cached shares host polling enumeration between conditions and timer firing (+1).
-surface-budget = 79
+# discover_checkout and CheckoutDiscoveryErr carry validated checkout discovery into launch compilation (+2).
+surface-budget = 81
+
+[[verdict]]
+kind = "item"
+key = "worktree::discover_checkout"
+reason = "Launch compilation resolves the HEAD-validated checkout once for scoped protection and judge overlays."
+
+[[verdict]]
+kind = "item"
+key = "worktree::CheckoutDiscoveryErr"
+reason = "Launch compilation preserves the failing ancestor's metadata path in the existing scoped-path refusal."
 
 [[verdict]]
 kind = "item"

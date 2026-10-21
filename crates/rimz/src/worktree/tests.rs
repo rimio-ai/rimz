@@ -4,6 +4,39 @@ use crate::agents::attribution::slot_groups;
 
 use super::*;
 
+#[test]
+fn checkout_discovery_requires_head_and_skips_stray_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let nested = repo.join("nested");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(nested.join(".git")).unwrap();
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert_eq!(discover_checkout(&nested).unwrap(), Some(repo.clone()));
+    std::fs::remove_file(repo.join(".git/HEAD")).unwrap();
+    assert_eq!(discover_checkout(&nested).unwrap(), None);
+    std::fs::remove_dir(nested.join(".git")).unwrap();
+    for contents in ["", "not a gitdir", "gitdir: missing", "gitdir: ../.git"] {
+        std::fs::write(nested.join(".git"), contents).unwrap();
+        assert_eq!(discover_checkout(&nested).unwrap(), None, "{contents}");
+    }
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert_eq!(discover_checkout(&nested).unwrap(), Some(nested.clone()));
+    let cwd = nested.join("deep");
+    std::fs::create_dir(&cwd).unwrap();
+    assert_eq!(discover_checkout(&cwd).unwrap(), Some(nested));
+}
+
+#[test]
+fn checkout_discovery_refuses_unreadable_git_file() {
+    let root = tempfile::tempdir().unwrap();
+    let dot_git = root.path().join(".git");
+    std::os::unix::fs::symlink(".git", &dot_git).unwrap();
+    let error = discover_checkout(root.path()).unwrap_err();
+    assert_eq!(error.path, dot_git);
+    assert_eq!(error.source.raw_os_error(), Some(nix::libc::ELOOP));
+}
+
 fn at(seconds: i64) -> Timestamp {
     Timestamp::from_second(seconds).expect("test timestamp")
 }

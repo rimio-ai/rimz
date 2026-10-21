@@ -120,6 +120,8 @@ pub struct SandboxInputs<'a> {
     pub cwd: &'a Path,
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
+    /// The enclosing Git checkout, resolved by the compiler; absent for empty-dir launches.
+    pub checkout: Option<&'a Path>,
     pub read_only: Vec<PathBuf>,
     pub tmp_dir: &'a Path,
     pub skills_dir: &'a Path,
@@ -467,15 +469,33 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         });
     }
     let mut read_only_overlays = BTreeSet::new();
+    let provider_homes: Vec<_> = inputs
+        .provider_home
+        .iter()
+        .flat_map(|home| [&home.source, &home.target])
+        .chain(inputs.default_home.iter())
+        .map(|home| {
+            home.canonicalize()
+                .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(home))
+        })
+        .collect();
     for path in protected_paths(inputs)
         .into_iter()
         .filter(|path| path.exists())
     {
         validate_path(&path)?;
-        if let Some(view) = views.dir.as_ref().filter(|view| {
-            view.root
-                .starts_with(path.canonicalize().unwrap_or_else(|_| path.clone()))
-        }) {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if provider_homes
+            .iter()
+            .any(|home| resolved.starts_with(home) || home.starts_with(&resolved))
+        {
+            continue;
+        }
+        if let Some(view) = views
+            .dir
+            .as_ref()
+            .filter(|view| view.root.starts_with(&resolved))
+        {
             // Build the skill overlay before making its parent read-only; a late
             // parent bind would hide the overlay and restore native discovery.
             mounts.push(Mount::Bind {
@@ -554,21 +574,18 @@ fn protected_paths(inputs: &SandboxInputs<'_>) -> BTreeSet<PathBuf> {
             .map(|entry| Path::new(home).join(entry)),
         );
     }
-    let checkout = inputs
-        .cwd
-        .ancestors()
-        .find(|path| path.join(".git").exists())
-        .unwrap_or(inputs.cwd);
-    let git = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| checkout.join(".git"));
-    let git = std::fs::read_to_string(git.join("commondir")).map_or_else(
-        |_| git.clone(),
-        |common| crate::utils::path::normalize_path_lexical(&git.join(common.trim())),
-    );
-    paths.extend([git.join("hooks"), git.join("config")]);
-    for root in [checkout, inputs.project_root] {
+    if let Some(checkout) = inputs.checkout {
+        let git = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| checkout.join(".git"));
+        let git = std::fs::read_to_string(git.join("commondir")).map_or_else(
+            |_| git.clone(),
+            |common| crate::utils::path::normalize_path_lexical(&git.join(common.trim())),
+        );
+        paths.extend([git.join("hooks"), git.join("config")]);
+    }
+    for root in [inputs.checkout.unwrap_or(inputs.cwd), inputs.project_root] {
         paths.extend([".claude", ".codex", ".agents", ".mcp.json"].map(|entry| root.join(entry)));
     }
     paths
@@ -721,6 +738,7 @@ mod tests {
             cwd,
             project_root: Path::new("/project"),
             worktree: None,
+            checkout: None,
             read_only: Vec::new(),
             tmp_dir: unit,
             skills_dir: &state().agent_skills_dir(Some("otter")),
@@ -744,6 +762,7 @@ mod tests {
             cwd: checkout.path(),
             project_root: checkout.path(),
             worktree: None,
+            checkout: None,
             read_only: vec![checkout.path().to_path_buf()],
             tmp_dir: Path::new("/state/tmp/unit"),
             skills_dir: Path::new("/state/skills"),
