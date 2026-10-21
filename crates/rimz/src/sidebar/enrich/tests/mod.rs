@@ -108,6 +108,35 @@ fn provider_labels_include_only_non_default_logins() {
 }
 
 #[test]
+fn account_label_from_machine_config_reaches_cached_panels() {
+    let key: crate::ids::LoginKey = "codex@team-1".parse().unwrap();
+    let mut config = crate::config::MachineConfig::default();
+    config.accounts.codex.insert(
+        key.name.clone(),
+        crate::config::NamedAccount {
+            home: Some(PathBuf::from("/srv/rimz-test-team")),
+            label: Some("work".to_owned()),
+            ..Default::default()
+        },
+    );
+    let logins = crate::agents::RoomLoginSet::new(
+        Some(crate::ids::RoomLogins::from([(key.kind.clone(), key.name.clone())]).into()),
+        Some(crate::agents::LoginCatalog::from_config(&config.accounts).unwrap()),
+        BTreeMap::new(),
+    );
+    let (_dir, runtime, _) = runtime();
+    let panels = provider_panels_from_caches(
+        &runtime,
+        &logins,
+        &config,
+        BTreeMap::from([(key.clone(), metered_account())]),
+        &Default::default(),
+    );
+    assert_eq!(panels[0].product_name, "Codex · work");
+    assert_eq!(panels[0].login_key(), key);
+}
+
+#[test]
 fn dashboard_shows_only_the_rooms_current_account_per_provider() {
     let config: crate::config::MachineConfig =
         toml::from_str("[accounts.codex.team-1]\nhome = \"/srv/rimz-test-team\"\n").unwrap();

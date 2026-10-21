@@ -145,14 +145,15 @@ impl ConfigEditor {
     }
 
     /// Declare `[accounts.<kind>.<name>]`, or set the given fields of a
-    /// declared one. An account with neither field is written as an empty
-    /// table so the default location and history mode stay derived.
+    /// declared one. An empty label removes that field. An account with no
+    /// fields is written as an empty table so its defaults stay derived.
     pub fn upsert_named_account(
         &self,
         kind: &crate::ids::AgentKind,
         name: &crate::ids::LoginName,
         home: Option<&Path>,
         history: Option<super::AccountHistory>,
+        label: Option<&str>,
     ) -> Result<()> {
         let file = self.files.file(MachineConfigFileKind::Core);
         let text = read_config_or_template(file.path(), file.template())?;
@@ -161,6 +162,10 @@ impl ConfigEditor {
         let fields = [
             ("home", home.map(|home| home.to_string_lossy().into_owned())),
             ("history", history.map(|mode| mode.as_str().to_owned())),
+            (
+                "label",
+                label.filter(|label| !label.is_empty()).map(str::to_owned),
+            ),
         ];
         if fields.iter().all(|(_, value)| value.is_none()) {
             if item_at(&doc, &key).is_none() {
@@ -178,6 +183,10 @@ impl ConfigEditor {
                 Value::from(value),
                 self.files.agents_home(),
             )?;
+        }
+        if label == Some("") {
+            table_at_mut(&mut doc, &key)?.remove("label");
+            validate_merged_text(file.path(), &doc.to_string(), self.files.agents_home())?;
         }
         write(file.path(), doc.to_string().as_bytes())
     }
@@ -1013,7 +1022,7 @@ fn is_unknown_get_shape(path: &[String]) -> bool {
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "use" && path.len() > 3)
-        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && !matches!(field.as_str(), "home" | "history"))
+        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && !matches!(field.as_str(), "home" | "history" | "label"))
         || matches!(path, [root, child, _, _, _, ..] if root == "accounts" && is_named_account_kind(child))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(
@@ -1126,6 +1135,7 @@ fn parse_edit_value(raw: &str) -> Value {
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && field == "auto-compact")
         || matches!(path, [root, child, _] if root == "accounts" && child == "use")
+        || matches!(path, [root, kind, _, field] if root == "accounts" && is_named_account_kind(kind) && field == "label")
         || matches!(path, [root, _, _] if root == "models")
         || is_harness_smart_compact_edit(path)
         || is_harness_auto_compact_edit(path)
@@ -1157,6 +1167,15 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if matches!(path, [root, kind, _, field] if root == "accounts" && is_named_account_kind(kind) && field == "label")
+    {
+        let Some(label) = value.as_str() else {
+            invalid_value!("{} must be a string", path.join("."));
+        };
+        if let Err(error) = super::NamedAccount::validate_label(label) {
+            invalid_value!("{} {error}", path.join("."));
+        }
+    }
     if matches!(path, [root, leaf] if root == "gc" && leaf == "transcript_retention") {
         super::TranscriptRetention::parse(value.as_str().unwrap_or_default())
             .map_err(ConfigEditErr::InvalidValue)?;

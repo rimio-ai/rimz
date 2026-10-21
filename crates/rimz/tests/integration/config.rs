@@ -1798,3 +1798,52 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
     assert!(!link.exists() && !link.is_symlink());
     assert!(native.join("projects").is_dir());
 }
+
+#[test]
+fn config_set_get_account_label_validates_only_the_label_write() {
+    let env = Env::new();
+    let key = "accounts.codex.team-1.label";
+    env.rimz()
+        .args(["config", "set", key, "work"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["config", "get", key])
+        .assert()
+        .success()
+        .stdout("work\n");
+    let declared = std::fs::read_to_string(machine_config_path(&env)).unwrap();
+    for (label, rule) in [
+        ("", "empty"),
+        (" work", "leading or trailing whitespace"),
+        ("wo\nrk", "control characters"),
+        ("\n", "control characters"),
+        (&"界".repeat(17), "at most 32 columns wide"),
+        (&"x".repeat(33), "at most 32 columns wide"),
+        ("\u{200b}", "empty"),
+    ] {
+        env.rimz()
+            .args(["config", "set", key, label])
+            .assert()
+            .failure()
+            .stderr(contains(rule));
+        assert_eq!(
+            std::fs::read_to_string(machine_config_path(&env)).unwrap(),
+            declared
+        );
+    }
+    std::fs::write(
+        machine_config_path(&env),
+        declared.replace("label = \"work\"", "label = ''"),
+    )
+    .unwrap();
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.codex.team-1.history",
+            "standalone",
+        ])
+        .assert()
+        .success();
+}

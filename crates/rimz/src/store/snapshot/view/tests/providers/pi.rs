@@ -21,6 +21,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![pi_reading.clone()]),
     ])
     .with_provider_aggregates(
+        &Default::default(),
         &probed,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -40,6 +41,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         agent("pi", "p1", AgentStatus::Idle, 20),
     ])
     .with_provider_aggregates(
+        &Default::default(),
         &probed,
         &BTreeMap::new(),
         &BTreeMap::new(),

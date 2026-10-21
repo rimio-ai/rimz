@@ -664,7 +664,7 @@ Stacked blocks (`provider_tabs = "never"`):
 
 A bar's filled part is the budget left. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
-A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. The header names the account (here a login named `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
+A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
 
 ```
 ────────────────────────────────────────────────────────────────────────────────────────────────────

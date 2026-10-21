@@ -1111,7 +1111,13 @@ pub(super) fn fold_machine_config_with(
             ))
         })
         .collect();
-    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, &spending, &shown)
+    snapshot.with_provider_aggregates(
+        &config.accounts,
+        &accounts,
+        &remote_control_flags,
+        &spending,
+        &shown,
+    )
 }
 
 /// Derive the rc badge from enablement and the managed-server probe. An absent

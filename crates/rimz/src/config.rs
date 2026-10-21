@@ -59,7 +59,9 @@ mod worktree;
 
 #[cfg(test)]
 pub(crate) use accounts::UsageLimitUsd;
-pub use accounts::{AccountBudgetConfigError, AccountHistory, AccountsConfig, NamedAccount};
+pub use accounts::{
+    AccountBudgetConfigError, AccountHistory, AccountLabelError, AccountsConfig, NamedAccount,
+};
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
     CommandsConfig, DONE_STAGE, HibernateConfig, HibernateScheduleErr, Isolation, LaunchPlacement,
@@ -469,9 +471,10 @@ impl ConfigNotices {
     }
 }
 
-/// Per-machine configuration. Lenient on unknown keys so a newer config never
-/// breaks an older binary, and every field defaults so the smallest useful file
-/// is a single section.
+/// Per-machine configuration. Unknown keys normally warn rather than refusing
+/// the file. [`NamedAccount`] is strict: a mistyped `home` must not launch into
+/// another home, so newer account fields can make an older binary refuse it.
+/// Every field defaults so the smallest useful file is a single section.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
@@ -1352,11 +1355,10 @@ fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConf
     Ok(parsed)
 }
 
-/// Tables the `[agents]` redesign removed. Serde tolerates unknown keys so a
-/// newer config never breaks an older binary, but a *renamed* table is not a
-/// forward-compatible unknown — silently dropping it would launch a surface the
-/// user never declared. Fail fast naming the rename instead. A genuine syntax
-/// error is left to the typed parse to report.
+/// Tables the `[agents]` redesign removed. Unknown keys normally warn, but a
+/// *renamed* table is not a forward-compatible unknown — dropping it would
+/// launch a surface the user never declared. Fail fast naming the rename
+/// instead. A genuine syntax error is left to the typed parse to report.
 fn check_removed_core_keys(path: &Path, text: &str) -> Result<()> {
     let Ok(doc) = toml::from_str::<toml::Table>(text) else {
         return Ok(());

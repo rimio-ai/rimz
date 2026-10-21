@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn account_labels_title_panels_without_merging_login_identity() {
+    let mut config = crate::config::AccountsConfig::default();
+    let mut agents = Vec::new();
+    for name in ["team-1", "team-2"] {
+        config.codex.insert(
+            name.parse().unwrap(),
+            crate::config::NamedAccount {
+                label: Some("work".to_owned()),
+                ..Default::default()
+            },
+        );
+        let mut state = agent("codex", name, AgentStatus::Idle, 10);
+        state.login = Some(name.parse().unwrap());
+        agents.push(state);
+    }
+    let panels = room_with_agent_panes(agents)
+        .with_provider_aggregates(
+            &config,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &shown(&["codex@team-1", "codex@team-2"]),
+        )
+        .providers;
+    assert_eq!(panels.len(), 2);
+    assert_ne!(panels[0].login_key(), panels[1].login_key());
+    assert!(
+        panels
+            .iter()
+            .all(|panel| panel.product_name == "Codex · work"),
+        "{panels:?}"
+    );
+}
+
+#[test]
+fn account_label_title_falls_back_to_name_when_invalid() {
+    for (label, expected) in [
+        ("work", "Codex · work"),
+        ("", "Codex · team-1"),
+        (" work", "Codex · team-1"),
+    ] {
+        let config = crate::config::AccountsConfig {
+            codex: BTreeMap::from([(
+                "team-1".parse().unwrap(),
+                crate::config::NamedAccount {
+                    label: Some(label.to_owned()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let mut state = agent("codex", "team", AgentStatus::Idle, 10);
+        state.login = Some("team-1".parse().unwrap());
+        let panels = room(vec![state])
+            .with_provider_aggregates(
+                &config,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &shown(&["codex@team-1"]),
+            )
+            .providers;
+        assert_eq!(panels[0].product_name, expected);
+    }
+}
+
+#[test]
 fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
     let accounts = provider_accounts([("codex", 10), ("pi", 20)]);
@@ -15,6 +82,7 @@ fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 3;
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &by_provider,
@@ -27,6 +95,7 @@ fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &by_provider,
@@ -45,6 +114,7 @@ fn session_windows_rank_lexicographically() {
         ("pi", 0, 0, 1_000),
     ]);
     let snapshot = room(Vec::new()).with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &spending,
@@ -62,6 +132,7 @@ fn login_and_credential_recency_break_unused_live_ties() {
     ];
     let accounts = provider_accounts([("codex", 10), ("pi", 20)]);
     let snapshot = room(agents).with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -78,6 +149,7 @@ fn full_usage_tie_falls_back_to_registry_order() {
         agent("claude", "c1", AgentStatus::Idle, 30),
     ])
     .with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -103,6 +175,7 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
     // Default `auto` tabs at five providers; a tight cap must not trim them.
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -120,6 +193,7 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
 fn provider_brand_color_carries_rgb_and_indexed_fallback() {
     let panel_for = |mut snapshot: SidebarSnapshot| {
         snapshot = snapshot.with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -138,6 +212,7 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
 
     let grok = room(vec![agent("grok", "g1", AgentStatus::Idle, 10)])
         .with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -208,6 +283,7 @@ fn provider_panels_carry_descriptor_window_placeholders() {
         agent("unregistered", "u1", AgentStatus::Idle, 20),
     ])
     .with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -233,6 +309,7 @@ fn provider_panels_carry_descriptor_window_placeholders() {
 fn copilot_catalog_tints_survive_color_overrides_but_not_art_overrides() {
     let panel_for = |mut snapshot: SidebarSnapshot| {
         snapshot = snapshot.with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -319,6 +396,7 @@ fn provider_list_filters_and_orders_dashboard_panels() {
             provider_list.into_iter().map(str::to_owned).collect();
 
         let snapshot = snapshot.with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -340,6 +418,7 @@ fn provider_list_all_expands_remaining_in_usage_order() {
     let mut snapshot = room(agents);
     snapshot.theme.display.provider_list = vec!["claude".to_owned(), "all".to_owned()];
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &spending,
@@ -370,6 +449,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
     );
 
     let spend_only = snapshot.clone().with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &by_provider,
@@ -394,6 +474,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
         },
     );
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &probed,
         &BTreeMap::new(),
         &by_provider,
@@ -414,7 +495,13 @@ fn idle_provider_presence_requires_account_substance() {
                        spending: BTreeMap<crate::ids::LoginKey, SpendTally>| {
         let accounts = BTreeMap::from([(provider_key("kimi"), account)]);
         room(Vec::new())
-            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending, &shown(&["kimi"]))
+            .with_provider_aggregates(
+                &Default::default(),
+                &accounts,
+                &BTreeMap::new(),
+                &spending,
+                &shown(&["kimi"]),
+            )
             .providers
             .len()
     };
@@ -455,6 +542,7 @@ fn idle_provider_presence_requires_account_substance() {
 
     let accounts = BTreeMap::from([(provider_key("kimi"), credentials_only)]);
     let live = room(vec![agent("kimi", "k1", AgentStatus::Idle, 10)]).with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -473,6 +561,7 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
     };
     let mut accounts = BTreeMap::from([(provider_key("antigravity"), account.clone())]);
     let initial = room(Vec::new()).with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -503,6 +592,7 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
     account.plan = None;
     accounts.insert(provider_key("antigravity"), account);
     let with_quota = room(vec![agent]).with_provider_aggregates(
+        &Default::default(),
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -534,6 +624,7 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
     let snapshot = room(vec![older, newer])
         .with_live_panes(vec![live], None)
         .with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -559,6 +650,7 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
     let identityless = identityless
         .with_live_panes(vec![pane("%2", "agy", "/repo/main")], None)
         .with_provider_aggregates(
+            &Default::default(),
             &accounts,
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -579,6 +671,7 @@ fn launched_child_counts_as_a_live_provider_session() {
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
     let snapshot = room_with_agent_panes(vec![parent, child]).with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -613,6 +706,7 @@ fn active_session_count_does_not_replace_real_provider_history() {
     let snapshot = room(vec![session])
         .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
         .with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &spending,
@@ -686,7 +780,13 @@ fn fold_builds_a_block_only_for_each_passed_login() {
     )]);
     let fold = |logins: &[&str]| {
         room_with_agent_panes(vec![native.clone(), work.clone()])
-            .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new(), &shown(logins))
+            .with_provider_aggregates(
+                &Default::default(),
+                &probed,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &shown(logins),
+            )
             .providers
             .into_iter()
             .map(|panel| (panel.product_name, panel.active_sessions))
@@ -716,6 +816,7 @@ fn a_login_outside_the_set_takes_no_cap_slot() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -753,6 +854,7 @@ fn panel_version_is_the_newest_reported_whichever_session_spoke_last() {
     let version = |sessions: Vec<AgentState>, probed: &BTreeMap<_, _>| {
         room(sessions)
             .with_provider_aggregates(
+                &Default::default(),
                 probed,
                 &BTreeMap::new(),
                 &BTreeMap::new(),

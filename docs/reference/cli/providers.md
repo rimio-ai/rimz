@@ -18,7 +18,7 @@ Flags follow the accounts command. The alias retains cached login records within
 | `account` | Canonical `kind@name`, replacing the former bare account name. |
 | `pool` | History pool as `kind@name`. Rows with equal pools share a spend tally; deduplicate by this key. |
 | `probe_error` | Cause text, such as `timed out` or `exited 1`, present only after a failed probe. |
-| `product_name` | Display name; `Claude · work` for a named account. |
+| `product_name` | Dashboard title: the theme-resolved product, with ` · <label>` for a named account with a valid display label, otherwise ` · <name>`; `default` has no suffix. |
 | `status` | `logged_in`, `logged_out` (no login found, or the provider offers no login check), or `unavailable` (the probe did not complete). An `unavailable` account can still carry facts from its last good probe. |
 | `entitlement` | `"ok"`, or `{"lapsed":{"since_ms":N}}` when subscription access was rejected; `N` is the first-seen Unix-millisecond timestamp. Independent of `status`. |
 | `probed_at` | RFC 3339 time of the last account probe. |

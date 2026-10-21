@@ -776,6 +776,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "account": "claude@work",
             "home": home_arg,
             "history": "shared",
+            "label": null,
             "machine_default": false,
             "status": "login_unknown",
             "login": "unavailable",
@@ -979,6 +980,120 @@ fn accounts_add_history_writes_only_that_field() {
     );
 }
 
+#[test]
+fn accounts_add_label_sets_rewrites_preserves_and_clears_only_the_label() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    let home = env.home_root.join("work-home");
+    succeeded(&accounts(
+        &env,
+        &[
+            "add",
+            "claude",
+            "team-1",
+            "--home",
+            home.to_str().unwrap(),
+            "--history",
+            "standalone",
+            "--label",
+            "work",
+        ],
+    ));
+    let declared = std::fs::read_to_string(&config).unwrap();
+    assert!(declared.contains("label = \"work\""), "{declared}");
+    let commented = declared.replace("label = \"work\"", "label = \"work\" # display only");
+    std::fs::write(&config, &commented).unwrap();
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "team-1", "--label", "personal"],
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        commented.replace("label = \"work\"", "label = \"personal\"")
+    );
+    let labelled = std::fs::read_to_string(&config).unwrap();
+    succeeded(&accounts(&env, &["add", "claude", "team-1"]));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), labelled);
+    succeeded(&accounts(&env, &["add", "claude", "team-1", "--label", ""]));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        declared.replace("label = \"work\"\n", "")
+    );
+}
+
+#[test]
+fn accounts_add_invalid_label_never_writes_or_creates_a_home() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    std::fs::write(&config, "# machine\n").unwrap();
+    let home = env.home_root.join("work-home");
+    for (label, rule) in [
+        (" work", "leading or trailing whitespace"),
+        ("work ", "leading or trailing whitespace"),
+        ("wo\nrk", "control characters"),
+        ("\n", "control characters"),
+        (&"界".repeat(17), "at most 32 columns wide"),
+        (&"x".repeat(33), "at most 32 columns wide"),
+        ("\u{200b}", "empty"),
+    ] {
+        let error = failed(&accounts(
+            &env,
+            &[
+                "add",
+                "codex",
+                "team-1",
+                "--home",
+                home.to_str().unwrap(),
+                "--label",
+                label,
+            ],
+        ));
+        assert!(error.contains(rule), "{error}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "# machine\n");
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn accounts_invalid_label_warns_but_keeps_the_named_account() {
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.codex.team-1]\nhome = '{}'\nlabel = '{}'\n",
+            env.home_root.join("team-1").display(),
+            "界".repeat(17)
+        ),
+    )
+    .unwrap();
+    for args in [
+        &["list", "--json"][..],
+        &["show", "codex@team-1", "--json"][..],
+    ] {
+        let output = accounts(&env, args);
+        let warning = String::from_utf8_lossy(&output.stderr);
+        for text in [
+            "rimz: warning:",
+            "accounts.codex.team-1.label",
+            "at most 32 columns wide",
+            "name instead",
+            "rimz accounts add codex team-1 --label",
+            "--label ''",
+        ] {
+            assert!(warning.contains(text), "{warning}");
+        }
+        let rows: Value = serde_json::from_str(&succeeded(&output)).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == "codex@team-1")
+            .unwrap();
+        assert_eq!(row.get("label"), Some(&Value::Null));
+        assert_eq!(row["product_name"], "Codex · team-1");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn accounts_add_history_keeps_the_declared_mode_when_the_switch_is_refused() {
@@ -1006,7 +1121,18 @@ fn accounts_add_history_keeps_the_declared_mode_when_the_switch_is_refused() {
     std::fs::create_dir_all(home.join("projects")).unwrap();
     std::fs::create_dir_all(native.join("projects")).unwrap();
     std::fs::write(home.join(".rimz-aside"), "").unwrap();
-    let refused = accounts(&env, &["add", "claude", "work", "--history", "shared"]);
+    let refused = accounts(
+        &env,
+        &[
+            "add",
+            "claude",
+            "work",
+            "--history",
+            "shared",
+            "--label",
+            "work",
+        ],
+    );
 
     let error = failed(&refused);
     assert!(error.contains("cannot link"), "{error}");

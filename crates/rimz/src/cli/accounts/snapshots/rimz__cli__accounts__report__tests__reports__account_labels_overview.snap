@@ -1,0 +1,17 @@
+---
+source: crates/rimz/src/cli/accounts/report_tests.rs
+expression: text
+---
+Claude
+   NAME      PLAN           AGENTS  SPEND 7d  READING
+   default   not installed  –       shared    never read
+○  missing   not installed  –       -         never read
+   personal  not installed  –       shared    never read
+
+Codex
+   NAME     LABEL  PLAN           AGENTS  READING
+●  default         not installed  –       never read
+   team-1   work   not installed  –       never read
+   team-2          not installed  –       never read
+
+● next launch from here (this room)   ○ new rooms

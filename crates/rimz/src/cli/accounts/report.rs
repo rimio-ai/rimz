@@ -56,6 +56,9 @@ pub(super) fn list(
         .ensure_shared_dirs()
         .context("preparing shared provider cache paths")?;
     let config = MachineConfig::load_lenient();
+    for (_, warning) in config.accounts.label_warnings() {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {warning}")?;
+    }
     let (standing, in_room) = match super::super::position_standing(globals, &config) {
         Ok(standing) => standing,
         Err(error) => {
@@ -419,11 +422,12 @@ fn build_report(
         product_name: panel
             .map(|panel| panel.product_name.clone())
             .unwrap_or_else(|| {
-                if login.name().is_default() {
-                    definition.display_name.to_owned()
-                } else {
-                    format!("{} · {}", definition.display_name, login.name())
-                }
+                let identity =
+                    rimz::theme::resolve_provider_identity(kind, &context.config.theme.providers);
+                context
+                    .config
+                    .accounts
+                    .provider_title(&identity.product_name, &login.key())
             }),
         status: ProviderStatus::from_record(record),
         entitlement,
@@ -487,6 +491,7 @@ struct AccountRow {
     home: Option<PathBuf>,
     /// `None` for `default` and for a selected account nothing declares.
     history: Option<AccountHistory>,
+    label: Option<String>,
     machine_default: bool,
     /// A setup or subscription-access problem, with its fix when available.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -660,44 +665,36 @@ fn account_rows(
     readings: &BTreeMap<LoginKey, LoginReading>,
     errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
 ) -> Vec<AccountRow> {
-    let row =
-        |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
+    let row = |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| {
+        let key = LoginKey {
             kind: kind.clone(),
-            account: LoginKey {
-                kind: kind.clone(),
-                name: name.clone(),
-            },
+            name: name.clone(),
+        };
+        AccountRow {
+            kind: kind.clone(),
+            account: key.clone(),
             home,
             history: accounts
                 .named(kind)
                 .and_then(|declared| declared.get(name))
                 .map(|account| account.history),
+            label: accounts.label(&key).map(str::to_owned),
             machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
             status: AccountStatus::of(problem.as_ref()),
             entitlement: Entitlement::Ok,
             problem: problem.map(|err| err.to_string()),
             active: standing.active(kind).as_ref() == Some(name),
             default_for: standing.scopes(kind, name),
-            agents: agents.map(|agents| {
-                agents
-                    .get(&LoginKey {
-                        kind: kind.clone(),
-                        name: name.clone(),
-                    })
-                    .copied()
-                    .unwrap_or_default()
-            }),
+            agents: agents.map(|agents| agents.get(&key).copied().unwrap_or_default()),
             windows: Vec::new(),
             extra_credits: None,
             reset_credits: None,
             spend_step: None,
             metered: None,
             login: None,
-            pool: catalog.pool(&LoginKey {
-                kind: kind.clone(),
-                name: name.clone(),
-            }),
-            product_name: render::palette::identity_name(kind.as_str()),
+            pool: catalog.pool(&key),
+            product_name: accounts
+                .provider_title(&render::palette::identity_name(kind.as_str()), &key),
             probed_at: None,
             probe_error: None,
             plan: None,
@@ -711,7 +708,8 @@ fn account_rows(
             installed: false,
             expanded: false,
             legacy_spend_step: SpendStep::Subscription,
-        };
+        }
+    };
     let mut rows: Vec<AccountRow> = catalog
         .all()
         .map(|login| {
@@ -932,7 +930,10 @@ fn write_comparison(
     }
     let extra = reports.iter().any(|report| report.extra_credits.is_some());
     let credits = reports.iter().any(|report| report.reset_credits.is_some());
-    let mut headers = vec!["".to_owned(), "NAME".to_owned(), "PLAN".to_owned()];
+    let labelled = reports.iter().any(|report| report.label.is_some());
+    let mut headers = vec!["".to_owned(), "NAME".to_owned()];
+    headers.extend(labelled.then(|| "LABEL".to_owned()));
+    headers.push("PLAN".to_owned());
     headers.extend(windows.iter().map(|(_, label)| label.clone()));
     headers.extend(extra.then(|| "EXTRA LEFT".to_owned()));
     headers.extend(credits.then(|| "RESET CREDITS".to_owned()));
@@ -977,8 +978,11 @@ fn write_comparison(
             } else {
                 cell(report.account.name.as_str())
             },
-            plan_cell(report),
         ];
+        if labelled {
+            cells.push(cell(report.label.as_deref().unwrap_or_default()));
+        }
+        cells.push(plan_cell(report));
         cells.extend(columns.iter_mut().map(|column| {
             let value = column.next().flatten();
             if report.without_login() || matches!(report.entitlement, Entitlement::Lapsed { .. }) {
@@ -1129,6 +1133,9 @@ fn write_pretty(
         writeln!(out)?;
 
         let mut rows = KeyVals::new().indent(2);
+        if let Some(label) = &report.label {
+            rows.push("label", cell(label));
+        }
         rows.push(
             "probed",
             report

@@ -119,6 +119,9 @@ pub(super) fn judge(
             warn(format!("accounts.budget.{kind}"), error.to_string());
         }
     }
+    for (setting, message) in machine.accounts.label_warnings() {
+        warn(setting, message);
+    }
     let (catalog, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
     let mut account_warnings = BTreeMap::new();
     for (kind, error) in &declarations {
@@ -366,6 +369,52 @@ fn hibernate_notice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_label_warnings_do_not_refuse_the_room_or_drop_accounts() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+        for (label, count) in [("", 1), ("work", 0)] {
+            let mut machine = MachineConfig::default();
+            machine.accounts.codex.insert(
+                "team-1".parse().unwrap(),
+                crate::config::NamedAccount {
+                    label: Some(label.to_owned()),
+                    home: Some(root.path().join("team-1")),
+                    ..Default::default()
+                },
+            );
+            let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+            let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+            let warnings: Vec<_> = judgment
+                .skipped
+                .iter()
+                .filter(|entry| entry.setting == "accounts.codex.team-1.label")
+                .collect();
+            assert_eq!(warnings.len(), count, "{warnings:?}");
+            if count > 0 {
+                let message = &warnings[0].message;
+                for text in [
+                    "accounts.codex.team-1.label",
+                    "empty",
+                    "name instead",
+                    "rimz accounts add codex team-1 --label",
+                    "--label ''",
+                ] {
+                    assert!(message.contains(text), "{message}");
+                }
+            }
+            assert!(
+                crate::agents::LoginCatalog::from_config(&machine.accounts)
+                    .unwrap()
+                    .select(
+                        &AgentKind::new_unchecked("codex"),
+                        &"team-1".parse().unwrap()
+                    )
+                    .is_ok()
+            );
+        }
+    }
 
     #[test]
     fn failed_account_never_prepares_remote_control() {

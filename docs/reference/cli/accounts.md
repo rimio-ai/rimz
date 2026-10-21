@@ -23,6 +23,10 @@ Named accounts exist for `claude` and `codex` only. `add`, `use`, and `remove` r
 
 An account name is 1 to 32 characters of `a-z`, `0-9`, `_`, and `-`, starting with a letter or digit. `default` is reserved for the provider's own home.
 
+An optional `label` on `[accounts.<kind>.<name>]` replaces the name only in the dashboard title: `Codex · work` instead of `Codex · team-1`. Labels may repeat; selections, records, and commands still use the name. A label must be a non-empty string at most 32 columns wide, with no control characters or leading or trailing whitespace. Wide characters count as two columns; a label made only of zero-width characters is invalid. `default` is never labelled.
+
+An invalid string label warns at room start and in `accounts list` and `show`; the dashboard uses the account name instead, without changing the account's usability. Set a valid label with `rimz accounts add <kind> <name> --label <TEXT>`, or remove it with `--label ''`. A non-string value is a TOML type error, like a non-string `history`.
+
 Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Mutation verbs keep their separate `KIND NAME` arguments; `show` takes `KIND[@NAME]`. `loop add --account` takes a bare name because the task supplies its provider.
 
 Every named account has a home directory, and RimZ checks each home when it reads the machine config:
@@ -35,12 +39,12 @@ Every named account has a home directory, and RimZ checks each home when it read
 | One account per home | Two accounts of the same kind cannot share a home. |
 | No `,` and no trailing `projects` | Provider home lists split on commas, and Claude reads a directory named `projects` as its transcript folder. |
 
-A `config.toml` entry that breaks a rule, or that declares `default`, makes mutations refuse with `invalid per-machine account at <path>: ...` and the fix. Listing and `show` warn, retain healthy kinds, and report the failed kind instead of failing the command.
+A `config.toml` entry that breaks a home rule, or that declares `default`, makes mutations refuse with `invalid per-machine account at <path>: ...` and the fix. Listing and `show` warn, retain healthy kinds, and report the failed kind instead of failing the command.
 
 ## `add`
 
 ```sh
-rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone]
+rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone] [--label <TEXT>]
 ```
 
 | Argument or flag | Effect |
@@ -48,13 +52,14 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone]
 | `KIND` | `claude` or `codex`. |
 | `NAME` | The account name a room selects with `--account <KIND>@<NAME>`. |
 | `--home <PATH>` | The account's provider home, such as an existing `~/.claude-work`. Without it, the home is the default location above. |
+| `--label <TEXT>` | Sets the display label; `--label ''` removes the field. On a rerun, changes only this field (and `history` when `--history` is also given); without the flag, leaves it alone. An invalid label is refused before any config write or home creation. |
 | `--history <MODE>` | `shared` or `standalone`: the account's `history` field, which names its history pool. `shared`, also what an absent field means, puts the account in one pool with `default` and every other shared account of its kind; `standalone` makes it a pool of its own. On a new account the flag writes the field, and without the flag no field is written. On an existing account the flag rewrites only that field, and without the flag the field is left alone. Any other value is refused, by the flag and by the config load, naming both. |
 
 `add` runs these steps in order:
 
-1. For a new account, writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given and `history` only when `--history` is given.
+1. For a new account, writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given, `history` only when `--history` is given, and `label` only when a non-empty `--label` is given.
 2. Creates the home directory.
-3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. With `--history` on an existing account, the links are brought to the requested mode first and the `history` field is rewritten once that succeeds, so a refused switch leaves `config.toml` unchanged.
+3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. On an existing account, the links are brought to the requested mode first; any `--history` and `--label` updates are written only once that succeeds, so a refused rerun leaves `config.toml` unchanged.
 4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex), updating the shared file in the provider's own home too.
 5. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` commands for a running room and new rooms.
 
@@ -91,7 +96,7 @@ claude account `work` lives at ~/.rimz/accounts/claude/work
 
 RimZ writes no credentials and never writes inside an unshared name. Unshared names remain per account; every other listed entry is shared by a link, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks once per account path, through its startup review or `/hooks` (see `hooks untrusted` under [`list`](#list)).
 
-Rerunning `add` leaves the config entry alone unless `--history` rewrites that field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. Correct links remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the removed-link, moved-aside, and left-in-place lines as warnings, and refuses on the same error.
+Rerunning `add` leaves the config entry alone unless `--history` or `--label` updates its field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. Correct links remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the removed-link, moved-aside, and left-in-place lines as warnings, and refuses on the same error.
 
 `add` refuses these cases. The live-agent checks count agents with a pane attached unless their recorded process has died, so the unstarted seats of one team launch never block each other, and run before any entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
 
@@ -169,6 +174,7 @@ The heading names the provider and CLI version: the active account's version, el
 | --- | --- |
 | (marker) | `●` on the account a launch from here uses; `○` on the machine default when it is not the `●` row. |
 | `NAME` | Bare account name; `default` is muted. |
+| `LABEL` | Only when some account in this provider's table has a valid label; rows without one have an empty cell. `NAME` remains the identity. |
 | `PLAN` | Plan label or a faint `–` when unknown, overridden by the first applicable state below. |
 | One `<window> LEFT` column | Every window any row reports, including model sub-caps and named quotas such as Copilot's `AI credits`. Reads what's left, time to reset, then pace. Percentages and countdowns align within the column. |
 | `EXTRA LEFT` | Only when some row reports paid usage: `off` when disabled, `∞` for unlimited credit, dollars left when known, else `$X used`, else `–`. ` · paying` follows when paid credit is the next spend step. |
@@ -217,6 +223,7 @@ Blocks use the table's state precedence in their titles, alongside the plan and 
 
 | Row | Shows |
 | --- | --- |
+| `label` | Display label, only when valid and set; the header keeps the account's real identity. |
 | `probed` | Age of the last login probe, or `never`. |
 | `home` | Home as `~/…`, or `–`. For `default`, the provider's environment-resolved home, unless it names a declared account's home; then the native provider home. |
 | `version` | CLI version as `v…`, or `–`. Always printed. |
@@ -254,6 +261,7 @@ Every key below is present, with `null` when unknown, except `problem`, `probe_e
 | --- | --- |
 | `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only Claude and Codex. |
 | `home`, `history` | Absolute home; `shared` or `standalone` history (`null` for default or undeclared accounts). |
+| `label` | Valid display label, or `null` for default, undeclared accounts, or unset or invalid labels. Always present. |
 | `machine_default` | Whether this is the machine's selection, or `default` when none is set. |
 | `problem` | Problem and fix, only when present. |
 | `status` | Launch health: `ready`, `login_unknown`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, `hooks_disabled`, or `unavailable`. A lapse changes displayed `PLAN`, not this value. |
@@ -263,7 +271,7 @@ Every key below is present, with `null` when unknown, except `problem`, `probe_e
 | `default_for` | Array containing any of `this_room` (a pin only), `this_project`, `new_rooms`, or empty. |
 | `agents` | Cross-room count, `0` for none, `null` when inventory fails. |
 | `pool` | History pool as `kind@name`; deduplicate spend by this key. |
-| `product_name` | Display name, including a named account's suffix. |
+| `product_name` | Dashboard title: the theme-resolved product for `default`, else `<Product> · <label>` when valid, or `<Product> · <name>`. |
 | `probed_at`, `probe_error` | Last probe's RFC 3339 timestamp; failure cause only after a failed probe. |
 | `plan`, `plan_label` | Plan tier and display label, both `null` while lapsed. Claude may refine `max` to RimZ-normalized `max_5x` or `max_20x` from credential metadata, labeled `Claude Max 5x` or `Claude Max 20x`; these are not untouched `subscriptionType` values. Codex retains raw `prolite`, `pro`, and `promax`, labeled `ChatGPT Pro 100`, `ChatGPT Pro 200`, and `ChatGPT Pro 500`. |
 | `account_id`, `sub_provider` | Non-secret provider account id and backing provider name. |

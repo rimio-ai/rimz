@@ -45,6 +45,7 @@ impl SidebarSnapshot {
     /// pure reducer leaves `providers` empty.
     pub(crate) fn with_provider_aggregates(
         mut self,
+        accounts: &crate::config::AccountsConfig,
         probed_accounts: &BTreeMap<LoginKey, AgentAccount>,
         remote_control: &BTreeMap<String, RemoteControlBadge>,
         provider_spending: &BTreeMap<LoginKey, SpendTally>,
@@ -194,11 +195,7 @@ impl SidebarSnapshot {
                     account_scope,
                     entitlement: Default::default(),
                     account_key,
-                    product_name: if key.name.is_default() {
-                        identity.product_name
-                    } else {
-                        format!("{} · {}", identity.product_name, key.name)
-                    },
+                    product_name: accounts.provider_title(&identity.product_name, &key),
                     art: identity.art,
                     art_tints: identity.art_tints,
                     color,

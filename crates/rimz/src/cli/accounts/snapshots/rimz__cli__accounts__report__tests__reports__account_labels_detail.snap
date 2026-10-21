@@ -1,0 +1,11 @@
+---
+source: crates/rimz/src/cli/accounts/report_tests.rs
+expression: text
+---
+  Codex · codex@team-1 — – · not installed
+  label:   work
+  probed:  never
+  home:    /accounts/team-1
+  version: –
+  usage:   never read
+  agents:  –
