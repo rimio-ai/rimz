@@ -318,8 +318,7 @@ pub(super) fn render_panel(
     let selected = active;
     let natural_models = model_breakdown_size(stats, selected);
     let natural_agents = agent_breakdown_size(stats, selected);
-    let natural_subagents =
-        breakdown_size(&stats.subagents, selected, subagent_usd(stats, selected));
+    let natural_subagents = breakdown_size(&stats.subagents, selected);
     let plan = fit(
         geometry.rows,
         include_header,
@@ -485,8 +484,8 @@ pub(super) fn render_spend(
     emit(w, &lines, 0, nl)
 }
 
-fn dollar_share(usd: f64, total: f64) -> f64 {
-    if total > 0.0 { usd / total } else { 0.0 }
+fn share_of(value: f64, total: f64) -> f64 {
+    if total > 0.0 { value / total } else { 0.0 }
 }
 
 fn subagents_note(stats: &Stats, today_day: i64, active: Window) -> Option<String> {
@@ -612,7 +611,7 @@ fn spend_section(
                 render::palette::money(),
                 &format!("{:>10}", fmt_usd(spend.usd))
             ),
-            dollar_share(spend.usd, total) * 100.0,
+            share_of(spend.usd, total) * 100.0,
         ));
     }
 }
@@ -968,27 +967,7 @@ pub(super) fn model_cells(
 }
 
 pub(super) fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
-    let total_usd: f64 = stats
-        .by_model
-        .values()
-        .map(|model| active.select(&model.tally))
-        .filter(|spend| spend.tokens > 0)
-        .map(|spend| spend.usd)
-        .sum();
-    let mut named = 0;
-    let mut other = false;
-    for (id, tally) in &stats.by_model {
-        let spend = active.select(&tally.tally);
-        if spend.tokens == 0 {
-            continue;
-        }
-        if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
-            other = true;
-        } else {
-            named += 1;
-        }
-    }
-    named + usize::from(other)
+    folded_models(stats, active, None).len()
 }
 
 pub(super) fn model_breakdown(
@@ -996,63 +975,30 @@ pub(super) fn model_breakdown(
     active: Window,
     cap: usize,
 ) -> Vec<(String, SpendWindow, String)> {
-    let total: u64 = stats
-        .by_model
-        .values()
-        .map(|model| active.select(&model.tally).tokens)
-        .sum();
-    if total == 0 {
-        return Vec::new();
-    }
-    let total_usd: f64 = stats
-        .by_model
-        .values()
-        .map(|model| active.select(&model.tally))
-        .filter(|spend| spend.tokens > 0)
-        .map(|spend| spend.usd)
-        .sum();
-
-    let mut named = Vec::new();
-    let mut other = SpendWindow::default();
-    for (id, tally) in &stats.by_model {
-        let spend = active.select(&tally.tally);
-        if spend.tokens == 0 {
-            continue;
-        }
-        if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
-            other.merge(&spend);
-        } else {
-            named.push((
+    folded_models(stats, active, Some(cap.min(MAX_MODELS)))
+        .into_iter()
+        .map(|row| match row.key {
+            Some(id) => (
                 rimz::agents::model_display::display_model(id),
-                spend,
-                tally.kind.clone(),
-            ));
-        }
-    }
-    named.sort_by(|a, b| {
-        b.1.usd
-            .partial_cmp(&a.1.usd)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.1.tokens.cmp(&a.1.tokens))
-    });
-    let cap = cap.min(MAX_MODELS);
-    if cap == 0 {
-        return Vec::new();
-    }
-    let natural_rows = named.len() + usize::from(other.tokens > 0);
-    if natural_rows > cap {
-        for (_, spend, _) in named.split_off(cap - 1) {
-            other.merge(&spend);
-        }
-    }
-    if other.tokens > 0 {
-        named.push(("Other".to_string(), other, String::new()));
-    }
-    named
+                row.window,
+                stats.by_model[id].kind.clone(),
+            ),
+            None => ("Other".to_owned(), row.window, String::new()),
+        })
+        .collect()
 }
 
-fn below_minimum_share(value: f64, total: f64) -> bool {
-    total > 0.0 && value < total * MIN_BREAKDOWN_SHARE
+fn folded_models(stats: &Stats, active: Window, cap: Option<usize>) -> Vec<BreakdownRow<'_>> {
+    let rows = breakdown_rows(
+        stats.by_model.iter().map(|(id, model)| {
+            (
+                (!id.is_empty()).then_some(id.as_str()),
+                active.select(&model.tally),
+            )
+        }),
+        active.select(&stats.total).usd,
+    );
+    fold_breakdown(rows, cap)
 }
 
 pub(super) struct AgentBreakdown<'a> {
@@ -1064,24 +1010,11 @@ pub(super) struct AgentBreakdown<'a> {
 }
 
 pub(super) fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
-    breakdown_size(&stats.by_agent, active, active.select(&stats.total).usd)
+    breakdown_size(&stats.by_agent, active)
 }
 
-fn breakdown_size(tallies: &BTreeMap<String, SpendTally>, active: Window, total_usd: f64) -> usize {
-    let mut named = 0;
-    let mut other = false;
-    for tally in tallies.values() {
-        let window = active.select(tally);
-        if window.usd <= 0.0 {
-            continue;
-        }
-        if below_minimum_share(window.usd, total_usd) {
-            other = true;
-        } else {
-            named += 1;
-        }
-    }
-    named + usize::from(other)
+fn breakdown_size(tallies: &BTreeMap<String, SpendTally>, active: Window) -> usize {
+    fold_breakdown(tally_breakdown_rows(tallies, active, 0.0, None), None).len()
 }
 
 pub(super) fn agent_breakdown(
@@ -1089,107 +1022,135 @@ pub(super) fn agent_breakdown(
     active: Window,
     cap: Option<usize>,
 ) -> Vec<AgentBreakdown<'_>> {
-    let total_usd = active.select(&stats.total).usd;
-
-    let agents: Vec<_> = stats
-        .by_agent
-        .iter()
-        .filter_map(|(kind, tally)| {
-            let window = active.select(tally);
-            let share = dollar_share(window.usd, total_usd);
-            (window.usd > 0.0).then(|| AgentBreakdown {
-                kind: kind.as_str(),
-                name: agent_display_name(kind),
-                window,
-                share,
-                folded: false,
-            })
-        })
-        .collect();
-    fold_breakdown(agents, total_usd, cap)
+    tally_breakdown_rows(
+        &stats.by_agent,
+        active,
+        active.select(&stats.total).usd,
+        cap,
+    )
+    .into_iter()
+    .map(|row| AgentBreakdown {
+        kind: row.key.unwrap_or(""),
+        name: row
+            .key
+            .map(agent_display_name)
+            .unwrap_or_else(|| "Other".to_owned()),
+        window: row.window,
+        share: row.share,
+        folded: row.key.is_none(),
+    })
+    .collect()
 }
 
+/// Profiles measure significance against their own dollars and work tokens,
+/// not the fleet totals used for displayed shares.
 pub(super) fn subagent_breakdown(
     stats: &Stats,
     active: Window,
     cap: Option<usize>,
 ) -> Vec<AgentBreakdown<'_>> {
-    let total_usd = active.select(&stats.total).usd;
-    let rows = stats
-        .subagents
-        .iter()
-        .filter_map(|(profile, tally)| {
-            let window = active.select(tally);
-            (window.usd > 0.0).then(|| AgentBreakdown {
-                kind: "",
-                name: profile.clone(),
-                share: dollar_share(window.usd, total_usd),
+    tally_breakdown_rows(
+        &stats.subagents,
+        active,
+        active.select(&stats.total).usd,
+        cap,
+    )
+    .into_iter()
+    .map(|row| AgentBreakdown {
+        kind: "",
+        name: row.key.unwrap_or("Other").to_owned(),
+        window: row.window,
+        share: row.share,
+        folded: row.key.is_none(),
+    })
+    .collect()
+}
+
+struct BreakdownRow<'a> {
+    key: Option<&'a str>,
+    window: SpendWindow,
+    share: f64,
+}
+
+impl BreakdownRow<'_> {
+    fn display_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .window
+            .usd
+            .total_cmp(&self.window.usd)
+            .then_with(|| other.window.tokens.cmp(&self.window.tokens))
+            .then_with(|| self.key.cmp(&other.key))
+    }
+}
+
+fn breakdown_rows<'a>(
+    rows: impl Iterator<Item = (Option<&'a str>, SpendWindow)>,
+    total_usd: f64,
+) -> Vec<BreakdownRow<'a>> {
+    let mut rows: Vec<_> = rows
+        .filter_map(|(key, window)| {
+            (window.usd > 0.0 || window.tokens > 0).then(|| BreakdownRow {
+                key,
+                share: share_of(window.usd, total_usd),
                 window,
-                folded: false,
             })
         })
         .collect();
-    fold_breakdown(rows, subagent_usd(stats, active), cap)
+    rows.sort_by(BreakdownRow::display_cmp);
+    rows
 }
 
-/// Profiles are a small subset of fleet spend, so the one-percent fold is
-/// measured against the section's own dollars; shares stay fleet-relative.
-fn subagent_usd(stats: &Stats, active: Window) -> f64 {
-    stats
-        .subagents
-        .values()
-        .map(|tally| active.select(tally).usd)
-        .sum()
-}
-
-fn fold_breakdown(
-    mut agents: Vec<AgentBreakdown<'_>>,
+fn tally_breakdown_rows(
+    tallies: &BTreeMap<String, SpendTally>,
+    active: Window,
     total_usd: f64,
     cap: Option<usize>,
-) -> Vec<AgentBreakdown<'_>> {
-    agents.sort_by(|a, b| {
-        b.window
-            .usd
-            .total_cmp(&a.window.usd)
-            .then_with(|| b.window.tokens.cmp(&a.window.tokens))
-    });
-    let Some(cap) = cap.map(|cap| cap.min(MAX_AGENTS)) else {
-        return agents;
-    };
-    if cap == 0 {
+) -> Vec<BreakdownRow<'_>> {
+    let rows = breakdown_rows(
+        tallies
+            .iter()
+            .map(|(key, tally)| (Some(key.as_str()), active.select(tally))),
+        total_usd,
+    );
+    match cap {
+        Some(cap) => fold_breakdown(rows, Some(cap.min(MAX_AGENTS))),
+        None => rows,
+    }
+}
+
+fn fold_breakdown(rows: Vec<BreakdownRow<'_>>, cap: Option<usize>) -> Vec<BreakdownRow<'_>> {
+    if cap == Some(0) {
         return Vec::new();
     }
-    let mut other_window = SpendWindow::default();
-    let mut other_share = 0.0;
-    let mut has_other = false;
-    agents.retain(|agent| {
-        if below_minimum_share(agent.window.usd, total_usd) {
-            other_window.merge(&agent.window);
-            other_share += agent.share;
-            has_other = true;
-            false
-        } else {
-            true
-        }
-    });
-    let natural_rows = agents.len() + usize::from(has_other);
-    if natural_rows > cap {
-        for agent in agents.split_off(cap - 1) {
-            other_window.merge(&agent.window);
-            other_share += agent.share;
-            has_other = true;
-        }
+    let total_usd: f64 = rows.iter().map(|row| row.window.usd).sum();
+    let total_tokens: u64 = rows.iter().map(|row| row.window.tokens).sum();
+    let significance = |row: &BreakdownRow<'_>| {
+        share_of(row.window.usd, total_usd)
+            .max(share_of(row.window.tokens as f64, total_tokens as f64))
+    };
+    let (mut named, mut folded): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|row| row.key.is_some() && significance(row) >= MIN_BREAKDOWN_SHARE);
+    if let Some(cap) = cap
+        && named.len() + usize::from(!folded.is_empty()) > cap
+    {
+        named.sort_by(|a, b| significance(b).total_cmp(&significance(a)));
+        folded.extend(named.split_off(cap - 1));
+        named.sort_by(BreakdownRow::display_cmp);
     }
-    if has_other {
-        agents.push(AgentBreakdown {
-            kind: "",
-            name: "Other".to_owned(),
-            window: other_window,
-            share: other_share,
-            folded: true,
-        });
+    if !folded.is_empty() {
+        let mut other = BreakdownRow {
+            key: None,
+            window: SpendWindow::default(),
+            share: 0.0,
+        };
+        for row in folded {
+            other.window.merge(&row.window);
+            other.share += row.share;
+        }
+        named.push(other);
     }
-    agents
+    named
 }
 
 pub(super) fn agent_cells(

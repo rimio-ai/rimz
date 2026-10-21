@@ -41,7 +41,7 @@ For a live screen, `rimz stats --refresh` keeps the wordmark, heatmap, all three
 
 To see what RimZ did for you, `rimz stats --assists` lists the latest 50 assists that took effect. Its counts cover all retained records, and each count names its held attempts beside it. `-n 0` shows all retained events, and `--all` includes held and failed attempts when you need to explain a missing action.
 
-For scripts, `rimz stats --json` unfolds every non-zero spender and includes local-date buckets and assist counts, without the event stream. `--subagents --json` returns the profile report; `--assists --json` returns the filtered timeline. Every field is in the [stats reference](../reference/cli/stats.md).
+For scripts, `rimz stats --json` unfolds every model, agent, and profile with usage in the window and includes local-date buckets and assist counts, without the event stream. `--subagents --json` returns the profile report; `--assists --json` returns the filtered timeline. Every field is in the [stats reference](../reference/cli/stats.md).
 
 **The figures are as fresh as the last walk, and no fresher.** A running sidebar keeps the spending cache current, and a one-shot `rimz stats` prints it when its figures cover today in its timezone. With no compatible cache covering today, the run walks every agent transcript on the machine behind a progress bar and publishes what it found; that walk is also the only thing on this path that fetches the price table. For updates within the day, `rimz stats --refresh` holds the panel open on the alternate screen and repaints from a live reread every minute, leaving no scrollback behind. What each mode reads, writes, and fetches is [how fresh the figures are](../reference/cli/stats.md#how-fresh-the-figures-are).
 

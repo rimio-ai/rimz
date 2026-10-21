@@ -50,7 +50,7 @@ fn subagents(stats: &Stats, active: Window) -> Vec<SubagentJson> {
         .subagents
         .iter()
         .map(|(profile, tally)| (profile, active.select(tally)))
-        .filter(|(_, spend)| spend.usd > 0.0)
+        .filter(|(_, spend)| spend.usd > 0.0 || spend.tokens > 0)
         .map(|(profile, spend)| SubagentJson {
             profile: profile.clone(),
             runs: spend.sessions,
@@ -184,7 +184,10 @@ fn stats_json<'a>(
     let mut models: Vec<ModelJson> = stats
         .by_model
         .iter()
-        .filter(|(_, model)| active.select(&model.tally).usd > 0.0)
+        .filter(|(_, model)| {
+            let spend = active.select(&model.tally);
+            spend.usd > 0.0 || spend.tokens > 0
+        })
         .map(|(id, tally)| {
             let spend = active.select(&tally.tally);
             ModelJson {
