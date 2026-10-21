@@ -209,7 +209,7 @@ reason = "Provider formats intentionally share this choreography."
 
 `layers` is an ordered list of module groups from lower to higher. A `[[module]]` path sets its escaping-surface ceiling and may set either `upward-dependencies` for exceptions to layer direction or `allowed-dependencies` as an exact boundary allow-list; a directory rule also covers its sibling `.rs` file. A `[[strangler]]` counts one Rust identifier under its path.
 
-After a rebase that conflicts in `refactor-target.toml`, run `cargo xtask atlas conform --ratchet` before any hand-off: a textual merge of two budgets does not prove the merged surface fits.
+After every rebase, run `cargo xtask atlas conform --ratchet` before any hand-off. A rebase runs no pre-commit hook, and a textual merge of two budgets does not prove the merged surface fits: a budget that merges cleanly can still sit below the surface the trunk added.
 
 Every `[[verdict]]` needs a non-empty reason and a unique `(kind, key)`. Key forms are:
 
