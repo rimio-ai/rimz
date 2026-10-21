@@ -1641,7 +1641,10 @@ fn calm_context_bar_orders_segments_left_to_right() {
         "the cache-read health run leads the bar before the accents: {bar_styles:?}"
     );
 }
-/// The card's age cluster pairs a clock-fill glyph with a continuous warn-to-alarm tone after half the TTL, or in the last ten minutes if earlier. Before that band the pin stays muted, and past the ceiling it wears the expired-cache tone.
+/// The card's age cluster pairs a clock-fill glyph with a continuous
+/// warn-to-alarm tone after half the TTL, or in the last ten minutes if
+/// earlier. Before that band the pin stays muted, and past the ceiling it
+/// wears the expired-cache tone.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);

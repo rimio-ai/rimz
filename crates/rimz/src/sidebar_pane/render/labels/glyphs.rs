@@ -24,7 +24,10 @@ pub(in crate::sidebar_pane::render) fn status_glyph(theme: &Theme, status: Agent
         .to_owned()
 }
 
-/// The age clock's Nerd Font faces: the `circle_slice` series shows completed eighths of the ceiling (7.5-minute steps on an hour scale), clamped to slice 1. No eighth-circle glyph exists in Unicode, so that preset keeps its quarter faces.
+/// The age clock's Nerd Font faces: the `circle_slice` series shows completed
+/// eighths of the ceiling (7.5-minute steps on an hour scale), clamped to
+/// slice 1. No eighth-circle glyph exists in Unicode, so that preset keeps its
+/// quarter faces.
 const NERD_AGE_SLICES: [&str; 8] = [
     "\u{f0a9e}", // nf-md-circle_slice_1
     "\u{f0a9f}", // nf-md-circle_slice_2
@@ -36,7 +39,12 @@ const NERD_AGE_SLICES: [&str; 8] = [
     "\u{f0aa5}", // nf-md-circle_slice_8
 ];
 
-/// The clock-fill glyph for an elapsed span, rounding down to completed fractions of `ceiling_secs`: the hour for attention clocks, the provider's cache TTL for a card's age pin. Unicode shows quarters (`◔`, `◑`, `◕`, `●`), while Nerd Font shows eighths across the `circle_slice` series, each clamped to its first face. The full face appears only at the ceiling; both read the ringed `◉` past it. One cell, so it never disturbs alignment.
+/// The clock-fill glyph for an elapsed span, rounding down to completed
+/// fractions of `ceiling_secs`: the hour for attention clocks, the provider's
+/// cache TTL for a card's age pin. Unicode shows quarters (`◔`, `◑`, `◕`,
+/// `●`), while Nerd Font shows eighths across the `circle_slice` series, each
+/// clamped to its first face. The full face appears only at the ceiling; both
+/// read the ringed `◉` past it. One cell, so it never disturbs alignment.
 pub(in crate::sidebar_pane::render) fn elapsed_glyph(
     theme: &Theme,
     secs: i64,
