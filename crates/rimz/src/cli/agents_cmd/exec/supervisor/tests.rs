@@ -101,7 +101,6 @@ fn unsupported_park_state_names_the_file_and_refuses() {
         fresh_launch: false,
         termios: None,
         keep: false,
-        survives_parent: false,
         awaiting_reopen: None,
         watchdog: None,
         entered_worktree: None,
@@ -405,7 +404,6 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
             fresh_launch: false,
             termios: None,
             keep: false,
-            survives_parent: false,
             awaiting_reopen: None,
             watchdog: None,
             entered_worktree: None,
@@ -480,6 +478,7 @@ fn failed_settle_store_reopen_still_fails_the_run_without_folding() {
         isolation: rimz::config::Isolation::Host,
         entered_worktree: None,
         keep: false,
+        terminal: ProviderTerminal { saved: None },
         outcome: ExecOutcome {
             status: ExitStatus::from_raw(1 << 8),
             abrupt: true,

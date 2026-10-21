@@ -46,8 +46,8 @@ rimz subagents wait "$first" "$second"
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
 | `--warn <OFFSETS>` | `[agents.subagents] warn`, `6m,3m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
 | `--grace <DURATION>` | `[agents.subagents] grace`, `3m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
-| `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
-| `--detach` | off | Launch without a report: the child stays out of the [fleet report](#the-fleet-report), never holds the parent's turn or run open, and outlives the parent's exit. Its pane closes when it finishes; `subagents wait <name>` still reads the answer. Refused with `--wait`. |
+| `--keep` | off | Disable automatic completion cleanup; hold the pane after provider exit until its parent ends or Ctrl-C is pressed in the pane. Explicit stop and the run timeout still apply. |
+| `--detach` | off | Launch without a report: the child stays out of the [fleet report](#the-fleet-report) and never holds the parent's turn or run open. Its pane closes when it finishes or its parent ends; `subagents wait <name>` still reads the answer. Refused with `--wait`. |
 | `--isolation host\|scoped\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | Ordered host < scoped < sandbox: looser explicit overrides refuse; looser defaults clamp to the parent's level with a note. |
 | `--yolo` | off | Run the child in yolo mode, up to the parent's own recorded mode. A parent with no recorded mode is treated as auto, so the flag refuses there. Launch the parent with `--yolo` or a `mode: yolo` definition to allow it. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
@@ -129,7 +129,7 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
 
-A child launched with `--detach` is outside the fleet. It adds no row and does not delay the report for the children beside it, the parent is not held open or shown as waiting for it, and its launch receipt says no report will arrive. Its response file is written when it settles, and `subagents wait <name>` joins it on purpose. A follow-up message to a detached child opens an ordinary reported turn; the detached answer itself appears in no report. A detached child that stops on a provider limit sends the parent no [park notice](#a-child-paused-on-a-provider-limit), though `subagents list` still shows it `paused`. A detached child survives its parent's exit, but `subagents stop` and a stop of the parent still stop it, and `agents stop --when-idle` on the parent waits while it works.
+A child launched with `--detach` is outside the fleet. It adds no row and does not delay the report for the children beside it, the parent is not held open or shown as waiting for it, and its launch receipt says no report will arrive. Its response file is written when it settles, and `subagents wait <name>` joins it on purpose. A follow-up message to a detached child opens an ordinary reported turn; the detached answer itself appears in no report. A detached child that stops on a provider limit sends the parent no [park notice](#a-child-paused-on-a-provider-limit), though `subagents list` still shows it `paused`. Like every child, it ends with its parent; `subagents stop` and a stop of the parent still stop it, and `agents stop --when-idle` on the parent waits while it works.
 
 A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
@@ -261,7 +261,7 @@ rimz subagents stop --all
 
 `stop` cancels the caller's named live children, or every live child with `--all`, and prints `stopped @<name>` for each. A child that fails to stop prints `error @<name>: <reason>`, and the command exits `1` after trying the rest. With no live child it fails with `this agent has no live subagents to stop`.
 
-Stopping declines the child's result: it leaves the fleet report as described [above](#the-fleet-report). The canceled run stays in the record, so `wait` still reads it. `stop` is also the only way to close a `--keep` pane; `rimz gc` does not reclaim it.
+Stopping declines the child's result: it leaves the fleet report as described [above](#the-fleet-report). The canceled run stays in the record, so `wait` still reads it. A `--keep` pane also closes when its parent ends or Ctrl-C is pressed in the pane; Ctrl-C does not decline the answer. `rimz gc` does not reclaim it.
 
 A successful stop ends the child's card even if its pane was already gone, so a later [parent message](#follow-up-messages) resumes it or names why it cannot resume.
 

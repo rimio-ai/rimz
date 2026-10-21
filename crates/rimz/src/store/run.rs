@@ -121,8 +121,9 @@ impl RunStatus {
     }
 }
 
-/// Who is told when a launched run settles. `Nobody` is a `--detach` launch:
-/// its answer is never owed, so no digest lists it and no launcher waits on it.
+/// Who is told when a launched run settles. `Nobody` comes from `rimz agents --bg --detach`,
+/// teams, or a legacy subagent record: its answer is never owed, so no digest lists it and no
+/// launcher waits on it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportTo {
@@ -371,11 +372,6 @@ impl RunRecord {
         self.follow_up
             .as_ref()
             .map_or(self.started_at, |turn| turn.started_at)
-    }
-
-    /// Whether this run outlives its parent agent: kept, or launched detached.
-    pub fn survives_parent(&self) -> bool {
-        self.keep || self.report_to == ReportTo::Nobody
     }
 
     pub fn prompt_origin(&self) -> RunPromptOrigin {
@@ -1044,7 +1040,7 @@ mod tests {
     }
 
     #[test]
-    fn a_detached_run_owes_no_answer_and_survives_its_parent() {
+    fn a_detached_run_owes_no_answer_but_keeps_it_readable() {
         let mut record = RunRecord::new(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
             AgentKind::new_unchecked("claude"),
@@ -1054,12 +1050,10 @@ mod tests {
         );
         record.status = RunStatus::Completed;
         assert!(record.owes_report());
-        assert!(!record.survives_parent());
         record.keep = true;
-        assert!(record.survives_parent());
+        assert!(record.owes_report());
         record.keep = false;
         record.report_to = ReportTo::Nobody;
-        assert!(record.survives_parent());
         assert!(!record.owes_report());
         let claims = record.answer_claims().collect::<Vec<_>>();
         assert_eq!(claims.len(), 1, "the answer is still there to join");

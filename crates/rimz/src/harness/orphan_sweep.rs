@@ -127,9 +127,6 @@ fn orphaned_child<'a>(
         return None;
     }
     let run = newest_run(child, runs);
-    if run.is_some_and(RunRecord::survives_parent) {
-        return None;
-    }
     let parent = crate::address::launched_parent(agents, child);
     let orphaned_at = match parent {
         Some(parent) => parent.ended_at?,
@@ -347,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn only_old_unkept_children_of_ended_or_missing_parents_are_orphans() {
+    fn every_old_child_of_an_ended_or_missing_parent_is_an_orphan() {
         let now = Timestamp::from_second(1_000).unwrap();
         let old = now - Duration::from_secs(601);
         let mut parent = crate::testkit::agent_state("codex", "parent", old);
@@ -379,7 +376,8 @@ mod tests {
                 &[child_run.clone()],
                 now
             )
-            .is_none()
+            .is_some(),
+            "a kept child ends with its parent"
         );
 
         child_run.keep = false;
@@ -391,8 +389,8 @@ mod tests {
                 &[child_run.clone()],
                 now
             )
-            .is_none(),
-            "a detached child outlives the parent that launched it"
+            .is_some(),
+            "a legacy nobody child ends with its parent"
         );
 
         child_run.report_to = crate::store::run::ReportTo::Launcher;

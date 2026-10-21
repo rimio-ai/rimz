@@ -81,6 +81,7 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                     cwd,
                     isolation,
                     keep,
+                    terminal: ProviderTerminal { saved: None },
                     outcome: ExecOutcome {
                         status,
                         abrupt: true,
@@ -448,7 +449,7 @@ fn launch_and_supervise(
     if let Some(context) = run_context {
         record_provider_process(context, child.id());
     }
-    let (keep, survives_parent) = run_context
+    let keep = run_context
         .as_ref()
         .and_then(|context| {
             rimz::harness::run::load(context.store.paths(), &context.run_id)
@@ -461,14 +462,9 @@ fn launch_and_supervise(
                 })
                 .ok()
         })
-        .map(|record| (record.keep, record.survives_parent()))
+        .map(|record| record.keep)
         .unwrap_or_default();
-    let watchdog = subagent_parent_watchdog(
-        request,
-        run_context,
-        launch_identity.as_ref(),
-        survives_parent,
-    );
+    let watchdog = subagent_parent_watchdog(request, run_context, launch_identity.as_ref());
     let exit = supervisor::park(
         ParkStartup {
             request,
@@ -481,7 +477,6 @@ fn launch_and_supervise(
             fresh_launch,
             terminal: &provider_terminal,
             keep,
-            survives_parent,
             awaiting_reopen,
             watchdog,
             entered_worktree: entered_worktree.as_deref(),
@@ -499,6 +494,7 @@ fn launch_and_supervise(
         RunExitContext {
             run: run_context,
             keep: exit.keep,
+            terminal: &exit.terminal,
             checkout: &invocation.cwd,
             terminal_grace: exit.terminal_grace,
             startup_deaths: exit.startup_deaths,
@@ -520,7 +516,6 @@ struct ParkStartup<'a> {
     fresh_launch: bool,
     terminal: &'a ProviderTerminal,
     keep: bool,
-    survives_parent: bool,
     awaiting_reopen: Option<u32>,
     watchdog: Option<rimz::harness::parent_watch::WatchdogSeed>,
     entered_worktree: Option<&'a Path>,
@@ -535,6 +530,7 @@ struct ParkExit {
     isolation: rimz::config::Isolation,
     entered_worktree: Option<PathBuf>,
     keep: bool,
+    terminal: ProviderTerminal,
     outcome: ExecOutcome,
     terminal_grace: Duration,
     startup_deaths: Option<u32>,
@@ -563,6 +559,7 @@ fn settle_park_exit(
         RunExitContext {
             run: run_context.as_ref(),
             keep: exit.keep,
+            terminal: &exit.terminal,
             checkout: &invocation.cwd,
             terminal_grace: exit.terminal_grace,
             startup_deaths: exit.startup_deaths,
@@ -576,6 +573,7 @@ fn settle_park_exit(
 struct RunExitContext<'a> {
     run: Option<&'a RunExecContext>,
     keep: bool,
+    terminal: &'a ProviderTerminal,
     checkout: &'a Path,
     /// What is left of `RUN_EXIT_TERMINAL_GRACE` for a late terminal hook.
     terminal_grace: Duration,
@@ -595,6 +593,7 @@ fn settle_after_exit(
     let RunExitContext {
         run,
         keep,
+        terminal,
         checkout,
         terminal_grace,
         startup_deaths,
@@ -609,14 +608,20 @@ fn settle_after_exit(
     let ExecOutcome {
         status,
         abrupt: child_exit_abrupt,
-        parent_ended,
+        parent_ended: observed_parent_end,
         parent_watchdog,
     } = outcome;
+    let parent_ended = || {
+        observed_parent_end
+            || parent_watchdog
+                .as_ref()
+                .is_some_and(|watchdog| watchdog.parent_ended())
+    };
     if let Some(context) = run {
         fail_run_if_child_exited_first(context, globals, terminal_grace);
     }
     if let Some(context) = run
-        && !parent_ended
+        && !parent_ended()
     {
         report_settled_child_or_log(context);
     }
@@ -651,10 +656,27 @@ fn settle_after_exit(
     let session_name = run
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
+    if should_linger_subagent(
+        request.subagent,
+        keep,
+        parent_watchdog.is_some(),
+        parent_ended(),
+        cleanup_signal_received(),
+        interrupt_signal_flag().load(Ordering::SeqCst),
+    ) && let Some(watchdog) = parent_watchdog.as_ref()
+    {
+        if let Some(identity) = launch_identity {
+            // Provider hooks temporarily own the runtime row while the turn
+            // runs. The wrapper becomes the long-lived owner once the
+            // provider exits, so dead-provider reaping must not end the pane.
+            attach_own_launch_pane(invocation, identity);
+        }
+        terminal.restore();
+        linger_subagent(run, status, watchdog);
+    }
     let abrupt = child_exit_abrupt || cleanup_signal_received();
-    let linger = should_linger_subagent(request, keep, parent_ended);
     let (deliberate, ended_session) =
-        stamp_own_end_if_deliberate(invocation, request, abrupt, linger, || {
+        stamp_own_end_if_deliberate(invocation, request, abrupt, || {
             session_accepts_agent_close(globals, session_name)
         });
     if let Some(ended) = &ended_session {
@@ -676,7 +698,7 @@ fn settle_after_exit(
         rimz::harness::launch::ExecAction::Pick { .. }
     ) && launch_identity
         .is_some_and(|identity| !picker_session_bound(invocation, identity).unwrap_or(false));
-    if !unbound_pick && should_print_exit_hint(request, abrupt, linger) {
+    if !unbound_pick && should_print_exit_hint(request, abrupt) {
         let resumable = std::env::current_dir()
             .is_ok_and(|cwd| exited_session_resumable(ended_session.as_ref(), &cwd));
         let hint = exit_hint(
@@ -691,7 +713,7 @@ fn settle_after_exit(
         );
         let _ = write!(std::io::stderr().lock(), "{hint}");
     }
-    if !linger && should_drop_to_shell(request, abrupt) {
+    if should_drop_to_shell(request, abrupt) {
         // The trace above stamps the agent ended; gc reclaims any worktree later.
         drop_to_shell_after_agent_exit();
     }
@@ -704,16 +726,12 @@ fn settle_after_exit(
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if linger {
-        if let Some(identity) = launch_identity {
-            // Provider hooks temporarily own the runtime row while the turn
-            // runs. The wrapper becomes the long-lived owner once the
-            // provider exits, so dead-provider reaping must not end the pane.
-            attach_own_launch_pane(invocation, identity);
-        }
-        linger_subagent(globals, session_name, run, status, parent_watchdog);
-    }
-    if parent_ended || request.close_pane_on_exit {
+    let close_pane = if request.subagent {
+        !(keep && cleanup_signal_received())
+    } else {
+        parent_ended() || request.close_pane_on_exit
+    };
+    if close_pane {
         close_own_pane(globals, session_name);
     }
     std::process::exit(status.code().unwrap_or(1));
@@ -754,39 +772,38 @@ struct EndedSession {
 }
 
 /// Whether this exit closes the agent deliberately, and the session it then
-/// stamped ended. A lingering subagent or a request that records no end
-/// stamps nothing.
+/// stamped ended. A request that records no end stamps nothing.
 fn stamp_own_end_if_deliberate(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
     abrupt: bool,
-    linger: bool,
     session_accepts_close: impl FnOnce() -> bool,
 ) -> (bool, Option<EndedSession>) {
     let deliberate = close_is_deliberate(abrupt, session_accepts_close, || {
         own_agent_pending_recovery(invocation, request)
     });
-    let ended_session = (deliberate && !linger && should_record_end_trace(request))
+    let ended_session = (deliberate && should_record_end_trace(request))
         .then(|| record_own_agent_end_trace(invocation, request))
         .flatten();
     (deliberate, ended_session)
 }
 
 fn should_linger_subagent(
-    request: &rimz::harness::launch::ExecRequest,
+    subagent: bool,
     keep: bool,
+    live_watch: bool,
     parent_ended: bool,
+    cleanup: bool,
+    interrupted: bool,
 ) -> bool {
-    request.subagent && keep && !parent_ended && !cleanup_signal_received()
+    subagent && keep && live_watch && !parent_ended && !cleanup && !interrupted
 }
 
 fn linger_subagent(
-    globals: &GlobalFlags,
-    session_name: &str,
     run_context: Option<&RunExecContext>,
     status: ExitStatus,
-    parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
-) -> ! {
+    parent_watchdog: &rimz::harness::parent_watch::ParentWatch,
+) {
     let run_status = run_context
         .and_then(|context| {
             rimz::harness::run::load(context.store.paths(), &context.run_id)
@@ -796,18 +813,14 @@ fn linger_subagent(
         .unwrap_or("done");
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: subagent {run_status}; --keep holds the pane (`rimz subagents stop` closes it)"
+        "rimz: subagent {run_status}; --keep holds this pane until its parent ends; press Ctrl-C to close it"
     );
     loop {
         if cleanup_signal_received() {
             std::process::exit(status.code().unwrap_or(1));
         }
-        if parent_watchdog
-            .as_ref()
-            .is_some_and(|watchdog| watchdog.parent_ended())
-        {
-            close_own_pane(globals, session_name);
-            std::process::exit(status.code().unwrap_or(1));
+        if interrupt_signal_flag().load(Ordering::SeqCst) || parent_watchdog.parent_ended() {
+            return;
         }
         std::thread::sleep(Duration::from_secs(1));
     }
@@ -834,6 +847,7 @@ fn announce_startup_relaunch(
 }
 
 /// The terminal modes the provider started from, when stdin is a terminal.
+#[derive(Clone)]
 struct ProviderTerminal {
     #[cfg(unix)]
     saved: Option<nix::sys::termios::Termios>,
@@ -878,12 +892,8 @@ impl ProviderTerminal {
     fn restore(&self) {}
 }
 
-fn should_print_exit_hint(
-    request: &rimz::harness::launch::ExecRequest,
-    abrupt: bool,
-    linger: bool,
-) -> bool {
-    request.run_id.is_none() && !abrupt && !linger
+fn should_print_exit_hint(request: &rimz::harness::launch::ExecRequest, abrupt: bool) -> bool {
+    request.run_id.is_none() && !abrupt
 }
 
 fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
@@ -894,6 +904,7 @@ fn should_drop_to_shell(request: &rimz::harness::launch::ExecRequest, abrupt: bo
     (request.close_pane_on_exit
         || (request.worktree_path.is_some() && request.identity.params.checkout.is_none()))
         && request.run_id.is_none()
+        && !request.subagent
         && !abrupt
 }
 
@@ -1883,7 +1894,6 @@ fn subagent_parent_watchdog(
     request: &rimz::harness::launch::ExecRequest,
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
-    survives_parent: bool,
 ) -> Option<rimz::harness::parent_watch::WatchdogSeed> {
     if !request.subagent {
         return None;
@@ -1892,9 +1902,6 @@ fn subagent_parent_watchdog(
         tracing::debug!("subagent parent watchdog has no supervised run context");
         return None;
     };
-    if survives_parent {
-        return None;
-    }
     let Some(identity) = launch_identity else {
         tracing::debug!("subagent parent watchdog has no launch identity");
         return None;

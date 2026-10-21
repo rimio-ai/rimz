@@ -1515,7 +1515,7 @@ path = "crates/rimz/src/store"
 # The pending-recovery record parks lost agents for the rebirth boundary and settlement (+5).
 # The idle-stop request record: its codec module, entry, error, read, arm and withdraw (+6).
 # The snapshot carries an open PR's merge-queue state to the header marker as `WorktreePrQueue` (+1).
-# `ReportTo` is the run's durable report policy for `--detach`; `RunRecord::survives_parent` is the one survival predicate the wrapper watchdog and the orphan sweep read (+2).
+# `ReportTo` is the run's durable report policy for `--detach` (+1).
 # `Store::is_pending_recovery` lets an exiting exec wrapper see its agent parked by a rebirth (+1).
 # `RunRecord::answer_started_at` is the one current-answer start the list, the report row, and the reopen fold read (+1).
 # CacheClock carries the card's provider cache window and keep-warm hold from enrichment to the renderer (+1).
@@ -1576,7 +1576,7 @@ path = "crates/rimz/src/store"
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
 # SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
 # UnitStatus and its five methods, unit_statuses, pipeline_owner and project_stuck_stages (+9).
-surface-budget = 491
+surface-budget = 490
 
 [[verdict]]
 kind = "item"
