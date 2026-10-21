@@ -79,6 +79,54 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
 }
 
 #[test]
+fn hook_woken_attempt_keeps_the_emitting_shell() {
+    let room = Room::new("");
+    let definition = room.env.rimz_home().join("workflows/review/workflow.toml");
+    let spec = fs::read_to_string(&definition)
+        .unwrap()
+        .replace("on.done = '@done'", "on.done = 'build'");
+    fs::write(definition, spec).unwrap();
+    let inner = write_fake_login_shell(&room.env, "inner-workflow-shell", &[]);
+    let log = room.env.home_root.join("shell-invocations.log");
+    fs::write(
+        &room.shell,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexec {} \"$@\"\n",
+            shlex::try_quote(log.to_str().unwrap()).unwrap(),
+            shlex::try_quote(inner.to_str().unwrap()).unwrap(),
+        ),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    let invocations = fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        invocations.matches("__RIMZ_ENV_PROBE_START__").count(),
+        1,
+        "the initial attempt probes through the fake shell: {invocations}"
+    );
+    fs::write(
+        room.env.project_root.join("panes.json"),
+        r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+    )
+    .unwrap();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let value = until(&room.env, &id, |value| {
+        (value["record"]["attempt"]["run"].is_object()
+            && value["record"]["attempt"]["run"]["run_id"] != run.run_id.as_str())
+            || value["record"]["state"] != "active"
+    });
+    let invocations = fs::read_to_string(&log).unwrap();
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    assert_eq!(
+        invocations.matches("__RIMZ_ENV_PROBE_START__").count(),
+        2,
+        "the hook-woken attempt must also probe through the emitter's shell: {invocations}\n{value:#}"
+    );
+    assert!(value["record"]["attempt"]["run"].is_object(), "{value:#}");
+}
+
+#[test]
 fn loop_project_scope_skips_before_reading_an_edited_definition() {
     let room = Room::new("");
     let dir = room.env.rimz_home().join("workflows/review");

@@ -58,6 +58,9 @@ pub const HOOK_ENV_NAMES: &[&str] = &[
     "CLAUDE_CODE_PROJECT_DIR_NAME",
 ];
 
+/// Extra environment carried by hook frames, beyond the identity keys.
+///
+/// Muse derives `managed_hooks_env_vars` from both lists, so adding a name re-offers every existing Muse hook install.
 pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
     "HOME",
     "PATH",
@@ -75,6 +78,8 @@ pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
     crate::config::Isolation::ENV,
     "RIMZ_USER_TMPDIR",
     "RIMZ_TEMP_ROOT_KEYS",
+    // `proc::user_shell` reads both, so hook-woken launches keep the emitter's shell.
+    "SHELL",
     "RIMZ_USER_SHELL",
 ];
 

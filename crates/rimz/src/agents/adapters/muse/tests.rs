@@ -214,6 +214,7 @@ fn managed_install_is_two_files_without_markers_and_restores_user_settings() {
     );
     assert!(!names.contains(&json!("RIMZ_AGENT_PID")));
     assert!(!names.contains(&json!("RIMZ_HOOK_OWNER_KIND")));
+    assert!(!names.contains(&json!("SHELL")));
     assert_eq!(hooks_json["hooks"].as_object().unwrap().len(), 10);
     for (event, groups) in hooks_json["hooks"].as_object().unwrap() {
         assert_eq!(groups[0].as_object().unwrap().len(), 1);
