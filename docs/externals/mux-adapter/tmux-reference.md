@@ -595,7 +595,11 @@ A single-pane schema example, derived from the serializer:
 
 `select-layout` accepts both formats. The legacy format is deprecated in the source. It starts with a four-hex-digit checksum and comma, then a cell tree. Each cell is `WxH,X,Y`, followed by `,<pane-number>` for a leaf, `{…}` for horizontal children, or `[…]` for vertical children.
 
+Legacy restoration ignores the written pane numbers: it assigns panes in native pane-list order to depth-first leaves. Excess leaves are pruned from the bottom-right; too few leaves fail. Containers may nest directly inside containers of the same orientation. JSON restoration instead binds by `i`, not `I`, so it can preserve a mapping whose pane-list and depth-first orders differ ([layout-custom.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/layout-custom.c)).
+
 Historical 3.7c output appended floating panes as `<WxH,X,Y,<pane>,…>`. Its parser rejected that suffix, so floating layouts could not round-trip. Version 3.8 legacy output omits the suffix and carries no floating marker. Read `pane_floating_flag` separately when using that format. JSON layouts carry `z` on floating leaves and remove the restoration restriction ([changelog](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/CHANGES)).
+
+A custom tiled legacy layout at 3.7c counts floating panes during assignment and can absorb them into tiled leaves; a rewrite that must preserve floating state must refuse such windows ([3.7c layout-custom.c](https://github.com/tmux/tmux/blob/e476c1230b958df0cb12977517d24b3dc931375b/layout-custom.c)).
 
 ### Client flags and flow control
 

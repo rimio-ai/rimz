@@ -93,7 +93,7 @@ With an ambient pane, subagent launches use `RunPlacement::SubagentZone`, a plac
 | 1 | the launch channel's companion family is live | append to the first companion with room, or open the next numbered companion when all are full |
 | 2 | the caller is a configured team member | open a new companion tab after the launcher's tab |
 | 3 | a launched child of the caller is live beside the caller's pane (same session and view, tiled) | stack against the newest such child |
-| 4 | the caller's pane is live | split right from the caller |
+| 4 | the caller's pane is live | split right from the caller, beside its whole stack when it is a member, on either backend |
 | 5 | none of the above | open a new companion tab |
 
 Companion titles are `#<channel> subagents`, using the launch channel without a pane lookup. On the main channel they retain `<view> subagents` from the caller's view, stripping status glyphs, or `subagents` when the view cannot be resolved. An out-of-pane child opens a tab with the same base title.

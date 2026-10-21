@@ -1,13 +1,5 @@
 //! Pure tmux layout trees: legacy and JSON reads, legacy writes, and stack lifting.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Stack lifting is wired into split_pane in the next change."
-    )
-)]
-
 use serde::Deserialize;
 
 use crate::mux::SplitDirection;
@@ -44,10 +36,12 @@ pub(super) enum Refusal {
     Members,
     #[error("stack has too few rows for a downward split")]
     Height,
-    #[error("stack has too few columns for a rightward split")]
+    #[error("stack has too few columns for the staging split")]
     Width,
     #[error("new pane is no longer directly after the last stack member")]
     Newcomer,
+    #[error("a pane outside the split moved or resized during it")]
+    Moved,
 }
 
 impl Layout {
@@ -114,7 +108,7 @@ impl Layout {
         &self,
         order: &[String],
         members: &[String],
-        open: &str,
+        open: Option<&str>,
         direction: SplitDirection,
     ) -> Result<(), Refusal> {
         self.check_order(order)?;
@@ -142,7 +136,7 @@ impl Layout {
         &self,
         order: &[String],
         members: &[String],
-        open: &str,
+        open: Option<&str>,
         newcomer: &str,
         direction: SplitDirection,
     ) -> Result<Self, Refusal> {
@@ -170,6 +164,29 @@ impl Layout {
         expected.insert(index + 1, newcomer.to_owned());
         if order != expected {
             return Err(Refusal::Newcomer);
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_split_geometry(
+        &self,
+        before: &Self,
+        last: &str,
+        newcomer: &str,
+    ) -> Result<(), Refusal> {
+        // A window shrink can move only the open last member, and a legacy
+        // select-layout would resize the window back to the read's size.
+        if (self.root.width, self.root.height) != (before.root.width, before.root.height)
+            || !self
+                .leaves()
+                .into_iter()
+                .filter(|cell| cell.pane_id() != Some(last) && cell.pane_id() != Some(newcomer))
+                .eq(before
+                    .leaves()
+                    .into_iter()
+                    .filter(|cell| cell.pane_id() != Some(last)))
+        {
+            return Err(Refusal::Moved);
         }
         Ok(())
     }
@@ -246,14 +263,25 @@ impl Cell {
         }
     }
 
-    fn extents(&self, open: &str, direction: SplitDirection) -> Result<(u64, u64), Refusal> {
+    fn open_or_tallest(rows: &[Self], open: Option<&str>) -> Option<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, cell)| open.is_none_or(|id| cell.pane_id() == Some(id)))
+            .max_by_key(|(_, cell)| cell.height)
+            .map(|(index, _)| index)
+    }
+
+    fn extents(
+        &self,
+        open: Option<&str>,
+        direction: SplitDirection,
+    ) -> Result<(u64, u64), Refusal> {
         let Content::Rows(rows) = &self.content else {
             return Err(Refusal::Members);
         };
-        let expanded = rows
-            .iter()
-            .find(|cell| cell.pane_id() == Some(open))
-            .ok_or(Refusal::Members)?;
+        if self.width < 3 {
+            return Err(Refusal::Width);
+        }
         let extent = match direction {
             SplitDirection::Right => self.width,
             SplitDirection::Down => self.height,
@@ -268,13 +296,15 @@ impl Cell {
         }
         let keep = extent - 1 - new;
         if direction == SplitDirection::Down {
+            let expanded = Self::open_or_tallest(rows, open).ok_or(Refusal::Members)?;
             let collapsed = rows
                 .iter()
-                .filter(|cell| cell.pane_id() != Some(open))
-                .map(|cell| cell.height)
+                .enumerate()
+                .filter(|(index, _)| *index != expanded)
+                .map(|(_, cell)| cell.height)
                 .max()
                 .unwrap_or(0);
-            if expanded
+            if rows[expanded]
                 .height
                 .checked_sub(extent - keep)
                 .is_none_or(|height| height <= collapsed)
@@ -287,7 +317,7 @@ impl Cell {
 
     fn split_run(
         mut self,
-        open: &str,
+        open: Option<&str>,
         newcomer: &str,
         direction: SplitDirection,
     ) -> Result<Self, Refusal> {
@@ -315,9 +345,10 @@ impl Cell {
             }
             SplitDirection::Down => {
                 run.height = keep;
+                let expanded = Self::open_or_tallest(rows, open).ok_or(Refusal::Members)?;
                 let mut y = self.y;
-                for row in rows {
-                    if row.pane_id() == Some(open) {
+                for (index, row) in rows.iter_mut().enumerate() {
+                    if index == expanded {
                         row.height -= self.height - keep;
                     }
                     row.y = y;
@@ -334,7 +365,7 @@ impl Cell {
     fn lift(
         &mut self,
         members: &[String],
-        open: &str,
+        open: Option<&str>,
         newcomer: &str,
         direction: SplitDirection,
     ) -> Result<bool, Refusal> {
@@ -668,8 +699,13 @@ mod tests {
                 } else {
                     ids(&["%0", "%1", "%2", "%3"])
                 };
-                let result =
-                    before.beside_stack(&order, &ids(&["%1", "%2", "%3"]), "%3", "%4", direction);
+                let result = before.beside_stack(
+                    &order,
+                    &ids(&["%1", "%2", "%3"]),
+                    Some("%3"),
+                    "%4",
+                    direction,
+                );
                 let y = if shared { 11 } else { 0 };
                 let (width, open_height, newcomer) = match direction {
                     SplitDirection::Right => (29, 24, leaf("%4", 29, 30, 71, y)),
@@ -774,10 +810,85 @@ mod tests {
             (short, order, members, SplitDirection::Down, Refusal::Height),
         ] {
             assert_eq!(
-                layout.beside_stack(&order, &members, "%3", "%4", direction),
+                layout.beside_stack(&order, &members, Some("%3"), "%4", direction),
                 Err(reason)
             );
         }
+    }
+
+    #[test]
+    fn downward_split_requires_width_for_its_horizontal_staging_split() {
+        let layout = Layout::parse("0000,2x30,0,0[2x2,0,0,1,2x2,0,3,2,2x24,0,6,3]").unwrap();
+        let members = ids(&["%1", "%2", "%3"]);
+        for open in [Some("%3"), None] {
+            assert_eq!(
+                layout.check_stack(&members, &members, open, SplitDirection::Down),
+                Err(Refusal::Width),
+                "a downward lift still stages a horizontal split"
+            );
+        }
+    }
+
+    #[test]
+    fn post_split_preserves_every_leaf_outside_the_staging_split() {
+        let before = fixture(false);
+        let mut staged = before.clone();
+        let Content::Columns(columns) = &mut staged.root.content else {
+            unreachable!()
+        };
+        let Content::Rows(rows) = &mut columns[1].content else {
+            unreachable!()
+        };
+        rows[2].content =
+            Content::Columns(vec![leaf("%3", 29, 24, 41, 6), leaf("%4", 29, 24, 71, 6)]);
+        assert_eq!(staged.check_split_geometry(&before, "%3", "%4"), Ok(()));
+        for changed in [
+            leaf("%0", 39, 30, 0, 0),
+            leaf("%0", 40, 29, 0, 0),
+            leaf("%0", 40, 30, 1, 0),
+            leaf("%0", 40, 30, 0, 1),
+            leaf("%9", 40, 30, 0, 0),
+        ] {
+            let mut after = staged.clone();
+            let Content::Columns(columns) = &mut after.root.content else {
+                unreachable!()
+            };
+            columns[0] = changed;
+            assert_eq!(
+                after.check_split_geometry(&before, "%3", "%4"),
+                Err(Refusal::Moved),
+                "a foreign leaf changed: {after:?}"
+            );
+        }
+        let mut resized = staged.clone();
+        resized.root.height += 1;
+        let Content::Columns(columns) = &mut resized.root.content else {
+            unreachable!()
+        };
+        columns[0].height += 1;
+        assert_eq!(
+            resized.check_split_geometry(&before, "%3", "%4"),
+            Err(Refusal::Moved)
+        );
+        let mut shrunk = staged.clone();
+        shrunk.root.height -= 1;
+        assert_eq!(
+            shrunk.check_split_geometry(&before, "%3", "%4"),
+            Err(Refusal::Moved),
+            "a window shrink taken from the staged member alone"
+        );
+        let Content::Columns(columns) = &mut staged.root.content else {
+            unreachable!()
+        };
+        let Content::Rows(rows) = &mut columns[1].content else {
+            unreachable!()
+        };
+        rows[0].height += 1;
+        assert_eq!(
+            staged.check_split_geometry(&before, "%3", "%4"),
+            Err(Refusal::Moved),
+            "an unsplit stack member changed"
+        );
     }
 
     #[test]
