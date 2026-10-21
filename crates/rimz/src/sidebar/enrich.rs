@@ -759,6 +759,7 @@ fn enrich_core(
     for group in Arc::make_mut(&mut folded.worktree_groups) {
         group.pipeline = pipeline_cache.groups.get(&group.key).cloned();
     }
+    folded.project_stuck_stages();
     super::refresh::keep_warm::project_cache_clocks(
         &mut folded,
         &keep_warm_cache,

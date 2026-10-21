@@ -2363,6 +2363,7 @@ pub(super) fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusC
         crate::agents::AgentStatus::Paused,
         crate::agents::AgentStatus::Success,
         crate::agents::AgentStatus::Running,
+        crate::agents::AgentStatus::Sleeping,
         crate::agents::AgentStatus::Idle,
     ]
     .into_iter()

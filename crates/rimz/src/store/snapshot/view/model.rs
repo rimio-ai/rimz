@@ -450,12 +450,132 @@ pub struct SidebarWorktreeGroup {
 
 /// A work unit within one projected group; keys never merge across groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SidebarUnitKey<'a> {
+pub enum SidebarUnitKey<'a> {
     Team(&'a str),
     Solo(&'a str),
 }
 
+/// A work unit's counted buckets and their row carriers, independent of the cockpit lens.
+pub struct UnitStatus {
+    buckets: Vec<AgentStatus>,
+    calm_carrier: CalmCarrier,
+}
+
+enum CalmCarrier {
+    Matching,
+    Owner(String),
+    All,
+}
+
+impl UnitStatus {
+    /// Pure verdict over `(attention status, is owner, row ID)`; unfinished boards without owners use the unstaged rule.
+    pub fn from_members<'a>(
+        members: impl IntoIterator<Item = (AgentStatus, bool, &'a str)>,
+        pipeline: Option<&SidebarPipeline>,
+    ) -> Self {
+        use AgentStatus::*;
+        let members = members.into_iter().collect::<Vec<_>>();
+        let owner = members
+            .iter()
+            .find(|(_, owner, _)| *owner)
+            .map(|(status, _, id)| (*status, *id));
+        let mut buckets = [Failed, Waiting, Paused]
+            .into_iter()
+            .filter(|status| members.iter().any(|(member, _, _)| member == status))
+            .collect::<Vec<_>>();
+        let (calm, calm_carrier) = match (pipeline, owner) {
+            (Some(pipeline), _) if pipeline.position() == PipelinePosition::Done => {
+                (Some(Success), CalmCarrier::All)
+            }
+            (Some(_), Some((status, owner_id))) => (
+                match status {
+                    Running | Sleeping => Some(status),
+                    Idle | Success => Some(Idle),
+                    Failed | Waiting | Paused => None,
+                },
+                CalmCarrier::Owner(owner_id.to_owned()),
+            ),
+            _ => (
+                [Running, Sleeping, Idle, Success]
+                    .into_iter()
+                    .find(|status| members.iter().any(|(member, _, _)| member == status)),
+                CalmCarrier::Matching,
+            ),
+        };
+        if let Some(calm) = calm
+            && (calm == Running || buckets.is_empty())
+        {
+            buckets.push(calm);
+        }
+        Self {
+            buckets,
+            calm_carrier,
+        }
+    }
+
+    pub fn buckets(&self) -> &[AgentStatus] {
+        &self.buckets
+    }
+
+    pub fn carries(&self, row: &SidebarRow, bucket: AgentStatus) -> bool {
+        if !self.buckets.contains(&bucket) {
+            return false;
+        }
+        if bucket.is_attention() {
+            return row.attention_status() == Some(bucket);
+        }
+        match &self.calm_carrier {
+            CalmCarrier::Matching => row.attention_status() == Some(bucket),
+            CalmCarrier::Owner(owner_id) => row.id == *owner_id,
+            CalmCarrier::All => true,
+        }
+    }
+
+    pub fn headline(&self) -> AgentStatus {
+        self.buckets.first().copied().unwrap_or(AgentStatus::Idle)
+    }
+}
+
 impl SidebarWorktreeGroup {
+    pub fn unit_statuses(&self) -> BTreeMap<SidebarUnitKey<'_>, UnitStatus> {
+        let owner = self.pipeline_owner();
+        let mut units: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for row in self.rows.iter() {
+            let Some(status) = row.attention_status() else {
+                continue;
+            };
+            units.entry(self.unit_key(row)).or_default().push((
+                status,
+                owner.is_some_and(|owner| owner.id == row.id),
+                row.id.as_str(),
+            ));
+        }
+        units
+            .into_iter()
+            .map(|(key, members)| {
+                let pipeline = match key {
+                    SidebarUnitKey::Team(team) if Some(team) == self.team.as_deref() => {
+                        self.pipeline.as_ref()
+                    }
+                    _ => None,
+                };
+                (key, UnitStatus::from_members(members, pipeline))
+            })
+            .collect()
+    }
+
+    pub(crate) fn pipeline_owner(&self) -> Option<&SidebarRow> {
+        if self.kind == SidebarWorktreeKind::External {
+            return None;
+        }
+        let team = self.team.as_deref()?;
+        let owner = self.pipeline.as_ref()?.owner.as_deref()?;
+        self.rows.iter().find(|row| {
+            row.team() == Some(team)
+                && row.as_agent().and_then(|card| card.handle.as_deref()) == Some(owner)
+        })
+    }
+
     pub(crate) fn unit_key<'a>(&self, row: &'a SidebarRow) -> SidebarUnitKey<'a> {
         if self.kind != SidebarWorktreeKind::External
             && let Some(team) = row.team()

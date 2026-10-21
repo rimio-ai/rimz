@@ -8,7 +8,9 @@ use tracing::debug;
 
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
-use crate::store::snapshot::{SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, WorktreePrState};
+use crate::store::snapshot::{
+    SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, UnitStatus, WorktreePrState,
+};
 
 #[cfg(test)]
 thread_local! {
@@ -54,47 +56,15 @@ impl From<BodyFilter> for BodyLens {
 
 pub(crate) struct GroupFacts<'a> {
     group: &'a SidebarWorktreeGroup,
-    buckets: BTreeMap<SidebarUnitKey<'a>, Vec<AgentStatus>>,
+    units: BTreeMap<SidebarUnitKey<'a>, UnitStatus>,
 }
 
 impl<'a> GroupFacts<'a> {
     pub(crate) fn new(group: &'a SidebarWorktreeGroup) -> Self {
-        let mut buckets: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for row in group.rows.iter() {
-            let Some(status) = row.attention_status() else {
-                continue;
-            };
-            let statuses = buckets.entry(group.unit_key(row)).or_default();
-            if !statuses.contains(&status) {
-                statuses.push(status);
-            }
+        Self {
+            group,
+            units: group.unit_statuses(),
         }
-        let is_active = |status: &AgentStatus| {
-            matches!(
-                status,
-                AgentStatus::Waiting
-                    | AgentStatus::Failed
-                    | AgentStatus::Paused
-                    | AgentStatus::Running
-            )
-        };
-        for statuses in buckets.values_mut() {
-            if statuses.iter().any(is_active) {
-                statuses.retain(is_active);
-                continue;
-            }
-            let rest = [
-                AgentStatus::Idle,
-                AgentStatus::Sleeping,
-                AgentStatus::Success,
-            ]
-            .into_iter()
-            .find(|status| statuses.contains(status));
-            statuses.retain(|status| {
-                Some(*status) == rest && (*status != AgentStatus::Success || !group.finished)
-            });
-        }
-        Self { group, buckets }
     }
 }
 
@@ -102,20 +72,26 @@ impl BodyFilter {
     /// Status lenses show a matching unit whole; other lenses keep row membership.
     pub(crate) fn shown(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
         match self {
-            Self::Status(status) => facts
-                .buckets
-                .get(&facts.group.unit_key(row))
-                .is_some_and(|buckets| buckets.contains(&status)),
+            Self::Status(status) => {
+                !(status == AgentStatus::Success && facts.group.finished)
+                    && facts
+                        .units
+                        .get(&facts.group.unit_key(row))
+                        .is_some_and(|unit| unit.buckets().contains(&status))
+            }
             Self::Unread => row.unread,
             Self::OpenPr => facts.group.pr_state == Some(WorktreePrState::Open),
         }
     }
 
-    /// A status match has the bucket's own attention status and belongs to a unit counted there.
+    /// A status match carries its unit's bucket, even when its row glyph differs.
     pub(crate) fn matches(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
         self.shown(row, facts)
             && match self {
-                Self::Status(status) => row.attention_status() == Some(status),
+                Self::Status(status) => facts
+                    .units
+                    .get(&facts.group.unit_key(row))
+                    .is_some_and(|unit| unit.carries(row, status)),
                 Self::Unread | Self::OpenPr => true,
             }
     }
@@ -189,24 +165,180 @@ mod tests {
     use crate::ids::WorkspaceId;
 
     #[test]
-    fn team_units_count_active_buckets_or_one_rest_bucket() {
+    fn team_units_follow_the_stage_owner_or_ownerless_priority() {
         use AgentStatus::*;
-        for (members, expected) in [
-            (vec![Running, Idle], vec![Running]),
-            (vec![Waiting, Running], vec![Waiting, Running]),
-            (vec![Failed, Paused, Running], vec![Failed, Paused, Running]),
-            (vec![Idle, Sleeping, Success], vec![Idle]),
-            (vec![Sleeping, Success], vec![Sleeping]),
-            (vec![Success, Success], vec![Success]),
+        for (owner, others, stage, expected) in [
+            (Some(Running), vec![Idle], "Implement", vec![Running]),
+            (Some(Sleeping), vec![Running], "Implement", vec![Sleeping]),
+            (Some(Idle), vec![Running], "Implement", vec![Idle]),
+            (Some(Success), vec![Success], "Implement", vec![Idle]),
+            (Some(Waiting), vec![Running], "Implement", vec![Waiting]),
+            (
+                Some(Running),
+                vec![Failed, Paused, Waiting],
+                "Implement",
+                vec![Failed, Waiting, Paused, Running],
+            ),
+            (Some(Sleeping), vec![Failed], "Implement", vec![Failed]),
+            (Some(Idle), vec![Waiting], "Implement", vec![Waiting]),
+            (Some(Running), vec![Running], "Done", vec![Success]),
+            (Some(Idle), vec![Failed], "Done", vec![Failed]),
+            (None, vec![Running, Idle], "Implement", vec![Running]),
+            (
+                None,
+                vec![Waiting, Running],
+                "Implement",
+                vec![Waiting, Running],
+            ),
+            (
+                None,
+                vec![Failed, Paused, Running],
+                "Implement",
+                vec![Failed, Paused, Running],
+            ),
+            (
+                None,
+                vec![Idle, Sleeping, Success],
+                "Implement",
+                vec![Sleeping],
+            ),
+            (None, vec![Sleeping, Success], "Implement", vec![Sleeping]),
+            (None, vec![Success, Success], "Done", vec![Success]),
         ] {
-            let group = team_group(&members);
+            let mut members = owner.into_iter().collect::<Vec<_>>();
+            members.extend(others);
+            let mut group = team_group(&members);
+            group.team = Some("crew".into());
+            if owner.is_some() {
+                std::sync::Arc::make_mut(&mut group.rows)[0]
+                    .as_agent_mut()
+                    .unwrap()
+                    .handle = Some("coder".into());
+            }
+            group.pipeline = Some(pipeline(stage));
             for status in [Waiting, Failed, Paused, Running, Idle, Sleeping, Success] {
                 assert_eq!(
                     BodyFilter::Status(status).total(std::slice::from_ref(&group)),
                     usize::from(expected.contains(&status)),
-                    "{members:?} in {status:?}"
+                    "owner={owner:?}, members={members:?}, stage={stage} in {status:?}"
                 );
             }
+        }
+    }
+
+    fn pipeline(stage: &str) -> crate::store::snapshot::SidebarPipeline {
+        crate::store::snapshot::SidebarPipeline {
+            stages: vec!["Implement".into()],
+            stage: stage.into(),
+            owner: Some("coder".into()),
+            started_at: None,
+            stage_started_at: None,
+            stage_prior_secs: 0,
+            visited: Default::default(),
+            done_at: None,
+        }
+    }
+
+    #[test]
+    fn staged_calm_carriers_can_differ_from_their_row_status() {
+        let mut group = team_group(&[AgentStatus::Success, AgentStatus::Success]);
+        group.team = Some("crew".into());
+        std::sync::Arc::make_mut(&mut group.rows)[0]
+            .as_agent_mut()
+            .unwrap()
+            .handle = Some("coder".into());
+        group.pipeline = Some(pipeline("Implement"));
+        let facts = GroupFacts::new(&group);
+        let idle = BodyFilter::Status(AgentStatus::Idle);
+        assert!(group.rows.iter().all(|row| idle.shown(row, &facts)));
+        assert!(idle.matches(&group.rows[0], &facts));
+        assert!(!idle.matches(&group.rows[1], &facts));
+
+        group.pipeline.as_mut().unwrap().stage = "Done".into();
+        std::sync::Arc::make_mut(&mut group.rows)[1]
+            .as_agent_mut()
+            .unwrap()
+            .status = AgentStatus::Running;
+        let facts = GroupFacts::new(&group);
+        let done = BodyFilter::Status(AgentStatus::Success);
+        assert!(group.rows.iter().all(|row| done.matches(row, &facts)));
+    }
+
+    #[test]
+    fn stage_calm_is_carried_only_by_the_resolved_owner_row() {
+        let mut group = team_group(&[AgentStatus::Success, AgentStatus::Success]);
+        group.team = Some("crew".into());
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            row.as_agent_mut().unwrap().handle = Some("coder".into());
+        }
+        group.pipeline = Some(pipeline("Implement"));
+        let units = group.unit_statuses();
+        let unit = &units[&SidebarUnitKey::Team("crew")];
+        assert!(unit.carries(&group.rows[0], AgentStatus::Idle));
+        assert!(!unit.carries(&group.rows[1], AgentStatus::Idle));
+    }
+
+    #[test]
+    fn done_board_needs_no_owner_and_every_member_carries_success() {
+        use crate::store::snapshot::SidebarUnitKey;
+        let mut group = team_group(&[
+            AgentStatus::Success,
+            AgentStatus::Idle,
+            AgentStatus::Running,
+        ]);
+        group.team = Some("crew".into());
+        let mut done = pipeline("Done");
+        done.owner = None;
+        group.pipeline = Some(done);
+        let units = group.unit_statuses();
+        let unit = &units[&SidebarUnitKey::Team("crew")];
+        assert_eq!(unit.headline(), AgentStatus::Success);
+        assert!(
+            group
+                .rows
+                .iter()
+                .all(|row| unit.carries(row, AgentStatus::Success))
+        );
+    }
+
+    #[test]
+    fn unit_verdict_exposes_buckets_carriers_and_headline() {
+        use crate::store::snapshot::{SidebarUnitKey, UnitStatus};
+        use AgentStatus::*;
+        let mut group = team_group(&[Running, Paused, Waiting, Failed]);
+        group.team = Some("crew".into());
+        std::sync::Arc::make_mut(&mut group.rows)[0]
+            .as_agent_mut()
+            .unwrap()
+            .handle = Some("coder".into());
+        group.pipeline = Some(pipeline("Implement"));
+        let units = group.unit_statuses();
+        assert_eq!(units.len(), 1);
+        let unit = &units[&SidebarUnitKey::Team("crew")];
+        assert_eq!(unit.buckets(), &[Failed, Waiting, Paused, Running]);
+        assert_eq!(unit.headline(), Failed);
+        for (row, status) in group.rows.iter().zip([Running, Paused, Waiting, Failed]) {
+            for bucket in [Running, Paused, Waiting, Failed] {
+                assert_eq!(unit.carries(row, bucket), bucket == status);
+            }
+        }
+        for (members, expected) in [
+            (vec![Waiting, Paused, Running], Waiting),
+            (vec![Paused, Running], Paused),
+            (vec![Running, Idle], Running),
+            (vec![Sleeping, Idle], Sleeping),
+            (vec![Idle, Success], Idle),
+            (vec![Success], Success),
+            (vec![], Idle),
+        ] {
+            assert_eq!(
+                UnitStatus::from_members(
+                    members.into_iter().map(|status| (status, false, "")),
+                    None
+                )
+                .headline(),
+                expected
+            );
         }
     }
 

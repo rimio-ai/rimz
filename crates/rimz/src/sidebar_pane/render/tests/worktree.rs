@@ -747,7 +747,7 @@ fn pipeline_duration_shapes_survive_nerd_font_and_no_color() {
 }
 
 #[test]
-fn pipeline_does_not_change_attention_or_animation() {
+fn pipeline_line_itself_adds_no_attention_or_animation() {
     let mut snapshot = pipeline_snapshot();
     // Isolate row rendering from the team badge's header/pipeline hand-off.
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].team = None;
