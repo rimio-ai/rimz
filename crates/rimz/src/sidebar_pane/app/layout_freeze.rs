@@ -98,6 +98,7 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &ViewState) -> Frozen
     }
 }
 
+/// Fallback for an external or recovered focus anchor without a live source view.
 pub(super) fn adopt_shared_order(
     ui: &mut ViewState,
     current: &mut SidebarSnapshot,

@@ -1,4 +1,4 @@
-//! The selection model: an identity-keyed highlight over a derived baseline,
+//! The client-view selection model: an identity-keyed highlight over a derived baseline,
 //! the transient motion/click browse layer above it, the key/mouse handlers that
 //! act on it, and the typed effects they return to the serve loop.
 
@@ -674,15 +674,14 @@ fn clamp_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
 }
 
 /// Reconcile the highlight after folding a new snapshot. Selection is *derived*
-/// state: the baseline is the session focus register, re-queried from the mux
-/// every fold and updated by focus events between pulls; it cannot
-/// desynchronize, only lag a frame. One transient local layer rides above it:
+/// state: the baseline follows the view's agreed working-pane focus, sampled
+/// from the mux and updated by its focus intent between pulls. One transient
+/// view-owned layer rides above it:
 /// [`Browse`] pick from a motion key or click. Clicks paint their pick at once;
 /// key jumps wait for the baseline. Keyed on pane identity, never position.
 ///
-/// `derived` is the snapshot's session-register derivation, pre-filtered at the
-/// call site to a non-sidebar row: `Some(pane)` iff the focused pane is a row in
-/// this snapshot; `None` otherwise.
+/// `derived` is the view's focus derivation, pre-filtered at the call site to a
+/// non-sidebar row. Sidebar focus, disagreement and non-row focus derive `None`.
 ///
 /// Ordered rules:
 /// 0. **Make-up filter.** The status filter clears when its bucket's

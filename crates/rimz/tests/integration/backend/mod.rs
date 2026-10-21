@@ -3,6 +3,7 @@
 //! mux; the shared `CommandSpec` engine suite needs only coreutils.
 
 mod command;
+mod shared_view;
 mod single_backend_room;
 mod tmux;
 mod web;

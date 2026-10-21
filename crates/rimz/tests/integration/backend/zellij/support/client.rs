@@ -56,9 +56,20 @@ impl AttachedClient {
         cols: u16,
         rows: u16,
     ) -> Self {
-        wait_for_human_client_count(session.backend(), session.name(), 0);
+        Self::attach_beside(session, cols, rows, 0)
+    }
+
+    /// Attach beside `attached` human clients, waiting for that count to be
+    /// stable first, and return after one more is stably registered.
+    pub(in crate::backend::zellij) fn attach_beside(
+        session: &LiveZellijSession,
+        cols: u16,
+        rows: u16,
+        attached: usize,
+    ) -> Self {
+        wait_for_human_client_count(session.backend(), session.name(), attached);
         let mut client = Self::spawn(session, cols, rows, AttachMode::Normal);
-        client.wait_until_registered(1);
+        client.wait_until_registered(attached + 1);
         client
     }
 
@@ -100,7 +111,7 @@ impl AttachedClient {
     }
 
     fn spawn(session: &LiveZellijSession, cols: u16, rows: u16, mode: AttachMode) -> Self {
-        let output = PtyRecorder::default();
+        let output = PtyRecorder::with_screen(rows, cols);
         let process = spawn_process_at(session.path(), session.name(), cols, rows, &mode, &output);
         Self {
             xdg: session.namespace().path().to_path_buf(),
@@ -456,6 +467,15 @@ impl AttachedClient {
 
     pub(in crate::backend::zellij) fn output_bytes(&self) -> Vec<u8> {
         self.output.output_bytes()
+    }
+
+    pub(in crate::backend::zellij) fn screen(&self) -> String {
+        self.output.screen()
+    }
+
+    pub(in crate::backend::zellij) fn send(&mut self, bytes: &[u8]) {
+        self.process.writer.write_all(bytes).expect("write input");
+        self.process.writer.flush().expect("flush input");
     }
 
     pub(in crate::backend::zellij) fn titles(&self) -> Vec<String> {

@@ -567,6 +567,7 @@ impl Drop for TmuxServer {
 pub(super) struct AttachedTmuxClient {
     pub(super) _master: Box<dyn portable_pty::MasterPty + Send>,
     pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
+    writer: Box<dyn std::io::Write + Send>,
     output: PtyRecorder,
 }
 
@@ -599,11 +600,13 @@ impl AttachedTmuxClient {
         // Drain the PTY in the background so the kernel buffer never fills and
         // stalls the client; the thread exits with the PTY on drop.
         let reader = pair.master.try_clone_reader().expect("clone reader");
-        let output = PtyRecorder::default();
+        let writer = pair.master.take_writer().expect("PTY writer");
+        let output = PtyRecorder::with_screen(rows, cols);
         output.read_from(reader);
         Self {
             _master: pair.master,
             child,
+            writer,
             output,
         }
     }
@@ -618,6 +621,15 @@ impl AttachedTmuxClient {
 
     pub(super) fn output_seen(&self) -> bool {
         self.output.output_seen()
+    }
+
+    pub(super) fn screen(&self) -> String {
+        self.output.screen()
+    }
+
+    pub(super) fn send(&mut self, bytes: &[u8]) {
+        self.writer.write_all(bytes).expect("write client input");
+        self.writer.flush().expect("flush client input");
     }
 }
 

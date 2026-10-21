@@ -1,6 +1,7 @@
 //! Native sidebar supervisors, the shared room host, and snapshot rendering.
 //!
 //! [`app`] owns attachment loops, retained host inputs, fetch, last-known-good gates, health, selection, input, and reload. [`render`] projects [`crate::store::snapshot::SidebarSnapshot`] into terminal cells. Neither owns store decisions; those stay in [`crate::sidebar`] and [`crate::store`].
+//! The host retains client views shared while co-located; painting attachments advance them lazily, with geometry and render caches remaining pane-local.
 
 pub mod app;
 mod attach;

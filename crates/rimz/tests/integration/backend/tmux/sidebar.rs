@@ -1,6 +1,228 @@
 #![allow(clippy::print_stdout)]
 
 use super::support::*;
+use crate::backend::shared_view::{
+    agent_layout, seed_agents, sidebar_view, wait_frame, wait_screen,
+};
+
+#[test]
+fn two_clients_share_the_sidebar_view_through_detach() {
+    require_tmux!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[sidebar]\nafk_after_secs = 20\n",
+    )
+    .unwrap();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let session = "shared-view";
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            env.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((160, 32)),
+        ))
+        .unwrap();
+    for (name, value) in [
+        ("RIMZ_HOME", env.rimz_home()),
+        ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("XDG_CONFIG_HOME", env.config_root()),
+        ("HOME", env.home_root.clone()),
+        ("RIMZ_BIN", env.rimz_bin().to_path_buf()),
+    ] {
+        server.tmux(&[
+            "set-environment",
+            "-t",
+            session,
+            name,
+            value.to_str().unwrap(),
+        ]);
+    }
+    let opts = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
+        workspace_id: env.workspace_id.clone(),
+        project_root: env.project_root.clone(),
+        cwd: env.project_root.clone(),
+        ..sidebar_opts(
+            server._tempdir.path(),
+            session,
+            env.rimz_bin().to_owned(),
+            Some(160),
+        )
+    };
+    server.backend.open_sidebar(&opts, None).unwrap();
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "agents".to_owned(),
+            panes: agent_layout(),
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: opts,
+        })
+        .unwrap();
+    let agents: Vec<_> = list_session_panes(&server, session)
+        .into_iter()
+        .filter(|pane| {
+            pane.view_name.as_deref() == Some("agents")
+                && pane.command.as_deref() != Some("rimz-sidebar")
+        })
+        .collect();
+    assert_eq!(agents.len(), 12);
+    seed_agents(&env.state_path_for(&env.project_root), &agents);
+    let mut first = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    let mut second = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    server.tmux(&["select-pane", "-t", sidebar.raw()]);
+    wait_screen(
+        || first.screen(),
+        |s| s.contains("⢿ 12"),
+        "all twelve running cards reach the first client",
+    );
+    wait_screen(
+        || second.screen(),
+        |s| s.contains("⢿ 12"),
+        "all twelve running cards reach the second client",
+    );
+    first.send(b"g");
+    wait_screen(
+        || first.screen(),
+        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        "first client starts at the top",
+    );
+    wait_screen(
+        || second.screen(),
+        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        "second client starts at the top",
+    );
+    first.send(b"G");
+    let bottom = wait_screen(
+        || first.screen(),
+        |s| {
+            s.contains("view-card-11")
+                && !s.contains("view-card-00")
+                && sidebar_view(s).selection_visible
+        },
+        "first client scrolls to bottom with the selection shown",
+    );
+    let bottom = sidebar_view(&bottom);
+    wait_screen(
+        || second.screen(),
+        |s| sidebar_view(s) == bottom,
+        "co-viewer sees the same scroll",
+    );
+    second.send(b"g");
+    wait_screen(
+        || first.screen(),
+        |s| s.contains("view-card-00") && !s.contains("view-card-11"),
+        "second client's input updates both views",
+    );
+    first.send(b"G");
+    let bottom = wait_screen(
+        || second.screen(),
+        |s| {
+            s.contains("view-card-11")
+                && !s.contains("view-card-00")
+                && sidebar_view(s).selection_visible
+        },
+        "survivor has the scrolled view with the selection before detach",
+    );
+    let bottom = sidebar_view(&bottom);
+    drop(first);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server
+        .backend
+        .client_view(ClientFocusOptions {
+            session_name: Some(session.to_owned()),
+            ..Default::default()
+        })
+        .unwrap()
+        .presence
+        .human_clients
+        != 1
+    {
+        assert!(Instant::now() < deadline, "one client must remain attached");
+        thread::sleep(Duration::from_millis(50));
+    }
+    thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        sidebar_view(&second.screen()),
+        bottom,
+        "detach must not restore a stale follower view"
+    );
+    drop(second);
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| {
+            frame.client_views.is_empty() && frame.presence.is_some_and(|p| p.human_clients == 0)
+        },
+        "host resolves full detach before the hold starts",
+    );
+    thread::sleep(Duration::from_secs(1));
+    let mut returning = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    wait_screen(
+        || returning.screen(),
+        |s| sidebar_view(s) == bottom,
+        "reattach within the hold keeps scroll and selection",
+    );
+    assert_eq!(
+        server
+            .backend
+            .client_view(ClientFocusOptions {
+                session_name: Some(session.to_owned()),
+                ..Default::default()
+            })
+            .unwrap()
+            .presence
+            .human_clients,
+        1,
+        "returning client is natively attached"
+    );
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| frame.client_views.len() == 1,
+        "host resolves the returning client",
+    );
+    wait_screen(
+        || returning.screen(),
+        |s| sidebar_view(s) == bottom && !s.contains("zᶻ away"),
+        "returning client receives its retained view after resolution",
+    );
+    returning.send(b"k");
+    wait_screen(
+        || returning.screen(),
+        |s| {
+            !s.contains("view-card-00")
+                && sidebar_view(s).cards.iter().any(|(_, selected)| *selected)
+        },
+        "returning input continues the retained cursor, not cached terminal bytes",
+    );
+    drop(returning);
+    wait_frame(
+        &env.runtime_paths(),
+        |frame| {
+            frame.client_views.is_empty() && frame.presence.is_some_and(|p| p.human_clients == 0)
+        },
+        "host resolves the second full detach",
+    );
+    thread::sleep(Duration::from_secs(23));
+    let fresh = AttachedTmuxClient::attach(&server.socket, session, 160, 32);
+    wait_screen(
+        || fresh.screen(),
+        |s| {
+            s.contains("view-card-00")
+                && !s.contains("view-card-11")
+                && !sidebar_view(s).selection_visible
+        },
+        "reattach after the hold starts at the top",
+    );
+}
 
 #[test]
 fn live_work_boundary_resize_is_audited() {

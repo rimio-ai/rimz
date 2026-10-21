@@ -40,6 +40,7 @@ pub struct SidebarConfig {
     /// reports per-client input idle, so this drives `zᶻ idle` and adds `· Nm`
     /// after the first minute; Zellij reports attach state only, so it shows
     /// `zᶻ away` on full detach regardless of this value. 15 minutes by default.
+    /// Also bounds departed clients' sidebar-view retention on both backends.
     pub afk_after_secs: NonZeroU32,
 }
 

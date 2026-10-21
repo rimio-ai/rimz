@@ -84,11 +84,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// a status-churn reorder re-anchors the highlight to the same pane
     /// instead of sliding it onto a neighbour.
     pub(in crate::sidebar_pane) selected_pane: Option<PaneId>,
-    /// The hold-last derived baseline: the session focus register from the last
-    /// frame that named a rendered row. Selection is *derived* — recomputed from
-    /// the queried mux state every fold, so it advances on a `Some` derivation
-    /// and holds across a `None` (the sidebar itself is focused, or the focused
-    /// pane is not a row).
+    /// The hold-last baseline from this view's agreed working-pane focus.
+    /// It advances on a `Some` derivation and holds across a `None` (sidebar
+    /// focus, disagreement between co-viewers, or a focused pane without a row).
     pub(in crate::sidebar_pane) baseline_pane: Option<PaneId>,
     /// Whether this renderer's own tab was the on-screen tab on the last fold
     /// that carried an own-view. `None` until the first own-view fold, so
@@ -168,7 +166,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// a browse: it clears when the selection-derived provider kind *genuinely*
     /// changes from the value captured at pick time (a `None` derivation — a
     /// process row — holds it), or when its target leaves the dashboard.
-    /// The host copies this pick to unviewed attachments.
+    /// Travels with the client view, including a fork's initial state.
     pub(in crate::sidebar_pane) dashboard_tab: Option<DashboardTab>,
     /// The last selection-derived agent kind the dashboard followed — its
     /// hold-last, one level finer than `baseline_pane`. Reconciliation
@@ -183,12 +181,12 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
     pub(in crate::sidebar_pane) make_up_filter: BodyLens,
     pub(in crate::sidebar_pane) search_draft: Option<String>,
-    /// Worktree groups expanded through `+K more`, shared with unviewed attachments.
+    /// Worktree groups expanded through `+K more` in this client view.
     /// Expansion is presentation state only: the snapshot carries the full
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
-    /// Visibility of finished groups' receipts, shared with unviewed attachments.
+    /// Visibility of finished groups' receipts in this client view.
     pub(in crate::sidebar_pane) landed_open: bool,
     /// View-owned open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default

@@ -496,10 +496,10 @@ impl ViewContext {
         // Reconcile the highlight as part of the fold, before the next frame paints:
         // re-anchor the identity-keyed selection to its row (so a status-churn
         // reorder never slides it onto a neighbour) and re-derive the baseline from
-        // the session focus register. Selection is derived state, queried from the
-        // mux each fold and updated by focus events between pulls. The derivation
-        // is filtered to a non-sidebar row: a sidebar-self focus or non-row focused
-        // pane derives `None` and the baseline holds its last value. It is
+        // the view's agreed working-pane focus. Its pending intent takes priority
+        // over the sampled clients. The derivation is filtered to a non-sidebar
+        // row: sidebar focus, disagreement or non-row focus derives `None` and the
+        // baseline holds its last value. It is
         // deliberately blind to the make-up filter — the focused pane is real
         // however the body is narrowed, so a hidden baseline holds rather than
         // blanks.
