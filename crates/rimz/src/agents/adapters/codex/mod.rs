@@ -913,6 +913,10 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
+    fn hook_trust_choice(&self) -> Option<&'static str> {
+        Some("choose \"Trust all and continue\"")
+    }
+
     fn adopt_shared_file(
         &self,
         name: &str,

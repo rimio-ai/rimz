@@ -94,7 +94,19 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         restart::relaunch_action(source, &logins, &catalog, &cwd)?.1
     };
     let provider_login = rimz::agents::session_login(&kind, login.as_ref(), &machine.accounts)?;
-    provider_login.health(&catalog.native_ambient(&kind, &rimz::agents::ambient_env()))?;
+    crate::cli::folder_trust::preflight_hooks(
+        provider_login.health(&catalog.native_ambient(&kind, &rimz::agents::ambient_env())),
+        || Some(crate::cli::folder_trust::Unattended::Agent),
+        || {
+            rimz::config::definitions::hook_trust_fix(
+                &kind,
+                args.agent.as_deref().or(source.profile.as_deref()),
+                None,
+            )
+        },
+        &mut Default::default(),
+        &mut crate::cli::render::err(),
+    )?;
     let repo_root = if source.checkout.is_none() {
         workspace.at_launch_dir(&cwd)?.cwd_project_root
     } else {

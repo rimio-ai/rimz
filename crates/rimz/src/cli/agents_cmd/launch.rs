@@ -360,6 +360,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     };
     let prompt_agent_index = prompt.and(receipt_leader_index);
     let mut checked_folder_trust = HashSet::new();
+    let mut noticed_hook_trust = HashSet::new();
     let mut preflighted_logins = Vec::new();
     let mut empty_dir = None;
     if !args.launch.cohort.continue_cohort {
@@ -404,6 +405,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 ancestry.as_ref(),
                 focus,
                 checked_folder_trust,
+                noticed_hook_trust,
             )
             .map(|()| None)
         }));
@@ -451,6 +453,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 CellStart::Launch(prompt.filter(|_| Some(index) == prompt_agent_index))
             },
             &mut checked_folder_trust,
+            &mut noticed_hook_trust,
+            || {
+                rimz::config::definitions::hook_trust_fix(
+                    &cell.kind,
+                    cell.launch.profile.as_deref(),
+                    None,
+                )
+            },
             loop_fire
                 .map(|_| crate::cli::folder_trust::Unattended::Loop)
                 .or_else(|| {
@@ -669,6 +679,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                         ancestry.as_ref(),
                         focus,
                         checked_folder_trust,
+                        noticed_hook_trust,
                     )
                     .map(|()| None);
                 }
@@ -1081,6 +1092,8 @@ fn preflight_cell(
     isolation: rimz::config::Isolation,
     start: CellStart<'_>,
     checked_folder_trust: &mut HashSet<(rimz::ids::LoginKey, PathBuf)>,
+    noticed_hook_trust: &mut HashSet<rimz::ids::LoginKey>,
+    hook_fix: impl FnOnce() -> String,
     unattended: Option<crate::cli::folder_trust::Unattended>,
     empty_dir: Option<(&[AgentState], Option<&str>)>,
 ) -> Result<(
@@ -1158,9 +1171,15 @@ fn preflight_cell(
         cwd,
         (!isolation.is_scoped()).then_some(runtime),
     )?;
-    login.health(
-        &rimz::agents::machine_login_catalog()
-            .native_ambient(&cell.kind, &rimz::agents::ambient_env()),
+    crate::cli::folder_trust::preflight_hooks(
+        login.health(
+            &rimz::agents::machine_login_catalog()
+                .native_ambient(&cell.kind, &rimz::agents::ambient_env()),
+        ),
+        || unattended,
+        hook_fix,
+        noticed_hook_trust,
+        &mut render::err(),
     )?;
     let mut launch_env = rimz::agents::ambient_env();
     launch_env.extend(process.env.clone());
@@ -1206,6 +1225,7 @@ fn launch_resume_layout(
     ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
     focus: LaunchFocus,
     mut checked_folder_trust: HashSet<(rimz::ids::LoginKey, PathBuf)>,
+    mut noticed_hook_trust: HashSet<rimz::ids::LoginKey>,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -1310,6 +1330,23 @@ fn launch_resume_layout(
             ),
             CellStart::Launch(None),
             &mut checked_folder_trust,
+            &mut noticed_hook_trust,
+            || match seed {
+                rimz::harness::plan::CohortSeed::Resume(agent) => {
+                    rimz::config::definitions::hook_trust_fix(
+                        &agent.kind,
+                        agent.profile.as_deref(),
+                        Some((agent, "resume")),
+                    )
+                }
+                rimz::harness::plan::CohortSeed::Fresh => {
+                    rimz::config::definitions::hook_trust_fix(
+                        &cell.kind,
+                        cell.launch.profile.as_deref(),
+                        None,
+                    )
+                }
+            },
             ancestry
                 .map(|_| crate::cli::folder_trust::Unattended::Agent)
                 .or_else(|| {

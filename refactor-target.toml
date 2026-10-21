@@ -322,6 +322,21 @@ reason = "One warning/refusal presentation for launch, relaunch, resident takeov
 
 [[verdict]]
 kind = "item"
+key = "cli::folder_trust::preflight_hooks"
+reason = "Pane-opening commands share the watched/unattended hook-trust verdict and per-account notice deduplication."
+
+[[verdict]]
+kind = "item"
+key = "config::definitions::hook_trust_fix"
+reason = "CLI launch refusals and rebirth share one user-run fix, resolving team seats to a standalone base profile or kind."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::InstallationCapability::hook_trust_choice"
+reason = "Launch consent policy consumes the provider's in-pane trust choice without changing account health or headless checks."
+
+[[verdict]]
+kind = "item"
 key = "cli::folder_trust::Unattended"
 reason = "CLI-private team/loop context types the shared folder-trust refusal without changing its wording."
 

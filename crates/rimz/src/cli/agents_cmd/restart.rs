@@ -29,8 +29,13 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     )?
     .clone();
     let peers = rimz::address::addressable_agents(&snapshot);
-    let focus = LaunchFocus::resolve(false, resolve_caller(&snapshot.agents).as_ref());
-    let message = restart_resolved(&ctx, &agent, &peers, focus, None)?;
+    let caller = resolve_caller(&snapshot.agents);
+    let focus = LaunchFocus::resolve(false, caller.as_ref());
+    let message = restart_resolved(&ctx, &agent, &peers, focus, None, || {
+        caller
+            .as_ref()
+            .map(|_| crate::cli::folder_trust::Unattended::Agent)
+    })?;
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
 }
@@ -41,6 +46,7 @@ pub(in crate::cli) fn restart_resolved(
     peers: &[&AgentState],
     focus: LaunchFocus,
     unattended: Option<crate::cli::folder_trust::Unattended>,
+    hook_unattended: impl FnOnce() -> Option<crate::cli::folder_trust::Unattended>,
 ) -> Result<String> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -91,7 +97,19 @@ pub(in crate::cli) fn restart_resolved(
     let (action, login, fresh_reason) = relaunch_action(agent, &logins, &catalog, &cwd)?;
     let provider_login =
         rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?;
-    provider_login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
+    crate::cli::folder_trust::preflight_hooks(
+        provider_login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env())),
+        hook_unattended,
+        || {
+            rimz::config::definitions::hook_trust_fix(
+                &agent.kind,
+                agent.profile.as_deref(),
+                Some((agent, "restart")),
+            )
+        },
+        &mut Default::default(),
+        &mut crate::cli::render::err(),
+    )?;
     let repo_root = if agent.checkout.is_none() {
         workspace.at_launch_dir(&cwd)?.cwd_project_root
     } else {

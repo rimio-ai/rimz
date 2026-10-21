@@ -89,7 +89,7 @@ claude account `work` lives at ~/.rimz/accounts/claude/work
   new rooms     rimz accounts use --global claude work
 ```
 
-RimZ writes no credentials and never writes inside an unshared name. Unshared names remain per account; every other listed entry is shared by a link, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks with `/hooks` once per account path (see `hooks untrusted` under [`list`](#list)).
+RimZ writes no credentials and never writes inside an unshared name. Unshared names remain per account; every other listed entry is shared by a link, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks once per account path, through its startup review or `/hooks` (see `hooks untrusted` under [`list`](#list)).
 
 Rerunning `add` leaves the config entry alone unless `--history` rewrites that field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. Correct links remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the removed-link, moved-aside, and left-in-place lines as warnings, and refuses on the same error.
 
@@ -203,7 +203,7 @@ After the tables comes one blank line, the marker legend, the folded `Also:` lin
 
 Setup problems name their repair: create or re-add the home, install hooks for `default`, enable disabled hooks, or trust Codex hooks with `/hooks` under that account. Without a setup problem, a lapse names `plan lapsed: no <product> access`; restore access, then run `rimz accounts show <kind> --refresh`. Logged-out accounts name their login command. An undeclared selected account names the declaration or selection fix.
 
-`rimz start` warns about configured account problems and opens the room; an explicit `--account` still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts. Listing exits 0 despite account problems. `rimz doctor` additionally reports exported-home conflicts; a named account missing hooks is `hooks missing`, with `rimz accounts add <kind> <name>` as the repair.
+`rimz start` warns about configured account problems and opens the room; an explicit `--account` still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts, except that watched Codex and Hermes launches proceed to their hook-trust prompts with a notice ([launch checks](./agents.md#the-account-check-at-launch)). The account row still says `hooks untrusted` until you consent. Listing exits 0 despite account problems. `rimz doctor` additionally reports exported-home conflicts; a named account missing hooks is `hooks missing`, with `rimz accounts add <kind> <name>` as the repair.
 
 ## `show`
 

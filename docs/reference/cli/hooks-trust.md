@@ -38,6 +38,10 @@ The annotation is `(new file)` when install created the file, `(updated existing
 
 Codex runs a new or changed hook only after you trust it inside Codex. When its installed hooks are untrusted, including outdated trust, install and `rimz start` print `codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks`, and the `HOOKS` row of `rimz doctor` names the same fix.
 
+An `rimz agents` launch, restart, resume, or fork from your own shell proceeds with one notice per account: choose **Trust all and continue** in Codex's new pane, or RimZ cannot track it. Agent-started launches, teams, loops, and subagent resumes refuse before opening panes, naming the command to ask you to run once. Room recovery skips that agent and names a user-run fix. RimZ never grants hook trust or bypasses Codex's review. [The account check at launch](./agents.md#the-account-check-at-launch) defines which starts are watched; account selection and headless checks are unchanged.
+
+Hermes follows the same watched/unattended rule: from your own shell, launch `rimz agents hermes` and answer `y` to each RimZ hook prompt in its new pane. Answering `N` leaves that hook unapproved for the session; relaunch to approve it. RimZ never writes Hermes's hook allowlist or bypasses its consent.
+
 ### What install writes
 
 | Agent | Files | Edit |

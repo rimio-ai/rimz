@@ -114,6 +114,81 @@ fn rebirth_skips_an_unhealthy_account_and_keeps_it_pending() {
 }
 
 #[test]
+fn rebirth_skips_untrusted_hooks_with_a_user_resume_fix() {
+    for (team, profile, fix) in [
+        (false, None, "rimz agents resume @lost"),
+        (true, Some("codex-code"), "rimz agents codex-code"),
+        (true, Some("missing.worker"), "rimz agents codex"),
+        (true, None, "rimz agents codex"),
+    ] {
+        let fixture = Fixture::new(&[]);
+        let config = PathBuf::from(&fixture.ambient["HOME"]).join(".codex/config.toml");
+        let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        table
+            .get_mut("hooks")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .remove("state");
+        std::fs::write(&config, toml::to_string(&table).unwrap()).unwrap();
+        let transcript = fixture.project.join("lost.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some("lost".into()), LifecycleSignal::Registered);
+        observation.agent_name = Some("lost".into());
+        if team {
+            observation.launch.team = Some("forge".into());
+            observation.launch.role = Some("coder".into());
+            observation.launch.profile = profile.map(str::to_owned);
+        }
+        observation.worktree_path = Some(fixture.project.display().to_string());
+        observation.transcript_path = Some(transcript.display().to_string());
+        Store::open(fixture.paths.clone(), fixture.runtime.clone())
+            .unwrap()
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                fixture.paths.workspace_id.clone(),
+                "rimz-test",
+                "codex",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+        let key = (AgentKind::new_unchecked("codex"), "lost".into());
+        live_roster::publish(&fixture.paths.live_roster, BTreeSet::from([key.clone()])).unwrap();
+        let machine = if team {
+            team_machine()
+        } else {
+            MachineConfig::default()
+        };
+        let plan = fixture.inspect_with(&machine, false);
+        assert_eq!(plan.preview().pane_count(), 0);
+        assert_eq!(
+            plan.preview().unresumable[0].reason,
+            Some(ResumeSkipReason::AccountUnavailable)
+        );
+        let text = plan.planned.warnings.join("\n");
+        for expected in [
+            "only you can trust them",
+            &format!("run `{fix}` from your own shell"),
+            "choose \"Trust all and continue\"",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        for excluded in [
+            fixture.ambient["HOME"].as_str(),
+            "SessionStart",
+            "CODEX_HOME",
+        ] {
+            assert!(!text.contains(excluded), "{text}");
+        }
+        park_roster(&fixture.paths).unwrap();
+        plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
+            .confirm(|_, _| Ok::<_, &str>(()));
+        assert!(pending(&fixture).contains(&key));
+    }
+}
+
+#[test]
 fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
     if std::env::var_os("RIMZ_TEST_REBIRTH_NO_BWRAP").is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())

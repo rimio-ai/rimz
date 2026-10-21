@@ -44,7 +44,8 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let snapshot = ctx.alive_snapshot()?;
-    let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
+    let caller = resolve_caller(&snapshot.agents);
+    let focus = LaunchFocus::resolve(args.bg, caller.as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     if source.checkout.is_some() {
         let cwd = source
@@ -141,7 +142,23 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     )?;
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;
-    login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
+    crate::cli::folder_trust::preflight_hooks(
+        login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env())),
+        || {
+            caller
+                .as_ref()
+                .map(|_| crate::cli::folder_trust::Unattended::Agent)
+        },
+        || {
+            rimz::config::definitions::hook_trust_fix(
+                &source.kind,
+                source.profile.as_deref(),
+                Some((&source, "fork")),
+            )
+        },
+        &mut Default::default(),
+        &mut crate::cli::render::err(),
+    )?;
     let repo_root = if seed.launch.checkout.is_none() {
         workspace.at_launch_dir(&seed.cwd)?.cwd_project_root
     } else {
