@@ -338,7 +338,7 @@ Selecting an engaged card inserts its stats line below the meter and appends ent
 | `expanded` | every engaged card keeps its stats line and lists its subagent and wait entries |
 | `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
 
-`[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the description, cost, and muted coarse age on the stale line, clipping the description to fit.
+`[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the description, cost, and coarse age on the stale line, clipping the description to fit. The age keeps that child-inclusive quiet time but wears the same cache tone as the meter's age pin, without a clock face.
 
 ### Subagents and waits
 

@@ -2,6 +2,8 @@ use super::*;
 
 use crate::config::CardDensityMode;
 use crate::sidebar_pane::render::sections::SelectionReach;
+use crate::sidebar_pane::render::theme::Component;
+use crate::store::snapshot::CacheClock;
 
 #[test]
 fn fresh_team_keeps_only_the_live_selection_open() {
@@ -183,6 +185,66 @@ fn stale_cards_shrink_only_unread_free_resting_history() {
         !identity.to_string().contains("try the arena"),
         "zero disables shrinking"
     );
+}
+
+#[test]
+fn stale_age_wears_the_cache_clock_tone() {
+    let theme = Theme::fixed(false);
+    let clock = CacheClock {
+        ceiling_secs: 1800,
+        last_request_at: None,
+        warm_until: None,
+        held_since: None,
+        rewarm_cost_usd: None,
+    };
+    for (cache, expected) in [
+        (
+            Some(clock),
+            theme.style(theme.component(Component::CacheExpired), Modifier::empty()),
+        ),
+        (
+            Some(CacheClock {
+                warm_until: Some(fixed_now() + Duration::from_secs(600)),
+                held_since: Some(fixed_now() - Duration::from_secs(3600)),
+                ..clock
+            }),
+            theme.good(Modifier::empty()),
+        ),
+        (None, theme.muted()),
+        (
+            Some(CacheClock {
+                last_request_at: Some(fixed_now() - Duration::from_secs(600)),
+                ..clock
+            }),
+            theme.muted(),
+        ),
+        (
+            Some(CacheClock {
+                last_request_at: Some(fixed_now() - Duration::from_secs(1500)),
+                ..clock
+            }),
+            theme.style(theme.warm_heat_tone(600.0 / 900.0), Modifier::empty()),
+        ),
+    ] {
+        let mut parent = density_agent("old", "claude", AgentStatus::Success, Some("old task"), 40);
+        parent.last_activity = fixed_now() - Duration::from_secs(172800);
+        let mut snapshot = snapshot_with(vec![parent]);
+        let row = snapshot.rows_mut().next().unwrap();
+        row.unread = false;
+        row.as_agent_mut().unwrap().cache = cache;
+        for width in [36, 70] {
+            let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+            let age = lines
+                .iter()
+                .find(|line| line.to_string().contains("claude"))
+                .unwrap()
+                .spans
+                .iter()
+                .find(|span| span.content == " 2d")
+                .expect("bare three-cell quiet age, even after a cache ping or hold");
+            assert_eq!(age.style, expected, "{cache:?} at width {width}");
+        }
+    }
 }
 
 #[test]
