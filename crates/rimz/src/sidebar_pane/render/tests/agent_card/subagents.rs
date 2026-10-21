@@ -1164,6 +1164,65 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
 }
 
 #[test]
+fn subagent_model_column_is_sized_by_display_width() {
+    // `模型模型` is 4 chars but 8 columns, `Haiku` 5 chars and 5 columns: the
+    // wide name sets the column only when it is measured in columns, so each
+    // child's effort starts in the same column only under that measure.
+    let parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let mut wide = agent(
+        "child-1",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    wide.parent_agent_id = Some("claude-1".into());
+    wide.model = Some("模型模型".to_owned());
+    wide.effort = Some("high".to_owned());
+    let mut narrow = wide.clone();
+    narrow.agent_id = "child-2".into();
+    narrow.model = Some("Haiku".to_owned());
+    narrow.effort = Some("low".to_owned());
+    let snapshot = snapshot_with(vec![parent, wide, narrow]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        54,
+        27,
+    );
+
+    let column = |line_needle: &str, col_needle: &str| {
+        let line = rendered
+            .lines()
+            .find(|line| line.contains(line_needle))
+            .unwrap_or_else(|| panic!("{line_needle:?} missing:\n{rendered}"));
+        Line::from(&line[..line.find(col_needle).unwrap()]).width()
+    };
+    assert_eq!(
+        column("模型模型", "模型模型"),
+        column("Haiku", "Haiku"),
+        "both models start in one column:\n{rendered}"
+    );
+    assert_eq!(
+        column("模型模型", "high"),
+        column("Haiku", "low"),
+        "the efforts stack after a wide model name:\n{rendered}"
+    );
+}
+
+#[test]
 fn codex_subagent_renders_nickname_nested_path_and_current_context() {
     let parent = agent(
         "codex-root",
