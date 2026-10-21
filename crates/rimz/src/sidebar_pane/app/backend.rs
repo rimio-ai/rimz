@@ -34,6 +34,27 @@ enum Geometry {
     Fixed(Size),
 }
 
+pub(super) struct BufferedFrame {
+    bytes: Vec<u8>,
+    bracket: bool,
+}
+
+impl BufferedFrame {
+    pub(super) fn write(self, backend: &mut PaneBackend) -> io::Result<()> {
+        if self.bracket {
+            backend.output.write_all(BEGIN_SYNC)?;
+        }
+        let body_result = backend.output.write_all(&self.bytes);
+        let end_result = if self.bracket {
+            backend.output.write_all(END_SYNC)
+        } else {
+            Ok(())
+        };
+        let flush_result = backend.output.flush();
+        body_result.and(end_result).and(flush_result)
+    }
+}
+
 impl PaneBackend {
     /// Name the pane as sidebar chrome; return `false` while the unsized backend drops writes.
     pub(super) fn set_pane_title(&mut self) -> io::Result<bool> {
@@ -49,26 +70,18 @@ impl PaneBackend {
         self.frame = Some(Vec::new());
     }
 
-    /// Write the buffered frame and flush once, even when the frame is empty.
-    /// The synchronized-output bracket wraps a non-empty frame only when the
-    /// caller passes `bracket`, which `FramePainter::draw_and_paint` does only
-    /// for frames carrying kitty graphics: a cell-only frame has no bracket.
-    pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
-        let frame = self.frame.take().unwrap_or_default();
-        let bracket = bracket && !frame.is_empty();
+    /// Detach the composed frame without writing, so its owner can release view state before output.
+    pub(super) fn take_frame(&mut self, bracket: bool) -> BufferedFrame {
+        let bytes = self.frame.take().unwrap_or_default();
+        let bracket = bracket && !bytes.is_empty();
         #[cfg(any(test, feature = "testkit"))]
         let bracket = bracket && self.captured.is_none();
-        if bracket {
-            self.output.write_all(BEGIN_SYNC)?;
-        }
-        let body_result = self.output.write_all(&frame);
-        let end_result = if bracket {
-            self.output.write_all(END_SYNC)
-        } else {
-            Ok(())
-        };
-        let flush_result = self.output.flush();
-        body_result.and(end_result).and(flush_result)
+        BufferedFrame { bytes, bracket }
+    }
+
+    #[cfg(test)]
+    pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
+        self.take_frame(bracket).write(self)
     }
 
     /// Paint the pane behind `fd`, the pane's own terminal output.

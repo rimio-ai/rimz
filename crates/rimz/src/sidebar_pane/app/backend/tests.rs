@@ -184,6 +184,22 @@ fn a_frame_holds_raw_and_encoded_bytes_until_ended() {
 }
 
 #[test]
+fn a_composed_frame_defers_output_until_explicit_publish() {
+    let mut pty = Pty::open(40, 12);
+    let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
+    backend.begin_frame();
+    backend.write_all(b"composed").unwrap();
+    let frame = backend.take_frame(true);
+    assert_eq!(pty.drain(), b"");
+    backend.begin_frame();
+    backend.write_all(b"next").unwrap();
+    frame.write(&mut backend).unwrap();
+    assert_eq!(pty.drain(), b"\x1b[?2026hcomposed\x1b[?2026l");
+    backend.end_frame(false).unwrap();
+    assert_eq!(pty.drain(), b"next");
+}
+
+#[test]
 fn a_write_to_a_closed_pane_is_an_error() {
     let mut pty = Pty::open(40, 12);
     let mut backend = PaneBackend::for_fd(pty.slave()).unwrap();
