@@ -113,13 +113,15 @@ fn subagent_lockdown_merges_opencode_permissions() {
 #[cfg(unix)]
 fn install_blocker_refuses_only_old_opencode() {
     use std::os::unix::fs::PermissionsExt as _;
-    let dir = tempfile::tempdir().unwrap();
-    let binary = dir.path().join("opencode");
     for (banner, blocked) in [
         ("opencode v1.19.0", true),
         ("opencode v2.0.27", false),
         ("unknown", false),
     ] {
+        // The version probe memoizes per path and file stamp, so a same-length
+        // rewrite of one path within an mtime tick would read the last case's output.
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("opencode");
         std::fs::write(&binary, format!("#!/bin/sh\nprintf '%s\\n' '{banner}'\n")).unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let reason = install_blocker_at(&binary);
