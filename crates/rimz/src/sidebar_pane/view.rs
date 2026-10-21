@@ -57,7 +57,6 @@ impl<'a> VisibleGroup<'a> {
 /// One body projection shared by render, browse, selection, and layout freezes.
 pub(super) struct VisibleRoster<'a> {
     rows: Vec<&'a SidebarRow>,
-    matches: Vec<bool>,
     groups: Vec<VisibleGroup<'a>>,
 }
 
@@ -69,7 +68,6 @@ impl<'a> VisibleRoster<'a> {
         held: Option<&HashSet<String>>,
     ) -> Self {
         let mut rows = Vec::new();
-        let mut matches = Vec::new();
         let mut groups = Vec::with_capacity(snapshot.worktree_groups.len());
         for group in snapshot.worktree_groups.iter() {
             let expanded = expanded_groups.contains(&group.key);
@@ -81,10 +79,7 @@ impl<'a> VisibleRoster<'a> {
             } else {
                 0
             };
-            for (row, matched) in projection.rows {
-                rows.push(row);
-                matches.push(matched);
-            }
+            rows.extend(projection.rows);
             groups.push(VisibleGroup {
                 source: group,
                 range: start..rows.len(),
@@ -97,11 +92,7 @@ impl<'a> VisibleRoster<'a> {
                 hidden_count,
             });
         }
-        Self {
-            rows,
-            matches,
-            groups,
-        }
+        Self { rows, groups }
     }
 
     pub(super) fn baseline(snapshot: &'a SidebarSnapshot) -> Self {
@@ -123,10 +114,8 @@ impl<'a> VisibleRoster<'a> {
             0
         };
         let len = projection.rows.len();
-        let (rows, matches) = projection.rows.into_iter().unzip();
         Self {
-            rows,
-            matches,
+            rows: projection.rows,
             groups: vec![VisibleGroup {
                 source: group,
                 range: 0..len,
@@ -151,10 +140,6 @@ impl<'a> VisibleRoster<'a> {
 
     pub(super) fn len(&self) -> usize {
         self.rows.len()
-    }
-
-    pub(super) fn is_match(&self, ordinal: usize) -> bool {
-        self.matches.get(ordinal).copied().unwrap_or(false)
     }
 
     pub(super) fn groups(&self) -> &[VisibleGroup<'a>] {
@@ -198,7 +183,7 @@ impl<'a> VisibleRoster<'a> {
 }
 
 struct GroupProjection<'a> {
-    rows: Vec<(&'a SidebarRow, bool)>,
+    rows: Vec<&'a SidebarRow>,
     natural_hidden_count: usize,
 }
 
@@ -233,16 +218,14 @@ fn project_group<'a>(
     {
         return projection;
     }
-    // A row the query names is a match even where the status lens shows it as context.
-    projection.rows.retain_mut(|(row, matched)| {
-        *matched = contains(&row.name)
+    projection.rows.retain(|row| {
+        contains(&row.name)
             || row.worktree_branch.as_deref().is_some_and(contains)
             || row.team().is_some_and(contains)
             || row
                 .as_agent()
                 .and_then(|agent| agent.handle.as_deref())
-                .is_some_and(|handle| contains(&format!("@{handle}")));
-        *matched
+                .is_some_and(|handle| contains(&format!("@{handle}")))
     });
     projection
 }
@@ -299,10 +282,7 @@ fn project_rows<'a>(
             }
         };
         if visible {
-            rows.push((
-                row,
-                filter.is_none_or(|(filter, facts)| filter.matches(row, facts)),
-            ));
+            rows.push(row);
             actual_visible += 1;
         }
     }
@@ -326,11 +306,7 @@ pub(crate) fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(rows, false, false, false, held, None, None)
-        .rows
-        .into_iter()
-        .map(|(row, _)| row)
-        .collect()
+    project_rows(rows, false, false, false, held, None, None).rows
 }
 
 fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
@@ -618,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn status_lens_shows_whole_units_with_match_bits_and_query_alignment() {
+    fn status_lens_shows_whole_units_with_query_alignment() {
         let mut rows = vec![
             agent_row("context", AgentStatus::Waiting),
             agent_row("match", AgentStatus::Running),
@@ -632,29 +608,24 @@ mod tests {
         let lens = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
         let roster = VisibleRoster::single(&group, &lens, false, None, None);
         assert_eq!(ids(&roster), ["context", "match"]);
-        assert!(!roster.is_match(0));
-        assert!(roster.is_match(1));
         let queried = BodyLens {
             query: Some("match".to_owned()),
             ..lens.clone()
         };
         let roster = VisibleRoster::single(&group, &queried, false, None, None);
         assert_eq!(ids(&roster), ["match"]);
-        assert!(roster.is_match(0));
         let queried = BodyLens {
             query: Some("context".to_owned()),
             ..lens.clone()
         };
         let roster = VisibleRoster::single(&group, &queried, false, None, None);
         assert_eq!(ids(&roster), ["context"]);
-        assert!(roster.is_match(0), "a row the query names is a match");
         let labelled = BodyLens {
             query: Some("main".to_owned()),
             ..lens.clone()
         };
         let roster = VisibleRoster::single(&group, &labelled, false, None, None);
         assert_eq!(ids(&roster), ["context", "match"]);
-        assert!(!roster.is_match(0) && roster.is_match(1));
         let idle = BodyLens::from(BodyFilter::Status(AgentStatus::Sleeping));
         assert_eq!(
             VisibleRoster::single(&group, &idle, false, None, None).len(),
@@ -669,7 +640,6 @@ mod tests {
             None,
         );
         assert_eq!(ids(&roster), ["context"]);
-        assert!(roster.is_match(0));
     }
 
     fn snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {

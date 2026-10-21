@@ -23,7 +23,6 @@ pub(in crate::sidebar_pane) struct CardHeights {
 pub(super) struct CardKey {
     pub(super) expansion: CardExpansion,
     pub(super) selected: bool,
-    pub(super) matched: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +69,6 @@ impl CardHeights {
             max_recent_subagents,
             // These resolve into CardKey, not the epoch.
             selected_index: _,
-            matched: _,
             held_expansions: _,
             delegation_overrides: _,
             delegation_history: _,

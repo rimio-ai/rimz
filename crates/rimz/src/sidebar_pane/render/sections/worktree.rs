@@ -191,10 +191,6 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         block.push_with_regions(line, None, target.map(|target| (0..u16::MAX, target)));
     }
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
-        let ctx = &RowCtx {
-            matched: roster.is_match(this_row),
-            ..*ctx
-        };
         block.card_starts.push((this_row, block.lines.len()));
         let selected = Some(this_row) == ctx.selected_index;
         let expanded = CardExpansion::resolve(
@@ -216,7 +212,6 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         let key = CardKey {
             expansion: expanded,
             selected,
-            matched: ctx.matched,
         };
         let cached = walk
             .heights

@@ -1352,11 +1352,6 @@ kind = "item"
 key = "store::snapshot::view::model::SidebarWorktreeGroup::unit_key"
 reason = "One method owns team-versus-solo identity including the external-group exception."
 
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::view::VisibleRoster::is_match"
-reason = "Render emphasis and keyboard selection read the projected row match bit."
-
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
 # render_section_line_ansi exposes the CLI's full-frame section filter.

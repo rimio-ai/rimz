@@ -3,7 +3,7 @@ use crate::sidebar_pane::render::layout::{spans_width, text_width};
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
-fn filtered_team_keeps_context_muted_and_closed() {
+fn filtered_team_cards_render_and_open_as_unfiltered() {
     let members = [AgentStatus::Running, AgentStatus::Idle]
         .into_iter()
         .enumerate()
@@ -58,7 +58,7 @@ fn filtered_team_keeps_context_muted_and_closed() {
         .flat_map(|line| &line.spans)
         .find(|span| span.content == "context")
         .expect("context teammate stays visible");
-    assert_eq!(context.style.fg, theme.muted().fg);
+    assert_eq!(context.style.fg, Some(theme.provider_brand_tone("claude")));
     let matched = block
         .lines
         .iter()
@@ -68,10 +68,20 @@ fn filtered_team_keeps_context_muted_and_closed() {
     assert_eq!(matched.style.fg, Some(theme.provider_brand_tone("claude")));
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 40);
     assert!(
-        !screen.contains("context task"),
-        "context must stay closed: {screen}"
+        screen.contains("context task"),
+        "the selected worker opens its teammate: {screen}"
     );
-    assert_snapshot("filtered_team_context", screen);
+    ui.make_up_filter = BodyLens::default();
+    let unfiltered = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 40);
+    let card_lines = |frame: super::super::compose::ComposedFrame| {
+        frame
+            .lines
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, line)| frame.interactions.row_at_line(index).map(|_| line))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(card_lines(block), card_lines(unfiltered));
 }
 
 fn pipeline_snapshot() -> SidebarSnapshot {
