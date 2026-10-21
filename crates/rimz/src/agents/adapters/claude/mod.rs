@@ -868,6 +868,31 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
+    fn allow_team_notes_args(
+        &self,
+        run: &Path,
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                union_settings_array(
+                    object,
+                    "permissions",
+                    "additionalDirectories",
+                    [run.display().to_string()],
+                )
+            },
+        )?;
+        Ok(())
+    }
+
     fn allow_routine_rimz_args(
         &self,
         (cwd, artifact_dir): (&Path, &Path),

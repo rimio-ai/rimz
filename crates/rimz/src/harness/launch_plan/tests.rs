@@ -975,12 +975,118 @@ fn model_alias_resolution_at_the_process_boundary() {
 }
 
 #[test]
+fn team_archive_grant_follows_a_childs_checkout_and_rejects_foreign_runs() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let nested = project.path().join("src");
+    std::fs::create_dir(&nested).unwrap();
+    let output = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(project.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let state = StatePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        config.path(),
+    )
+    .unwrap();
+    let runtime = RuntimePaths::for_state_under(&state, config.path());
+    let run = state.root.join("team-notes/run");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    let link = project.path().join(".rimz/team");
+    std::os::unix::fs::symlink(&run, &link).unwrap();
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[agents]\nallow-routine-rimz = false").unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), config.path()).unwrap();
+    let mut request = request("claude", action_with_args("launch", Vec::new()));
+    request.subagent = true;
+    let dirs = |team: Option<&str>| {
+        let mut request = request.clone();
+        request.identity.params.team = team.map(str::to_owned);
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: &nested,
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        let argv = &plan.process().provider_argv;
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--settings")
+            .unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+        settings["permissions"]["additionalDirectories"].clone()
+    };
+    assert_eq!(dirs(None), serde_json::json!([run.canonicalize().unwrap()]));
+    let nested_run = state.team_notes_dir.join("nested-run");
+    std::fs::create_dir(&nested_run).unwrap();
+    std::fs::write(nested_run.join("run.json"), r#"{"team":"mill"}"#).unwrap();
+    std::fs::create_dir(nested.join(".rimz")).unwrap();
+    let nested_link = nested.join(".rimz/team");
+    std::os::unix::fs::symlink(&nested_run, &nested_link).unwrap();
+    assert_eq!(
+        dirs(None),
+        serde_json::json!([nested_run.canonicalize().unwrap()]),
+        "a subdirectory launch must grant its nearest run"
+    );
+    assert!(
+        dirs(Some("forge")).is_null(),
+        "do not skip a foreign nearest run to grant the checkout root's run"
+    );
+    assert_eq!(
+        dirs(Some("mill")),
+        serde_json::json!([nested_run.canonicalize().unwrap()])
+    );
+    std::fs::remove_file(&nested_link).unwrap();
+    assert_eq!(
+        dirs(Some("forge")),
+        serde_json::json!([run.canonicalize().unwrap()])
+    );
+    std::fs::remove_file(run.join("run.json")).unwrap();
+    assert!(
+        dirs(Some("forge")).is_null(),
+        "an unowned run grants no tagged launch"
+    );
+    std::fs::remove_dir_all(project.path().join(".git")).unwrap();
+    assert_eq!(dirs(None), serde_json::json!([run.canonicalize().unwrap()]));
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(config.path(), &link).unwrap();
+    assert!(dirs(None).is_null());
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(config.path().join("missing"), &link).unwrap();
+    assert!(dirs(None).is_null());
+    std::fs::remove_file(&link).unwrap();
+    assert!(dirs(None).is_null());
+}
+
+#[test]
 fn routine_permissions_cover_actions_children_and_isolations() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
+    let run = state.root.join("team-notes/run");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::os::unix::fs::symlink(&run, project.path().join(".rimz/team")).unwrap();
     let home = project.path().join("home");
     for name in ["commit", "rimz-pin"] {
         std::fs::create_dir_all(home.join("skills").join(name)).unwrap();
@@ -1058,7 +1164,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                             ),
                             rules
                         );
-                        let dirs = [
+                        let mut dirs = vec![
                             if sandboxed {
                                 PathBuf::from("/tmp")
                             } else {
@@ -1066,13 +1172,13 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                             },
                             state.room_shared_dir.clone(),
                         ];
+                        if !enabled {
+                            dirs.clear();
+                        }
+                        dirs.push(run.clone());
                         assert_eq!(
                             value["permissions"]["additionalDirectories"],
-                            if enabled {
-                                serde_json::json!(dirs)
-                            } else {
-                                serde_json::Value::Null
-                            }
+                            serde_json::json!(dirs)
                         );
                         assert_eq!(
                             value["permissions"]["allow"]
