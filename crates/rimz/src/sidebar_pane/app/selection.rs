@@ -420,7 +420,7 @@ pub(super) fn handle_mouse_click(
             anchor_selection(ui, snapshot);
             ui.offset_authoritative = true;
             ui.scroll_ease.cancel();
-            ui.reveal_row = Some(row);
+            ui.reveal_row = pane.is_some().then_some(row);
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleLanded) => {
