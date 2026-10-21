@@ -290,7 +290,7 @@ fn map_sandbox_paths(store: &Store, frame: &mut HookIngress) -> Result<()> {
     let rebound: Vec<PathBuf> = serde_json::from_str(
         frame
             .env
-            .get(rimz::sandbox::HOOK_HOST_PATHS_ENV)
+            .get(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV)
             .context("sandbox hook requires RIMZ_SANDBOX_HOST_PATHS")?,
     )?;
     let host_path = |path: &Path| {
@@ -666,7 +666,7 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
     {
         match frame
             .env
-            .contains_key(rimz::sandbox::HOOK_HOST_PATHS_ENV)
+            .contains_key(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV)
             .then(|| hook_drain::Connection::connect(&store))
         {
             Some(Ok(connection)) => Some(connection),

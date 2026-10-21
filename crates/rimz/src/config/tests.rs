@@ -2164,6 +2164,67 @@ fn scoped_ambient_skips_definition_skill_library_checks() {
 }
 
 #[test]
+fn scoped_mount_pin_preserves_definition_family_across_isolation_spellings() {
+    let dir = tempdir().unwrap();
+    for kind in ["claude", "codex"] {
+        write_definition(
+            dir.path(),
+            &format!("agents/{kind}.md"),
+            &format!("description: {kind} base"),
+            "Base.",
+        );
+    }
+    write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\ntier: senior\ntools: [Skill]\nskills: [work]",
+        "",
+    );
+    for (root, marker) in [
+        (".claude/skills", "disable-model-invocation: true\n"),
+        ("skills", ""),
+    ] {
+        let skill = dir.path().join(root).join("work");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), format!("---\n{marker}---\nSkill.")).unwrap();
+    }
+    let path = write(&dir, "[agents]\nisolation = 'scoped'\n");
+    for (stamp, pinned, family) in [
+        ("sandbox", true, "claude"),
+        ("scoped", true, "claude"),
+        ("sandbox", false, "codex"),
+    ] {
+        let mut env = BTreeMap::from([
+            ("HOME".to_owned(), dir.path().display().to_string()),
+            (Isolation::ENV.to_owned(), stamp.to_owned()),
+        ]);
+        if pinned {
+            env.insert(Isolation::SCOPED_HOST_PATHS_ENV.to_owned(), "[]".to_owned());
+        }
+        let (config, _) =
+            MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+        assert!(
+            config.notices.definition_errors.is_empty(),
+            "{:?}",
+            config.notices.definition_errors
+        );
+        let profile = &config.agents.profiles.0["worker"];
+        assert_eq!(profile.agent, family, "stamp={stamp}, pin={pinned}");
+        let renders = profile.definition_renders.as_ref().unwrap();
+        if pinned {
+            assert!(renders.renders.contains_key("claude"));
+        } else {
+            assert!(!renders.renders.contains_key("claude"));
+            let reason = &renders.exclusions["claude"];
+            assert!(
+                reason.contains("skill 'work'") && reason.contains("user-only"),
+                "{reason}"
+            );
+        }
+    }
+}
+
+#[test]
 fn loaded_team_replaces_peer_and_retains_its_source() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "");
@@ -2269,6 +2330,36 @@ fn isolation_values_round_trip() {
     assert!(!Isolation::Host.is_scoped());
     assert!(!Isolation::Sandbox.is_scoped());
 }
+
+#[test]
+fn ambient_isolation_uses_the_scoped_mount_pin_before_the_stamp() {
+    use Isolation::{Host, Sandbox, Scoped};
+
+    for (stamp, pinned, expected) in [
+        (Some("sandbox"), true, Some(Scoped)),
+        (Some("host"), true, Some(Scoped)),
+        (None, true, Some(Scoped)),
+        (Some("scoped"), true, Some(Scoped)),
+        (Some("scoped"), false, Some(Scoped)),
+        (Some("sandbox"), false, Some(Sandbox)),
+        (Some("host"), false, Some(Host)),
+        (None, false, None),
+    ] {
+        let mut env = BTreeMap::new();
+        if let Some(stamp) = stamp {
+            env.insert(Isolation::ENV.to_owned(), stamp.to_owned());
+        }
+        if pinned {
+            env.insert(Isolation::SCOPED_HOST_PATHS_ENV.to_owned(), "[]".to_owned());
+        }
+        assert_eq!(
+            Isolation::ambient(&env),
+            expected,
+            "stamp={stamp:?}, pin={pinned}"
+        );
+    }
+}
+
 #[test]
 fn scoped_settings_fall_back_to_host_with_notices() {
     use super::Isolation::{Host, Scoped};

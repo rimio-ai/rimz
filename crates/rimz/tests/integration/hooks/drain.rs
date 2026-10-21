@@ -2893,7 +2893,7 @@ fn provider_sandbox_hook_uses_host_paths_without_a_scoped_mount_pin() {
     std::fs::write(&transcript, "").unwrap();
     command
         .env("RIMZ_ISOLATION", "sandbox")
-        .env_remove(rimz::sandbox::HOOK_HOST_PATHS_ENV);
+        .env_remove(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV);
     let output = env.spawn_payload(command, &json!({"hook_event_name": "Stop", "session_id": "native-sandbox", "transcript_path": transcript}).to_string()).wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
@@ -2954,7 +2954,7 @@ fn sandbox_hook_without_the_mount_pin_applies_inline_with_a_live_drainer() {
     let mut command = env.hook_command("claude");
     command
         .env("RIMZ_ISOLATION", "scoped")
-        .env_remove(rimz::sandbox::HOOK_HOST_PATHS_ENV)
+        .env_remove(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV)
         .env("TMPDIR", "/tmp");
     let output = env
         .spawn_payload(
@@ -2989,7 +2989,9 @@ fn sandbox_frame_without_the_mount_pin_is_diagnosed_not_applied() {
     env.record(&env.project_root);
     let mut frame = stop_frame(&env);
     frame.env.insert("RIMZ_ISOLATION".into(), "scoped".into());
-    frame.env.remove(rimz::sandbox::HOOK_HOST_PATHS_ENV);
+    frame
+        .env
+        .remove(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV);
     let (frame, _) = append_frame(&env, frame);
     once(&env);
     assert!(
@@ -3062,7 +3064,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
         })
         .collect();
     frame.env.insert(
-        "RIMZ_SANDBOX_HOST_PATHS".into(),
+        rimz::config::Isolation::SCOPED_HOST_PATHS_ENV.into(),
         serde_json::to_string(&bound).unwrap(),
     );
     for (key, value) in plan.pins {
@@ -3198,10 +3200,10 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
         },
     })
     .unwrap();
-    let EnvPin::Set(pin) = &plan.pins[rimz::sandbox::HOOK_HOST_PATHS_ENV] else {
+    let EnvPin::Set(pin) = &plan.pins[rimz::config::Isolation::SCOPED_HOST_PATHS_ENV] else {
         panic!("sandbox planner must pin its identity binds");
     };
-    command.env(rimz::sandbox::HOOK_HOST_PATHS_ENV, pin);
+    command.env(rimz::config::Isolation::SCOPED_HOST_PATHS_ENV, pin);
     #[cfg(target_os = "linux")]
     command.env(
         "RIMZ_TEST_HOOK_APPLY",
