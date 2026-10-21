@@ -113,7 +113,7 @@ fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
                 "Implement 4h12m",
                 "4h51m🮇",
                 "   2h▐",
-                "◑  8m▐",
+                "◔  8m▐",
                 "silent 30m",
                 "◉ 30m▐",
                 "   9m▐",

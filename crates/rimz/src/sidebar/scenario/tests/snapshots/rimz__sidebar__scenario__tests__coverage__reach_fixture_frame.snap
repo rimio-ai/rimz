@@ -12,7 +12,7 @@ expression: rendered
 ▎⑂ network-check ┄┄┄┄┄┄┄┄┄┄ ⇡1 ⇣1  +1680 -610  ⑂ main🮇
 ▌? claude-3 · Opus 4.8 · xhigh · 1M             $6.88▐
 ▌  approve firewall rule change                      ▐
-▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────   23% ◑ 24m▐
+▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────   23% ◔ 24m▐
 ▌  ▤ 236k · ◌ 203k ◍ 23k ↘ 9k ↗ 29k                  ▐
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
@@ -21,7 +21,7 @@ expression: rendered
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
 ▎⢄ pi-2 · GPT 5.5 · xhigh · 272k                $6.24🮇
 ▎  debug jump-host DNS                               🮇
-▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━───   92% ● 51m🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━───   92% ◕ 51m🮇
 ▎  ⧉ subagents (2)                                   🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
