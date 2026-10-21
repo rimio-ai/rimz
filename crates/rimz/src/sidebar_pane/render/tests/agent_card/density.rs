@@ -361,8 +361,11 @@ fn compact_density_trims_resting_cards_by_status() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(6),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(6),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         31,
@@ -430,8 +433,11 @@ fn compact_density_running_waiting_render_placeholder_meter() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(2),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(2),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         25,
@@ -486,8 +492,11 @@ fn compact_density_selected_card_opens_to_full_form() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(usize::MAX),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(usize::MAX),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         21,
@@ -501,8 +510,11 @@ fn compact_density_selected_card_opens_to_full_form() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         21,
@@ -577,8 +589,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         25,
@@ -628,8 +643,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     parent.sub_agent_count += 1;
     let turn = parent.user_turn_started_at;
     let mut ui = UiState {
-        selected_index: Some(0),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
     assert!(folded.contains("map the render path"));

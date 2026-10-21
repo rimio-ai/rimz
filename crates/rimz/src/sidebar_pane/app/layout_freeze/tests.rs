@@ -565,10 +565,13 @@ fn capture_order_collects_group_keys_flat_row_ids_and_visible_ids() {
 #[test]
 fn apply_freeze_arms_holds_and_expires() {
     let mut ui = UiState {
-        last_order: FrozenOrder {
-            groups: vec!["a".to_owned()],
-            rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
-            visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
+        view: crate::sidebar_pane::render::ViewState {
+            last_order: FrozenOrder {
+                groups: vec!["a".to_owned()],
+                rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
+                visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
+            },
+            ..Default::default()
         },
         ..UiState::default()
     };
@@ -628,14 +631,17 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
 #[test]
 fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     let mut ui = UiState {
-        last_order: FrozenOrder {
-            groups: vec![
-                "main".to_owned(),
-                "finished".to_owned(),
-                "external".to_owned(),
-            ],
-            rows: vec![frozen_paneless_row("zsh")],
-            visible: HashSet::from(["zsh".to_owned()]),
+        view: crate::sidebar_pane::render::ViewState {
+            last_order: FrozenOrder {
+                groups: vec![
+                    "main".to_owned(),
+                    "finished".to_owned(),
+                    "external".to_owned(),
+                ],
+                rows: vec![frozen_paneless_row("zsh")],
+                visible: HashSet::from(["zsh".to_owned()]),
+            },
+            ..Default::default()
         },
         ..UiState::default()
     };
@@ -727,18 +733,21 @@ fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
 #[test]
 fn freeze_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
     let mut ui = UiState {
-        last_order: FrozenOrder {
-            groups: vec!["team".to_owned()],
-            rows: vec![
-                frozen_row("launch-planner", "terminal_1"),
-                frozen_row("launch-coder", "terminal_2"),
-                frozen_row("launch-reviewer", "terminal_3"),
-            ],
-            visible: HashSet::from([
-                "launch-planner".to_owned(),
-                "launch-coder".to_owned(),
-                "launch-reviewer".to_owned(),
-            ]),
+        view: crate::sidebar_pane::render::ViewState {
+            last_order: FrozenOrder {
+                groups: vec!["team".to_owned()],
+                rows: vec![
+                    frozen_row("launch-planner", "terminal_1"),
+                    frozen_row("launch-coder", "terminal_2"),
+                    frozen_row("launch-reviewer", "terminal_3"),
+                ],
+                visible: HashSet::from([
+                    "launch-planner".to_owned(),
+                    "launch-coder".to_owned(),
+                    "launch-reviewer".to_owned(),
+                ]),
+            },
+            ..Default::default()
         },
         ..UiState::default()
     };

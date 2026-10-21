@@ -228,8 +228,11 @@ fn active_alert_blocks_search_but_keeps_normal_commands_and_help() {
         assert_eq!(ui.search_draft, None);
     }
     let mut ui = UiState {
-        help_visible: true,
-        ..Default::default()
+        view: render::ViewState {
+            help_visible: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     assert_eq!(
         handle_wakeup(
@@ -278,9 +281,12 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
     use ratatui::crossterm::event::KeyCode;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = UiState {
-        selected_index: Some(1),
-        selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(1),
+            selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
     for ch in "cla".chars() {
@@ -473,8 +479,11 @@ fn pick_click_toggle_preserves_committed_query() {
     use crate::agents::AgentStatus;
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = UiState {
-        make_up_filter: BodyLens {
-            query: Some("main".to_owned()),
+        view: render::ViewState {
+            make_up_filter: BodyLens {
+                query: Some("main".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
         interactions: render::FrameInteractions::from_parts(
@@ -504,11 +513,14 @@ fn search_cancel_and_empty_enter_clear_only_query() {
     let snapshot = clickable_block_snapshot(&workspace());
     for exit in [KeyCode::Esc, KeyCode::Backspace, KeyCode::Enter] {
         let mut ui = UiState {
-            make_up_filter: BodyLens {
-                filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-                query: Some("cla".to_owned()),
+            view: render::ViewState {
+                make_up_filter: BodyLens {
+                    filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+                    query: Some("cla".to_owned()),
+                },
+                ..Default::default()
             },
-            ..Default::default()
+            ..UiState::default()
         };
         search_key(&mut ui, &snapshot, KeyCode::Char('/'));
         assert_eq!(ui.search_draft.as_deref(), Some("cla"));
@@ -540,11 +552,14 @@ fn normal_escape_clears_only_query_even_during_an_alert() {
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
     for alert_active in [false, true] {
         let mut ui = UiState {
-            make_up_filter: BodyLens {
-                filter: Some(filter),
-                query: Some("no match".to_owned()),
+            view: render::ViewState {
+                make_up_filter: BodyLens {
+                    filter: Some(filter),
+                    query: Some("no match".to_owned()),
+                },
+                ..Default::default()
             },
-            ..Default::default()
+            ..UiState::default()
         };
         let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_9");
         reconcile_selection(&mut ui, &snapshot, Some(baseline.clone()));
@@ -593,19 +608,22 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
     ] {
         for query in [None, Some("cla".to_owned())] {
             let mut ui = UiState {
-                make_up_filter: BodyLens {
-                    query: query.clone(),
+                view: render::ViewState {
+                    make_up_filter: BodyLens {
+                        query: query.clone(),
+                        ..Default::default()
+                    },
+                    search_draft: Some(
+                        if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
+                            "zsh"
+                        } else {
+                            "cla"
+                        }
+                        .to_owned(),
+                    ),
                     ..Default::default()
                 },
-                search_draft: Some(
-                    if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
-                        "zsh"
-                    } else {
-                        "cla"
-                    }
-                    .to_owned(),
-                ),
-                ..Default::default()
+                ..UiState::default()
             };
             let theme = ui.theme(&snapshot.theme);
             ui.interactions =
@@ -652,7 +670,10 @@ fn departed_painted_row_click_does_not_commit_a_search() {
     use super::super::super::loop_state::handle_wakeup;
     let snapshot = clickable_block_snapshot(&workspace());
     let mut ui = UiState {
-        search_draft: Some("cla".to_owned()),
+        view: render::ViewState {
+            search_draft: Some("cla".to_owned()),
+            ..Default::default()
+        },
         painted_roster: vec!["departed".into()],
         interactions: render::FrameInteractions::from_parts(vec![Some(0)], Vec::new()),
         ..Default::default()
@@ -685,7 +706,10 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
         HitTarget::ToggleGroup("/repo/main".into()),
     ] {
         let mut ui = UiState {
-            search_draft: Some("cla".to_owned()),
+            view: render::ViewState {
+                search_draft: Some("cla".to_owned()),
+                ..Default::default()
+            },
             interactions: render::FrameInteractions::from_parts(
                 Vec::new(),
                 vec![render::HitRegion::whole_line(0, target.clone())],
@@ -853,11 +877,14 @@ fn search_composes_with_status_and_n_keeps_needs_you_meaning() {
 fn show_all_clears_both_pick_and_query() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = UiState {
-        make_up_filter: BodyLens {
-            filter: Some(BodyFilter::Unread),
-            query: Some("auth".to_owned()),
+        view: render::ViewState {
+            make_up_filter: BodyLens {
+                filter: Some(BodyFilter::Unread),
+                query: Some("auth".to_owned()),
+            },
+            ..Default::default()
         },
-        ..Default::default()
+        ..UiState::default()
     };
     let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(ui.make_up_filter, BodyLens::default());
@@ -871,11 +898,14 @@ fn show_all_clears_both_pick_and_query() {
 fn empty_pick_auto_clear_preserves_the_query() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = UiState {
-        make_up_filter: BodyLens {
-            filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
-            query: Some("auth".to_owned()),
+        view: render::ViewState {
+            make_up_filter: BodyLens {
+                filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Waiting)),
+                query: Some("auth".to_owned()),
+            },
+            ..Default::default()
         },
-        ..Default::default()
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.make_up_filter.filter, None);
@@ -886,11 +916,14 @@ fn empty_pick_auto_clear_preserves_the_query() {
 fn zero_match_query_stays_set_with_an_empty_roster() {
     let snapshot = filterable_snapshot(&workspace());
     let mut ui = UiState {
-        make_up_filter: BodyLens {
-            query: Some("no such row".to_owned()),
+        view: render::ViewState {
+            make_up_filter: BodyLens {
+                query: Some("no such row".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.visible_roster(&snapshot).len(), 0);
@@ -904,10 +937,13 @@ fn worktree_keys_respect_the_make_up_filter() {
     let snapshot = filterable_snapshot(&ws);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let mut ui = UiState {
-        selected_index: Some(0),
-        selected_pane: Some(failed),
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            selected_pane: Some(failed),
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
@@ -1226,8 +1262,11 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
     // The waiting bucket reads 0 in this room, so a stale waiting filter ends
     // on the fold — the body's twin of a tab pick whose panel left.
     let mut ui = UiState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
-        ..Default::default()
+        view: render::ViewState {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Waiting)),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.make_up_filter, BodyLens::default());
@@ -1299,8 +1338,11 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
     );
 
     let mut ui = UiState {
-        make_up_filter: filter.clone(),
-        ..Default::default()
+        view: render::ViewState {
+            make_up_filter: filter.clone(),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let theme = ui.theme(&snapshot.theme);
     let interactions =
@@ -1642,8 +1684,11 @@ fn focus_jumps_keep_the_make_up_filter() {
     // A digit resolves its target in the filtered body and focuses it without
     // changing renderer-local state.
     let mut ui = UiState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
-        ..Default::default()
+        view: render::ViewState {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(failed.clone()));
@@ -1654,10 +1699,13 @@ fn focus_jumps_keep_the_make_up_filter() {
 
     // Enter focuses the highlighted filtered row with the same pure effect.
     let mut ui = UiState {
-        selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
-        selected_pane: Some(failed.clone()),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Failed)),
+            selected_pane: Some(failed.clone()),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(failed));
@@ -1706,10 +1754,13 @@ fn inbox_jumps_keep_the_make_up_filter_in_both_directions() {
 
     let filter = BodyLens::from(BodyFilter::Unread);
     let mut ui = UiState {
-        selected_index: Some(0),
-        selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
-        make_up_filter: filter.clone(),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_1")),
+            make_up_filter: filter.clone(),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let forward = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);

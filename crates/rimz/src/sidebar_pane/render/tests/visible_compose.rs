@@ -102,14 +102,18 @@ fn compose_cached(
 fn write_back(ui: &mut UiState, frame: compose::ComposedFrame) {
     ui.interactions = frame.interactions;
     ui.scrollbar.shift(frame.correction);
-    ui.scrollbar
+    ui.view
+        .scrollbar
         .observe(frame.visible_scroll_offset, ui.animation_phase);
     ui.scroll_ease = frame.scroll_ease;
-    ui.scroll_ease.observe(frame.scroll_offset, ui.frame_ms);
+    ui.view
+        .scroll_ease
+        .observe(frame.scroll_offset, ui.frame_ms);
     ui.scroll_offset = frame.scroll_offset;
     ui.drawn_scroll_max = Some(frame.scroll_max);
     ui.painted_rows = frame.painted_rows;
     ui.anchored_rows = frame.anchored_rows;
+    ui.anchor_banner_shown = frame.banner_shown;
     ui.drawn_selection = frame.drawn_selection;
     ui.held_expansions = frame.held_expansions;
     ui.scroll_zone_top = frame.top_height;
@@ -197,13 +201,16 @@ fn assert_painted(ui: &UiState, expected: BTreeSet<usize>) {
 fn paint_scope_tracks_window_epoch_and_selection() {
     let mut snapshot = fleet(124);
     let mut ui = UiState {
-        expanded_groups: snapshot
-            .worktree_groups
-            .iter()
-            .map(|g| g.key.clone())
-            .collect(),
-        landed_open: true,
-        ..Default::default()
+        view: ViewState {
+            expanded_groups: snapshot
+                .worktree_groups
+                .iter()
+                .map(|g| g.key.clone())
+                .collect(),
+            landed_open: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let count = ui.visible_roster(&snapshot).len();
     assert_eq!(count, 124);

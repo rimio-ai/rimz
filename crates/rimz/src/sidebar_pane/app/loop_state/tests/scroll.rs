@@ -94,6 +94,13 @@ fn publish_scrolled(source: &mut Rig, offset: usize) {
     paint_at(source, 0);
 }
 
+fn anchored_pane_rows(ui: &UiState) -> Vec<(String, isize)> {
+    ui.anchored_rows
+        .iter()
+        .map(|(id, row)| (id.clone(), row + ui.scroll_zone_top as isize))
+        .collect()
+}
+
 #[test]
 fn publication_wakes_no_peer() {
     let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
@@ -118,7 +125,7 @@ fn frozen_viewport_survives_round_trip_on_both_backends() {
         layout_freeze::arm_freeze(&mut a.state.ui, a.state.clock.now_ms() as i64);
         publish_scrolled(&mut a, 12);
         let expected = a.state.ui.last_order.clone();
-        let expected_rows = a.state.ui.anchored_rows.clone();
+        let expected_rows = anchored_pane_rows(&a.state.ui);
         let a_target = a.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
         let b_target = b.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
         for back in [false, true] {
@@ -253,7 +260,7 @@ fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
         assert_eq!(destination.state.ui.last_order.rows, published.rows);
         assert_eq!(
             destination.state.ui.painted_rows,
-            source.state.ui.anchored_rows
+            anchored_pane_rows(&source.state.ui)
         );
     }
 }
@@ -634,7 +641,7 @@ fn assert_native_arrival_keeps_shared_frame(mux: MuxName) {
         0,
         "the hidden destination leaves the publication untouched"
     );
-    let before = source.state.ui.anchored_rows.clone();
+    let before = anchored_pane_rows(&source.state.ui);
     let target = destination.state.current.worktree_groups[0].rows[19]
         .pane
         .as_ref()
@@ -738,7 +745,7 @@ fn tmux_switch_away_keeps_the_publication_until_arrival() {
             unfocused: vec![],
         });
     }
-    let before = source.state.ui.anchored_rows.clone();
+    let before = anchored_pane_rows(&source.state.ui);
     paint_at(&mut destination, 0);
     assert_eq!(destination.state.ui.painted_rows, before);
     for target in [source_pane, destination_pane].iter().cycle().take(8) {
@@ -1369,7 +1376,7 @@ fn shared_viewport_publishes_glide_target_once_and_waits_for_arrival() {
     assert_eq!(paints(&output), 1);
     assert_eq!(
         destination.state.ui.painted_rows,
-        source.state.ui.anchored_rows
+        anchored_pane_rows(&source.state.ui)
     );
 }
 
@@ -1384,8 +1391,11 @@ fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
     assert_ne!(destination.state.current.display_name, "deferred content");
     publish_scrolled(&mut source, 12);
     destination.state.ui = UiState {
-        selected_pane: destination.state.current.focused_pane.clone(),
-        selected_index: Some(0),
+        view: render::ViewState {
+            selected_pane: destination.state.current.focused_pane.clone(),
+            selected_index: Some(0),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     destination
@@ -1402,7 +1412,8 @@ fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
     assert_eq!(paints(&output), 1, "newborn paints exactly once");
     assert_eq!(destination.state.current.display_name, "deferred content");
     assert_eq!(
-        destination.state.ui.painted_rows, source.state.ui.anchored_rows,
+        destination.state.ui.painted_rows,
+        anchored_pane_rows(&source.state.ui),
         "newborn uses its own measured cockpit top"
     );
 }

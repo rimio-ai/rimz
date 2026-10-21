@@ -899,7 +899,10 @@ fn foreign_strand_has_no_effect_while_own_strand_waits_for_a_working_row() {
 fn focus_stranded_targets_recent_own_pane_events_only() {
     let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
+        view: render::ViewState {
+            baseline_pane: Some(second_work.clone()),
+            ..Default::default()
+        },
         ..UiState::default()
     };
 
@@ -919,7 +922,10 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
 
     let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
     let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
+        view: render::ViewState {
+            baseline_pane: Some(second_work.clone()),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     assert_eq!(
@@ -973,7 +979,10 @@ fn focus_stranded_uses_evidence_without_snapshot_client_agreement() {
     let evidence = snapshot.client_views.clone();
     snapshot.client_views[0].pane_id = first_work;
     let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
+        view: render::ViewState {
+            baseline_pane: Some(second_work.clone()),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     for presence in [snapshot.presence, None] {
@@ -1059,7 +1068,10 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
 fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
     let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
     let ui = UiState {
-        baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
+        view: render::ViewState {
+            baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
+            ..Default::default()
+        },
         ..UiState::default()
     };
 
@@ -1102,7 +1114,10 @@ fn focus_stranded_uses_settled_evidence_despite_stale_viewed_panes() {
     let (mut snapshot, sidebar, first_work, second_work) = focus_fixture();
     snapshot.viewed_panes = vec![sidebar.clone(), first_work];
     let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
+        view: render::ViewState {
+            baseline_pane: Some(second_work.clone()),
+            ..Default::default()
+        },
         ..UiState::default()
     };
 

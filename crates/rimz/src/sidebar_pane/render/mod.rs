@@ -44,7 +44,7 @@ use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
-pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState};
+pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState, ViewState};
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
 };
@@ -136,14 +136,18 @@ fn draw_into(
         .collect();
     ui.interactions = composed.interactions;
     ui.scrollbar.shift(composed.correction);
-    ui.scrollbar
+    ui.view
+        .scrollbar
         .observe(composed.visible_scroll_offset, ui.animation_phase);
     ui.scroll_ease = composed.scroll_ease;
-    ui.scroll_ease.observe(composed.scroll_offset, ui.frame_ms);
+    ui.view
+        .scroll_ease
+        .observe(composed.scroll_offset, ui.frame_ms);
     ui.scroll_offset = composed.scroll_offset;
     ui.drawn_scroll_max = Some(composed.scroll_max);
     ui.painted_rows = composed.painted_rows;
     ui.anchored_rows = composed.anchored_rows;
+    ui.anchor_banner_shown = composed.banner_shown;
     ui.drawn_selection = composed.drawn_selection;
     ui.held_expansions = composed.held_expansions;
     ui.scroll_zone_top = top_height;
@@ -602,7 +606,10 @@ pub fn render_fixed<W: Write>(
         snapshot,
         None,
         &mut UiState {
-            selected_index: Some(0),
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
             ..UiState::default()
         },
     )?;
@@ -654,7 +661,10 @@ fn render_line_ansi<W: Write>(
     }
     let snapshot = expanded.as_ref().unwrap_or(snapshot);
     let mut ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     if height.is_none() {

@@ -17,6 +17,41 @@ pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRo
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct UiState {
+    pub(in crate::sidebar_pane) view: ViewState,
+    pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
+    /// Typed hit geometry from the most recently painted frame.
+    pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    /// Section labels in physical-row coordinates from that same paint.
+    pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
+    /// Row identity per roster ordinal in the last painted hit map.
+    pub(in crate::sidebar_pane) painted_roster: Vec<String>,
+    /// Maximum offset in the last drawn frame, absent before the first draw.
+    pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
+    /// Visible cards' own first lines in absolute pane rows, signed when clipped above the zone.
+    pub(in crate::sidebar_pane) painted_rows: Vec<(String, isize)>,
+    /// Absolute pane row of the last draw's scroll-zone top.
+    pub(in crate::sidebar_pane) scroll_zone_top: usize,
+    /// The last draw's anchor correction hit the offset clamp, so the card moved.
+    pub(in crate::sidebar_pane) anchor_clamped: bool,
+    /// Whether the last frame painted on this pane showed a banner.
+    pub(in crate::sidebar_pane) banner_shown: bool,
+    /// The current pet dashboard view, folded by the serve loop from the latest
+    /// snapshot and the renderer-local asset cache before drawing. Render reads
+    /// this data only; it never fetches, decodes, or slices pet assets.
+    pub(in crate::sidebar_pane) pet: Option<PetView>,
+    /// Pane-local context-meter interning state, persisted across frames so a
+    /// quantized raster keeps its image id while ratatui diffs placeholders.
+    pub(in crate::sidebar_pane) meter_pixels: Option<MeterPixels>,
+    pub(in crate::sidebar_pane) card_heights: super::heights::CardHeights,
+    /// Renderer-local status for a successful fetch that the regression gate is
+    /// holding behind the last good frame. It is display-only evidence for the
+    /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
+    pub(in crate::sidebar_pane) gate_notice: Option<GateNotice>,
+}
+
+/// Client presentation state, independent of a pane's render resources and hit geometry.
+#[derive(Clone, Debug, Default)]
+pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) help_visible: bool,
     /// Wall-clock animation frame counter, advanced by the serve loop's
@@ -27,7 +62,6 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) cosmetic_phase: Option<u64>,
     /// Elapsed milliseconds since the loop's monotonic base, stamped beside the phase.
     pub(in crate::sidebar_pane) frame_ms: u64,
-    pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
     /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
@@ -44,12 +78,6 @@ pub(in crate::sidebar_pane) struct UiState {
     /// card at `animation_phase`; ORed into the serve loop's animation gate
     /// beside the tally. Crate-internal, like `tally`.
     pub(in crate::sidebar_pane) cost_rolls: CostRolls,
-    /// Typed hit geometry from the most recently painted frame.
-    pub(in crate::sidebar_pane) interactions: FrameInteractions,
-    /// Section labels in physical-row coordinates from that same paint.
-    pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
-    /// Row identity per roster ordinal in the last painted hit map.
-    pub(in crate::sidebar_pane) painted_roster: Vec<String>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
     /// position. Re-derived each fold by `app::reconcile_selection` from the
     /// derived `baseline_pane` and any live `browse`. Keying on the pane means
@@ -89,12 +117,10 @@ pub(in crate::sidebar_pane) struct UiState {
     /// by a wheel tick, observed at every draw's write-back, translated by card
     /// corrections, and snapped by selection changes and explicit jumps.
     pub(in crate::sidebar_pane) scroll_ease: ScrollEase,
-    /// Maximum offset in the last drawn frame, absent before the first draw.
-    pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
-    /// Visible cards' own first lines in absolute pane rows, signed when clipped above the zone.
-    pub(in crate::sidebar_pane) painted_rows: Vec<(String, isize)>,
-    /// Previous target-window placements, independent of the wheel's painted position.
+    /// Previous target-window placements relative to the scroll zone, independent of the wheel's painted position.
     pub(in crate::sidebar_pane) anchored_rows: Vec<(String, isize)>,
+    /// Whether the anchored frame had a banner; a banner toggle preserves the card's pane row.
+    pub(in crate::sidebar_pane) anchor_banner_shown: bool,
     /// Row id the last draw treated as selected; a different id is a selection change.
     pub(in crate::sidebar_pane) drawn_selection: Option<String>,
     /// Previous selection sources, including their teammates'
@@ -105,12 +131,6 @@ pub(in crate::sidebar_pane) struct UiState {
     /// these local candidates and the previous selection.
     /// Host viewport adoption copies these sources and the drawn selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
-    /// Absolute pane row of the last draw's scroll-zone top.
-    pub(in crate::sidebar_pane) scroll_zone_top: usize,
-    /// The last draw's anchor correction hit the offset clamp, so the card moved.
-    pub(in crate::sidebar_pane) anchor_clamped: bool,
-    /// The last draw showed the directional `↑/↓ N need you` banner.
-    pub(in crate::sidebar_pane) banner_shown: bool,
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; explicit row and landed-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
@@ -156,14 +176,6 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Read by `active_dashboard_tab` below the live derivation and re-guarded
     /// against the panel still being on the dashboard.
     pub(in crate::sidebar_pane) last_agent_kind: Option<crate::ids::AgentKind>,
-    /// The current pet dashboard view, folded by the serve loop from the latest
-    /// snapshot and the renderer-local asset cache before drawing. Render reads
-    /// this data only; it never fetches, decodes, or slices pet assets.
-    pub(in crate::sidebar_pane) pet: Option<PetView>,
-    /// Pane-local context-meter interning state, persisted across frames so a
-    /// quantized raster keeps its image id while ratatui diffs placeholders.
-    pub(in crate::sidebar_pane) meter_pixels: Option<MeterPixels>,
-    pub(in crate::sidebar_pane) card_heights: super::heights::CardHeights,
     /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
     ///
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
@@ -186,10 +198,20 @@ pub(in crate::sidebar_pane) struct UiState {
     /// next user-authored prompt.
     /// Copied into unviewed attachments through the host viewport.
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
-    /// Renderer-local status for a successful fetch that the regression gate is
-    /// holding behind the last good frame. It is display-only evidence for the
-    /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
-    pub(in crate::sidebar_pane) gate_notice: Option<GateNotice>,
+}
+
+impl std::ops::Deref for UiState {
+    type Target = ViewState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.view
+    }
+}
+
+impl std::ops::DerefMut for UiState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.view
+    }
 }
 
 impl UiState {

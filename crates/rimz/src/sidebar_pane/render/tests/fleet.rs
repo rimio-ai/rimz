@@ -132,8 +132,11 @@ fn unread_banner_counts_two_actionable_teammates_as_one_unit() {
     rows.insert(1, sibling);
     group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     let ui = UiState {
-        scroll_offset: 99,
-        offset_authoritative: true,
+        view: ViewState {
+            scroll_offset: 99,
+            offset_authoritative: true,
+            ..selected_ui().view
+        },
         ..selected_ui()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
@@ -1060,9 +1063,12 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
     );
 
     let ui = UiState {
-        selected_index: Some(0),
-        scroll_offset: 99,
-        offset_authoritative: true,
+        view: ViewState {
+            selected_index: Some(0),
+            scroll_offset: 99,
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..UiState::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
@@ -1081,8 +1087,11 @@ fn unread_banner_points_below_or_to_the_filter_hidden_lead() {
     let lead = rows.remove(0);
     rows.push(lead);
     let mut ui = UiState {
-        offset_authoritative: true,
-        ..Default::default()
+        view: ViewState {
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
     assert!(screen.contains("↓ 1 need you"), "{screen}");
@@ -1124,9 +1133,12 @@ fn render_make_up_filter_narrows_the_body() {
         ),
     });
     let ui = UiState {
-        selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
     assert!(
@@ -1162,9 +1174,12 @@ fn render_unread_filter_narrows_the_body() {
         .expect("failed row");
     failed.unread = true;
     let ui = UiState {
-        selected_index: Some(0),
-        make_up_filter: BodyLens::from(BodyFilter::Unread),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            make_up_filter: BodyLens::from(BodyFilter::Unread),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);

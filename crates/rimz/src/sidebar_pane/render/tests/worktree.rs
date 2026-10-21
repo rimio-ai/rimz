@@ -46,8 +46,11 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
         .id
         .clone();
     let mut ui = UiState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
-        ..Default::default()
+        view: ViewState {
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     ui.selected_index = ui.visible_roster(&snapshot).ordinal_of_id(&match_id);
     let theme = Theme::fixed(false);
@@ -405,8 +408,11 @@ fn render_pipeline_folded_stage() {
         &snapshot,
         None,
         &UiState {
-            landed_open: true,
-            ..Default::default()
+            view: ViewState {
+                landed_open: true,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         20,
@@ -997,7 +1003,10 @@ fn selecting_named_team_member_folds_teammate_entries() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(selected_index),
+            view: ViewState {
+                selected_index: Some(selected_index),
+                ..Default::default()
+            },
             ..UiState::default()
         },
         54,
@@ -1089,7 +1098,10 @@ fn selecting_inline_cohort_member_expands_only_that_card() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(selected_index),
+            view: ViewState {
+                selected_index: Some(selected_index),
+                ..Default::default()
+            },
             ..UiState::default()
         },
         54,

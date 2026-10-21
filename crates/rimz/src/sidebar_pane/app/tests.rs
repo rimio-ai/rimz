@@ -588,13 +588,16 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         Wakeup::Scroll { down: true },
     ] {
         let mut ui = UiState {
-            help_visible: true,
-            make_up_filter: crate::sidebar_pane::view::BodyLens {
-                query: Some("kept".to_owned()),
+            view: render::ViewState {
+                help_visible: true,
+                make_up_filter: crate::sidebar_pane::view::BodyLens {
+                    query: Some("kept".to_owned()),
+                    ..Default::default()
+                },
+                selected_index: Some(0),
+                scroll_offset: 4,
                 ..Default::default()
             },
-            selected_index: Some(0),
-            scroll_offset: 4,
             interactions: render::FrameInteractions::from_parts(vec![Some(1)], Vec::new()),
             ..Default::default()
         };

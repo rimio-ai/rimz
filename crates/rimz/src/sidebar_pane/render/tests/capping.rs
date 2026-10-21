@@ -431,8 +431,11 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         &snapshot,
         None,
         &UiState {
-            landed_open: true,
-            ..Default::default()
+            view: ViewState {
+                landed_open: true,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         30,
@@ -460,9 +463,12 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         30,
@@ -476,9 +482,12 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         30,

@@ -327,7 +327,10 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         bg: Color::Rgb(20, 20, 200),
     };
     let ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(
                 (0..usize::from(

@@ -45,8 +45,11 @@ use crate::sidebar_pane::view::BodyLens;
 
 fn selected_ui() -> UiState {
     UiState {
-        selected_index: Some(0),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        ..UiState::default()
     }
 }
 
@@ -323,12 +326,15 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
     let ui = fixed_theme_ui(
         &measured_snapshot,
         &UiState {
-            selected_index: Some(0),
-            expanded_groups: measured_snapshot
-                .worktree_groups
-                .iter()
-                .map(|group| group.key.clone())
-                .collect(),
+            view: ViewState {
+                selected_index: Some(0),
+                expanded_groups: measured_snapshot
+                    .worktree_groups
+                    .iter()
+                    .map(|group| group.key.clone())
+                    .collect(),
+                ..Default::default()
+            },
             ..UiState::default()
         },
     );
@@ -503,10 +509,13 @@ fn codex_context(now: Timestamp) -> AgentContext {
 
 fn ui_at_phase(phase: u64) -> UiState {
     UiState {
-        selected_index: Some(0),
-        help_visible: false,
-        animation_phase: phase,
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: phase,
+            ..Default::default()
+        },
+        ..UiState::default()
     }
 }
 
@@ -1106,9 +1115,12 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
 fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let snapshot = overflowing_fleet_with_unread_lead();
     let ui = UiState {
-        selected_index: Some(0),
-        scroll_offset: 99,
-        offset_authoritative: true,
+        view: ViewState {
+            selected_index: Some(0),
+            scroll_offset: 99,
+            offset_authoritative: true,
+            ..Default::default()
+        },
         ..UiState::default()
     };
     let theme = Theme::for_sidebar(&snapshot.theme);

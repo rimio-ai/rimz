@@ -34,11 +34,11 @@ proptest! {
         provider in prop::option::of(provider_spec()),
     ) {
         let snapshot = build_adversarial_snapshot(display_name, rows, provider);
-        let ui = UiState {
+        let ui = UiState { view: ViewState {
             selected_index,
             scroll_offset,
             ..Default::default()
-        };
+        }, ..UiState::default() };
 
         let theme = Theme::for_sidebar(&snapshot.theme);
         let composed = compose_lines(&snapshot, None, &ui, &theme, width, height);

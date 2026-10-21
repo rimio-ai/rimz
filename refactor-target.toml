@@ -1558,7 +1558,13 @@ reason = "Shared enrichment projects idle unfinished stages after attaching pipe
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
 # render_section_line_ansi exposes the CLI's full-frame section filter.
-surface-budget = 60
+# ViewState separates portable presentation from pane-bound render resources.
+surface-budget = 61
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::ViewState"
+reason = "Portable presentation excludes pane-bound caches and hit geometry."
 
 [[verdict]]
 kind = "item"
@@ -1593,7 +1599,7 @@ reason = "Attachment startup installs the current viewport before its first pain
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::render::compose::compose_lines_with_meter"
-reason = "A newborn viewport adopter measures its own cockpit before rebasing published card rows."
+reason = "A newborn viewport adopter measures the receiving pane's cockpit before its first paint."
 
 [[module]]
 path = "crates/rimz/src/sock.rs"

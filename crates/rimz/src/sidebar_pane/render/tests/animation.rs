@@ -115,7 +115,10 @@ fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
     .unwrap()
     .status = crate::agents::AgentStatus::Waiting;
     let mut ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: None,
             caption: None,
@@ -513,8 +516,11 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     );
 
     let mut off_selection = UiState {
-        selected_index: Some(99),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(99),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     off_selection.theme(&snapshot.theme);
     assert!(animation_interval(&snapshot, &off_selection, 0, false).is_none());
@@ -560,9 +566,12 @@ fn help_popup_keeps_animation_grid_hot() {
     let ws = workspace();
     let snapshot = snapshot(&ws);
     let mut ui = UiState {
-        selected_index: Some(0),
-        help_visible: true,
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            help_visible: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     ui.theme(&snapshot.theme);
 
@@ -581,7 +590,10 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -632,7 +644,10 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
                 crate::sidebar_pane::pets::PetCell {
@@ -830,8 +845,11 @@ fn expanded_row_awaiting_first_prompt_tracks_selected_bare_idle_card() {
     assert!(!expanded_row_awaiting_first_prompt(
         &bare_idle,
         &UiState {
-            selected_index: Some(99),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(99),
+                ..Default::default()
+            },
+            ..UiState::default()
         }
     ));
 
@@ -906,7 +924,10 @@ fn selected_pet_action_follows_the_focused_card() {
         (AgentStatus::Running, crate::agents::TurnPhase::Acting),
     ]);
     let ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     assert_eq!(
@@ -914,7 +935,10 @@ fn selected_pet_action_follows_the_focused_card() {
         crate::sidebar_pane::pets::PetAction::Ask
     );
     let ui = UiState {
-        selected_index: Some(1),
+        view: ViewState {
+            selected_index: Some(1),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     assert_eq!(
@@ -922,7 +946,10 @@ fn selected_pet_action_follows_the_focused_card() {
         crate::sidebar_pane::pets::PetAction::Thinking
     );
     let ui = UiState {
-        selected_index: Some(2),
+        view: ViewState {
+            selected_index: Some(2),
+            ..Default::default()
+        },
         ..UiState::default()
     };
     assert_eq!(

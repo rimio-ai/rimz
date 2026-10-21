@@ -965,10 +965,13 @@ fn selected_agent_without_context_keeps_bare_token_total() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                help_visible: false,
+                animation_phase: 0,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         44,
         17,
@@ -1017,10 +1020,13 @@ fn codex_card_renders_the_per_call_composition() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                help_visible: false,
+                animation_phase: 0,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         44,
         17,
@@ -1087,8 +1093,11 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
             &snapshot_with(vec![agent]),
             None,
             &UiState {
-                selected_index: Some(0),
-                ..Default::default()
+                view: ViewState {
+                    selected_index: Some(0),
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             52,
             17,
@@ -1157,10 +1166,13 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                help_visible: false,
+                animation_phase: 0,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         44,
         17,
@@ -1266,8 +1278,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         48,
         17,
@@ -1304,8 +1319,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &snapshot_with(vec![copilot.clone()]),
         None,
         &UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         48,
         17,
@@ -1333,8 +1351,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
         &compact,
         None,
         &UiState {
-            selected_index: Some(1),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(1),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         48,
         19,
@@ -1440,10 +1461,13 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                help_visible: false,
+                animation_phase: 0,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         48,
         17,
@@ -1841,10 +1865,13 @@ fn codex_app_server_context_links_to_rich_card() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                help_visible: false,
+                animation_phase: 0,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
         17,
