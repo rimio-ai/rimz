@@ -92,6 +92,7 @@ pub(super) fn reconcile_cohort_launch(
                     workspace,
                     store,
                     DispatchRequest {
+                        resuming_recipient: None,
                         target: target.clone(),
                         text: prompt.to_owned(),
                         target_scope: leader.channel(),

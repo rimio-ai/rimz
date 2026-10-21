@@ -464,6 +464,19 @@ fn parked_reply_reanchors_when_delivery_starts() {
         reason: None,
     };
     let mut leg = Leg::new(target, &outcome, 0);
+    let mut ended = agent.clone();
+    ended.ended_at = Some(Timestamp::UNIX_EPOCH);
+    let mut resumed = Leg::new(
+        ReplyTarget::new(&ended, "@claude".to_owned(), adapter),
+        &DispatchOutcome::Queued {
+            label: "@claude".to_owned(),
+            message_id: leg.message_id.clone(),
+            reason: Some(crate::message::dispatch::ParkReason::Resuming {
+                register_by: Timestamp::now(),
+            }),
+        },
+        0,
+    );
 
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -505,6 +518,12 @@ fn parked_reply_reanchors_when_delivery_starts() {
     };
     assert!(advance_leg(&mut leg, &store, &idle, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.result().final_message, None);
+    assert!(advance_leg(&mut resumed, &store, &idle, DeliveryKind::Boundary).unwrap());
+    assert_eq!(
+        resumed.result().final_message.as_deref(),
+        Some("intervening answer"),
+        "a resumed child's fast reply must survive its first delivery poll"
+    );
 }
 
 #[test]
@@ -632,7 +651,7 @@ fn terminal_message_poll_reads_only_appended_bytes_after_base() {
 
     let before = event_log::testkit::bytes_read();
     assert_eq!(
-        latest_terminal_message_status(&store, &old.message_id, &mut base).unwrap(),
+        latest_terminal_message_outcome(&store, &old.message_id, &mut base).unwrap(),
         None
     );
     assert_eq!(event_log::testkit::bytes_read() - before, 0);
@@ -649,8 +668,8 @@ fn terminal_message_poll_reads_only_appended_bytes_after_base() {
     let before = event_log::testkit::bytes_read();
 
     assert_eq!(
-        latest_terminal_message_status(&store, &message.message_id, &mut base).unwrap(),
-        Some(MessageStatus::Delivered)
+        latest_terminal_message_outcome(&store, &message.message_id, &mut base).unwrap(),
+        Some((MessageStatus::Delivered, None))
     );
     assert_eq!(event_log::testkit::bytes_read() - before, appended);
     assert_eq!(base, log_len);

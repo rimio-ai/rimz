@@ -77,6 +77,7 @@ The send prints one line per target:
 | `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
 | `queued for @coder (msg_…) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_…` | Waiting for a resumed provider to start. |
+| `queued for @child (msg_…) — @child is resuming; delivers when @child registers; fails if @child has not registered by <UTC time>` | A parent's follow-up queued before resuming its ended child; the receipt is independent of the three-second pane-bind check. |
 | `queued for @coder (msg_…) — @coder has a prompt open and will not read this until it is answered` | Followed by `  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>`. |
 | `queued for @coder (msg_…) — opens <time>` | Scheduled. The time includes a relative interval and UTC timestamp, as in `message show`. |
 | `queued for @coder (msg_…) — after @planner` | The first unmet `--after` condition. |
@@ -172,6 +173,7 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 | --- | --- | --- |
 | `RIMZ_MESSAGE_QUEUED_NOTICE_IDLE_MS` | `300000` (5 min) | Queued-notice delay when the receiver is not working, in milliseconds |
 | `RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS` | `1200000` (20 min) | Queued-notice delay when the receiver is busy in a turn or compacting, in milliseconds |
+| `RIMZ_MESSAGE_REGISTER_TIMEOUT_MS` | `120000` (2 min) | Registration limit for a parent's follow-up to an ended child, in milliseconds; a registered child waiting on a provider prompt does not expire |
 
 `rimz transcript` hides `@rimz` deliveries from its human view; `rimz transcript --json` keeps them.
 
@@ -187,6 +189,8 @@ If the prompt starts a fresh turn, that turn is the reply for `--interrupt --wai
 | `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
 
 At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
+
+A parent's message to its ended child queues before opening the resume pane; steer and interrupt also become the next prompt. `--wait` continues through registration and delivery, exits 1 with the message's failure reason if delivery fails, and still exits 124 on its own wait budget. Registration expiry needs the room's sidebar sweep or an explicit message sweep/gc; without one the queued record remains pending.
 
 After printing a subagent or launched peer's reply, `--wait` claims that answer for its launcher during an open turn, or for a human shell. Other agents and unattended callers claim nothing. Only the answer opened by the sent message is claimed; earlier unread answers still reach the fleet report. If the answer has not settled before the wait's deadline, it remains eligible for reporting. An already queued report containing other unread answers can still repeat a claimed row.
 

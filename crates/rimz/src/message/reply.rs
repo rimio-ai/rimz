@@ -23,7 +23,7 @@ use crate::store::message::{
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
-use super::dispatch::DispatchOutcome;
+use super::dispatch::{DispatchOutcome, ParkReason};
 
 const WAIT_GUARD_TICKS: u8 = 10;
 
@@ -44,6 +44,7 @@ pub enum ReplyFailure {
     WaitingForInput,
     DeliveryFailed {
         status: MessageStatus,
+        reason: Option<String>,
     },
     AgentGone,
     Deadlock {
@@ -454,10 +455,16 @@ impl Leg {
                 Some(ReplyFailure::WaitingForInput),
             ),
         };
-        let cursor = target
-            .cursor
-            .take()
-            .filter(|_| message_status == MessageStatus::Sent);
+        let cursor = target.cursor.take().filter(|_| {
+            message_status == MessageStatus::Sent
+                || matches!(
+                    outcome,
+                    DispatchOutcome::Queued {
+                        reason: Some(ParkReason::Resuming { .. }),
+                        ..
+                    }
+                )
+        });
         let transcript_path = target.transcript_path.clone();
         Self {
             target,
@@ -673,11 +680,18 @@ fn advance_leg(
     view: &TurnWaitView,
     kind: DeliveryKind,
 ) -> Result<bool, ReplyErr> {
-    if let Some(status) =
-        current_message_status(store, &view.messages, &leg.message_id, &mut leg.wait_base)?
-    {
-        leg.message_status = status;
-    }
+    let reason = match current_message_outcome(
+        store,
+        &view.messages,
+        &leg.message_id,
+        &mut leg.wait_base,
+    )? {
+        Some((status, reason)) => {
+            leg.message_status = status;
+            reason
+        }
+        None => None,
+    };
     let agent = view
         .snapshot
         .agents
@@ -724,7 +738,7 @@ fn advance_leg(
         }
         Step::DeliveryFailed(status) => {
             leg.done = Some(RunStatus::Failed);
-            leg.failure = Some(ReplyFailure::DeliveryFailed { status });
+            leg.failure = Some(ReplyFailure::DeliveryFailed { status, reason });
             Ok(true)
         }
         Step::AgentGone => {
@@ -745,26 +759,26 @@ fn anchored_cursor(
     cursor
 }
 
-fn current_message_status(
+fn current_message_outcome(
     store: &Store,
     messages: &[MessageRecord],
     message_id: &MessageId,
     wait_base: &mut u64,
-) -> Result<Option<MessageStatus>, ReplyErr> {
+) -> Result<Option<(MessageStatus, Option<String>)>, ReplyErr> {
     if let Some(message) = messages
         .iter()
         .find(|message| message.message_id == *message_id)
     {
-        return Ok(Some(message.status));
+        return Ok(Some((message.status, message.last_error.clone())));
     }
-    latest_terminal_message_status(store, message_id, wait_base)
+    latest_terminal_message_outcome(store, message_id, wait_base)
 }
 
-fn latest_terminal_message_status(
+fn latest_terminal_message_outcome(
     store: &Store,
     message_id: &MessageId,
     base: &mut u64,
-) -> Result<Option<MessageStatus>, ReplyErr> {
+) -> Result<Option<(MessageStatus, Option<String>)>, ReplyErr> {
     let mut latest = None;
     let path = &store.paths().events_log;
     let log_len = match std::fs::metadata(path) {
@@ -787,7 +801,7 @@ fn latest_terminal_message_status(
             continue;
         };
         if payload.message_id == *message_id && payload.status.is_terminal() {
-            latest = Some(payload.status);
+            latest = Some((payload.status, payload.reason));
         }
     }
     Ok(latest)

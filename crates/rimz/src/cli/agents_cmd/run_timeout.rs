@@ -34,6 +34,7 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
                 &ctx.workspace,
                 &ctx.store,
                 rimz::message::dispatch::DispatchRequest {
+                    resuming_recipient: None,
                     target,
                     text: rung.text(),
                     target_scope: None,

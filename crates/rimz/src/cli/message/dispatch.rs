@@ -9,7 +9,7 @@ use super::*;
 use rimz::address::TargetErr;
 use rimz::message::dispatch::{
     ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchOutcome, DispatchRequest,
-    WhenRequest,
+    DispatchResult, WhenRequest,
 };
 use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
@@ -85,6 +85,7 @@ pub(super) fn send_message(
     let kind = mode.kind();
     let wait_started = std::time::Instant::now();
     let request = || DispatchRequest {
+        resuming_recipient: None,
         target: target.clone(),
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
@@ -116,16 +117,19 @@ pub(super) fn send_message(
     let result = match rimz::message::dispatch::dispatch(workspace, store, request()) {
         Ok(result) => result,
         Err(DispatchErr::Recipient(err)) => {
-            if !recipient_miss(&ctx, miss(), err, globals, true)? {
-                return Ok(());
-            }
-            match rimz::message::dispatch::dispatch(workspace, store, request()) {
-                Ok(result) => result,
-                Err(DispatchErr::Recipient(err)) => {
-                    recipient_miss(&ctx, miss(), err, globals, false)?;
-                    return Ok(());
+            match recipient_miss(&ctx, miss(), err, globals, Some(request()))? {
+                RecipientMissOutcome::Complete => return Ok(()),
+                RecipientMissOutcome::Dispatched(result) => result,
+                RecipientMissOutcome::Retry => {
+                    match rimz::message::dispatch::dispatch(workspace, store, request()) {
+                        Ok(result) => result,
+                        Err(DispatchErr::Recipient(err)) => {
+                            recipient_miss(&ctx, miss(), err, globals, None)?;
+                            return Ok(());
+                        }
+                        Err(err) => return Err(map_dispatch_err(err, &ctx)),
+                    }
                 }
-                Err(err) => return Err(map_dispatch_err(err, &ctx)),
             }
         }
         Err(err) => return Err(map_dispatch_err(err, &ctx)),
@@ -213,6 +217,12 @@ struct RecipientMiss<'a> {
     create: bool,
 }
 
+enum RecipientMissOutcome {
+    Complete,
+    Retry,
+    Dispatched(DispatchResult),
+}
+
 /// Recover from an address that matched no recipient: create the agent on
 /// demand, record the bounce, then present the miss with the available agents.
 fn recipient_miss(
@@ -220,8 +230,8 @@ fn recipient_miss(
     miss: RecipientMiss<'_>,
     err: TargetErr,
     globals: &GlobalFlags,
-    allow_resume: bool,
-) -> Result<bool> {
+    resume: Option<DispatchRequest>,
+) -> Result<RecipientMissOutcome> {
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     if miss.create {
         return crate::cli::agents_cmd::create_on_miss(
@@ -232,7 +242,7 @@ fn recipient_miss(
             miss.text,
             globals,
         )
-        .map(|()| false);
+        .map(|()| RecipientMissOutcome::Complete);
     }
     let mut resume_error = None;
     if matches!(
@@ -241,15 +251,24 @@ fn recipient_miss(
             | TargetErr::NoMatchInChannel { .. }
             | TargetErr::PaneUnbound { .. }
     ) {
-        if allow_resume {
+        if let Some(request) = resume {
+            use crate::cli::subagents::ResumeChildOutcome;
             match crate::cli::subagents::resume_child(
                 ctx,
                 miss.target,
                 miss.worktree.or(miss.channel_flag),
                 &ctx.address_context(),
+                request,
             ) {
-                Ok(true) => return Ok(true),
-                Ok(false) => {}
+                Ok(ResumeChildOutcome::AlreadyBound) => return Ok(RecipientMissOutcome::Retry),
+                Ok(ResumeChildOutcome::Dispatched(result)) => {
+                    return Ok(RecipientMissOutcome::Dispatched(result));
+                }
+                Ok(ResumeChildOutcome::DispatchFailed(error)) => {
+                    return Err(map_dispatch_err(error, ctx));
+                }
+                Ok(ResumeChildOutcome::DeliveryFailed(error)) => return Err(error),
+                Ok(ResumeChildOutcome::NotApplicable) => {}
                 Err(err) => resume_error = Some(format!("{err:#}")),
             }
         }
@@ -285,7 +304,7 @@ fn recipient_miss(
         &ctx.address_context(),
         &mapped,
     )
-    .map(|()| false)
+    .map(|()| RecipientMissOutcome::Complete)
 }
 
 fn map_dispatch_err(err: DispatchErr, ctx: &Ctx) -> anyhow::Error {

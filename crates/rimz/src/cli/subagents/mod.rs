@@ -16,7 +16,7 @@ use super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::agents::AgentState;
 
 mod resume;
-pub(in crate::cli) use resume::resume_child;
+pub(in crate::cli) use resume::{ResumeChildOutcome, resume_child};
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]

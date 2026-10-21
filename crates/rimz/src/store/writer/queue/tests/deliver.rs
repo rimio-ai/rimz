@@ -6,6 +6,38 @@ fn user_message(text: &str) -> String {
 
 const BLOCKER: &str = "stuck: no live pane";
 
+#[test]
+fn resume_enqueue_refuses_a_card_that_became_live() {
+    for live in [false, true] {
+        let q = Queue::new();
+        let receiver = agent();
+        for signal in [
+            Some(LifecycleSignal::Registered),
+            (!live).then_some(LifecycleSignal::Ended),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            q.append_event(&EventEnvelope::agent_lifecycle(
+                q.workspace_id.clone(),
+                "session",
+                receiver.kind.as_str(),
+                "test",
+                &AgentLifecycleObservation::new(Some(receiver.agent_id.clone()), signal),
+            ))
+            .unwrap();
+        }
+        let mut message = q.record(1);
+        message.register_by = Some(message.enqueued_at + Duration::from_secs(120));
+        assert_eq!(
+            q.queue_resuming_message(&message, "session").unwrap(),
+            !live
+        );
+        assert_eq!(q.live().len(), usize::from(!live));
+        assert_eq!(q.count("message.queued"), usize::from(!live));
+    }
+}
+
 fn is_blocker(recorded: &str) -> bool {
     recorded == BLOCKER
 }
