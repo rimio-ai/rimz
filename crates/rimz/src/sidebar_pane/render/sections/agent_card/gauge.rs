@@ -101,15 +101,7 @@ pub(super) fn bar_row(
 /// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
 /// fills it to `▣`.
 ///
-/// At L2 every meter reserves a five-cell age cluster after a space; below L2
-/// the bar keeps that room and the stats line pins the age instead. The age appears from five minutes quiet, with a
-/// clock-fill glyph ([`elapsed_glyph`]) and continuous tone: muted until the
-/// last ten minutes before the known TTL, caution to alarm in that band,
-/// then muted with a full face past the ceiling. Unknown lifetimes stay muted. A keep-warm
-/// horizon uses the steady held tone ([`cache_age_pin`]). Finished cards follow
-/// the same ramp. The clock reads the agent's own quiet time
-/// ([`SidebarRow::own_last_activity`]), not child-folded activity: a parent
-/// waiting on children makes no model call, so its cache keeps cooling.
+/// At L2 every meter reserves a five-cell age cluster after a space; below L2 the bar keeps that room and the stats line pins the age instead. The age appears from five minutes quiet, with a clock-fill glyph ([`elapsed_glyph`]) and continuous tone: muted until half the known TTL, or the last ten minutes if earlier, then warn through caution to alarm at the ceiling. Past the ceiling it wears the fixed expired-cache tone and ringed over face. Unknown lifetimes stay muted. A keep-warm horizon uses the steady held tone ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last cache request, not child-folded activity: a parent waiting on children makes no model call, so its cache keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -363,7 +355,7 @@ impl CacheAge {
         if age > ceiling {
             return CachePhase::Expired;
         }
-        let band = ceiling.min(600);
+        let band = (ceiling / 2).max(ceiling.min(600));
         let band_start = ceiling - band;
         if age <= band_start {
             return CachePhase::Calm;
@@ -383,10 +375,9 @@ impl CachePhase {
     fn style(self, theme: &Theme) -> Style {
         match self {
             Self::Held => theme.good(Modifier::empty()),
-            Self::Closing { amount, .. } => theme.style(
-                theme.warm_heat_tone((1.0 + amount) / 2.0),
-                Modifier::empty(),
-            ),
+            Self::Closing { amount, .. } => {
+                theme.style(theme.warm_heat_tone(amount), Modifier::empty())
+            }
             Self::Expired => {
                 theme.style(theme.component(Component::CacheExpired), Modifier::empty())
             }
@@ -413,13 +404,7 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
     }
 }
 
-/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
-/// the time since the last real turn ended, the face filling over the horizon
-/// in the steady `good` tone; otherwise the time since the agent's own activity
-/// or its last cache request (a ping refreshes the cache, not the activity),
-/// face over the card's provider cache TTL, else the hour. Only the last ten
-/// minutes before a known TTL heat from caution to alarm; an unknown lifetime
-/// stays muted, and an expired cache wears the meter's expired-cache tone.
+/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads the time since the last real turn ended, the face filling over the horizon in the steady `good` tone; otherwise the time since the agent's own activity or its last cache request (a ping refreshes the cache, not the activity), face over the card's provider cache TTL, else the hour. After half a known TTL, or in the last ten minutes if earlier, the pin heats from warn through caution to alarm; an unknown lifetime stays muted, and an expired cache wears the meter's expired-cache tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = age.phase(now).style(theme);
@@ -622,37 +607,32 @@ mod tests {
             }
             .phase(now)
         };
-        assert_eq!(phase(1199, Some(1800)), CachePhase::Calm);
-        assert_eq!(phase(1200, Some(1800)), CachePhase::Calm);
-        assert_eq!(
-            phase(1201, Some(1800)),
-            CachePhase::Closing {
-                remaining: 599,
-                amount: 1.0 / 600.0
-            }
-        );
-        assert_eq!(
-            phase(1800, Some(1800)),
-            CachePhase::Closing {
-                remaining: 0,
-                amount: 1.0
-            }
-        );
-        assert_eq!(phase(1801, Some(1800)), CachePhase::Expired);
-        assert_eq!(
-            phase(1, Some(300)),
-            CachePhase::Closing {
-                remaining: 299,
-                amount: 1.0 / 300.0
-            }
-        );
-        assert_eq!(
-            phase(300, Some(300)),
-            CachePhase::Closing {
-                remaining: 0,
-                amount: 1.0
-            }
-        );
+        for (ceiling, start) in [(3600_u64, 1800_u64), (1800, 900), (300, 0)] {
+            let band = ceiling - start;
+            assert_eq!(
+                phase(start.saturating_sub(1), Some(ceiling as i64)),
+                CachePhase::Calm
+            );
+            assert_eq!(phase(start, Some(ceiling as i64)), CachePhase::Calm);
+            assert_eq!(
+                phase(start + 1, Some(ceiling as i64)),
+                CachePhase::Closing {
+                    remaining: (band - 1) as i64,
+                    amount: 1.0 / band as f32
+                }
+            );
+            assert_eq!(
+                phase(ceiling, Some(ceiling as i64)),
+                CachePhase::Closing {
+                    remaining: 0,
+                    amount: 1.0
+                }
+            );
+            assert_eq!(
+                phase(ceiling + 1, Some(ceiling as i64)),
+                CachePhase::Expired
+            );
+        }
         assert_eq!(phase(0, Some(0)), CachePhase::Calm);
         assert_eq!(phase(1, Some(0)), CachePhase::Expired);
         for age in [0, 300, 1800, 10000] {
@@ -666,6 +646,23 @@ mod tests {
             .phase(now),
             CachePhase::Held
         );
+    }
+
+    #[test]
+    fn closing_cache_style_uses_the_full_warm_ramp() {
+        let theme = Theme::fixed(false);
+        for amount in [0.0, 0.5, 1.0] {
+            assert_eq!(
+                CachePhase::Closing {
+                    remaining: 0,
+                    amount,
+                }
+                .style(&theme)
+                .fg,
+                Some(theme.warm_heat_tone(amount)),
+                "closing cache at {amount} of its warning band"
+            );
+        }
     }
 
     #[test]
