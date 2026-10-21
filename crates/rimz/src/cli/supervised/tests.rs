@@ -9,6 +9,83 @@ use rimz::pane::PaneRef;
 use rimz::store::run::{ReportTo, RunStatus, WakeupFrame};
 use tokio::net::UnixDatagram;
 
+fn assert_bind_timeout_last_read(
+    read: Result<Vec<AgentState>, String>,
+    expected: serde_json::Value,
+) {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let sink = rimz::diag::DiagSink::under(
+        fixture.paths.root.clone(),
+        fixture.workspace_id.clone(),
+        "room",
+        None,
+    );
+    let kind = AgentKind::new_unchecked("codex");
+    let launch_id = AgentSessionId::from("launch_child");
+    assert!(
+        !super::pane::PaneBindWait {
+            run_id: &fixture.run_id(),
+            launch_id: &launch_id,
+            kind: &kind,
+            caller: rimz::diag::record::SubagentPaneBindCaller::Resume,
+            open: Duration::from_millis(17),
+        }
+        .wait_with(
+            &sink,
+            || read.clone(),
+            Duration::from_millis(1),
+            Duration::from_millis(1)
+        )
+    );
+    let log = std::fs::read_to_string(sink.log_path().unwrap()).unwrap_or_default();
+    assert!(!log.is_empty(), "a bind timeout must emit durable evidence");
+    let record: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
+    assert_eq!(record["severity"], "warn");
+    let record = &record["event"];
+    assert_eq!(record["kind"], "subagent_pane_bind_timeout");
+    assert_eq!(record["run_id"], fixture.run_id().to_string());
+    assert_eq!(record["launch_id"], "launch_child");
+    assert_eq!(record["agent_kind"], "codex");
+    assert_eq!(record["caller"], "resume");
+    assert_eq!(record["open_ms"], 17);
+    assert!(record["waited_ms"].as_u64().unwrap() >= 1);
+    assert!(record["polls"].as_u64().unwrap() >= 1);
+    assert_eq!(record["last_read"], expected);
+}
+
+#[test]
+fn bind_timeout_records_last_read_failure() {
+    assert_bind_timeout_last_read(
+        Err("projection unreadable".to_owned()),
+        serde_json::json!({"error": "projection unreadable"}),
+    );
+}
+
+#[test]
+fn bind_timeout_records_no_matching_rows() {
+    assert_bind_timeout_last_read(
+        Ok(vec![agent_state("codex", "other", AgentStatus::Idle)]),
+        serde_json::json!([]),
+    );
+}
+
+#[test]
+fn bind_timeout_records_ended_and_unbound_rows() {
+    let mut ended = agent_state("codex", "ended", AgentStatus::Idle);
+    ended.launch_id = Some("launch_child".into());
+    ended.ended_at = Some("2026-01-01T00:00:00Z".parse().unwrap());
+    ended.pane = Some(pane_ref("%2", "subagents"));
+    let mut unbound = agent_state("claude", "unbound", AgentStatus::Idle);
+    unbound.launch_id = Some("launch_child".into());
+    assert_bind_timeout_last_read(
+        Ok(vec![ended, unbound]),
+        serde_json::json!([
+            {"kind": "codex", "pane": "tmux:%2", "ended_at": "2026-01-01T00:00:00Z"},
+            {"kind": "claude", "pane": null, "ended_at": null},
+        ]),
+    );
+}
+
 #[test]
 fn stream_json_prompt_concatenates_user_message_text() {
     // String content and text-block content both contribute; non-user

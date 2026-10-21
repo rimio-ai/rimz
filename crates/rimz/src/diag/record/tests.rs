@@ -2,6 +2,45 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn subagent_pane_bind_timeouts_round_trip_with_run_identity() {
+    let run_id = crate::RunId::new();
+    for (caller, expected) in [
+        ("launch", SubagentPaneBindCaller::Launch),
+        ("resume", SubagentPaneBindCaller::Resume),
+    ] {
+        for last_read in [
+            serde_json::json!({"error": "projection unreadable"}),
+            serde_json::json!([]),
+            serde_json::json!([{"kind": "codex", "pane": null, "ended_at": "2026-01-01T00:00:00Z"}]),
+        ] {
+            let wire = serde_json::json!({
+                "kind": "subagent_pane_bind_timeout", "run_id": run_id,
+                "launch_id": "launch_child", "agent_kind": "codex", "caller": caller,
+                "open_ms": 17, "waited_ms": 3000, "polls": 121, "last_read": last_read,
+            });
+            let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+            assert!(
+                decoded.is_ok(),
+                "bind timeout diagnostic must decode: {decoded:?}"
+            );
+            let event = decoded.unwrap();
+            assert!(matches!(
+                &event,
+                DiagEvent::SubagentPaneBindTimeout { caller, .. } if *caller == expected
+            ));
+            assert_eq!(event.severity(), DiagSeverity::Warn);
+            assert_eq!(
+                event.identity_key(),
+                format!("subagent_pane_bind_timeout:{run_id}")
+            );
+            assert!(event.summary().contains(&run_id.to_string()));
+            assert!(event.summary().contains(caller));
+            assert_eq!(serde_json::to_value(event).unwrap(), wire);
+        }
+    }
+}
+
+#[test]
 fn subagent_zone_lookup_failures_round_trip_and_distinguish_run_and_lookup() {
     let run_id = crate::RunId::new();
     let mut identities = std::collections::BTreeSet::new();

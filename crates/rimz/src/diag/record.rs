@@ -100,6 +100,27 @@ pub enum SubagentZoneLookup {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum SubagentPaneBindCaller {
+    Launch,
+    Resume,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SubagentPaneBindRead {
+    Failed { error: String },
+    Rows(Vec<SubagentPaneBindRow>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentPaneBindRow {
+    pub kind: AgentKind,
+    pub pane: Option<PaneId>,
+    pub ended_at: Option<jiff::Timestamp>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TickLoop {
     Fetch,
     CacheRefresh,
@@ -575,6 +596,16 @@ pub enum DiagEvent {
         lookup: SubagentZoneLookup,
         error: String,
     },
+    SubagentPaneBindTimeout {
+        run_id: RunId,
+        launch_id: AgentSessionId,
+        agent_kind: AgentKind,
+        caller: SubagentPaneBindCaller,
+        open_ms: u64,
+        waited_ms: u64,
+        polls: u64,
+        last_read: SubagentPaneBindRead,
+    },
     PaneWinsizeRepaired {
         pane: PaneId,
         rows: u16,
@@ -684,6 +715,7 @@ impl DiagEvent {
             | Self::SubagentOrphanReaped { .. }
             | Self::SubagentOrphanRepairFailed { .. }
             | Self::SubagentZoneLookupFailed { .. }
+            | Self::SubagentPaneBindTimeout { .. }
             | Self::ProviderStartupExit { .. }
             | Self::PaneCacheDivergence { .. }
             | Self::SupervisorPreflightRejected { .. }
@@ -799,6 +831,7 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
             Self::SubagentZoneLookupFailed { .. } => "subagent_zone_lookup_failed",
+            Self::SubagentPaneBindTimeout { .. } => "subagent_pane_bind_timeout",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
             Self::HiddenViewsFitted { .. } => "hidden_views_fitted",
@@ -1051,6 +1084,9 @@ impl DiagEvent {
             } => format!("{}:{parent_agent_id}", self.kind_name()),
             Self::SubagentZoneLookupFailed { run_id, lookup, .. } => {
                 format!("{}:{run_id}:{lookup:?}", self.kind_name())
+            }
+            Self::SubagentPaneBindTimeout { run_id, .. } => {
+                format!("{}:{run_id}", self.kind_name())
             }
             Self::ProviderStartupExit {
                 agent_kind,
@@ -1492,6 +1528,20 @@ impl DiagEvent {
                 error,
             } => format!(
                 "subagent run {run_id} opening a companion tab after {lookup:?} lookup failed: {error}"
+            ),
+            Self::SubagentPaneBindTimeout {
+                run_id,
+                caller,
+                open_ms,
+                waited_ms,
+                polls,
+                ..
+            } => format!(
+                "subagent run {run_id} {} pane bind unseen after {waited_ms}ms and {polls} polls (open took {open_ms}ms)",
+                match caller {
+                    SubagentPaneBindCaller::Launch => "launch",
+                    SubagentPaneBindCaller::Resume => "resume",
+                }
             ),
             Self::PaneCacheDivergence {
                 pane_id,
