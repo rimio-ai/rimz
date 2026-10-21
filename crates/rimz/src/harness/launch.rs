@@ -1049,6 +1049,14 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
+    if let Some(run) = &reminders.team_notes_run {
+        adapter.allow_team_notes_args(
+            run,
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if let Some(roots) = &reminders.permission_roots {
         adapter.configure_sandbox_settings(
             (cwd, artifact_dir),

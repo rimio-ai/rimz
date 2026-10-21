@@ -633,6 +633,27 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.runtime.root.clone(),
         inputs.runtime.shared_root.clone(),
     ]);
+    reminders.team_notes_run = match crate::worktree::discover_checkout(inputs.cwd) {
+        Ok(Some(checkout)) => inputs
+            .cwd
+            .ancestors()
+            .take_while(|path| path.starts_with(&checkout))
+            .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
+        Ok(None) => inputs
+            .cwd
+            .ancestors()
+            .find_map(|checkout| super::scratch::run_dir(inputs.state, checkout)),
+        Err(_) => None,
+    }
+    .filter(|run| {
+        inputs
+            .request
+            .identity
+            .params
+            .team
+            .as_deref()
+            .is_none_or(|team| super::scratch::run_team(run).as_deref() == Some(team))
+    });
     if inputs
         .effective
         .is_none_or(|effective| effective.allow_routine_rimz)

@@ -544,6 +544,17 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
+    /// Grant native file access to the checkout's archived team run, where supported.
+    fn allow_team_notes_args(
+        &self,
+        _run: &Path,
+        _paths: (&Path, &Path),
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
     /// Allow invoking profile-listed skills without a provider permission prompt.
     fn allow_listed_skill_args(
         &self,

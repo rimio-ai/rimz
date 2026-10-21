@@ -237,7 +237,8 @@ upward-dependencies = ["address"]
 # WaitingResolution and its resolver share answered-ask proof with the sidebar (+2).
 # PendingWaitClass (including its re-export), rested_status and display_rest_status replace sleeping_over (+3 net).
 # InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
-surface-budget = 1109
+# LaunchCapability::allow_team_notes_args shares the archive run grant with the process compiler (+1).
+surface-budget = 1110
 
 [[verdict]]
 kind = "item"
@@ -2175,6 +2176,7 @@ allowed-dependencies = [
     "harness::launch_reminders",
     "harness::prompt_compose",
     "harness::schedule",
+    "harness::scratch",
     "harness::subagent_policy",
     "harness::team_prompt",
     "ids",
@@ -8148,3 +8150,8 @@ reason = "Launch, prompt-submit and team inspection list archived memory indepen
 kind = "item"
 key = "harness::scratch::run_dir"
 reason = "Registration, board writers and launch grants share the read-only current-room run check."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::allow_team_notes_args"
+reason = "The process compiler grants one archived run through a provider-neutral, default-noop capability."

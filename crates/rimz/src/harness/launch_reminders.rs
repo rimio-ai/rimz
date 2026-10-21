@@ -30,6 +30,8 @@ pub(super) struct LaunchReminders {
     pub routine_rimz: Option<(std::path::PathBuf, [std::path::PathBuf; 2])>,
     /// Room-root write grants; absent in preflight compiles.
     pub permission_roots: Option<[PathBuf; 3]>,
+    /// This checkout's canonical team archive run; absent in preflight compiles.
+    pub team_notes_run: Option<PathBuf>,
     /// The launch's temp unit and the room's shared dir; every compiled launch has them.
     pub files: Option<TempFiles>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
@@ -61,6 +63,7 @@ impl Default for LaunchReminders {
             settings: None,
             routine_rimz: None,
             permission_roots: None,
+            team_notes_run: None,
             files: None,
             model: true,
             sandbox: false,
