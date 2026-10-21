@@ -372,6 +372,7 @@ fn tick_budget_breach(
         budget_spawns: 32,
         since_ms,
         recovered_after_ms,
+        spawns_by_step: BTreeMap::new(),
     }
 }
 
@@ -445,8 +446,28 @@ fn tick_budget_breach_deserializes_legacy_records_without_last_sample() {
             budget_spawns: 32,
             since_ms: 10,
             recovered_after_ms: None,
+            spawns_by_step: BTreeMap::new(),
         }
     );
+}
+
+#[test]
+fn tick_budget_breach_round_trips_spawns_by_step_and_omits_it_when_empty() {
+    let mut event = tick_budget_breach(TickLoop::CacheRefresh, 10, None);
+    let bare = serde_json::to_value(&event).expect("encode");
+    assert!(bare.get("spawns_by_step").is_none());
+
+    let DiagEvent::TickBudgetBreach { spawns_by_step, .. } = &mut event else {
+        unreachable!("built as a breach");
+    };
+    *spawns_by_step = BTreeMap::from([("diff_stats".to_owned(), 40), ("other".to_owned(), 2)]);
+    let value = serde_json::to_value(&event).expect("encode");
+    assert_eq!(
+        value["spawns_by_step"],
+        serde_json::json!({"diff_stats": 40, "other": 2})
+    );
+    let decoded: DiagEvent = serde_json::from_value(value).expect("decode");
+    assert_eq!(decoded, event);
 }
 
 #[test]
@@ -1076,6 +1097,7 @@ fn summary_includes_frame_ref_and_tick_work() {
         budget_spawns: 32,
         since_ms: 10,
         recovered_after_ms: None,
+        spawns_by_step: BTreeMap::new(),
     }
     .summary();
     assert!(tick.contains("last 900ms (250ms mux)/1024B/1 spawns"));

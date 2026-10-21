@@ -1896,8 +1896,11 @@ impl FetchWorker {
                 Ok(state) => {
                     let tick = self.meter.begin();
                     self.run_cycle(&state, cycle.request, &mut sink);
-                    if let Some(event) = self.meter.finish(tick, crate::utils::time::unix_now_ms())
-                    {
+                    if let Some(event) = self.meter.finish(
+                        tick,
+                        crate::utils::time::unix_now_ms(),
+                        Default::default(),
+                    ) {
                         crate::sidebar::meter::report(&self.diag, event);
                     }
                 }

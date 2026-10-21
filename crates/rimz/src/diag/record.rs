@@ -4,6 +4,7 @@
 //! and fetch-window totals are JSONL entries under the workspace state directory.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -454,6 +455,10 @@ pub enum DiagEvent {
         since_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
+        /// Spawns per refresh step for the streak's worst-spawn pass; sums to
+        /// `spawns`. Only the cache-refresh loop reports it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        spawns_by_step: BTreeMap<String, u64>,
     },
     FetchDeliveryStats {
         interval_ms: u64,

@@ -206,6 +206,7 @@ fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) 
         budget_spawns: 32,
         since_ms,
         recovered_after_ms,
+        spawns_by_step: Default::default(),
     }
 }
 
