@@ -299,6 +299,7 @@ fn state_style(state: CohortState) -> anstyle::Style {
         CohortState::Working => render::palette::accent(),
         CohortState::Blocked => render::palette::alarm(),
         CohortState::Paused => render::palette::warn(),
+        CohortState::Done => render::palette::good(),
         CohortState::Sleeping | CohortState::Idle => render::palette::muted(),
     }
 }

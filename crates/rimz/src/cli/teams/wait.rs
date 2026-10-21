@@ -284,7 +284,7 @@ fn poll(
             || {
                 let snapshot = match &mut snapshot {
                     Some(snapshot) => snapshot,
-                    None => snapshot.insert(ctx.alive_snapshot()?),
+                    None => snapshot.insert(ctx.published_snapshot()?),
                 };
                 Ok(rimz::address::team_cohorts(snapshot.agents.iter())
                     .iter()
@@ -300,10 +300,13 @@ fn poll(
         };
         let mut statuses = Vec::new();
         let mut activity = None;
-        if let Some(snapshot) = &snapshot
-            && let Some(cohort) = rimz::address::team_cohorts(snapshot.agents.iter())
+        let cohort = snapshot.as_ref().and_then(|snapshot| {
+            rimz::address::team_cohorts(snapshot.agents.iter())
                 .into_iter()
                 .find(|cohort| cohort.team == target.team && cohort.channel == target.channel)
+        });
+        if let Some(snapshot) = &snapshot
+            && let Some(cohort) = &cohort
         {
             progress.owner_live = progress.owner.as_deref().map(|owner| {
                 !rimz::address::role_holders(cohort.members.iter().copied(), owner).is_empty()
@@ -329,21 +332,17 @@ fn poll(
                     }),
                 };
                 let attention = rimz::store::snapshot::needs_you(agent, row, demotion, now);
-                let status = attention.as_ref().map_or_else(
-                    || {
-                        row.and_then(|row| row.status())
-                            .unwrap_or_else(|| agent.rowless_status(demotion).0)
-                    },
-                    |attention| attention.status,
-                );
+                let status = row
+                    .and_then(|row| row.status())
+                    .unwrap_or_else(|| agent.rowless_status(demotion).0);
                 statuses.push(status);
                 activity = activity.max(Some(
                     row.map_or(agent.last_activity, |row| row.last_activity),
                 ));
-                if attention.is_some() {
+                if let Some(attention) = attention {
                     progress.needs_you.push((
                         rimz::address::agent_handle(agent, &cohort.members, false),
-                        status,
+                        attention.status,
                     ));
                 }
             }
@@ -351,8 +350,13 @@ fn poll(
         progress
             .needs_you
             .sort_by(|left, right| left.0.cmp(&right.0));
-        let state =
-            super::show::state_with_age(super::list::instance_state(statuses), activity, now);
+        let state = snapshot
+            .as_ref()
+            .zip(cohort.as_ref())
+            .map_or(super::list::CohortState::Idle, |(snapshot, cohort)| {
+                super::list::CohortState::for_cohort(snapshot, cohort, statuses)
+            });
+        let state = super::show::state_with_age(state, activity, now);
         // A settling target's outcome follows at once, so it gets no progress line.
         if outcome.is_none()
             && let Some(line) = diagnostic_line(

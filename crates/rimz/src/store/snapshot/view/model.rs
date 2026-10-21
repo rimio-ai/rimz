@@ -534,6 +534,11 @@ impl UnitStatus {
     pub fn headline(&self) -> AgentStatus {
         self.buckets.first().copied().unwrap_or(AgentStatus::Idle)
     }
+
+    /// Whether the unit's calm verdict comes from a board at Done rather than member turns.
+    pub fn is_board_done(&self) -> bool {
+        matches!(self.calm_carrier, CalmCarrier::All)
+    }
 }
 
 impl SidebarWorktreeGroup {

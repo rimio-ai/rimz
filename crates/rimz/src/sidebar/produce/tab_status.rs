@@ -11,7 +11,7 @@ use crate::mux::tab_name::{
 };
 use crate::sidebar::frame::{PaneFrame, PaneState};
 use crate::sidebar::timing::TAB_SUCCESS_STATUS_TTL;
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{PipelinePosition, SidebarSnapshot, SidebarUnitKey};
 use crate::theme;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +32,7 @@ enum TabStatus {
 }
 
 impl TabStatus {
-    fn from_row(status: AgentStatus, fresh_success: bool) -> Option<Self> {
+    fn from_headline(status: AgentStatus, fresh_success: bool) -> Option<Self> {
         match status {
             AgentStatus::Failed => Some(Self::Failed),
             AgentStatus::Waiting => Some(Self::Waiting),
@@ -78,25 +78,32 @@ pub(crate) fn desired_tab_renames(
         .filter(|row| row.as_agent().is_some())
         .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
         .collect::<HashSet<_>>();
-    let status_by_pane = snapshot
-        .rows()
-        .filter_map(|row| {
-            let pane = row.pane.as_ref()?;
-            let status = row.status()?;
-            let success_age = snapshot.now.duration_since(row.last_activity);
-            let fresh_success = success_age <= TAB_SUCCESS_STATUS_TTL;
-            TabStatus::from_row(status, fresh_success).map(|status| (pane.pane_id.clone(), status))
-        })
-        .fold(
-            HashMap::<PaneId, TabStatus>::new(),
-            |mut statuses, (pane, status)| {
-                statuses
-                    .entry(pane)
+    let mut status_by_pane = HashMap::<PaneId, TabStatus>::new();
+    for group in snapshot.worktree_groups.iter() {
+        for (key, unit) in group.unit_statuses() {
+            let members = group.rows.iter().filter(|row| group.unit_key(row) == key);
+            let completed_at = match key {
+                SidebarUnitKey::Team(team) if group.team.as_deref() == Some(team) => group
+                    .pipeline
+                    .as_ref()
+                    .filter(|pipeline| pipeline.position() == PipelinePosition::Done)
+                    .map(|pipeline| pipeline.done_at),
+                _ => None,
+            }
+            .unwrap_or_else(|| members.clone().map(|row| row.last_activity).max());
+            let fresh_success = completed_at
+                .is_some_and(|at| snapshot.now.duration_since(at) <= TAB_SUCCESS_STATUS_TTL);
+            let Some(status) = TabStatus::from_headline(unit.headline(), fresh_success) else {
+                continue;
+            };
+            for pane in members.filter_map(|row| row.pane.as_ref()) {
+                status_by_pane
+                    .entry(pane.pane_id.clone())
                     .and_modify(|known| *known = (*known).max(status))
                     .or_insert(status);
-                statuses
-            },
-        );
+            }
+        }
+    }
     frame
         .tabs
         .iter()
