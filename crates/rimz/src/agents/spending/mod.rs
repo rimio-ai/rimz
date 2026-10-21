@@ -138,6 +138,8 @@ pub struct SpendingWalkResult {
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RoleTallies {
+    #[serde(default)]
+    pub agents: BTreeMap<String, SpendTally>,
     pub subagents: BTreeMap<String, SpendTally>,
     pub recorded_since_secs: Option<u64>,
 }

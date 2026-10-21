@@ -703,7 +703,7 @@ reason = "Shared local-midnight convention is reachable for spending consumers i
 [[verdict]]
 kind = "item"
 key = "agents::spending::RoleTallies"
-reason = "Published profile-attributed subagent spend and the first retained role record shared with the stats reader."
+reason = "Published profile-attributed agent and subagent spend and the first retained role record shared with the stats reader."
 
 [[verdict]]
 kind = "item"

@@ -258,7 +258,8 @@ pub(crate) fn aggregate_counted_rollups(
         recorded_since_secs: history_roles.and_then(|index| index.recorded_since_secs),
         ..Default::default()
     };
-    let mut role_sessions = FastHashMap::default();
+    let mut agent_sessions = FastHashMap::default();
+    let mut subagent_sessions = FastHashMap::default();
     let joined_roles = history_roles
         .map(|index| &index.roles)
         .filter(|roles| !roles.is_empty());
@@ -386,13 +387,24 @@ pub(crate) fn aggregate_counted_rollups(
                     .and_then(|id| id.as_deref())
                     .or(entry.thread_id.as_deref())
                     .filter(|id| !id.is_empty());
-                let Some(SessionRole::Subagent { profile }) =
-                    native.and_then(|session| index.get(provider)?.get(session))
+                let Some(role) = native.and_then(|session| index.get(provider)?.get(session))
                 else {
                     continue;
                 };
+                let (tallies, sessions, profile) = match role {
+                    SessionRole::Agent { profile } => (
+                        &mut roles.agents,
+                        &mut agent_sessions,
+                        profile.as_deref().unwrap_or(provider),
+                    ),
+                    SessionRole::Subagent { profile } => (
+                        &mut roles.subagents,
+                        &mut subagent_sessions,
+                        profile.as_str(),
+                    ),
+                };
                 accum(
-                    roles.subagents.entry(profile.clone()).or_default(),
+                    tallies.entry(profile.to_owned()).or_default(),
                     entry,
                     now_secs,
                     cutoffs.total,
@@ -404,7 +416,7 @@ pub(crate) fn aggregate_counted_rollups(
                         thread_id,
                     })
                     .unwrap_or_else(|| counted.session_key());
-                role_sessions
+                sessions
                     .entry((profile, session))
                     .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))
                     .or_insert(entry.ts_secs);
@@ -420,14 +432,19 @@ pub(crate) fn aggregate_counted_rollups(
         cutoffs.total,
         history_day_cutoff,
     );
-    for ((profile, _), youngest) in role_sessions {
-        bump_sessions(
-            roles.subagents.entry(profile.clone()).or_default(),
-            youngest,
-            now_secs,
-            cutoffs.total,
-            history_day_cutoff,
-        );
+    for (tallies, sessions) in [
+        (&mut roles.agents, agent_sessions),
+        (&mut roles.subagents, subagent_sessions),
+    ] {
+        for ((profile, _), youngest) in sessions {
+            bump_sessions(
+                tallies.entry(profile.to_owned()).or_default(),
+                youngest,
+                now_secs,
+                cutoffs.total,
+                history_day_cutoff,
+            );
+        }
     }
     if let Some(scope) = workspace {
         add_scoped_sessions(

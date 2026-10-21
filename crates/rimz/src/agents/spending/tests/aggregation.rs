@@ -125,8 +125,9 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
         let roles = serde_json::to_value(&result.roles).unwrap();
         assert_eq!(
             roles.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["recorded_since_secs", "subagents"]
+            ["agents", "recorded_since_secs", "subagents"]
         );
+        assert!(roles["agents"].as_object().unwrap().is_empty());
         assert!(roles["recorded_since_secs"].is_null());
         assert!(roles["subagents"].as_object().unwrap().is_empty());
     }
@@ -137,11 +138,13 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     use super::super::session_roles::SessionRole;
     let parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let named = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
     let paths = [
         PathBuf::from(format!("/x/{parent}.jsonl")),
         PathBuf::from(format!("/x/{parent}/subagents/agent-native.jsonl")),
         PathBuf::from(format!("/x/rollout-2026-01-01T00-00-00-{child}.jsonl")),
         PathBuf::from("/x/opencode.db"),
+        PathBuf::from(format!("/x/{named}.jsonl")),
     ];
     let mut root = cached_entry(NOW_SECS, 1.0, "");
     root.thread_id = None;
@@ -170,6 +173,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         spending_file(claude_adapter(), paths[1].clone()),
         spending_file(codex_adapter(), paths[2].clone()),
         spending_file(opencode_adapter(), paths[3].clone()),
+        spending_file(claude_adapter(), paths[4].clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -183,13 +187,25 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                     cached_entry(NOW_SECS - 40 * 86_400, 5.0, "unseen"),
                 ],
             ),
+            cached_file(
+                &paths[4],
+                vec![cached_entry(NOW_SECS - 2 * 86_400, 6.0, named)],
+            ),
         ]),
         ..Default::default()
     };
     let roles: super::super::session_roles::RoleMap = BTreeMap::from([
         (
             crate::ids::AgentKind::new_unchecked("claude"),
-            BTreeMap::from([(parent.into(), SessionRole::Agent { profile: None })]),
+            BTreeMap::from([
+                (parent.into(), SessionRole::Agent { profile: None }),
+                (
+                    named.into(),
+                    SessionRole::Agent {
+                        profile: Some("claude".into()),
+                    },
+                ),
+            ]),
         ),
         (
             crate::ids::AgentKind::new_unchecked("codex"),
@@ -254,6 +270,30 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     );
     let published_roles = serde_json::to_value(&result.roles).unwrap();
     assert_eq!(published_roles["recorded_since_secs"], first);
+    assert_eq!(
+        published_roles["agents"].as_object().map(|rows| rows.len()),
+        Some(2)
+    );
+    for window in ["today", "day", "week", "month", "year"] {
+        let recent = matches!(window, "today" | "day");
+        assert_eq!(
+            published_roles["agents"]["claude"][window]["usd"],
+            if recent { 3.0 } else { 9.0 }
+        );
+        assert_eq!(
+            published_roles["agents"]["claude"][window]["sessions"],
+            if recent { 1 } else { 2 }
+        );
+        let peer_in_window = matches!(window, "month" | "year");
+        assert_eq!(
+            published_roles["agents"]["peer-profile"][window]["usd"],
+            if peer_in_window { 4.0 } else { 0.0 }
+        );
+        assert_eq!(
+            published_roles["agents"]["peer-profile"][window]["sessions"],
+            u32::from(peer_in_window)
+        );
+    }
     assert_eq!(published_roles["subagents"].as_object().unwrap().len(), 1);
     for window in ["today", "day", "week", "month", "year"] {
         assert_eq!(published_roles["subagents"]["fast"][window]["usd"], 3.0);
@@ -268,9 +308,11 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     ];
     for window in windows {
         let mut sum = SpendWindow::default();
-        for profile in published_roles["subagents"].as_object().unwrap().values() {
-            let tally = serde_json::from_value::<SpendTally>(profile.clone()).unwrap();
-            sum.merge(window(&tally));
+        for role in ["agents", "subagents"] {
+            for profile in published_roles[role].as_object().unwrap().values() {
+                let tally = serde_json::from_value::<SpendTally>(profile.clone()).unwrap();
+                sum.merge(window(&tally));
+            }
         }
         assert!(sum.usd <= window(&result.spending.total).usd);
         assert!(sum.tokens <= window(&result.spending.total).tokens);
@@ -292,6 +334,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         Some(&Default::default()),
     );
     let empty = serde_json::to_value(&empty.roles).unwrap();
+    assert!(empty["agents"].as_object().unwrap().is_empty());
     assert!(empty["subagents"].as_object().unwrap().is_empty());
     assert!(empty["recorded_since_secs"].is_null());
 }
