@@ -87,7 +87,7 @@ State is tiers of plain files, scoped by what each one outlives. [`disk/paths.rs
 workspace store         ~/.rimz/ws/<basename>-<hex>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
-  log/, records/, audit/, cache/, owned/, tmp/, locks/ group files by lifetime;
+  log/, records/, audit/, cache/, owned/, tmp/, team-notes/, locks/ group files by lifetime;
   every room flock lives in locks/, never cleared by reset or teardown
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root

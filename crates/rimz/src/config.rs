@@ -86,7 +86,7 @@ pub(crate) use display::{
 };
 pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
 pub(crate) use gc::GcConfig;
-pub use gc::{TranscriptRetention, parse_older_than};
+pub use gc::{HistoryRetention, parse_older_than};
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub(crate) use harness::IdleCompactParseError;

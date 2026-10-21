@@ -422,11 +422,25 @@ impl Sweep {
         files: usize,
         report: &mut GcReport,
     ) -> Result<()> {
+        self.remove_tree_if(path, files, report, || Ok(true))
+            .map(|_| ())
+    }
+
+    pub(super) fn remove_tree_if(
+        &mut self,
+        path: &Path,
+        files: usize,
+        report: &mut GcReport,
+        still_expired: impl FnOnce() -> Result<bool>,
+    ) -> Result<bool> {
         let bytes = crate::disk::usage::dir_size(path);
+        if !still_expired()? {
+            return Ok(false);
+        }
         if !self.dry_run {
             match fs::remove_dir_all(path) {
                 Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
                 Err(source) => {
                     return Err(GcErr::Io {
                         path: path.to_owned(),
@@ -438,7 +452,7 @@ impl Sweep {
         self.record_removed(path, bytes, report, |report| {
             report.sidecar_files_removed += files
         });
-        Ok(())
+        Ok(true)
     }
 
     pub(super) fn new(dry_run: bool) -> Self {

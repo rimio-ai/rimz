@@ -1149,7 +1149,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
         || is_gc_duration_edit(path)
-        || matches!(path, [root, leaf] if root == "gc" && leaf == "transcript_retention")
+        || matches!(path, [root, leaf] if root == "gc" && matches!(leaf.as_str(), "transcript_retention" | "team_notes_retention"))
         || matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min")
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
@@ -1176,8 +1176,9 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             invalid_value!("{} {error}", path.join("."));
         }
     }
-    if matches!(path, [root, leaf] if root == "gc" && leaf == "transcript_retention") {
-        super::TranscriptRetention::parse(value.as_str().unwrap_or_default())
+    if matches!(path, [root, leaf] if root == "gc" && matches!(leaf.as_str(), "transcript_retention" | "team_notes_retention"))
+    {
+        super::HistoryRetention::parse(value.as_str().unwrap_or_default(), &path.join("."))
             .map_err(ConfigEditErr::InvalidValue)?;
     }
     if is_auto_redeem_min_gain_edit(path) {

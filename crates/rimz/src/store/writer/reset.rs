@@ -191,6 +191,7 @@ impl Store {
                     crate::disk::paths::Class::Tmp,
                     crate::disk::paths::Class::Out,
                     crate::disk::paths::Class::Shared,
+                    crate::disk::paths::Class::TeamNotes,
                 ] {
                     state_entries_removed +=
                         remove_state_dir_with(&class.path_under(&paths.root), &count)?.unwrap_or(0);
@@ -261,6 +262,7 @@ mod tests {
             let tmp = paths.temp_unit_dir(Some("retired")).join("note");
             let out = paths.out_reader_dir(Some("retired")).join("child.output");
             let shared = paths.room_shared_dir.join("task/note");
+            let team_notes = paths.root.join("team-notes/run/blackboard.md");
             let cache = paths.cache_dir.join("obsolete.json");
             let record = paths.fleet_budget_record.clone();
             let transcript = paths.transcript_dir.join("old.jsonl");
@@ -271,6 +273,7 @@ mod tests {
                 &tmp,
                 &out,
                 &shared,
+                &team_notes,
                 &cache,
                 &record,
                 &transcript,
@@ -287,6 +290,7 @@ mod tests {
             assert_eq!(tmp.exists(), !hard);
             assert_eq!(out.exists(), !hard);
             assert_eq!(shared.exists(), !hard);
+            assert_eq!(team_notes.exists(), !hard);
             assert!(!cache.exists());
             assert!(record.exists());
         }

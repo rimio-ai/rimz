@@ -15,6 +15,30 @@ const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/adapters/pi/ext
 const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/plugin.ts");
 const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
 
+#[test]
+fn team_notes_retention_config_round_trips_and_names_invalid_values() {
+    let env = Env::new();
+    let key = "gc.team_notes_retention";
+    for value in ["forever", "30d"] {
+        env.rimz()
+            .args(["config", "set", key, value])
+            .assert()
+            .success();
+        env.rimz()
+            .args(["config", "get", key])
+            .assert()
+            .success()
+            .stdout(contains(value));
+    }
+    for value in ["0d", "never", "30"] {
+        env.rimz()
+            .args(["config", "set", key, value])
+            .assert()
+            .failure()
+            .stderr(contains(key));
+    }
+}
+
 fn machine_config_path(env: &Env) -> std::path::PathBuf {
     env.rimz_home().join("config.toml")
 }

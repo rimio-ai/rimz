@@ -136,6 +136,7 @@ pub(crate) enum Class {
     Owned,
     Tmp,
     Shared,
+    TeamNotes,
     Out,
     Sock,
     Live,
@@ -144,7 +145,7 @@ pub(crate) enum Class {
 }
 
 impl Class {
-    pub(crate) const STATE: [Self; 9] = [
+    pub(crate) const STATE: [Self; 10] = [
         Self::Log,
         Self::Records,
         Self::Audit,
@@ -152,6 +153,7 @@ impl Class {
         Self::Owned,
         Self::Tmp,
         Self::Shared,
+        Self::TeamNotes,
         Self::Out,
         Self::Locks,
     ];
@@ -166,6 +168,7 @@ impl Class {
             Self::Owned => "owned",
             Self::Tmp => "tmp",
             Self::Shared => "shared",
+            Self::TeamNotes => "team-notes",
             Self::Out => "out",
             Self::Sock => "sock",
             Self::Live => "live",
@@ -197,6 +200,7 @@ pub struct StatePaths {
     pub agents_dir: PathBuf,
     /// The room tier every agent reads and writes: `<state>/shared`.
     pub room_shared_dir: PathBuf,
+    pub team_notes_dir: PathBuf,
     /// RimZ-written results, one `<reader>/` directory per agent they report to.
     pub out_dir: PathBuf,
     pub skills_dir: PathBuf,
@@ -409,6 +413,7 @@ impl StatePaths {
             dir_name,
             agents_dir: owned_dir.join("agents"),
             room_shared_dir: Class::Shared.path_under(&root),
+            team_notes_dir: Class::TeamNotes.path_under(&root),
             out_dir: Class::Out.path_under(&root),
             skills_dir: cache_dir.join("skills"),
             tmp_dir,

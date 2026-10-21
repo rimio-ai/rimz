@@ -74,7 +74,7 @@ Two of those are worth knowing by name. `cache/` holds only what RimZ can rebuil
 
 Room files that only matter while the machine is up (sockets, locks, wakeup pipes) sit on tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, or `/tmp/rimz-<uid>/rimz/ws/<name>/` without a runtime dir, and `~/.rimz/run` links there once a room is born. Panes, scoped views, and hooks all inherit the `RIMZ_HOME` the room was born with.
 
-A room's directory name is the project's basename plus the first hex digits of its workspace id, such as `ws/myrepo-3f2a/`, and the durable tree under the home and the runtime tree on tmpfs use that same name. When two projects share a basename and those digits, the newer one gets a longer name. `rimz paths` prints every location for the project you run it in, and `rimz paths --json` gives scripts the same thing ([reference](../reference/cli/paths.md)).
+A room's directory name is the project's basename plus the first hex digits of its workspace id, such as `ws/myrepo-3f2a/`, and the durable tree under the home and the runtime tree on tmpfs use that same name. When two projects share a basename and those digits, the newer one gets a longer name. `rimz paths` prints every location for the project you run it in, including its `team-notes/` archive, and `rimz paths --json` gives scripts the same thing ([reference](../reference/cli/paths.md)).
 
 ### How the layers combine
 
@@ -315,6 +315,7 @@ flip_compact = "180k"
 auto = true
 older_than = "7d"
 transcript_retention = "forever"
+team_notes_retention = "forever"
 tmp_grace = "1d"
 tmp_floor_percent = 10
 tmp_floor_min = "10GiB"
@@ -322,7 +323,9 @@ tmp_floor_min = "10GiB"
 
 Stale runtime files, orphaned temp files, dead workspace stores, and landed worktrees pile up as rooms come and go. With `auto` on, the default, every open room runs [`rimz gc`](../reference/cli/maintenance.md#sweep-stale-state) once a day, starting five minutes after the room comes up. A manual `rimz gc` sweeps only the current room; `--all` adds every room and shared machine state. One daily helper is elected to run that machine scope, so closed rooms also get cleaned without every open room repeating the machine sweep. Both scopes keep anything dirty, unmerged, held by an agent, pane, or armed loop task, or unproven. Each sweep shows up in `rimz stats --assists`.
 
-Conversation transcripts and final message text stay forever by default, separately from diagnostic logs. Set `gc.transcript_retention` to a positive duration such as `30d` or `12h` to expire their weekly files by the time of the last append. A file can keep its earliest entries up to seven days longer than the setting. `rimz gc` reports both histories together as `transcript`, including their kept bytes; `--older-than` does not override this setting. This is a per-machine setting, not project config. Whole-room deletion (including machine GC of a deleted project), hard reset, and uninstall still remove the history. Files already deleted by an older sweep cannot be recovered by changing retention.
+Conversation transcripts and final message text stay forever by default, separately from diagnostic logs. Set `gc.transcript_retention` to a positive duration such as `30d` or `12h` to expire their weekly files by the time of the last append. A file can keep its earliest entries up to seven days longer than the setting. `rimz gc` reports both histories together as `transcript`, including their kept bytes; `--older-than` does not override this setting. This is a per-machine setting, not project config. Whole-room deletion (including machine GC of a deleted project), hard reset, and `uninstall --state` or `--all` still remove the history. Files already deleted by an older sweep cannot be recovered by changing retention.
+
+Team boards and notes have their own archive under `~/.rimz/ws/<workspace-dir>/team-notes/`. They also stay forever by default. Set `gc.team_notes_retention` to `forever` or a positive duration with the same grammar to remove whole runs after their newest file or directory modification expires. One fresh entry keeps the whole run; removing a checkout does not remove its notes. `rimz gc` reports kept bytes in `team-notes`, independently of `--older-than`. Soft reset keeps these archives; hard reset, whole-room deletion, and `uninstall --state` or `--all` remove them.
 
 `older_than` is the age past which runtime and atomic-write temp files go, and it is also what `rimz gc --older-than` defaults to. Agent scratch has its own `tmp_grace`: a unit stays while any agent sharing it is live or has not ended, then goes after both its latest end and its latest directory or direct-child modification are past the grace. Both durations take `s`, `m`, `h`, or `d` and must be greater than zero. `tmp_floor_percent` (0 through 100) and `tmp_floor_min` reserve the larger of a capacity percentage and a byte size; `GiB` is binary, `G` is decimal. When space falls below that floor, open rooms trigger [oldest-first pressure eviction](../reference/cli/maintenance.md#automatic-sweeps) of ended agents' scratch across all rooms, without waiting for the grace. Live agents' scratch stays. `rimz doctor` shows the free space and reclaimable units. Setting both floor settings to zero disables pressure eviction. `rimz config set gc.auto false` turns off both automatic deletion paths and leaves ordinary `rimz gc` for you to run by hand.
 

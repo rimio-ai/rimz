@@ -543,7 +543,7 @@ upward-dependencies = [
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
 # TaskEntry::repeats_while_true shares sustained workflow/resident retry policy (+1).
 # GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
-# TranscriptRetention carries the independent history policy through GC (+1).
+# HistoryRetention carries transcript and team-note archive policies through GC (+1).
 # Isolation::is_scoped shares the mount-view predicate with harness and CLI (+1).
 # SpendOrder shares typed capacity ordering with harness and CLI.
 # AccountLabelError, validate_label, label, label_warnings, provider_title share display-only account labels (+5).
@@ -7906,7 +7906,7 @@ reason = "GC and doctor share the max of percentage and byte reserve."
 [[verdict]]
 kind = "item"
 key = "store::gc::GcPolicy"
-reason = "The CLI supplies independent runtime TTL and temp-unit grace to the store sweep."
+reason = "The CLI supplies runtime TTL, temp-unit grace, and independent history and team-archive retention to the store sweep."
 
 [[verdict]]
 kind = "item"
@@ -8030,8 +8030,8 @@ reason = "Agent logs share the transcript's shell-quoted older-history hint."
 
 [[verdict]]
 kind = "item"
-key = "config::gc::TranscriptRetention"
-reason = "GcPolicy shares the machine's typed forever-or-duration history retention with every sweep."
+key = "config::gc::HistoryRetention"
+reason = "GcPolicy shares the machine's typed forever-or-duration history and team-archive retention with every sweep."
 
 [[verdict]]
 kind = "item"

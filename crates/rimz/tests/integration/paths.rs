@@ -56,6 +56,11 @@ fn paths_names_one_workspace_dir_in_both_trees() {
     );
     assert_eq!(path_of(&report, "room_tmp"), state.root.join("tmp"));
     assert_eq!(path_of(&report, "shared"), state.root.join("shared"));
+    assert_eq!(
+        report.get("team_notes").and_then(Value::as_str),
+        state.team_notes_dir.to_str(),
+        "paths must name the team archive"
+    );
     assert_eq!(path_of(&report, "out"), state.root.join("out"));
     assert!(report.get("scratch").is_none());
 
@@ -63,7 +68,8 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         .arg("paths")
         .assert()
         .success()
-        .stdout(predicates::str::contains("workspace dir"));
+        .stdout(predicates::str::contains("workspace dir"))
+        .stdout(predicates::str::contains("team notes"));
 }
 
 #[test]
