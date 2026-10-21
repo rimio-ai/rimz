@@ -31,6 +31,7 @@ mod reap;
 mod reconcile;
 mod resume;
 mod self_close;
+mod shared_view;
 mod stack_winsize;
 mod support;
 mod tab_ownership;

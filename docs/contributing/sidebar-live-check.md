@@ -83,9 +83,16 @@ Run Look for one sidebar, then its Capture twice across a displayed clock-unit b
 
 Flip back to `Review` before checks 3 and 4.
 
-### 3. Adoption on each tab
+### 3. Client views on each tab
 
 For every Sidebar block, run its Look, then its Capture. Repeat the Capture while the frame is still the pre-Look one: a capture taken a few tens of milliseconds after Look can still show `Build`. Each tab must show `Review` within 5 s of Look.
+
+Attach two real terminal clients to the card's private mux session, using the same isolated environment as its Look command. Read each client's terminal output, not only server-side pane captures. With enough cards to scroll, check both sharing cases:
+
+- **tmux:** both clients view the same sidebar. Scroll from each client in turn; both screens must change together. Detach one; the survivor must keep its scroll and selection after a fresh fold.
+- **Zellij:** put the clients on different tabs and scroll one; the other's cards must stay put. Move that client onto the other's tab; it must join the view already there. Move away again; it must carry the joined view, then scroll independently.
+
+For retention, shorten `[sidebar] afk_after_secs` to 20 in the disposable room's isolated `RIMZ_HOME/config.toml`, not its project config. Scroll and select a card, detach every client, and reattach within that window: the held view must return. Compare after the client map settles, keeping the same native working-pane baseline. Detach again, wait past the window, and reattach: with no other retained view the sidebar starts at the top without a carried selection. Start the expiry wait when the published client map shows full detach, not when the terminals close; an unviewed pane roster can wait ten seconds before sampling again. A new client's native working-pane focus can immediately establish a new highlight. Keep the host alive throughout; a host restart loses full views. The executable proofs live in `crates/rimz/tests/integration/backend/tmux/sidebar.rs::two_clients_share_the_sidebar_view_through_detach` and `crates/rimz/tests/integration/backend/zellij/shared_view.rs::two_clients_split_join_and_carry_the_sidebar_view`.
 
 ### 4. Pipeline click routes to the owner
 
@@ -845,7 +852,7 @@ BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/de
 ## Traps
 
 - A live check of anything the host, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
-- Look before capturing or clicking: a settled unwatched sidebar retains its last painted frame until reveal. Data changes and viewport publications alone emit no hidden frame bytes. Establish known ownership and let startup or reconciliation finish before using a hidden pane as a negative control; input, resize, own-view changes and bounded obligations can still make it fold or paint.
+- Look before capturing or clicking: a settled unwatched sidebar retains its last painted frame until reveal. Data changes alone emit no hidden frame bytes and unpainted views do no reductions. Establish known ownership and let startup or reconciliation finish before using a hidden pane as a negative control; input can reveal it, but hidden resize changes only geometry. Pane-local reconciliation obligations still run.
 - Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` does not move the Zellij client: the sidebar stays narrow with its clock stopped at `0:00` until a `go-to-tab` widens it and resumes the clock.
 - A previously selected card stays held open, with its stats line and its subagent and wait entries, until collapsing it would no longer move the selected card, or until a wheel tick, unread-banner jump, or toggle releases it. A check of an unselected card's shape (a stale card's one line, a hidden subagents and waits line) releases the hold first; otherwise the held card reads as a shape that failed to change.
 - `sidebar click` is testkit-only. It sends an instance-addressed click through the host's room socket, exercising hit testing and focus routing but skipping terminal input and its parsing.

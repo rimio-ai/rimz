@@ -161,9 +161,30 @@ struct PtyOutput {
     tail: Vec<u8>,
     titles: Vec<String>,
     marker: Option<OutputMarker>,
+    screen: Option<vt100::Parser>,
 }
 
 impl PtyRecorder {
+    pub(crate) fn with_screen(rows: u16, cols: u16) -> Self {
+        Self {
+            output: Arc::new(Mutex::new(PtyOutput {
+                screen: Some(vt100::Parser::new(rows, cols, 0)),
+                ..Default::default()
+            })),
+        }
+    }
+
+    pub(crate) fn screen(&self) -> String {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .screen
+            .as_ref()
+            .expect("sized PTY recorder")
+            .screen()
+            .contents()
+    }
+
     pub(crate) fn watch_output(&self, needle: &[u8]) {
         self.output
             .lock()
@@ -198,6 +219,9 @@ impl PtyRecorder {
                 let mut output = output
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(screen) = &mut output.screen {
+                    screen.process(&buffer[..read]);
+                }
                 output.titles.extend(titles);
                 if let Some(marker) = &mut output.marker {
                     marker.feed(&buffer[..read]);
