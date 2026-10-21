@@ -14,7 +14,7 @@ cargo build -p rimz --bin rimz --features testkit
 
 `cargo xtask sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancestor <@handle>] [--] <command>` runs one command inside that held room. `--as` uses the agent's launch environment; `--as-ancestor` runs beneath its stub with no agent or pane keys, exercising caller detection by ancestry. Both need Linux. The cwd and identity flags may come in either order before the command. Use a qualified handle (`@coder#probe`) if the short form (`@coder`) is ambiguous.
 
-Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Use the ready-to-paste commands from your own card; the cards below record real runs, so their roots, pane IDs, and the long absolute `rimz` path (one machine's resolved `target/debug/rimz`) are not reusable.
+Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Paste the commands from your own card: its root, pane ids, and `rimz` path are particular to that room.
 
 A check that needs two rooms, such as a pane id addressed across rooms, starts the second inside the same sandbox. With `$BIN` the card's `rimz` path and `<mux>` the room's backend:
 
@@ -28,63 +28,34 @@ A command run with `--cwd "$ROOT/home/probe2"` resolves the second room. Plain `
 
 ## Room cards
 
-The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane and tab, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so use the pane id rather than counting blocks. The recorded cards below predate host-only painting and include retired producer/consumer labels; current cards omit those labels. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Each As line is a command prefix for that agent: append a RimZ command, or swap `--as` for `--as-ancestor` to exercise ancestry. Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
+The card names the sandbox root, the room's private multiplexer and session, and the team's checkout (Worktree). One Sidebar block follows per sidebar pane, each with its tab and three commands: Look, Capture, and Click. A standard room has three: the daemon tab, a shell tab, and the team's `#probe` tab. A tab can carry more than one sidebar pane, so address a sidebar by its pane id, not by counting blocks. Role lines map each agent to its pane and process id (`pid -` when the multiplexer reported none). Each As line is a command prefix for that agent: append a RimZ command, or swap `--as` for `--as-ancestor` to exercise ancestry. Stage and Owner give the initial board state, Flip moves the stage to Review, and Focus reads focus from the multiplexer.
 
-### tmux
+A tmux card has this shape, with one block shown per line kind (`<root>`, `<session>`, `<bin>`, and the pane ids come from your room):
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-FYlgGi
-Mux: tmux  Session: room-fdab
-Worktree: /tmp/rimz-sandbox-FYlgGi/home/room-worktrees/probe
-Sidebar: tmux:%3  Tab: rimzd  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%3'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%3' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Sidebar: tmux:%0  Tab: zsh  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%0'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Sidebar: tmux:%9  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%9'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%9'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%9' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  tmux:%6  pid 2593482
-  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' --as '@coder#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux
-Role: @reviewer#probe  tmux:%8  pid 2593536
-  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' --as '@reviewer#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux
+Sandbox root: <root>
+Mux: tmux  Session: <session>
+Worktree: <root>/home/room-worktrees/probe
+Sidebar: tmux:<pane>  Tab: <tab>
+  Look: target/debug/xtask sandbox in '<root>' -- '<bin>' '--tmux' 'pane' 'focus' 'tmux:<pane>'
+  Capture: target/debug/xtask sandbox in '<root>' -- '<bin>' --tmux pane capture 'tmux:<pane>'
+  Click: target/debug/xtask sandbox in '<root>' -- '<bin>' --tmux sidebar click 'tmux:<pane>' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+Role: @coder#probe  tmux:<pane>  pid <pid>
+  As: target/debug/xtask sandbox in '<root>' --as '@coder#probe' -- '<bin>' --tmux
 Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- tmux -S '/tmp/rimz-sandbox-FYlgGi/runtime/rimz/tmux/server' display -p '#{pane_id}'
+Flip: target/debug/xtask sandbox in '<root>' -- '<bin>' --tmux teams flip Review 'live check' --team forge
+Focus: target/debug/xtask sandbox in '<root>' -- tmux -S '<root>/runtime/rimz/tmux/server' display -p '#{pane_id}'
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
-### Zellij
+A Zellij card differs in two lines. Look switches the client to the sidebar's tab, and Focus lists every pane:
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-wsZYXO
-Mux: zellij  Session: room-1828
-Worktree: /tmp/rimz-sandbox-wsZYXO/home/room-worktrees/probe
-Sidebar: zellij:terminal_0  Tab: rimzd  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '1'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Sidebar: zellij:terminal_4  Tab: zsh  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '2'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_4'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_4' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Sidebar: zellij:terminal_6  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_6'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_6' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  zellij:terminal_7  pid 2600984
-  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' --as '@coder#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij
-Role: @reviewer#probe  zellij:terminal_8  pid 2600987
-  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' --as '@reviewer#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij
-Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- zellij --session 'room-1828' action list-panes -a -j
-Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
+  Look: target/debug/xtask sandbox in '<root>' -- 'zellij' '--session' '<session>' 'action' 'go-to-tab' '<tab number>'
+Focus: target/debug/xtask sandbox in '<root>' -- zellij --session '<session>' action list-panes -a -j
 ```
+
+Its pane ids read `zellij:terminal_<n>`, and every other command carries `--zellij` in place of `--tmux`.
 
 ## Seven checks
 
@@ -92,99 +63,39 @@ Run the sequence on both backends, using each room's own card.
 
 ### 1. First pane clock
 
-Run Look for one sidebar, then its Capture twice across a displayed clock-unit boundary: a second apart below a minute, a minute apart below an hour. The compact pipeline clock should advance. The recorded tmux producer advanced `24s -> 26s`, and the Zellij producer `15s -> 17s`.
+Run Look for one sidebar, then its Capture twice across a displayed clock-unit boundary: a second apart below a minute, a minute apart below an hour. The compact pipeline clock must advance.
 
 ### 2. Another pane clock and stage flips
 
-**2a.** Run Look for another sidebar, then its Capture twice across a displayed clock-unit boundary. Its pipeline clock should also advance: the recorded tmux consumer showed `40s -> 42s`, and the Zellij consumer `30s -> 33s`. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
+**2a.** Run Look for another sidebar, then its Capture twice across a displayed clock-unit boundary. Its pipeline clock must also advance. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
 
-**2b.** Keep that pane watched. Run the card's Flip, then repeat that pane's Capture and measure from the flip to the first frame showing `Review`. It must replace `Build` within 5 s. The real watched-consumer measurements were:
-
-```text
-   tmux:%3 Build -> Review after 1241 ms
-   zellij:terminal_4 Build -> Review after 2849 ms
-```
-
-This is the first `Review` frame read from the watched tmux consumer `tmux:%3`:
+**2b.** Keep that pane watched. Run the card's Flip, then repeat that pane's Capture and measure from the flip to the first frame showing `Review`. It must replace `Build` within 5 s. The pipeline line sits under the team's worktree group:
 
 ```text
- ⌘ room                                    ~/room
-
- ◎ 0                              ◇ 0 ↘ 0 ↗ 0 ◌ 0
- ¤ 2                                        $0.00
- ────────────────────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0            ⢿ 0   ☾ 0   ○ 2
-
  ⑂ probe · forge                           ≡ main
    ● ◉  Review                               0:13
- ○ coder
- ○ reviewer
-
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌○ zsh                                           ▐
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- ────────────────────────────────────────────────
-           Claude v9.9.9 · Claude Max
-  ▐▛███▜▌  ◎ 2  ◇ – ↘ – ↗ – ◌ –               $ –
- ▝▜█████▛▘ 5h  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
-   ▘▘ ▝▝   7d  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
-
-  ── Total: ─────────────────────────────────────
-  W: ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
-  M: ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
-  W: $0.00                               M: $0.00
-
-                                       ? for help
 ```
 
-**2c.** Keep the pane watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the update latency, the stage time, and the run total. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
+**2c.** Hold the room with `env -u NO_COLOR` (for example `env -u NO_COLOR cargo xtask sandbox room --mux <tmux|zellij> --for 15m`), or the ANSI capture carries no color. Keep the pane watched and record the earlier Build duration from the board ledger (the published `stage_prior_secs` carries the same interval). Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the update latency, the stage time, and the run total, all read from the watched pane's frames, not inferred from the publication. The pass rules:
 
-The 2026-09-25 flip-back check used `env -u NO_COLOR cargo xtask sandbox room --mux <backend> --for 15m` with the testkit build. Both ANSI captures retained a hollow Review dot with foreground `38;2;224;175;104` (the warm tone). Earlier Build time below is the ledger interval, also confirmed by the published `stage_prior_secs`; the clock and adoption latency were read from the watched consumer, not inferred from publication.
+- The Review dot is now hollow and warm (`warn`). Add `--ansi` to Capture to keep the dot's color, since a plain capture cannot prove tone. In the default theme the warm tone is foreground `38;2;224;175;104`.
+- The stage clock resumes Build's earlier duration plus the time since the return. It does not restart at zero.
 
-| Backend | Watched consumer | Earlier Build time | Review -> Build adoption | First resumed stage time and run total |
-| --- | --- | --- | --- | --- |
-| tmux | `tmux:%3` | 58 s | 1409 ms | `59s / 1m` |
-| Zellij | `zellij:terminal_0` | 65 s | 2034 ms | `1m / 1m` |
+Flip back to `Review` before checks 3 and 4.
 
 ### 3. Adoption on each tab
 
-For every Sidebar block, run its Look, then its Capture — repeating the Capture if the first frame is still the pre-Look one. Each tab must show `Review` within 5 s of Look. In the recorded runs the first capture already carried it: tmux at `22 ms`, `24 ms`, `24 ms` and `26 ms` after Look, Zellij at `38 ms` and `28 ms`. The third Zellij pane still showed `Build` at `22 ms` and carried `Review` on the next capture, which is what the repeat is for.
+For every Sidebar block, run its Look, then its Capture. Repeat the Capture while the frame is still the pre-Look one: a capture taken a few tens of milliseconds after Look can still show `Build`. Each tab must show `Review` within 5 s of Look.
 
 ### 4. Pipeline click routes to the owner
 
-On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows from zero to the pipeline line and set `ROOM_ROW` to that row; do not reuse a row from an earlier frame, since selection can shift rows. Run the card's Focus to record the starting focus, then its Click (`sidebar click <pane> 2 <row>`), then Focus again. The target must be the reviewer pane from the card.
+On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows from zero to the pipeline line and set `ROOM_ROW` to that row. Do not reuse a row from an earlier frame, since selection can shift rows. Run the card's Focus to record the starting focus, then its Click (`sidebar click <pane> 2 <row>`), then Focus again. The target must be the reviewer pane from the card's `Role: @reviewer#probe` line: on tmux, Focus prints that pane id, and on Zellij that pane joins the focused set in the `list-panes` output.
 
-The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%8`, matching `Role: @reviewer#probe  tmux:%8`. On Zellij, `8=forge.reviewer@#probe` joined the focused set, matching `Role: @reviewer#probe  zellij:terminal_8`.
-
-On Zellij the held room's attached client follows no focus sent from outside a pane, so `list-clients` and the active tab stay where they were after any click, a card click included. Prove a pane jump there from the target tab's focused set before and after the click (the sidebar pane leaves it and the target stays) and from the fused `focused_pane` in the renderer's fold trace. The client's tab switch itself needs a real attached session; tmux shows it through `list-clients`.
+On Zellij the held room's attached client follows no focus sent from outside a pane, so `list-clients` and the active tab stay where they were after any click, a card click included. Prove a pane jump there from the target tab's focused set before and after the click (the sidebar pane leaves it and the target stays) and from the fused `focused_pane` in the renderer's fold trace. The client's tab switch itself needs a real attached session. tmux shows it through `list-clients`.
 
 ### 5. Wheel glide
 
 On each backend, use an attached room with more cards than viewport rows (expand groups or shorten the terminal if needed). Focus the sidebar and wheel down, then up: the cards should glide over about a tenth of a second, and the scrollbar should follow the visible cards rather than jump ahead. Wheel again during a glide to check that it continues from the visible row without jumping back. Press a selection key during a glide: the glide should stop in one frame, revealing the new card only if none of it is visible. Click a visible card mid-glide and confirm that the pane it opens matches the card under the pointer.
-
-The recorded run glided from an idle sidebar on 16 ms paints on both backends: three tmux ticks went `off=8 → 6 → 4 → 2 → 1` over 20–99 ms, and three Zellij ticks went `off=7 → 5 → 3 → 1 → 0` over 30–96 ms. A selection key 35 ms into a glide snapped in one paint on both, and a click mid-glide focused the card under the pointer (tmux `cmd=more`, Zellij `terminal_28`).
 
 ### 6. Cross-tab click row
 
@@ -194,12 +105,12 @@ In `audit/focus.log.jsonl`, inspect the latest `push_handshake` records with `jq
 
 Also drive a rapid cross-tab burst from the one visible source sidebar, sending every click to that same renderer before its first jump dispatches. Do not alternate source sidebars: a destination is not held, so that misses input queued on the held source. Only the final cross-tab target should switch; a re-click on a same-tab card should focus without waiting for the pending jump. Use `click_delivery` and `jump_progress` to distinguish delivery, lease arming, and supersession from a missing handshake.
 
-A change to jump timing under load needs a loaded large room: an idle room of 100 tabs picks a push up in 1 to 44 ms, while a busy real room took 96 to 722 ms. On tmux, grow the held room past 100 tabs with a `tmux new-window -t <session>:` loop, then confirm with `rimz sidebar renderers --json` that one host serves a renderer per tab. Hold the load for the whole measurement with two generators run through `sandbox in --as`:
+A change to jump timing under load needs a loaded large room. As a scale reference, an idle room of 100 tabs picks a push up in about 1 to 45 ms, and a busy real room in about 100 to 700 ms: a room that still answers in idle times is not loaded enough. On tmux, grow the held room past 100 tabs with a `tmux new-window -t <session>:` loop, then confirm with `rimz sidebar renderers --json` that one host serves a renderer per tab. Hold the load for the whole measurement with two generators run through `sandbox in --as`:
 
 - four concurrent loops of `rimz sidebar notify-test '@reviewer#probe' --no-command --force-bell`, each pausing 80 ms after every send;
 - `command_changed` sidebar-event datagrams (`"v": "rimz.sidebar-event.v2"`, the room's workspace ID and session name, a shell pane and its command) sent 20 times a second to the host's `wake.sock` under the room's runtime directory.
 
-That reached about 45 to 55 events a second in the recorded runs. Compare `push_handshake` records from two builds under that same load rather than against an idle run. To hold a room on a fixed build while the checkout rebuilds, copy `debug/rimz` and `xtask` into a directory `P` as `P/debug/rimz` and `P/xtask`, and run every sandbox verb as `CARGO_TARGET_DIR=P P/xtask sandbox ...`: `sandbox` resolves `rimz` from `$CARGO_TARGET_DIR/debug`. The source sidebar reflows after a click, so a burst reads each later click's row from a capture taken after the previous click, not from one taken before the burst.
+Compare `push_handshake` records from two builds under that same load, never against an idle run. To hold a room on a fixed build while the checkout rebuilds, copy `debug/rimz` and `xtask` into a directory `P` as `P/debug/rimz` and `P/xtask`, and run every sandbox verb as `CARGO_TARGET_DIR=P P/xtask sandbox ...`: `sandbox` resolves `rimz` from `$CARGO_TARGET_DIR/debug`. The source sidebar reflows after a click, so a burst reads each later click's row from a capture taken after the previous click, not from one taken before the burst.
 
 ### 7. Failed focus
 
@@ -215,12 +126,11 @@ ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
 
 Expect one `sidebar host` line and one `sidebar serve` line per tab, never a child `serve` painter. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it.
 
-Three checks cover what a unit test cannot:
+Five checks cover what a unit test cannot:
 
 1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable. The successor host starts with no fold, so each sidebar paints the placeholder until its first fold arrives. When you time successive kills, wait more than 60 seconds between them. `RIMZ_TEST_SIDEBAR_STABLE_RUN_MS` shortens that window on a testkit build, but `sandbox room` strips every `RIMZ_*` variable from the room it holds, so it cannot be set there; space the kills instead. A kill that lands inside the previous host's first minute gets the doubled retry delay, not the 1 s first retry, and its timing measures the backoff.
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat leaves the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
 3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
-
 4. **Reload onto different bytes.** Start the held room with `target/debug/xtask sandbox room`, rather than `cargo xtask sandbox room`, so it does not hold Cargo's lock during the rebuild. Set `ROOT` and `BIN` from that room's card. Copy the running build before rebuilding if `BIN` names Cargo's output. The build-version override below changes embedded bytes and therefore the linker build identity; changing a runtime environment variable or touching a source file without changing its contents does not. A reload onto the build already painting restarts nothing (`rimz reload` prints `… already on the current build.`), which is why this check needs a second, different build.
 
    ```sh
@@ -250,7 +160,7 @@ Three checks cover what a unit test cannot:
 
 ## First frame of a new tab
 
-A new tab's sidebar seeds its first frame from the warm host's last delivered fold in memory ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. A cold host has no seed and paints the placeholder until its first fold. The seed is projected for the new pane. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the fold's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction; poll the new pane from the moment the tab opens to check the live backend too. Save each loop as a script under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since both need the room's environment. Each writes one file per non-blank capture, named by the milliseconds since the tab was opened.
+A new tab's sidebar seeds its first frame from the warm host's last delivered fold in memory ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. A cold host has no seed and paints the placeholder until its first fold. The seed is projected for the new pane. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the fold's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction. To check the live backend, poll the new pane from the moment the tab opens with one of the scripts below. Save it under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since it needs the room's environment. Each script writes one file per non-blank capture, named by the milliseconds since the tab was opened.
 
 tmux, given the room's tmux socket, its session, and an output directory:
 
@@ -291,9 +201,9 @@ while [ $i -lt 32 ]; do
 done
 ```
 
-The earliest file for the sidebar pane must already name the room's agents. Any selection must belong to the new tab, never the previous tab's pane. A seed from before the tab's birth must have no selection-open card and no `▌`, `▐`, `▎`, or `🮇` cells. On Zellij, the root pid lets the producer derive the new shell's command and cwd before admission: the shell is a row in the roster publication, and its selection and group lane appear on the first fold of that publication, not after a later command wake. tmux continues to seat within tens of milliseconds of the tab opening. Capture the whole interval, not just the settled frame; the 32-iteration loop above spans about three seconds.
+Capture the whole interval, not just the settled frame: the 32-iteration Zellij loop spans about three seconds. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and takes about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely.
 
-Attribute the captures with the [focus trace](../internals/diagnostics.md#where-diagnostics-land), not just the final screen. Set `FOCUS_LOG` to the room's persistent `audit/focus.log.jsonl` (the state directory is printed by `rimz paths`), and `INSTANCE_ID` to the new sidebar's instance from the testkit command `rimz sidebar renderers`. Record `START_MS=$(date +%s%3N)` immediately before running the capture script and `END_MS=$(date +%s%3N)` immediately after it. Run this where the log is readable; keep earlier publications in the input so a seed can correlate to its pre-tab frame:
+Attribute the captures with the [focus trace](../internals/diagnostics.md#where-diagnostics-land), not just the final screen. Set `FOCUS_LOG` to the room's persistent `audit/focus.log.jsonl` (the state directory is printed by `rimz paths`), and `INSTANCE_ID` to the new sidebar's instance from the testkit command `rimz sidebar renderers`. Record `START_MS=$(date +%s%3N)` immediately before running the capture script and `END_MS=$(date +%s%3N)` immediately after it. Run this where the log is readable, and keep earlier publications in the input so a seed can correlate to its pre-tab frame:
 
 ```sh
 jq -s --arg instance "$INSTANCE_ID" --argjson start "$START_MS" --argjson end "$END_MS" '
@@ -313,11 +223,20 @@ jq -s --arg instance "$INSTANCE_ID" --argjson start "$START_MS" --argjson end "$
 ' "$FOCUS_LOG"
 ```
 
-Each output pairs a `fold_decided` with the latest `frame_published` whose `produced_at_ms` is at or below the fold's `panes_produced_at_ms`. Equality is not required: identical publications and folds append no record. Pass only if every `baseline` and `selected_after` is absent or names a pane in the new tab, and every publication from the roster growing (`pane_count` increases) until the first later one with `focus_origin: session_focus` names the new shell, has no `focused_pane`, or keeps the pre-growth focus with `focus_origin: prior` and `client_sample_withheld: true`. A `client_view` or `session_focus` publication naming the pre-tab pane in that span fails. A seed can rest on a pre-tab publication naming the old pane, but must seat nothing. Read `source`, `phase`, `focus_origin`, and `fused_event_sent_at_ms` beside the captures to distinguish publication truth from an event-fused decision. A missing correlated publication needs the earlier log, not an assumption that the fold was correct.
+Each output pairs a `fold_decided` with the latest `frame_published` whose `produced_at_ms` is at or below the fold's `panes_produced_at_ms`. Equality is not required: identical publications and folds append no record. A missing correlated publication needs the earlier log, not an assumption that the fold was correct. Read `source`, `phase`, `focus_origin`, and `fused_event_sent_at_ms` beside the captures to tell publication truth from an event-fused decision.
 
-For each new Zellij tab, the new attachment's first `fold_decided` with `panes_produced_at_ms` at or after the roster growth must carry `baseline` and `selected_after` naming the new shell. Also inspect every already-open attachment over the same window: none may append a fold with `selected_before` set and `selected_after` absent, including idle selections past the six-row cap. Read one new shell's `/proc/<pid>/cmdline` to confirm its argv[0] is the shell path rather than a login name starting with `-`, and check `audit/diag.log.jsonl` for `newborn_quarantined`, expected absent for these shells. A missing root pid or unreadable process entry retains the wait for Zellij's command/cwd events. Save the room's whole `audit/` directory beside the run report, not only `focus.log.jsonl`: row admission is recorded in `audit/diag.log.jsonl` and `audit/binding.log.jsonl`, and the focus trace cannot say why a pane had no row. When a record fails the pass rule, repeat the same script on a build of the branch's merge-base and report both runs, so the failure is tagged as introduced or already on the trunk. A failure that the merge-base build reproduces is already on the trunk: report it as an advisory in the PR and do not block the change on it. A failure that only the branch shows blocks.
+The run passes when all of these hold:
 
-A stale seed is a race, so one tab proves little: the recorded tmux failure was 1 tab in 18. Wrap the tmux script in a loop that opens 18 tabs and keeps each tab's window and new pane ids beside its captures. Given the tmux script's path, the socket, the session, and an output directory:
+1. **Captures.** The earliest file for the sidebar pane already names the room's agents. Any selection belongs to the new tab, never the previous tab's pane. A seed from before the tab's birth has no selection-open card and no `▌`, `▐`, `▎`, or `🮇` cells.
+2. **Folds.** Every `fold_decided` has `baseline` and `selected_after` absent or naming a pane in the new tab. A seed can rest on a pre-tab publication that names the old pane, but then it seats nothing: a seed resting on a fold older than the tab has `own_view: false`.
+3. **Publications.** Every `frame_published` from the roster growth (`pane_count` increases) up to the first later `focus_origin: session_focus` publication that names the new shell, either names the new shell, has no `focused_pane`, or keeps the pre-growth focus with `focus_origin: prior` and `client_sample_withheld: true`. A `client_view` or `session_focus` publication naming the pre-tab pane in that span fails.
+4. **Zellij seating.** The new attachment's first `fold_decided` with `panes_produced_at_ms` at or after the roster growth carries `baseline` and `selected_after` naming the new shell. No already-open attachment appends a fold with `selected_before` set and `selected_after` absent, including idle selections past the six-row cap. `audit/diag.log.jsonl` has no `newborn_quarantined` for these shells.
+
+Rule 4 depends on the root pid, which lets the producer derive the new shell's command and cwd before admission, so the shell is a row in the roster publication itself. Read one new shell's `/proc/<pid>/cmdline` to confirm its argv[0] is the shell path, not a login name starting with `-`. A missing root pid or unreadable process entry falls back to waiting for Zellij's command and cwd events. On tmux, expect the new tab to seat within tens of milliseconds of opening.
+
+Save the room's whole `audit/` directory beside the run report, not only `focus.log.jsonl`: row admission is recorded in `audit/diag.log.jsonl` and `audit/binding.log.jsonl`, and the focus trace cannot say why a pane had no row. When a record fails a rule, repeat the same script on a build of the branch's merge-base and report both runs. A failure that the merge-base build reproduces is already on the trunk: report it as an advisory in the PR and do not block the change on it. A failure that only the branch shows blocks.
+
+A stale seed is a race that has shown up about once in 18 tabs on tmux, so one tab proves little. Wrap the tmux script in a loop that opens 18 tabs and keeps each tab's window and new pane ids beside its captures. Given the tmux script's path, the socket, the session, and an output directory:
 
 ```sh
 #!/bin/sh
@@ -335,7 +254,7 @@ while [ $n -le 18 ]; do
 done
 ```
 
-Then judge every `fold_decided` in each tab's window, from every sidebar, with `OUT` that output directory and `FOCUS_LOG` as above:
+Then judge rule 2 for every `fold_decided` in each tab's window, from every sidebar, with `OUT` that output directory and `FOCUS_LOG` as above:
 
 ```sh
 for D in "$OUT"/tab*; do
@@ -356,11 +275,9 @@ done > "$OUT/folds.jsonl"
 jq -c 'select(.ok | not)' "$OUT/folds.jsonl"
 ```
 
-`ok` holds when the fold's `baseline` and `selected_after` are absent or name a pane the tab created, and a seed resting on a fold older than the tab has `own_view: false`. The run passes when the last command prints nothing and a warm host's `folds.jsonl` holds 18 records with `seed: true`, one per tab. This judges the folds only; the publication half of the pass rule above still reads the `frame_published` records.
+The 18-tab run passes when the last command prints nothing and a warm host's `folds.jsonl` holds 18 records with `seed: true`, one per tab. The judge covers rule 2 only: read rule 3 from the `frame_published` records with the first `jq` block.
 
-Two Zellij checks guard the neighbours of that rule, read from the same log. With focus resting on a pane, open and close a pane in another tab without moving focus (`zellij action new-pane --tab-id <n> --no-focus`, then `close-pane --pane-id <id>`): no `frame_published` moves `focused_pane` off the resting pane, and no attachment appends a `fold_decided`. Then switch between two existing tabs (`zellij action go-to-tab <n>`): no publication carries `client_sample_withheld`, and the destination sidebar's seating fold has `fused_event_sent_at_ms` set and lands before the `session_focus` publication that names the destination, under about 100 ms in a small room.
-
-A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and resolves about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely.
+Two Zellij checks guard the neighbours of these rules, read from the same log. With focus resting on a pane, open and close a pane in another tab without moving focus (`zellij action new-pane --tab-id <n> --no-focus`, then `close-pane --pane-id <id>`): no `frame_published` moves `focused_pane` off the resting pane, and no attachment appends a `fold_decided`. Then switch between two existing tabs (`zellij action go-to-tab <n>`): no publication carries `client_sample_withheld`, and the destination sidebar's seating fold has `fused_event_sent_at_ms` set and lands before the `session_focus` publication that names the destination, under about 100 ms in a small room.
 
 ## Inspect the data behind a card
 
@@ -427,23 +344,19 @@ target/debug/xtask sandbox in "$ROOT" -- "$PWD/target/debug/rimz" --tmux agents 
 jq -c '.agent.sub_agents[].tokens' /tmp/show.json
 ```
 
-`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the pane's Look then Capture, as in the five checks. The expected window is the newest assistant request in the child transcript, prompt side only:
+`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the pane's Look then Capture, as in the [seven checks](#seven-checks). The expected window is the newest assistant request in the child transcript, prompt side only:
 
 ```sh
 jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' "$ROOT/tmp/replay/$SESSION/subagents/agent-$CHILD.jsonl"
 ```
 
-In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`. The snapshot read `{"status":"running","tokens":{"window":121011}}`, then `{"status":"success","tokens":{"window":121011}}` after the stop; the `tokenCount` of 999999 did not replace it. The consumer's child line, running and stopped:
+The pass rules, read running and again after the stop:
 
-```text
-▌    ⢁ Explore · Replay occupancy check          ▐
-▌      ▤ 121k · Opus 5                      ◔ <1m▐
+- The snapshot's `tokens.window` equals that sum on both reads, and `status` moves from `running` to `success`. The payload's `tokenCount` of 999999 never replaces it.
+- `agents show --json` reports the same `tokens`.
+- The child line in the frame shows a spinner while running and `✓` after the stop, with a second line `▤ <window> · <model>`, the window abbreviated in thousands (`121k`).
 
-▌    ✓ Explore · Replay occupancy check     ◔ <1m▐
-▌      ▤ 121k · Opus 5                           ▐
-```
-
-The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). The 2026-09-26 run was on tmux; on 2026-10-07 the same recipe ran on Zellij with `--zellij` in place of `--tmux`.
+The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape: that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). The recipe runs on Zellij with `--zellij` in place of `--tmux`.
 
 **Quiet and stalled child.** To watch a native child go quiet and then stall, feed the first three payloads and leave the stop unfed. The child's entry shows plain runtime, the faced quiet clock from five minutes of silence, and `!` with `silent Nm` once `stalled_after_secs` has passed. Shorten that window before the feed by appending to the sandbox home's config:
 
@@ -451,7 +364,7 @@ The replay proves the adapter and renderer path from hook to frame. It does not 
 printf '[agents.attention]\nstalled_after_secs = 480\n' >> "$ROOT/home/.rimz/config.toml"
 ```
 
-`jq .attention.stalled_after_secs` on the snapshot confirms the room read it. One transcript pair replays once per room: a second copy fed to the room's other agent moved the session off the first card and its child arrived already `success`, so a second scenario takes a fresh room.
+`jq .attention.stalled_after_secs` on the snapshot confirms the room read it. One transcript pair replays once per room: a second copy fed to the room's other agent moves the session off the first card, and its child arrives already `success`, so a second scenario takes a fresh room.
 
 After SessionStart, the same `x()` helper also identifies the caller for commands such as `wait` ([Run a command as an agent](#run-a-command-as-an-agent)).
 
@@ -489,23 +402,18 @@ The room restarts the stub agent when its process is killed, so an agent leaves 
 
 Session-death recovery needs the same feed for every agent. The stub agents hold provisional session ids, which the producer leaves out of `records/live-roster.json`, so an unprimed room publishes an empty roster while its agents are alive and the next `rimz start` has nothing to recover. Feed one SessionStart per agent and wait for the roster to name them before ending the session.
 
-The feed exits 0 with no output. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries. Both backends resolved the caller to `@coder#probe`. These arming-line excerpts show `--as` followed by `--as-ancestor`, first on tmux:
+The feed exits 0 with no output, and it runs once per room: later `a` calls reuse the registered session. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries.
+
+On both backends, both `wait` calls must resolve the caller to `@coder#probe`. The arming lines read like this, `--as` first and `--as-ancestor` second (wait names are random):
 
 ```console
 armed wait-still-marker: check: true → @coder#probe
 armed wait-simple-lane: check: true → @coder#probe
 ```
 
-And on Zellij:
+This check proves caller resolution, not delivery of the wait's result to the agent. To inspect hook attribution, use `sidebar snapshot --json` and read the selected agent's `runtime_owner` under `agents`: `agents show --json` does not expose that field.
 
-```console
-armed wait-fair-nova: check: true → @coder#probe
-armed wait-kind-brook: check: true → @coder#probe
-```
-
-This check proves caller resolution, not wait completion. To inspect hook attribution, use `sidebar snapshot --json` and read the selected agent's `runtime_owner` under `agents`; `agents show --json` does not expose that field. Before the feed, both rooms still showed idle `○ coder` and `○ reviewer` rows, as before the serving stub.
-
-The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming; `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm. The feed only needs to run once per room; later `a` calls reuse the registered session. The run proved arming only, not delivery of the wait's result to the agent.
+The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming. `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm.
 
 ## Capture kitty graphics
 
@@ -515,10 +423,10 @@ Start the room with `env -u NO_COLOR`: with `NO_COLOR` set, pets and meters are 
 
 A held room shows no pet until one is configured. To check pixel pets, turn one on in the room's theme file, `$ROOT/home/.rimz/theme.toml`, under its `[theme.pets]` table (pets are a theme setting, so a `[pets]` table in `config.toml` does nothing): set `enabled = true`, `glyphs = "pixel"`, and `pet` to the path of a local 1536x1872 PNG sheet, which avoids a network fetch. The running sidebar picks the change up within a few seconds.
 
-Take `ROOT` and the session from your card (`Mux: tmux  Session: room-e5ac`). The machine usually has no `xterm-kitty` terminfo, so alias one from `xterm-256color` under the room's tmp. Then detach the room's rendering client (control-mode `1` lines are RimZ's own link; leave them), and attach a `script`-recorded client for 30 seconds, long enough for the sidebar's 10-second caps refresh to see it:
+Set `ROOT` and `SESSION` from your card's `Sandbox root:` and `Session:` values. The machine usually has no `xterm-kitty` terminfo, so alias one from `xterm-256color` under the room's tmp. Then detach the room's rendering client (control-mode `1` lines are RimZ's own link; leave them), and attach a `script`-recorded client for 30 seconds, long enough for the sidebar's 10-second caps refresh to see it:
 
 ```sh
-S="$ROOT/runtime/rimz/tmux/server" SESSION=room-e5ac
+S="$ROOT/runtime/rimz/tmux/server"
 t() { target/debug/xtask sandbox in "$ROOT" -- tmux -S "$S" "$@"; }
 mkdir -p "$ROOT/tmp/terminfo"
 infocmp -x xterm-256color | sed '1,/^xterm-256color|/s/^xterm-256color|/xterm-kitty|/' | tic -x -o "$ROOT/tmp/terminfo" -
@@ -528,20 +436,20 @@ target/debug/xtask sandbox in "$ROOT" -- sh -c "TERMINFO='$ROOT/tmp/terminfo' TE
 grep -ao $'\e_G[^;\e]*' "$ROOT/tmp/kitty.raw" | sed -E 's/i=[0-9]+/i=N/; s/[xy]=[0-9]+//g' | sort | uniq -c | sort -rn
 ```
 
-`detach-client -a` detaches every client except the one named, so name the rendering client directly as above. In the recorded run (2026-09-28, tmux 3.7c) the tally read:
+`detach-client -a` detaches every client except the one named, so name the rendering client directly as above. The tally has this shape, one line per distinct command with its count first (counts depend on the room):
 
 ```text
-   1536 _Ga=d,d=I,i=N,q=2
-      2 _Gm=0
-      2 _Ga=t,f=100,i=N,q=2,m=1
-      2 _Ga=p,U=1,i=N,p=1,c=38,r=1,q=2
+   <n> _Ga=d,d=I,i=N,q=2
+   <n> _Gm=0
+   <n> _Ga=t,f=100,i=N,q=2,m=1
+   <n> _Ga=p,U=1,i=N,p=1,c=38,r=1,q=2
 ```
 
-The `d=I` lines are the sweeps a sidebar makes over its leased id window before its first transmit; the `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Counts depend on the room. Drop `-o` and read the raw lines to see the actual ids.
+The `d=I` lines are the sweeps a sidebar makes over its leased id window before its first transmit. The `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Drop `-o` and read the raw lines to see the actual ids.
 
 ## Replay a kitty capture through Ghostty
 
-The tally above shows what RimZ sent, which does not prove how a terminal parsed it. A graphics fix that depends on ordering (two sidebars on one tmux client, say) is proven only at the consumer, so feed the `kitty.raw` from [Capture kitty graphics](#capture-kitty-graphics) through Ghostty's own stream and APC parser, and record the result of every kitty command. This harness proved the one-envelope-per-image fix in PR #627. On a capture of two `rimz list-pets` writers in one tmux window, Ghostty v1.3.1 read `errors=85` before the fix (41 `EINVAL: invalid data`, 39 `EINVAL: dimensions required`, 5 `ENOENT: image not found`) and `errors=0` after, over 4368 commands each.
+The tally above shows what RimZ sent, which does not prove how a terminal parsed it. A graphics fix that depends on ordering (two sidebars on one tmux client, say) is proven only at the consumer, so feed the `kitty.raw` from [Capture kitty graphics](#capture-kitty-graphics) through Ghostty's own stream and APC parser, and record the result of every kitty command.
 
 Check out the Ghostty tag under the room's tmp. Ghostty v1.3.1 builds with zig 0.15.2, which `uvx` fetches from PyPI, so no system zig is needed:
 
@@ -657,7 +565,7 @@ grep SUMMARY "$ROOT/tmp/kitty.results"
 awk -F 'result=' '/result=/ && $2 !~ /^OK/ { n[$2]++ } END { for (e in n) print n[e], e }' "$ROOT/tmp/kitty.results"
 ```
 
-The first build compiles Ghostty's test binary (1 minute 46 seconds on a machine whose zig package cache was already warm, longer when it must fetch Ghostty's dependencies); a rerun on another capture reuses it and takes seconds. Replay a capture from the base branch and one from your change, and compare the two `SUMMARY` lines: a clean replay reads `errors=0`. The harness parses a byte stream in one pass, so it covers Ghostty's parser and image storage, not the app's rendering, and it pins one Ghostty tag. Newer Ghostty can differ (on `main` a delete also cancels a half-received chunked image), so name the tag you replayed against.
+The first build compiles Ghostty's test binary, which takes about two minutes with a warm zig package cache and longer when it must fetch Ghostty's dependencies. A rerun on another capture reuses it and takes seconds. Replay a capture from the base branch and one from your change, and compare the two `SUMMARY` lines: a clean replay reads `errors=0`. The harness parses a byte stream in one pass, so it covers Ghostty's parser and image storage, not the app's rendering, and it pins one Ghostty tag. Newer Ghostty can differ (on `main` a delete also cancels a half-received chunked image), so name the tag you replayed against.
 
 ## Hibernate an agent
 
@@ -682,7 +590,7 @@ rimz trust grant --agents claude,codex
 rimz start --tmux
 ```
 
-Before you read any timing, confirm from the shell that sends the messages that `command -v rimz` prints the staged path and `rimz --version` prints the branch build. If a login shell's rc (a `~/.zshrc` that prepends `~/.cargo/bin`, say) puts the installed `rimz` back first on `PATH`, the check silently runs the released binary. Once, that read as a false park miss.
+Before you read any timing, confirm from the shell that sends the messages that `command -v rimz` prints the staged path and `rimz --version` prints the branch build. If a login shell's rc (a `~/.zshrc` that prepends `~/.cargo/bin`, say) puts the installed `rimz` back first on `PATH`, the check silently runs the released binary and its result can read as a failure of your change.
 
 A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set to a short path (a few characters under `/tmp`): socket paths under a long directory exceed the AF_UNIX limit and the room fails to start. The state root may be long.
 
@@ -775,7 +683,7 @@ print(json.dumps({"outcome": outcome}))
 
 Here `merged` is a synthetic routing result, not evidence that the real draft PR merged. The real sweep reads the PR but cannot merge it. Validate both profiles and the workflow before starting. Profiles need tools; omitting them fails validation. Do not add `skills: []` without the `Skill` tool.
 
-A login shell can reorder `PATH` after launch. The first provider did so despite the correct `RIMZ_BIN`. Create an executable `$LIVE_ROOT/agent-shell` with an absolute staging path substituted below:
+A login shell can reorder `PATH` after launch, even with `RIMZ_BIN` correct. Create an executable `$LIVE_ROOT/agent-shell` with an absolute staging path substituted below:
 
 ```text
 #!/bin/sh
@@ -846,17 +754,16 @@ BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/de
 ## Traps
 
 - A live check of anything the host, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
-- Look before capturing or clicking: an unwatched sidebar can hold a stale frame, because the renderer suppresses a dirty paint while the attached client is known to be looking elsewhere (`sidebar_pane/app/loop_state.rs` `dirty_paintable`). It is not a reliable negative control, so do not assert it: across runs an unwatched clock froze on tmux and on Zellij, and on one Zellij run it kept ticking.
-- Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` never moved the Zellij client: the sidebar stayed ~21 columns wide with its clock stopped at `0:00` until one `go-to-tab`, which widened it to 48 columns and resumed the clock.
+- Look before capturing or clicking: an unwatched sidebar can hold a stale frame, because the renderer suppresses a dirty paint while the attached client is known to be looking elsewhere (`sidebar_pane/app/loop_state.rs` `dirty_paintable`). It is not a reliable negative control, so do not assert it: an unwatched clock usually freezes on both backends but can keep ticking on Zellij.
+- Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` does not move the Zellij client: the sidebar stays narrow with its clock stopped at `0:00` until a `go-to-tab` widens it and resumes the clock.
 - A previously selected card stays held open, with its stats line and its subagent and wait entries, until collapsing it would no longer move the selected card, or until a wheel tick, unread-banner jump, or toggle releases it. A check of an unselected card's shape (a stale card's one line, a hidden subagents and waits line) releases the hold first; otherwise the held card reads as a shape that failed to change.
 - `sidebar click` is testkit-only. It sends an instance-addressed click through the host's room socket, exercising hit testing and focus routing but skipping terminal input and its parsing.
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
 - Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
-- To drive sidebar keys on Zellij, send them through the attached client (`tmux send-keys -t room-client` via `sandbox in`). The held room attaches in normal mode, where Zellij itself takes `Ctrl+n` and `Ctrl+p`: lock the client first with `tmux send-keys -t room-client C-g`. `zellij action switch-mode` and `focus-pane-id` did not change the attached client (its status bar stayed `NORMAL` and its keys kept landing in the agent pane), and `Alt+p` sent through the outer tmux client did not move focus. Focus the sidebar with `"$BIN" --zellij sidebar focus --toggle --session-name <session>`, the command the chord runs, and read the client's focused pane from `zellij --session <session> action list-clients`.
+- To drive sidebar keys on Zellij, send them through the attached client (`tmux send-keys -t room-client` via `sandbox in`). The held room attaches in normal mode, where Zellij itself takes `Ctrl+n` and `Ctrl+p`: lock the client first with `tmux send-keys -t room-client C-g`. `zellij action switch-mode` and `focus-pane-id` do not change the attached client (its status bar stays `NORMAL` and its keys keep landing in the agent pane), and `Alt+p` sent through the outer tmux client does not move focus. Focus the sidebar with `"$BIN" --zellij sidebar focus --toggle --session-name <session>`, the command the chord runs, and read the client's focused pane from `zellij --session <session> action list-clients`.
 - A relative program path passed directly to `sandbox in` resolves from your checkout. A path nested inside `env` or `sh -c` belongs to that command instead; pass the RimZ binary by absolute path in those cases.
 - Wrapping `sandbox room` in your own `bwrap` (to keep its files in a scratch directory) needs `--dev-bind /dev /dev`; without it the room exits before starting with `starting sandbox cleanup reaper` / `Permission denied (os error 13)`.
-- To live-check a signal emitter from an agent's shell tool, keep the emitting call alive until the run is recorded: `rz events emit <signal>; sleep 2; rz loop show <task> --json` in one call, with `rz` from [Run a command as an agent](#run-a-command-as-an-agent). An emit that ended its call recorded no run at all, while the same emit followed by the two-second wait delivered. The cause is not established; the guess is that the shell tool cleans up the emitter's detached child when the call returns. Judge delivery by the run record or `rimz message show <id>`, never by the emitter's `fired` count, which read the same both times.
-- A supervised loop check (`loop add <name> --in 1m --agent worker …`) needs the stub provider's hooks before the add: run `rimz hooks install claude` through `sandbox in` first. The held room starts without them, and `loop add` refuses an agent task whose provider hooks are missing, which otherwise costs a retry while the room's `--for` timer runs.
-- A held room starts without provider hooks: run `rimz hooks install <kind>` through `sandbox in` before launching any agent kind other than the room's stubs.
+- To live-check a signal emitter from an agent's shell tool, keep the emitting call alive until the run is recorded: `rz events emit <signal>; sleep 2; rz loop show <task> --json` in one call, with `rz` from [Run a command as an agent](#run-a-command-as-an-agent). An emit whose call ends at once can record no run at all. The cause is not established (possibly the shell tool cleans up the emitter's detached child when the call returns). Judge delivery by the run record or `rimz message show <id>`, never by the emitter's `fired` count, which reads the same whether the run was recorded or not.
+- A held room starts without provider hooks: run `rimz hooks install <kind>` through `sandbox in` before launching any agent kind other than the room's stubs. A supervised loop check (`loop add <name> --in 1m --agent worker …`) needs `rimz hooks install claude` before the add, since `loop add` refuses an agent task whose provider hooks are missing, and the retry costs time on the room's `--for` timer.
 - The held stats view needs a terminal: a plain `rimz stats --refresh --hold` under `cargo xtask sandbox` exits `No such device or address (os error 6)`. Give it one with `script -qfc '<bin> stats --refresh --hold' <file>` inside the sandbox, with `<bin>` the RimZ binary by absolute path. To measure the spending service it elects, sample the owner's threads with `ls /proc/<pid>/task | wc -l`.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Ctrl-C or a signal to its whole process group also cleans the room, because the reaper runs outside that group. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep -x xtask`, not with `pkill -f <pattern>` or a loop over `pgrep -f <pattern>`: the pattern matches the invoking shell's own command line, so either kills the shell that ran it.
