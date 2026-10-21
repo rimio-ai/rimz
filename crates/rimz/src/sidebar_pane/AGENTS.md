@@ -34,6 +34,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the sidebar renderer: the
 - Resolve every color through a component token, `theme.component(Component::…)` in [`render/theme.rs`](./render/theme.rs), or a semantic accessor. The invariant rejects every named ratatui `Color` variant in render code — including the indexed and true-color constructors — leaving `Color::Reset` as the single literal a render file may name, so only the theme pipeline mints a color.
 - Resolve every glyph through `theme.glyph(GlyphRole::…)`, which the shared core in [`theme/`](../theme/mod.rs) owns. The invariant carries the banned-literal list, which is what keeps the legend and the frame in step.
 - The carrier layer is exempt: [`render/theme.rs`](./render/theme.rs) and its component tokens turn a tone into a ratatui color, and [`render/ansi.rs`](./render/ansi.rs) quantizes that carrier down for a limited terminal. Add a color or glyph there and name it by role everywhere else.
+- Measure the painted width of text the renderer did not format itself (a product name, a theme override, an account label) with `text_width` in [`render/layout.rs`](./render/layout.rs), never `chars().count()`: such text may hold wide or zero-width characters, and a budget counted in chars misplaces every cell and click target after them.
 
 ## Pets
 

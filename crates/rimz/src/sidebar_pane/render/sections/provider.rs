@@ -681,7 +681,7 @@ fn provider_tab_rail(
         let gap = if rendered > 0 { RAIL_STUB } else { 0 };
         let active = panel.login_key() == *active_kind;
         let label = panel.product_name.as_str();
-        let cells = label.chars().count() + 4;
+        let cells = provider_tab_cells(panel);
         if gap > 0 {
             spans.push(fill(gap));
             col += gap;
@@ -702,13 +702,16 @@ fn provider_tab_rail(
     block
 }
 
+fn provider_tab_cells(panel: &SidebarProviderPanel) -> usize {
+    text_width(&panel.product_name) + 4
+}
+
 fn selected_provider_tabs(
     providers: &[SidebarProviderPanel],
     active_kind: &crate::ids::LoginKey,
     width: usize,
     stub: usize,
 ) -> Vec<bool> {
-    let tab_cells = |panel: &SidebarProviderPanel| panel.product_name.chars().count() + 4;
     let active_index = providers
         .iter()
         .position(|panel| panel.login_key() == *active_kind);
@@ -718,14 +721,14 @@ fn selected_provider_tabs(
         && used < width
     {
         selected[index] = true;
-        used = (used + tab_cells(&providers[index])).min(width);
+        used = (used + provider_tab_cells(&providers[index])).min(width);
     }
     for (index, panel) in providers.iter().enumerate() {
         if Some(index) == active_index {
             continue;
         }
         let gap = RAIL_STUB * usize::from(selected.iter().any(|selected| *selected));
-        let cells = tab_cells(panel);
+        let cells = provider_tab_cells(panel);
         if used + gap + cells <= width {
             selected[index] = true;
             used += gap + cells;
