@@ -164,7 +164,7 @@ rimz agents 'claude/codex/term' -w feat-d      # one stack; focus opens a member
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named [team](./docs/guide/teams.md) in `~/.rimz/teams/<name>.md` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. A staged team tracks its progress on `blackboard.md` in the worktree, and `rimz teams flip` hands a stage to the next role. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) in `~/.rimz/teams/<name>.md` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. A staged team tracks its progress through `.rimz/team/blackboard.md`, linked into room state that survives worktree removal, and `rimz teams flip` hands a stage to the next role. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
 
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without a saved team
@@ -184,7 +184,7 @@ rimz agents attribution --md                          # credit the lane's agents
 # Park at the next turn boundary; address by kind, profile, or team role
 rimz message @claude "add coverage for the expiry edge cases"
 rimz message @planner "draft the implementation plan"
-rimz message @coder --after @planner "planner's done: read plan-notes.md and start"
+rimz message @coder --after @planner "planner's done: read .rimz/team/plan-notes.md and start"
 
 # Ask and print the reply from the agent's own context
 rimz message @coder --wait "did the migration land? one line"

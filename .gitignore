@@ -33,8 +33,7 @@ coverage/
 lcov.info
 
 # Agent Harness
-/blackboard.md
-/*-notes.md
+/.rimz/team
 plan.md
 result.md
 status.md

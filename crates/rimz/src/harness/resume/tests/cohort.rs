@@ -986,7 +986,8 @@ fn team_hold_table() {
         ),
     ];
     for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
-        let board_path = root.path().join("blackboard.md");
+        let board_path = root.path().join(".rimz/team/blackboard.md");
+        std::fs::create_dir_all(board_path.parent().unwrap()).unwrap();
         if let Some(board) = board {
             std::fs::write(&board_path, board).unwrap();
         } else if board_path.exists() {
@@ -1096,7 +1097,8 @@ fn channel_hold_table() {
         (vec![], Some("Stage: Build"), None),
     ];
     for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
-        let board_path = checkout.join("blackboard.md");
+        let board_path = checkout.join(".rimz/team/blackboard.md");
+        std::fs::create_dir_all(board_path.parent().unwrap()).unwrap();
         if let Some(board) = board {
             std::fs::write(&board_path, board).unwrap();
         } else if board_path.exists() {

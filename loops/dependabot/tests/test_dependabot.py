@@ -98,7 +98,7 @@ class CheckoutFixture(unittest.TestCase):
             git(self.root, "config", key, value)
         self.commit("initial")
         git(self.root, "push", "--quiet", "origin", "main")
-        (self.root / ".git" / "info" / "exclude").write_text("blackboard.md\n")
+        (self.root / ".git" / "info" / "exclude").write_text("/.rimz/team\n")
         self.rimz = FakeRimz(self.root)
         for name, value in (("ROOT", self.root), ("rimz", self.rimz)):
             patcher = patch.object(repair, name, value)
@@ -180,15 +180,16 @@ class CheckoutFixture(unittest.TestCase):
 
     def occupy_checkout(self, board="Stage: Done (@coder)\n"):
         repair.open_checkout(self.plan)
+        (self.tree() / ".rimz" / "team").mkdir(parents=True, exist_ok=True)
         if board is not None:
-            (self.tree() / "blackboard.md").write_text(board)
+            (self.tree() / ".rimz" / "team" / "blackboard.md").write_text(board)
         self.rimz.roster = [dict(handle="coder", team="spot", role="coder",
                                 placement=dict(branch="deps/repair-1", pane="tmux:%1", pr=None))]
         self.rimz.calls.clear()
 
     def test_surviving_pane_prevents_duplicate_launch_on_unfinished_lanes(self):
         self.occupy_checkout()
-        board_path = self.tree() / "blackboard.md"
+        board_path = self.tree() / ".rimz" / "team" / "blackboard.md"
         cases = [("Stage: Review (@reviewer)\n", []),
                  ("Stage: Done (@coder)\n", [replacement(10, [1])]),
                  (None, []), ("# No stage\n", []),

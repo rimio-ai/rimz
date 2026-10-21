@@ -362,7 +362,12 @@ mod tests {
     fn solo_seats_and_team_seats_compact_whatever_the_board_says() {
         let mut candidate = agent(AgentStatus::Idle, 6_000, 80_000);
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            root.path().join(".rimz/team/blackboard.md"),
+            "Stage: Done\n",
+        )
+        .unwrap();
         candidate.worktree_path = Some(root.path().to_string_lossy().into_owned());
         candidate.team = None;
         assert!(due(&candidate), "a solo seat reads no board");
@@ -370,13 +375,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         candidate.worktree_path = Some(root.path().to_string_lossy().into_owned());
         assert!(due(&candidate), "no board is live");
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
         std::fs::write(
-            root.path().join("blackboard.md"),
+            root.path().join(".rimz/team/blackboard.md"),
             "Stage: Review (@judge)\n",
         )
         .unwrap();
         assert!(due(&candidate));
-        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            root.path().join(".rimz/team/blackboard.md"),
+            "Stage: Done\n",
+        )
+        .unwrap();
         assert!(due(&candidate), "Done still compacts");
     }
 

@@ -419,8 +419,9 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
         snapshot.agents[0].pending_waits[2].trigger,
         PendingWaitTrigger::Team { stage: None }
     );
+    std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
     std::fs::write(
-        dir.path().join("blackboard.md"),
+        dir.path().join(".rimz/team/blackboard.md"),
         "Stage: Review (@reviewer)\n",
     )
     .unwrap();
@@ -441,7 +442,8 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
         }
     );
     assert_eq!(snapshot.agents[0].pending_waits[3], catalog_wait);
-    std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+    std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     Arc::make_mut(&mut snapshot.agents)[0].pending_waits.clear();
     project_run_waits(&mut snapshot, &paths);
     assert!(
@@ -451,7 +453,7 @@ fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
             .all(|wait| !matches!(wait.trigger, PendingWaitTrigger::Team { .. })),
         "a board at Done projects no team wait"
     );
-    std::fs::remove_file(dir.path().join("blackboard.md")).unwrap();
+    std::fs::remove_file(dir.path().join(".rimz/team/blackboard.md")).unwrap();
     for run in &mut runs {
         run.report_to = run::ReportTo::Nobody;
         run::write(&paths.runs_dir, run).unwrap();

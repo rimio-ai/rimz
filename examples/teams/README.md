@@ -18,20 +18,20 @@ The three bundles differ in their roles and their pipeline. Everything below is 
 
 **A pipeline of stages.** `<team>.md` declares an ordered `stages` list in its YAML frontmatter, and each role owns the stages its prompt names. A stage is an obligation to leave specific information behind, not a turn: the owner does the work, writes its product, then hands off. `rimz teams show <team>` displays the pipeline and brackets the current stage.
 
-**Memory in files, never in the chat.** Two kinds of file live at the worktree root, both git-excluded by default for a staged team and never committed, with no `scratch-files` setting needed:
+**Memory in files, never in the chat.** Two kinds of file live through `.rimz/team/`, a git-excluded link to the run's archive in room state. Removing the worktree keeps the archive, with no `scratch-files` setting needed:
 
-- `blackboard.md` is where you look to see where the run stands. It holds the `Stage:` line, the Goal, an append-only Decisions list, an append-only Progress section, and the Result.
-- `<stage>-notes.md` is one file per stage, written only by that stage's owner: `explore-notes.md`, `plan-notes.md`, `implement-notes.md`, `review-notes.md`, `reflect-notes.md`. The narrative lives here; the board carries state.
+- `.rimz/team/blackboard.md` is where you look to see where the run stands. It holds the `Stage:` line, the Goal, an append-only Decisions list, an append-only Progress section, and the Result.
+- `.rimz/team/<stage>-notes.md` is one file per stage, written only by that stage's owner: `.rimz/team/explore-notes.md`, `.rimz/team/plan-notes.md`, `.rimz/team/implement-notes.md`, `.rimz/team/review-notes.md`, `.rimz/team/reflect-notes.md`. The narrative lives here; the board carries state.
 
 Because state lives in the files and in git, a member that crashed, restarted, or compacted mid-run re-derives its position from the `Stage:` line and the Progress history and carries on.
 
-**One channel to you.** The leader (`@planner`, `@architect`, or `@coder`) is the only seat that talks to you: it restates your request as the board's Goal and raises the calls only you can make. The other roles end their turns silently and reach each other with short `rimz message` lines that point at a file (`plan-notes.md is ready, read and implement`), never with the content itself.
+**One channel to you.** The leader (`@planner`, `@architect`, or `@coder`) is the only seat that talks to you: it restates your request as the board's Goal and raises the calls only you can make. The other roles end their turns silently and reach each other with short `rimz message` lines that point at a file (`.rimz/team/plan-notes.md is ready, read and implement`), never with the content itself.
 
 **A blind review.** Every team's reviewer builds its own model of the change from the intent and the diff, with the implementer's report embargoed until its findings are drafted. Blocking findings go back to the coder, who fixes, pushes back with `file:line`, or refuses with a reason; two rounds, then the reviewer rules.
 
 **CI comes back to the coder.** Each fragment binds the `ci.failed` signal to its coder role, so a failing run after submission reaches the agent that can fix it, with its evidence, rather than whoever pushed.
 
-**The run ends in Reflect.** The final stage distills what the run learned into `reflect-notes.md`: a ranked list of fixes, each marked landed, proposed, or yours to decide. That file is the one to read before the next run.
+**The run ends in Reflect.** The final stage distills what the run learned into `.rimz/team/reflect-notes.md`: a ranked list of fixes, each marked landed, proposed, or yours to decide. That file is the one to read before the next run.
 
 ## Forge
 
@@ -42,7 +42,7 @@ Explore → Plan → Implement → Review → Submit → Reflect
 @planner   @planner  @coder    @reviewer  @reviewer  @planner
 ```
 
-- **@planner** (Claude, on Fable) is the leader. It aims the exploration, sizes the code through subagents, and designs the change with you at its gates, locking each decision into the board. `plan-notes.md` is its product and stays its file for the whole run: when an assumption breaks, the planner amends it and steers whoever is building on it.
+- **@planner** (Claude, on Fable) is the leader. It aims the exploration, sizes the code through subagents, and designs the change with you at its gates, locking each decision into the board. `.rimz/team/plan-notes.md` is its product and stays its file for the whole run: when an assumption breaks, the planner amends it and steers whoever is building on it.
 - **@coder** (Codex, on GPT) starts fresh from the plan: a clean window, the files named, the decisions already made. It treats the plan as a strong proposal rather than ground truth, takes a deviation the code justifies and records it with evidence, and stops only when a broken assumption invalidates a large part of the plan.
 - **@reviewer** (Claude, on Opus) is a third fresh window. It gates the pass on a clean tree, reviews the full merge-base diff blind, and then owns Submit: the PR body is synthesized from the board and the stage files, advisories included.
 
@@ -120,7 +120,7 @@ The `ci.failed` binding is armed when the coder registers and is scoped to its w
 
 `<team>.md` is the tuning surface: swap models, change effort or tools in a role's frontmatter, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the agent bodies, team body, and `roles` list together: the prompts carry their own roster table, and a role's `owns` column must keep matching `stages`.
 
-The team consensus is built into RimZ. The pipeline is the team definition's Markdown body, appended after the consensus. The memory patterns are `["/blackboard.md", "/*-notes.md"]`.
+The team consensus is built into RimZ. The pipeline is the team definition's Markdown body, appended after the consensus. The memory patterns are `[".rimz/team/blackboard.md", ".rimz/team/*-notes.md"]`. `scratch-files` adds extra checkout-local Git excludes only, not archived memory.
 
 Any of the three also makes a solid skeleton for a team of your own: copy the bundle, rename the team and its agent definitions, and reshape the roles to how your work splits. Validate it with `rimz agents validate`.
 

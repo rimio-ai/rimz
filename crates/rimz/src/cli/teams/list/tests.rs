@@ -276,12 +276,13 @@ fn catalog_projects_cohort_observability_by_worktree() {
     let second = root.path().join("second");
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
+    std::fs::create_dir_all(first.join(".rimz/team")).unwrap();
     std::fs::write(
-        first.join("blackboard.md"),
+        first.join(".rimz/team/blackboard.md"),
         "# Board\nStage: Implement (delta) (@coder)\n",
     )
     .unwrap();
-    std::fs::write(first.join("plan-notes.md"), "one\ntwo\nthree\n").unwrap();
+    std::fs::write(first.join(".rimz/team/plan-notes.md"), "one\ntwo\nthree\n").unwrap();
     let mut definition = team();
     // A staged team keeps the default memory files without declaring them.
     definition.stages = vec!["Plan".into(), "Implement".into()];
@@ -335,7 +336,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
         instance: instance.into(),
         to: to.into(),
         by: "planner".into(),
-        board: first.join("blackboard.md"),
+        board: first.join(".rimz/team/blackboard.md"),
         at: jiff::Timestamp::from_second(second).unwrap(),
         from: None,
         owner: None,
@@ -382,13 +383,14 @@ fn catalog_projects_cohort_observability_by_worktree() {
         ("Stage: Plan (@planner)\n", serde_json::json!(false)),
         ("Stage: Plan\n", serde_json::Value::Null),
     ] {
-        std::fs::write(second.join("blackboard.md"), board).unwrap();
+        std::fs::create_dir_all(second.join(".rimz/team")).unwrap();
+        std::fs::write(second.join(".rimz/team/blackboard.md"), board).unwrap();
         let projected = build(&snapshot);
         let json = serde_json::to_value(&projected[0].instances[1]).unwrap();
         assert!(json["stage"].get("owner_live").is_some());
         assert_eq!(json["stage"]["owner_live"], expected);
     }
-    std::fs::remove_file(second.join("blackboard.md")).unwrap();
+    std::fs::remove_file(second.join(".rimz/team/blackboard.md")).unwrap();
     assert_eq!(first_report.worktree.as_deref(), Some(first.as_path()));
     assert_eq!(first_report.branch.as_deref(), Some("branch-first"));
     assert_eq!(
@@ -1168,8 +1170,9 @@ fn human_catalog_prioritizes_attention_and_collapses_definitions() {
         let path = root.path().join(lane);
         std::fs::create_dir(&path).unwrap();
         let stage = if lane == "done" { "Done" } else { "Plan" };
+        std::fs::create_dir_all(path.join(".rimz/team")).unwrap();
         std::fs::write(
-            path.join("blackboard.md"),
+            path.join(".rimz/team/blackboard.md"),
             format!("Stage: {stage} (@planner)\n"),
         )
         .unwrap();
@@ -1192,7 +1195,7 @@ fn human_catalog_prioritizes_attention_and_collapses_definitions() {
             instance: format!("forge#{lane}"),
             to: stage.into(),
             by: "user".into(),
-            board: path.join("blackboard.md"),
+            board: path.join(".rimz/team/blackboard.md"),
             at: jiff::Timestamp::UNIX_EPOCH,
             from: None,
             owner: None,

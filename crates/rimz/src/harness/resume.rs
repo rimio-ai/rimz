@@ -1788,7 +1788,13 @@ fn materialize_team_restore_tab(
 
     let team = teams.0.get(&planned.team);
     if let Some(team) = team {
-        crate::worktree::exclude_team_scratch(&planned.cwd, &team.scratch_patterns());
+        super::team_notes::register(
+            store,
+            &planned.cwd,
+            &planned.team,
+            team,
+            super::team_notes::Launch::Resume,
+        )?;
     }
     let team_roles = team.map(|team| team.roles.as_slice());
     let mut resume_ancestries = planned.cohort.seeds.iter().filter_map(|seed| {

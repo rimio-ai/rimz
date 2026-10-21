@@ -53,7 +53,7 @@ Launch the team with the task in the same command. `-w` puts every member in a f
 $ rimz teams forge -w feat-rate-limits "add rate limiting to the ingest API"
 launched forge in worktree #feat-rate-limits
   path      /home/you/code/ingest-worktrees/feat-rate-limits
-  board     blackboard.md
+  board     .rimz/team/blackboard.md
   prompt    → @planner  "add rate limiting to the ingest API"
 
   @planner    claude  fable        <- leader
@@ -68,7 +68,7 @@ The whole team shares one channel, `#feat-rate-limits`, named after the worktree
 
 Each role is on the model that suits its stage:
 
-- **@planner** (Claude on Fable) is the seat that talks with you. It explores the code, settles the design choices with you, and writes the plan to `plan-notes.md`, on the deep model that holds a large design in view.
+- **@planner** (Claude on Fable) is the seat that talks with you. It explores the code, settles the design choices with you, and writes the plan to `.rimz/team/plan-notes.md`, on the deep model that holds a large design in view.
 - **@coder** (Codex on Astra) starts from that plan in a clean window, on a fast model that writes solid code once the details are pinned down. It checks the plan against the real code as it goes rather than trusting it.
 - **@reviewer** (Claude on Opus) is a third fresh window. It reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative.
 
@@ -111,8 +111,8 @@ forge#feat-rate-limits · working
 
   worktree:  /home/you/code/ingest-worktrees/feat-rate-limits
   isolation: host · shared ~/.rimz/ws/ingest-3f2a/shared
-  memory:    blackboard.md   41 lines · 2m ago
-             plan-notes.md  120 lines · 18m ago
+  memory:    .rimz/team/blackboard.md   41 lines · 2m ago
+             .rimz/team/plan-notes.md  120 lines · 18m ago
 
 …
 ```
@@ -138,14 +138,16 @@ An agent that launches a team need not run `wait` at all. Each time the board fl
 
 ## Hand off with one command
 
-A staged team keeps its state in files at the worktree root rather than in any one window, which is what lets a member that crashed, restarted, or compacted pick the run back up. `blackboard.md` is the board: the `Stage:` line, the goal, the decisions, an append-only progress ledger, and the result. Beside it sit the stage files the pipeline names, `plan-notes.md` and the rest. Both patterns (`/blackboard.md` and `/*-notes.md`) are registered in the repository's `.git/info/exclude` at launch and resume, so the files never show up in `git status` or a commit, and they are deleted with the worktree. Delete those lines to undo the exclusion.
+A staged team keeps its state in `.rimz/team/` rather than in any one window, so a member that crashed, restarted, or compacted can pick the run back up. `.rimz/team/blackboard.md` is the board: the `Stage:` line, the goal, the decisions, an append-only progress ledger, and the result. Beside it sit the stage files the pipeline names, `.rimz/team/plan-notes.md` and the rest. The directory is a symlink into this room's dated run archive under `~/.rimz/ws/<workspace-dir>/team-notes/`; `readlink .rimz/team` shows the run, whose `run.json` records the team, creation time, checkout, and any worktree provenance. Removing the checkout keeps the archive. The notes stay forever by default; [`gc.team_notes_retention`](./configuration.md#garbage-collection) can expire whole runs.
+
+Launch and resume register `/.rimz/team` in Git's effective `info/exclude`. For a team launched with `--cwd` in a subdirectory, they also register `/<subdirectory>/.rimz/team`, relative to the Git worktree root, so its link stays out of Git status too. A team's `scratch-files` adds extra excludes only: those files stay in the checkout and are not archived or listed as team memory. Put anything that must survive in `.rimz/team/`. Remove an exclude line to undo its Git exclusion; RimZ adds it again at the next launch or resume. If `.rimz/team` is a real file or directory, move it aside before relaunching. If `.rimz` itself is a symlink, seed it through `.worktreeinclude` rather than `.worktreelink`, or replace the link with a directory. A missing or dangling team link is repaired by relaunching or resuming, not by `flip` or `record`. Those commands refuse another team's run or a run without an owning team: stop the writing team, then resume it to recover its own run. Boards left at the checkout root by older versions are not migrated.
 
 A hand edit can race a stage flip. Add goals, decisions, and results with `rimz teams record Decisions "<what changed and why>"`: it locks the board, appends a timestamped entry under your role (or `user`), and prints a one-line receipt such as `recorded Decisions @user`. Use `--file PATH` or `--stdin` for longer entries; amending an existing line remains a direct edit without a lock. See [recording an entry](../reference/cli/teams.md#record-an-entry-on-the-board) for the input forms.
 
 Editing the board and separately messaging the next owner leaves two steps to forget. Once your stage's work is saved, hand it off with one command:
 
 ```sh
-rimz teams flip Implement "plan ready in plan-notes.md; three advisories carried in"
+rimz teams flip Implement "plan ready in .rimz/team/plan-notes.md; three advisories carried in"
 ```
 
 RimZ rewrites the board's `Stage:` line, appends the note to `## Progress` as a timestamped ledger entry, fires a `team.stage` signal for anything subscribed, and sends the new owner a prose `Type: STAGE` notice at its next turn boundary. The note says where the work stands; it is not a request to the receiver, and no separate message is needed. Run the command in the team's worktree, and add `--team NAME` if several teams live there. Stage names must match the definition exactly, so put qualifiers like "delta round" in the note.
@@ -192,7 +194,7 @@ The stages decide who is woken when. `leader` names the seat that receives the l
 
 Put shared provider instructions in the kind base `agents/<kind>.md`, each role's craft in its own profile, and the workflow the seats share in the team's body. RimZ composes them in that order, slipping one layer of its own, a built-in consensus on how teammates cooperate, between each role's craft and the team's body. You can read that consensus in the copy RimZ writes to `~/.rimz/teams/consensus.md` ([read-only](../reference/definitions.md#the-built-in-consensus-copy); editing it changes nothing).
 
-Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout. The leader starts with `rimz teams record Goal "<the request>"` to create `blackboard.md`, then flips to the first stage; a flip can also bootstrap a missing board. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
+Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout. The leader starts with `rimz teams record Goal "<the request>"` to create `.rimz/team/blackboard.md`, then flips to the first stage; a flip can also bootstrap a missing board. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
 
 ### Send events to the responsible role
 
@@ -226,9 +228,9 @@ rimz teams forge -w feat-rate-limits --fresh
 
 Name the worktree whenever the team has run in more than one. A prompt can ride along: `rimz teams resume forge 'Continue from the board'` queues your message to the leader after reopening. Model and effort overrides become the saved settings for later relaunches; an in-session `/model` switch is not carried, so restate it with `--model` on resume to keep it. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
 
-`fresh` starts new sessions in the same checkout when you want the work but not the conversations. The branch, the uncommitted changes, and the memory files all stay, and the new members are told which scratch files are already there so they can read the old run before acting.
+`fresh` starts new sessions in the same checkout when you want the work but not the conversations. The branch and uncommitted changes stay. It keeps the linked run and its memory files only when that run belongs to the same team and its board is not at `Done`; the new members see which files exist. Otherwise it links a new, empty run without changing the old archive. `resume` keeps the linked run only when it belongs to this team, including at `Done`, so members can continue a follow-up by flipping out of `Done`. Otherwise it restores this team's newest archived run for the same checkout, or opens a new one if none exists. `fresh` never restores an unlinked archive.
 
-Taking a team down is three steps, in this order. `rimz teams stop forge` closes every member and its subagents, and drops the signal subscriptions they armed. `rimz worktree remove feat-rate-limits` reclaims the checkout and its branch once the work has landed, taking the memory files with it ([worktrees](./worktrees.md#cleanup-once-work-lands)). Deleting `~/.rimz/teams/forge.md` retires the definition; profiles that other teams share can stay.
+Taking a team down is three steps, in this order. `rimz teams stop forge` closes every member and its subagents, and drops the signal subscriptions they armed. `rimz worktree remove feat-rate-limits` reclaims the checkout and its branch once the work has landed, leaving its archived memory files in room state ([worktrees](./worktrees.md#cleanup-once-work-lands)). Deleting `~/.rimz/teams/forge.md` retires the definition; profiles that other teams share can stay.
 
 ## See also
 

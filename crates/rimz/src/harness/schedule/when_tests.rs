@@ -182,7 +182,12 @@ fn unknown_membership_and_strict_inequality() {
             missing,
             "{input}"
         );
-        std::fs::write(scope.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        std::fs::create_dir_all(scope.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            scope.path().join(".rimz/team/blackboard.md"),
+            "Stage: Done\n",
+        )
+        .unwrap();
         let source = CiSource(PrStateCache {
             branch_ci: BTreeMap::from([(scope.path().display().to_string(), WorktreeCi::Passing)]),
             ..Default::default()
@@ -200,7 +205,7 @@ fn unknown_membership_and_strict_inequality() {
             known,
             "{input}"
         );
-        std::fs::remove_file(scope.path().join("blackboard.md")).unwrap();
+        std::fs::remove_file(scope.path().join(".rimz/team/blackboard.md")).unwrap();
     }
 }
 
@@ -415,7 +420,12 @@ fn readings_and_boolean_truth_include_unknown_negation() {
             "{input}"
         );
     }
-    std::fs::write(scope.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(scope.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        scope.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
     let cache = CiSource(PrStateCache {
         branch_ci: BTreeMap::from([(
             scope.path().to_string_lossy().into_owned(),

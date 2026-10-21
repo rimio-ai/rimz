@@ -419,8 +419,9 @@ mod tests {
         policy.teams.0.insert("mill".into(), toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}]").unwrap());
         let harness = HarnessConfig::default();
         for (stage, expected) in [("Implement", true), ("Done", false), ("Review", true)] {
+            std::fs::create_dir_all(board.path().join(".rimz/team")).unwrap();
             std::fs::write(
-                board.path().join("blackboard.md"),
+                board.path().join(".rimz/team/blackboard.md"),
                 format!("Stage: {stage}\n"),
             )
             .unwrap();
@@ -450,7 +451,12 @@ mod tests {
         let workspace = crate::WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         let board = tempfile::tempdir().unwrap();
-        std::fs::write(board.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        std::fs::create_dir_all(board.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            board.path().join(".rimz/team/blackboard.md"),
+            "Stage: Done\n",
+        )
+        .unwrap();
         let mut done = agent("claude", "done-1", Some("warm"), Some(10));
         done.team = Some("forge".into());
         done.role = Some("coder".into());

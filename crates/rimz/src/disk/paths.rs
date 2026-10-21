@@ -192,6 +192,7 @@ pub struct HistoryPaths {
 
 #[derive(Clone, Debug)]
 pub struct StatePaths {
+    home: PathBuf,
     empty_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
@@ -306,6 +307,10 @@ pub fn workflow_runs_under(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths
 }
 
 impl StatePaths {
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// The machine-wide parent used for empty-dir folder trust.
     pub fn empty_dir_root(&self) -> PathBuf {
         self.empty_root.clone()
@@ -408,6 +413,7 @@ impl StatePaths {
         let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
         Self {
+            home: home.to_owned(),
             empty_root: empty_dir_root_under(home),
             workspace_id,
             dir_name,

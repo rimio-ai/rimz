@@ -191,7 +191,9 @@ mod tests {
             });
             super::super::run::create(store.paths(), &record).unwrap();
             if done {
-                std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+                std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+                std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n")
+                    .unwrap();
             }
             assert_eq!(OwedWake::Team.as_str(), "team");
             assert_eq!(

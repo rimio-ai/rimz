@@ -231,7 +231,7 @@ impl FlipErr {
 
 pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     let owner = resolve_owner(request.team_name, request.team, request.to)?;
-    let locked = LockedBoard::open(request.store, request.worktree)?;
+    let locked = LockedBoard::open(request.store, request.worktree, Some(request.team_name))?;
     let worktree = locked.worktree.clone();
     let board = locked.path.clone();
     let text = &locked.text;
@@ -257,6 +257,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         team_name: request.team_name,
         channel: request.channel,
         members: request.members,
+        worktree: &worktree,
         board: &board,
         from: from.as_deref(),
         to: request.to,
@@ -347,7 +348,13 @@ fn with_rewake<T>(
     }
     // The board lock serializes the check below with the enqueue, so a wrapper and a
     // registration racing for one member cannot both find it un-woken.
-    let locked = LockedBoard::open(store, worktree)?;
+    let locked = match LockedBoard::open(store, worktree, Some(team_name)) {
+        Ok(board) => board,
+        Err(super::board::BoardErr::Unlinked(_) | super::board::BoardErr::WrongTeam { .. }) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
     let board = locked.path.clone();
     let text = &locked.text;
     let Some(stage) = parse_board_stage(text) else {
@@ -372,6 +379,7 @@ fn with_rewake<T>(
             team_name,
             channel: &channel,
             members,
+            worktree: &locked.worktree,
             board: &board,
             from: Some(&stage.name),
             to: &stage.name,
@@ -731,6 +739,7 @@ struct StageOpening<'a> {
     team_name: &'a str,
     channel: &'a str,
     members: &'a [AgentState],
+    worktree: &'a Path,
     board: &'a Path,
     from: Option<&'a str>,
     to: &'a str,
@@ -791,12 +800,10 @@ fn open_stage(
 
 fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<Delivery, FlipErr> {
     let Some(owner) = opening.owner else {
-        if let Some(root) = opening.board.parent()
-            && let Err(error) = crate::lsp::registry::stop_checkout(
-                root,
-                crate::lsp::registry::StopReason::TeamDone,
-            )
-        {
+        if let Err(error) = crate::lsp::registry::stop_checkout(
+            opening.worktree,
+            crate::lsp::registry::StopReason::TeamDone,
+        ) {
             tracing::debug!(%error, "failed to stop language servers at Done");
         }
         return Ok(Delivery::Terminal);
@@ -881,19 +888,21 @@ fn stage_open_body(
 ) -> String {
     let mut body = if rewake {
         format!(
-            "The team resumed at stage {to}, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+            "The team resumed at stage {to}, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops."
         )
     } else {
         match from {
             Some(from) if from == to => {
-                format!("@{by} re-opened {to}. It is still yours: pick it up from blackboard.md.")
+                format!(
+                    "@{by} re-opened {to}. It is still yours: pick it up from .rimz/team/blackboard.md."
+                )
             }
             Some(from) => format!(
-                "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from blackboard.md."
+                "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
             ),
             None => {
                 format!(
-                    "@{by} opened the stage {to}. {to} is yours: pick it up from blackboard.md."
+                    "@{by} opened the stage {to}. {to} is yours: pick it up from .rimz/team/blackboard.md."
                 )
             }
         }
@@ -924,7 +933,7 @@ fn uncommitted_paths(worktree: &Path) -> Result<Vec<String>, FlipErr> {
     let status = crate::proc::git_command(worktree)
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .args(["--", "."])
-        .arg(format!(":(exclude){}", super::board::BOARD_FILE))
+        .arg(format!(":(exclude){}", super::scratch::TEAM_LINK))
         .env("LC_ALL", "C")
         .output()
         .map_err(|source| FlipErr::Io {
@@ -1080,6 +1089,81 @@ mod tests {
 
     use super::*;
 
+    fn rewake_without_own_run(linked: bool) -> (bool, bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let id = crate::WorkspaceId::from_project_root(&checkout);
+        let state = crate::StatePaths::under(id.clone(), &temp.path().join("home")).unwrap();
+        let runtime = crate::RuntimePaths::for_state_under(&state, temp.path());
+        let store = Store::open(state, runtime).unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id: id,
+            project_root: checkout.clone(),
+            cwd_project_root: None,
+            root_class: crate::workspace::RootClass::Directory,
+            worktree_root: checkout.clone(),
+            worktree_branch: None,
+            session_name: "test".into(),
+            mux_hint: None,
+        };
+        let team: Team = toml::from_str(
+            "stages = ['Build']\n[[roles]]\nrole = 'coder'\nprofile = 'claude'\nowns = ['Build']",
+        )
+        .unwrap();
+        if linked {
+            super::super::team_notes::register(
+                &store,
+                &checkout,
+                "mill",
+                &team,
+                super::super::team_notes::Launch::Fresh,
+            )
+            .unwrap();
+            std::fs::write(
+                super::super::scratch::board_path(&checkout),
+                "Stage: Build (@coder)\n",
+            )
+            .unwrap();
+        }
+        let now = Timestamp::now();
+        let mut member = crate::testkit::agent_state("claude", "coder", now);
+        member.role = Some("coder".into());
+        let mut called = false;
+        let result = with_rewake(
+            &workspace,
+            &store,
+            "forge",
+            &team,
+            &member,
+            &[],
+            &checkout,
+            None,
+            now,
+            RewakeCause::Registration,
+            |_, _| {
+                called = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+        (result.is_none(), called)
+    }
+
+    #[test]
+    fn rewake_skips_an_unlinked_board() {
+        assert_eq!(rewake_without_own_run(false), (true, false));
+    }
+
+    #[test]
+    fn rewake_skips_another_teams_run() {
+        assert_eq!(
+            rewake_without_own_run(true),
+            (true, false),
+            "another team's board must not wake this member"
+        );
+    }
+
     #[test]
     fn stage_strip_matches_exact_names_and_includes_terminal() {
         let stages = vec!["Plan".into(), "Plan review".into()];
@@ -1108,11 +1192,11 @@ mod tests {
                 false,
                 None
             ),
-            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.\n\nNote: plan ready"
+            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: plan ready"
         );
         assert_eq!(
             stage_open_body(None, "Explore", "planner", Some("opened"), false, None),
-            "@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.\n\nNote: opened"
+            "@planner opened the stage Explore. Explore is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: opened"
         );
         assert_eq!(
             stage_open_body(
@@ -1123,11 +1207,11 @@ mod tests {
                 false,
                 None
             ),
-            "@user re-opened Implement. It is still yours: pick it up from blackboard.md.\n\nNote: retry"
+            "@user re-opened Implement. It is still yours: pick it up from .rimz/team/blackboard.md.\n\nNote: retry"
         );
         assert_eq!(
             stage_open_body(Some("Implement"), "Implement", "rimz", None, true, None),
-            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops."
         );
     }
 
@@ -1194,7 +1278,13 @@ mod tests {
         std::fs::write(repo.path().join("moved.rs"), "fn a() {}\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "init"]);
-        std::fs::write(repo.path().join("blackboard.md"), "Stage: Build\n").unwrap();
+        std::fs::create_dir_all(repo.path().join(".rimz")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), repo.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            repo.path().join(".rimz/team/blackboard.md"),
+            "Stage: Build\n",
+        )
+        .unwrap();
         assert!(uncommitted_paths(repo.path()).unwrap().is_empty());
         git(&["mv", "moved.rs", "renamed.rs"]);
         std::fs::create_dir(repo.path().join("src")).unwrap();
@@ -1299,7 +1389,7 @@ mod tests {
                 false,
                 Some("planner")
             ),
-            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.\n\nNote: plan ready\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
+            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: plan ready\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
         );
         assert_eq!(
             stage_open_body(
@@ -1310,7 +1400,7 @@ mod tests {
                 true,
                 Some("planner")
             ),
-            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
+            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops.\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
         );
     }
 }

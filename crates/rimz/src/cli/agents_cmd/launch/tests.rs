@@ -644,7 +644,7 @@ fn team_launch_receipt_marks_the_implicit_leader() {
     assert!(!output.contains("stages"));
     assert!(!output.contains("prompt"));
     assert!(!output.contains("branch"));
-    assert!(output.contains("  board     blackboard.md"));
+    assert!(output.contains("  board     .rimz/team/blackboard.md"));
     assert!(!output.contains("Reach:"));
 }
 

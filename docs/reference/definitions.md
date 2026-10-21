@@ -156,7 +156,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 
 Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
 
-Prompt order is kind base → ancestor crafts → seat craft → built-in consensus → team pipeline, separated by blank lines. Markdown teams do not expose custom consensus or scratch-file keys. Their staged workflow uses `/blackboard.md` and `/*-notes.md` as default ephemeral-memory patterns; see [teams](../guide/teams.md).
+Prompt order is kind base → ancestor crafts → seat craft → built-in consensus → team pipeline, separated by blank lines. Markdown teams do not expose custom consensus or scratch-file keys. Their staged workflow keeps its board and stage notes through `.rimz/team/`, a link to the run's archive in room state; see [teams](../guide/teams.md).
 
 ### The built-in consensus copy
 

@@ -476,7 +476,12 @@ fn team_files_finish_environment_after_bullets() {
     };
     for present in [false, true] {
         if present {
-            std::fs::write(worktree.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+            std::fs::create_dir_all(worktree.path().join(".rimz/team")).unwrap();
+            std::fs::write(
+                worktree.path().join(".rimz/team/blackboard.md"),
+                "Stage: Done\n",
+            )
+            .unwrap();
         }
         let text = render(
             &request,
@@ -485,7 +490,7 @@ fn team_files_finish_environment_after_bullets() {
             Some(Path::new("/bin/zsh")),
         );
         let listing = if present {
-            "blackboard.md"
+            ".rimz/team/blackboard.md"
         } else {
             "(no such files)"
         };
@@ -495,7 +500,7 @@ fn team_files_finish_environment_after_bullets() {
             )
         );
         assert!(text.contains(&format!(
-            "you name.\n\n```\n$ ls blackboard.md *-notes.md\n{listing}\n```\n</system_reminder>"
+            "you name.\n\n```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{listing}\n```\n</system_reminder>"
         )));
         assert_eq!(text.matches(worktree.path().to_str().unwrap()).count(), 1);
         assert_eq!(text.contains("[Done]"), present);
@@ -512,7 +517,14 @@ fn team_files_finish_environment_after_bullets() {
         "### Environment\n\n- cwd: {}\n- tmp: /tmp",
         worktree.path().display()
     )));
-    reminders.team.as_mut().unwrap().team.scratch_files = Some(Vec::new());
+    reminders
+        .team
+        .as_mut()
+        .unwrap()
+        .team
+        .roles
+        .iter_mut()
+        .for_each(|role| role.owns.clear());
     let text = render(
         &request,
         &reminders,

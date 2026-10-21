@@ -10,7 +10,7 @@ use crate::disk::{atomic, lock::WorkspaceLock};
 
 use super::scratch::is_atx_heading;
 
-/// File name of a team's board under its worktree root.
+/// File name of a team's board inside its archived run.
 pub const BOARD_FILE: &str = "blackboard.md";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +57,8 @@ impl std::str::FromStr for BoardSection {
 pub struct RecordRequest<'a> {
     pub store: &'a Store,
     pub worktree: &'a Path,
+    /// The writing team; an unscoped human entry uses the linked run's owner.
+    pub team: Option<&'a str>,
     pub section: BoardSection,
     pub by: &'a str,
     pub text: &'a str,
@@ -65,7 +67,7 @@ pub struct RecordRequest<'a> {
 
 pub fn record(request: RecordRequest<'_>) -> Result<(), BoardErr> {
     let entry = entry_line(request.now, request.by, request.text)?;
-    let board = LockedBoard::open(request.store, request.worktree)?;
+    let board = LockedBoard::open(request.store, request.worktree, request.team)?;
     let text = if board.text.is_empty() {
         "# Blackboard\n\n## Goal\n\n## Decisions\n\n## Progress\n\n## Result\n"
     } else {
@@ -164,6 +166,14 @@ pub(super) fn stamp(now: Timestamp) -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BoardErr {
+    #[error("no linked team run at {0}; relaunch or resume the team to link a run")]
+    Unlinked(PathBuf),
+    #[error("cannot write team notes at {link}: owning team is {owner}; {fix}")]
+    WrongTeam {
+        link: PathBuf,
+        owner: String,
+        fix: String,
+    },
     #[error("`{0}` belongs to `rimz teams flip`; record takes Goal, Decisions, or Result")]
     FlipSection(String),
     #[error("provide nonblank text for the board entry")]
@@ -190,10 +200,29 @@ pub(super) struct LockedBoard {
 }
 
 impl LockedBoard {
-    pub(super) fn open(store: &Store, worktree: &Path) -> Result<Self, BoardErr> {
+    pub(super) fn open(
+        store: &Store,
+        worktree: &Path,
+        team: Option<&str>,
+    ) -> Result<Self, BoardErr> {
         let worktree = canonical_worktree(worktree)?;
-        let path = worktree.join(BOARD_FILE);
         let lock = WorkspaceLock::acquire(&store.runtime_paths().board_lock(&worktree))?;
+        let run = super::scratch::run_dir(store.paths(), &worktree)
+            .ok_or_else(|| BoardErr::Unlinked(worktree.join(super::scratch::TEAM_LINK)))?;
+        let owner = super::scratch::run_team(&run);
+        if owner.is_none() || team.is_some_and(|team| owner.as_deref() != Some(team)) {
+            return Err(BoardErr::WrongTeam {
+                link: worktree.join(super::scratch::TEAM_LINK),
+                owner: owner.unwrap_or_else(|| "none".to_owned()),
+                fix: match team {
+                    Some(team) => format!(
+                        "run `rimz teams stop {team}`, then `rimz teams resume {team}` to relink this team's run"
+                    ),
+                    None => "relaunch or resume the team that should own this checkout to link its own run".to_owned(),
+                },
+            });
+        }
+        let path = run.join(BOARD_FILE);
         let text = read_board(&path)?;
         Ok(Self {
             worktree,
@@ -269,19 +298,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn record_requires_a_link_and_publishes_inside_the_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let id = crate::WorkspaceId::from_project_root(&checkout);
+        let state = crate::StatePaths::under(id, &temp.path().join("home")).unwrap();
+        let runtime = crate::RuntimePaths::for_state_under(&state, temp.path());
+        let store = Store::open(state, runtime).unwrap();
+        let run = store.paths().root.join("team-notes/run");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+        std::fs::create_dir(checkout.join(".rimz")).unwrap();
+        std::os::unix::fs::symlink(&run, checkout.join(".rimz/team")).unwrap();
+        let write = || {
+            record(RecordRequest {
+                store: &store,
+                worktree: &checkout,
+                team: None,
+                section: BoardSection::Goal,
+                by: "user",
+                text: "Keep this run",
+                now: Timestamp::now(),
+            })
+        };
+        write().unwrap();
+        assert!(
+            run.join("blackboard.md").is_file(),
+            "board writes belong to the archive"
+        );
+        assert!(!checkout.join("blackboard.md").exists());
+        std::fs::remove_file(checkout.join(".rimz/team")).unwrap();
+        let error = write().unwrap_err().to_string();
+        assert!(
+            error.contains(checkout.join(".rimz/team").to_str().unwrap())
+                && error.contains("resume"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn record_creates_full_template_and_appends_to_empty_board() {
         let root = tempfile::tempdir().unwrap();
         let id = crate::WorkspaceId::from_project_root(root.path());
         let state = crate::StatePaths::under(id.clone(), &root.path().join("state")).unwrap();
         let runtime = crate::RuntimePaths::under(id, &root.path().join("runtime")).unwrap();
         let store = Store::open(state, runtime).unwrap();
+        super::super::team_notes::register(
+            &store,
+            root.path(),
+            "forge",
+            &toml::from_str("stages = ['Plan']").unwrap(),
+            super::super::team_notes::Launch::Resume,
+        )
+        .unwrap();
         for empty in [false, true] {
             if empty {
-                std::fs::write(root.path().join("blackboard.md"), "").unwrap();
+                std::fs::write(super::super::scratch::board_path(root.path()), "").unwrap();
             }
             record(RecordRequest {
                 store: &store,
                 worktree: root.path(),
+                team: None,
                 section: BoardSection::Goal,
                 by: "user",
                 text: "Ship",
@@ -290,7 +368,7 @@ mod tests {
             .unwrap();
             let entry = entry_line(Timestamp::UNIX_EPOCH, "user", "Ship").unwrap();
             assert_eq!(
-                std::fs::read_to_string(root.path().join("blackboard.md")).unwrap(),
+                std::fs::read_to_string(super::super::scratch::board_path(root.path())).unwrap(),
                 format!(
                     "# Blackboard\n\n## Goal\n{entry}\n\n## Decisions\n\n## Progress\n\n## Result\n"
                 )
@@ -375,7 +453,8 @@ mod tests {
             let appended = append_section(board, heading, "- NEW");
             assert_eq!(appended, expected);
             let root = tempfile::tempdir().unwrap();
-            std::fs::write(root.path().join("blackboard.md"), &appended).unwrap();
+            std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+            std::fs::write(super::super::scratch::board_path(root.path()), &appended).unwrap();
             let section = heading.trim_start_matches("## ");
             assert!(
                 super::super::scratch::board_section(root.path(), section)
@@ -434,7 +513,8 @@ mod tests {
             super::super::scratch::parse_board_stage(original)
         );
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("blackboard.md"), &board).unwrap();
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+        std::fs::write(super::super::scratch::board_path(root.path()), &board).unwrap();
         assert_eq!(
             super::super::scratch::board_section(root.path(), "Goal"),
             Some(entry)
@@ -513,8 +593,9 @@ mod tests {
             now
         );
         let worktree = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(worktree.path().join(".rimz/team")).unwrap();
         std::fs::write(
-            worktree.path().join("blackboard.md"),
+            super::super::scratch::board_path(worktree.path()),
             format!("Stage: Done\n## Progress\n{line}\n"),
         )
         .unwrap();

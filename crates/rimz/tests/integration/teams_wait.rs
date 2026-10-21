@@ -66,6 +66,14 @@ impl Fixture {
     fn lane(&self, lane: &str) -> PathBuf {
         let worktree = self.env.project_root.join(lane);
         std::fs::create_dir_all(&worktree).unwrap();
+        rimz::harness::team_notes::register(
+            &self.env.store(),
+            &worktree,
+            "forge",
+            &toml::from_str("stages = ['Build']").unwrap(),
+            rimz::harness::team_notes::Launch::Resume,
+        )
+        .unwrap();
         for role in ["coder", "reviewer"] {
             self.seed(&format!("{role}-{lane}"), role, lane, &worktree);
         }
@@ -154,7 +162,13 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
         text(&missing.stderr).contains("forge#a: timed out after 1s at none; cohort left running")
     );
 
-    std::fs::write(worktree.join("blackboard.md"), "Stage: Build (@coder)\n").unwrap();
+    std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
+
+    std::fs::write(
+        worktree.join(".rimz/team/blackboard.md"),
+        "Stage: Build (@coder)\n",
+    )
+    .unwrap();
     let pending = fixture.run(&["forge", "-w", "a", "--timeout", "1s", "--json"]);
     assert_eq!(pending.status.code(), Some(124));
     let report: Value = serde_json::from_slice(&pending.stdout).unwrap();
@@ -174,7 +188,9 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
         text(&pending.stderr)
     );
 
-    std::fs::write(worktree.join("blackboard.md"), DONE_BOARD).unwrap();
+    std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
+
+    std::fs::write(worktree.join(".rimz/team/blackboard.md"), DONE_BOARD).unwrap();
     let done = fixture.run(&["forge#a"]);
     assert_eq!(done.status.code(), Some(0), "{}", text(&done.stderr));
     assert!(text(&done.stderr).is_empty(), "{}", text(&done.stderr));
@@ -189,14 +205,19 @@ fn wait_times_out_on_a_pending_board_and_settles_at_once_on_done() {
     assert_eq!(report["stage"], "Done");
     assert_eq!(
         report["board"],
-        worktree.join("blackboard.md").display().to_string()
+        worktree
+            .join(".rimz/team/blackboard.md")
+            .display()
+            .to_string()
     );
     assert_eq!(
         report["result"],
         "PR: https://example.test/pr/1\n- gate green"
     );
 
-    std::fs::write(worktree.join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(worktree.join(".rimz/team")).unwrap();
+
+    std::fs::write(worktree.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     let bare = fixture.run(&["forge#a"]);
     assert_eq!(bare.status.code(), Some(0));
     assert!(bare.stdout.is_empty());
@@ -216,7 +237,7 @@ fn wait_fails_when_the_cohort_ends_before_done() {
     // The board is a FIFO, so a write to it returns only once the waiter opens it to read.
     // The waiter reads its board after it selects the cohort, so the first write to return
     // is the earliest point the members can end without the wait refusing a dead cohort.
-    let board = worktree.join("blackboard.md");
+    let board = worktree.join(".rimz/team/blackboard.md");
     nix::unistd::mkfifo(&board, nix::sys::stat::Mode::S_IRWXU).expect("board fifo");
 
     let mut child = fixture
@@ -268,8 +289,14 @@ fn wait_joins_cohorts_and_races_them_with_any() {
     let fixture = Fixture::new();
     let a = fixture.lane("a");
     let b = fixture.lane("b");
-    std::fs::write(a.join("blackboard.md"), DONE_BOARD).unwrap();
-    std::fs::write(b.join("blackboard.md"), "Stage: Build (@coder)\n").unwrap();
+    std::fs::create_dir_all(a.join(".rimz/team")).unwrap();
+    std::fs::write(a.join(".rimz/team/blackboard.md"), DONE_BOARD).unwrap();
+    std::fs::create_dir_all(b.join(".rimz/team")).unwrap();
+    std::fs::write(
+        b.join(".rimz/team/blackboard.md"),
+        "Stage: Build (@coder)\n",
+    )
+    .unwrap();
 
     let join = fixture.run(&["forge#a", "forge#b", "--timeout", "1s", "--json"]);
     assert_eq!(join.status.code(), Some(124));
@@ -285,7 +312,9 @@ fn wait_joins_cohorts_and_races_them_with_any() {
         "--- forge#a ---\nPR: https://example.test/pr/1\n- gate green\n\n"
     );
 
-    std::fs::write(b.join("blackboard.md"), DONE_BOARD).unwrap();
+    std::fs::create_dir_all(b.join(".rimz/team")).unwrap();
+
+    std::fs::write(b.join(".rimz/team/blackboard.md"), DONE_BOARD).unwrap();
     let all = fixture.run(&["forge#a", "forge#b"]);
     assert_eq!(all.status.code(), Some(0), "{}", text(&all.stderr));
     let stdout = text(&all.stdout);

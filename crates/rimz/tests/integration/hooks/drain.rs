@@ -1687,8 +1687,16 @@ fn crash_redo_arms_the_registered_teams_subscription() {
         "leader: coder\nstages: [Build]\nroles:\n  - role: coder\n    agent: worker\n    owns: [Build]\n    signals: [{signal: probe.done, prompt: Continue.}]",
         "Complete the work.",
     );
+    rimz::harness::team_notes::register(
+        &env.store(),
+        &env.project_root,
+        "forge",
+        &toml::from_str("stages = ['Build']").unwrap(),
+        rimz::harness::team_notes::Launch::Resume,
+    )
+    .unwrap();
     std::fs::write(
-        env.project_root.join("blackboard.md"),
+        env.project_root.join(".rimz/team/blackboard.md"),
         "# Work\nStage: Build (@coder)\n",
     )
     .unwrap();
@@ -2057,8 +2065,16 @@ fn redo_after_crash_applies_each_frame_once() {
         "leader: coder\nstages: [Build]\nroles:\n  - role: coder\n    agent: worker\n    owns: [Build]",
         "Complete the work.",
     );
+    rimz::harness::team_notes::register(
+        &stage.store(),
+        &stage.project_root,
+        "forge",
+        &toml::from_str("stages = ['Build']").unwrap(),
+        rimz::harness::team_notes::Launch::Resume,
+    )
+    .unwrap();
     std::fs::write(
-        stage.project_root.join("blackboard.md"),
+        stage.project_root.join(".rimz/team/blackboard.md"),
         "# Work\nStage: Build (@coder)\n",
     )
     .unwrap();

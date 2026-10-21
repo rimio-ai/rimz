@@ -634,7 +634,7 @@ fn live_instances(
             .as_deref()
             .zip(team)
             .map(|(root, team)| {
-                rimz::harness::scratch::scan(root, &team.scratch_patterns())
+                rimz::harness::scratch::scan(root, &rimz::harness::scratch::memory_patterns(team))
                     .files
                     .into_iter()
                     .map(|file| MemoryReport {

@@ -166,7 +166,15 @@ done
     };
     hook("SessionStart");
     hook("UserPromptSubmit");
-    let board = env.project_root.join("blackboard.md");
+    rimz::harness::team_notes::register(
+        &env.store(),
+        &env.project_root,
+        "forge",
+        &toml::from_str("stages = ['Build', 'Review']").unwrap(),
+        rimz::harness::team_notes::Launch::Resume,
+    )
+    .unwrap();
+    let board = env.project_root.join(".rimz/team/blackboard.md");
     std::fs::write(
         &board,
         "# Work\nStage: Build (@coder)\n\n## Evidence\nKeep this.\n",
@@ -208,7 +216,7 @@ done
     );
     assert_eq!(
         pending[0].text,
-        "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: Inspect the receiver.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
+        "@user flipped the stage Build -> Review. Review is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: Inspect the receiver.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
     );
     let message_id = pending[0].message_id.clone();
     command()
@@ -279,7 +287,10 @@ done
     assert!(delivered.contains("Type: STAGE"), "{delivered}");
     assert!(delivered.contains("From: @rimz"), "{delivered}");
     assert!(!delivered.lines().any(|line| line.starts_with('{')));
-    assert!(delivered.contains("reread blackboard.md"), "{delivered}");
+    assert!(
+        delivered.contains("reread .rimz/team/blackboard.md"),
+        "{delivered}"
+    );
     assert!(store.list_pending_messages().unwrap().is_empty());
     assert_eq!(std::fs::read(&board).unwrap(), flipped_board);
 }

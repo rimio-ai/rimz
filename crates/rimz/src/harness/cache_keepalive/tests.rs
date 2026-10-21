@@ -465,8 +465,9 @@ roles = [
     seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
     let harness = HarnessConfig::default();
     for stage in ["Explore", "Plan", "Implement", "Done", "Review"] {
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
         std::fs::write(
-            root.path().join("blackboard.md"),
+            root.path().join(".rimz/team/blackboard.md"),
             format!("Stage: {stage}\n"),
         )
         .unwrap();
@@ -511,7 +512,8 @@ roles = [{role = "coder", profile = "claude"}]"#,
     let harness = HarnessConfig::default();
     for board in [None, Some("# Board\n"), Some("Stage: Implement\n")] {
         if let Some(board) = board {
-            std::fs::write(root.path().join("blackboard.md"), board).unwrap();
+            std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+            std::fs::write(root.path().join(".rimz/team/blackboard.md"), board).unwrap();
         }
         seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
         assert_eq!(
@@ -757,13 +759,19 @@ fn keep_warm_and_the_sleeping_path_both_continue_after_done() {
             ts(3540),
         )
     };
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
     std::fs::write(
-        root.path().join("blackboard.md"),
+        root.path().join(".rimz/team/blackboard.md"),
         "Stage: Review (@judge)\n",
     )
     .unwrap();
     assert!(due(&seat));
-    std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
     assert!(due(&seat), "a plain duration continues after Done");
     let mut sleeper = sleeping();
     sleeper.team = seat.team.clone();
@@ -845,7 +853,12 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
     seat.role = Some("coder".into());
     seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
     assert_eq!(holding(&seat, &on), Some(TWO_HOURS));
-    std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
     assert_eq!(
         holding(&seat, &on),
         Some(TWO_HOURS),

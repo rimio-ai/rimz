@@ -87,7 +87,7 @@ You run inside a RimZ room: `rimz` is on your `PATH`, and every teammate is reac
 `rimz agents list` shows who is live and their handles.
 
 ```bash
-rimz message @coder 'plan-notes.md is ready, read and implement'
+rimz message @coder '.rimz/team/plan-notes.md is ready, read and implement'
 ```
 
 Single quotes deliver the text literally, as one argument. The receipt is stamped with your name as sender, so never sign the text yourself.
@@ -118,16 +118,16 @@ Turn output is not delivery: an answer merely printed in your turn text never re
 ## Handing off the stage
 
 ```bash
-rimz teams flip Implement "plan ready in plan-notes.md; agreed scope recorded"
+rimz teams flip Implement "plan ready in .rimz/team/plan-notes.md; agreed scope recorded"
 ```
 
 One command carries the whole hand-off: it rewrites the board's `Stage:` line to `Stage: Implement (@coder)`, appends `- <date> <time> @<you>: Plan -> Implement — <note>` to the Progress section, and delivers a stage opening to the role configured to own that stage. On the first flip, a missing board or Stage line is created and the ledger says `opened <stage>` instead. Other board content stays intact, and no `rimz message` goes on top. Run the command in the team's worktree; use `--team NAME` only to choose among teams there.
 
-The stage name matches a declared one exactly, case included; whatever qualifies it — `delta round`, a file, a link — goes in the required positional progress note. RimZ does not enforce the pipeline's order, so flipping back to an earlier stage is how work reopens, and a mistaken flip is corrected by flipping to the stage you meant, both kept in the ledger. Flipping to a stage you own yourself sends no message: carry straight on. `rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"` closes the board and wakes no one.
+The stage name matches a declared one exactly, case included; whatever qualifies it — `delta round`, a file, a link — goes in the required positional progress note. RimZ does not enforce the pipeline's order, so flipping back to an earlier stage is how work reopens, and a mistaken flip is corrected by flipping to the stage you meant, both kept in the ledger. Flipping to a stage you own yourself sends no message: carry straight on. `rimz teams flip Done "reflection recorded in .rimz/team/reflect-notes.md; run complete"` closes the board and wakes no one.
 
 Delivery always parks at the owner's next turn boundary. An owner that is not live is not an error: the board and the ledger land, and RimZ wakes that owner once it comes up. A failure after the board write says which steps completed — run the same flip again to repeat the delivery. The effective `[harness] flip_compact` threshold, overridden by a role's `flip-compact` threshold or `"off"`, compacts your own context at its next turn boundary only when you leave a stage you own for one you do not and occupied context reaches the threshold. `Done` counts as not owned, and a non-live owner does not prevent compaction. Self-owned moves, same-stage re-fires, user flips, and flips of someone else's stage never compact. Compaction failures are skipped without failing the flip; re-read the board when the next turn opens.
 
-The opening lands in the owner's prompt as `Type: STAGE` from `@rimz`, with prose naming the flipper and transition, directing the owner to `blackboard.md`, and quoting the progress record as `Note: <note>`. A same-stage re-fire says the stage was re-opened and is still yours. Registration re-wakes say the team resumed, with no note; payload JSON belongs to the durable `team.stage` signal, not this notice.
+The opening lands in the owner's prompt as `Type: STAGE` from `@rimz`, with prose naming the flipper and transition, directing the owner to `.rimz/team/blackboard.md`, and quoting the progress record as `Note: <note>`. A same-stage re-fire says the stage was re-opened and is still yours. Registration re-wakes say the team resumed, with no note; payload JSON belongs to the durable `team.stage` signal, not this notice.
 
 ## Delegating to subagents
 

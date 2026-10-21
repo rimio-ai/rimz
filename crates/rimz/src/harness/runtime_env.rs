@@ -53,7 +53,7 @@ pub fn sample(submit: &PromptSubmit<'_>) -> Option<String> {
                 })
                 .ok()
         })
-        .map(|team| team.scratch_patterns())
+        .map(|team| scratch::memory_patterns(&team))
         .unwrap_or_default();
     render(&submit.workspace.worktree_root, &patterns)
 }

@@ -7,7 +7,7 @@ import json
 import pathlib
 import re
 
-path = pathlib.Path("reflect-notes.md")
+path = pathlib.Path(".rimz/team/reflect-notes.md")
 entries = []
 section = None
 if path.exists():
@@ -19,4 +19,4 @@ if path.exists():
             if not re.search(r"\[[^\]]+\]$", heading):
                 entries.append(heading)
 outcome = "none" if not entries else "needed" if all(re.match(r"(Bug fix|Test|Feature|Refactor|Docs):", entry) for entry in entries) else "unsure"
-print(json.dumps({"outcome": outcome, "reason": f"{len(entries)} unruled entries in reflect-notes.md"}))
+print(json.dumps({"outcome": outcome, "reason": f"{len(entries)} unruled entries in .rimz/team/reflect-notes.md"}))

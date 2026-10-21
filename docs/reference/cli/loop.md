@@ -109,7 +109,7 @@ Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A
 
 | Key | Values | Reading |
 | --- | --- | --- |
-| `team.stage` | `unknown`, `Done` and stages declared by any team in the effective configuration, case-sensitive | The scoped checkout's `blackboard.md` Stage line. |
+| `team.stage` | `unknown`, `Done` and stages declared by any team in the effective configuration, case-sensitive | The scoped checkout's `.rimz/team/blackboard.md` Stage line. |
 | `ci`, `ci[branch]` | `unknown`, `passed`, `failed`, `pending` | The room sidebar's last-known CI result. A live runnable condition keeps its checkout in the sidebar's probe set, with or without a pane; removing the task releases it. Without a sidebar source it is unknown, including under the external timer. |
 | `pr`, `pr[branch]` | `unknown`, `open`, `merged`, `closed` | The room sidebar's last-known PR state for the checkout or selected branch. Like `ci`, a live condition keeps its checkout probed without a pane. Unknown with no PR link or no sidebar source; branch CI alone does not imply a PR state. A PR in the merge queue, or removed from it, still reads `open`. |
 | `pr.queue`, `pr.queue[branch]` | `unknown`, `queued`, `dequeued`, `none` | The room sidebar's last-known merge-queue state for the checkout's or selected branch's open PR, GitHub only: `queued` while it is in the queue, `dequeued` once it has left the queue without merging, until it is queued again, merged, or closed. `none` for a PR that was never queued and for one that is merged or closed. Unknown with no PR link or no sidebar source. Pair it with `pr`: `pr=open && pr.queue=dequeued`. |
