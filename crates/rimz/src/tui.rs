@@ -212,6 +212,10 @@ pub fn truecolor() -> bool {
 }
 
 /// Write a buffered terminal frame with raw-mode-safe, self-clearing lines.
+///
+/// Each erase runs while the cursor is still at the start of its line: a line
+/// that fills the terminal leaves the cursor on its last cell, and an erase
+/// issued there clears that cell.
 fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     let mut start = 0;
     for (index, byte) in bytes.iter().enumerate() {
@@ -223,13 +227,14 @@ fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
         } else {
             index
         };
+        w.write_all(b"\x1b[K")?;
         w.write_all(&bytes[start..line_end])?;
-        w.write_all(b"\x1b[K\r\n")?;
+        w.write_all(b"\r\n")?;
         start = index + 1;
     }
+    queue!(w, terminal::Clear(terminal::ClearType::FromCursorDown))?;
     if start < bytes.len() {
         w.write_all(&bytes[start..])?;
-        w.write_all(b"\x1b[K")?;
     }
     Ok(())
 }
@@ -238,7 +243,6 @@ fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
 pub fn replace_frame(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     queue!(w, cursor::MoveTo(0, 0))?;
     write_crlf(w, bytes)?;
-    queue!(w, terminal::Clear(terminal::ClearType::FromCursorDown))?;
     w.flush()
 }
 
@@ -478,7 +482,7 @@ mod tests {
 
         write_crlf(&mut out, b"head\nrow\r\ntail").expect("write frame");
 
-        assert_eq!(out, b"head\x1b[K\r\nrow\x1b[K\r\ntail\x1b[K");
+        assert_eq!(out, b"\x1b[Khead\r\n\x1b[Krow\r\n\x1b[Jtail");
     }
 
     #[test]
@@ -487,7 +491,7 @@ mod tests {
 
         replace_frame(&mut out, b"head\nrow").expect("replace frame");
 
-        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\r\nrow\x1b[K\x1b[J");
+        assert_eq!(out.bytes, b"\x1b[1;1H\x1b[Khead\r\n\x1b[Jrow");
         assert_eq!(out.flushes, 1);
     }
 
@@ -497,7 +501,7 @@ mod tests {
 
         replace_frame(&mut out, b"head\n").expect("replace frame");
 
-        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\r\n\x1b[J");
+        assert_eq!(out.bytes, b"\x1b[1;1H\x1b[Khead\r\n\x1b[J");
         assert_eq!(out.flushes, 1);
     }
 
@@ -507,8 +511,31 @@ mod tests {
 
         replace_frame(&mut out, b"head").expect("replace frame");
 
-        assert_eq!(out.bytes, b"\x1b[1;1Hhead\x1b[K\x1b[J");
+        assert_eq!(out.bytes, b"\x1b[1;1H\x1b[Jhead");
         assert_eq!(out.flushes, 1);
+    }
+
+    #[test]
+    fn frame_replacement_preserves_full_width_lines_and_removes_stale_content() {
+        let mut terminal = vt100::Parser::new(4, 8, 0);
+        terminal.process(b"old-old!\r\nstale...\r\nremove!!\r\nmore...");
+        let mut out = RecordingWriter::default();
+
+        replace_frame(&mut out, b"12345678\nabcdefgX").expect("replace full-width frame");
+        terminal.process(&out.bytes);
+        assert_eq!(terminal.screen().contents(), "12345678\nabcdefgX");
+        assert_eq!(out.flushes, 1);
+
+        out.bytes.clear();
+        replace_frame(&mut out, b"new\n").expect("replace with shorter frame");
+        terminal.process(&out.bytes);
+        assert_eq!(terminal.screen().contents(), "new");
+        assert_eq!(terminal.screen().cursor_position(), (1, 0));
+
+        out.bytes.clear();
+        replace_frame(&mut out, b"").expect("clear frame");
+        terminal.process(&out.bytes);
+        assert_eq!(terminal.screen().contents(), "");
     }
 
     #[test]
