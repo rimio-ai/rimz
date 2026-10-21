@@ -65,11 +65,8 @@ pub struct LaunchPlan {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchPlanWarning {
-    #[error("{kind} sandbox wall is not guaranteed: {reason}")]
-    NativeSandboxBypass {
-        kind: crate::ids::AgentKind,
-        reason: &'static str,
-    },
+    #[error("sandbox isolation adds no sandbox flag for {kind}; launching as at host isolation")]
+    NoSandboxFlag { kind: crate::ids::AgentKind },
     #[error(
         "{kind} has no per-launch skill switch; profile skills are not enforced under host isolation"
     )]
@@ -702,12 +699,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         AgentProcessStage::Ready(process)
         | AgentProcessStage::LoginShellReentry { process, .. } => process,
     };
-    if inputs.isolation == Isolation::Sandbox
-        && let Some(reason) = adapter.native_sandbox_warning(&process.provider_argv)
-    {
-        warnings.push(LaunchPlanWarning::NativeSandboxBypass {
+    if inputs.isolation == Isolation::Sandbox && !adapter.has_native_sandbox() {
+        warnings.push(LaunchPlanWarning::NoSandboxFlag {
             kind: request.kind.clone(),
-            reason,
         });
     }
     let mut unset: BTreeMap<String, sandbox::EnvPin> = inherited_keys

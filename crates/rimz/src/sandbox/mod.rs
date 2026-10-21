@@ -60,8 +60,6 @@ impl TmpView {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxErr {
-    #[error(transparent)]
-    NativeSandbox(#[from] crate::blocker::Blocker),
     #[error("scoped isolation requires Linux; set agents.isolation = \"host\"")]
     UnsupportedOs,
     #[error(
@@ -254,57 +252,6 @@ pub fn preflight_launch(
     skills_configured: bool,
     manual: ManualSkill,
 ) -> Result<Option<PathBuf>, SandboxErr> {
-    if isolation == Isolation::Sandbox {
-        use crate::blocker::{Blocker, Surface};
-        let refusal = |problem: String| {
-            Blocker::new(problem)
-                .with_fix(
-                    "Launch with --isolation scoped",
-                    Some("rimz config set agents.isolation scoped".into()),
-                    Surface::Security,
-                )
-                .with_fix(
-                    "Launch with --isolation host",
-                    Some("rimz config set agents.isolation host".into()),
-                    Surface::Security,
-                )
-        };
-        let prerequisites = crate::agents::find_definition(kind.as_str())
-            .and_then(|adapter| adapter.native_sandbox_prerequisites())
-            .ok_or_else(|| refusal(format!("sandbox isolation is unsupported for {kind}; supported providers are Claude Code and Codex")))?;
-        #[cfg(target_os = "linux")]
-        {
-            for binary in prerequisites {
-                if which::which(binary).is_err() {
-                    return Err(refusal(format!(
-                        "{kind} sandbox isolation needs {binary} on PATH"
-                    ))
-                    .with_fix(
-                        format!(
-                            "Install {}",
-                            if *binary == "bwrap" {
-                                "bubblewrap (bwrap)"
-                            } else {
-                                binary
-                            }
-                        ),
-                        None,
-                        Surface::Plain,
-                    )
-                    .into());
-                }
-            }
-            if prerequisites.contains(&"bwrap") {
-                linux::probe().map_err(|error| refusal(error.to_string()).with_fix(
-                    "Check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy",
-                    None, Surface::Plain,
-                ))?;
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        let _ = prerequisites;
-        return Ok(None);
-    }
     if isolation.is_scoped() && skills_configured && manual == ManualSkill::Unsupported {
         return Err(SandboxErr::ManualSkillsUnsupported {
             kind: kind.to_string(),
@@ -327,7 +274,6 @@ impl From<SandboxErr> for crate::blocker::Blocker {
     fn from(error: SandboxErr) -> Self {
         use crate::blocker::Surface;
         let blocker = match error {
-            SandboxErr::NativeSandbox(blocker) => return blocker,
             SandboxErr::UnsupportedOs => Self::new("scoped isolation requires Linux"),
             SandboxErr::MissingBwrap => Self::new("scoped isolation needs bwrap on PATH")
                 .with_fix("Install bubblewrap", None, Surface::Plain),

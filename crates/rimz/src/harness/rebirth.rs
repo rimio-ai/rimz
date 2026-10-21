@@ -986,7 +986,7 @@ fn plan_recovery(
         agent_liveness,
     );
     let mut health = BTreeMap::new();
-    let mut sandbox = BTreeMap::new();
+    let mut sandbox = None;
     let shell_error = machine.agents.shell.as_deref().and_then(|shell| {
         crate::harness::launch::validate_agent_shell(shell)
             .err()
@@ -1018,15 +1018,11 @@ fn plan_recovery(
         if let Some(error) = error {
             return Some((ResumeSkipReason::AccountUnavailable, error.clone()));
         }
-        if isolation == crate::config::Isolation::Host {
+        if !isolation.is_scoped() {
             return None;
         }
         sandbox
-            .entry((
-                isolation,
-                (isolation == crate::config::Isolation::Sandbox).then(|| kind.clone()),
-            ))
-            .or_insert_with(|| {
+            .get_or_insert_with(|| {
                 crate::sandbox::preflight_launch(
                     isolation,
                     kind,

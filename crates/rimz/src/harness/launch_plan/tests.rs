@@ -44,9 +44,21 @@ fn compile_isolated_request(
 }
 
 #[test]
-fn provider_sandbox_settings_stamp_and_yolo_warning_follow_the_resolved_level() {
+fn provider_sandbox_settings_and_warnings_follow_the_resolved_level() {
     let project = tempfile::tempdir().unwrap();
-    for kind in ["claude", "codex"] {
+    for action in ["launch", "resume", "fork"] {
+        let invocation = request("codex", action_with_args(action, vec![]));
+        let plan =
+            compile_isolated_request(project.path(), &invocation, None, None, Isolation::Sandbox);
+        let argv = &plan.process().provider_argv;
+        let sandbox = argv
+            .windows(2)
+            .position(|pair| pair == ["--sandbox", "workspace-write"])
+            .expect("default sandbox mode on every action");
+        assert_eq!(argv[sandbox + 2], "-c");
+        assert!(argv[sandbox + 3].starts_with("sandbox_workspace_write.writable_roots="));
+    }
+    for kind in ["claude", "codex", "muse"] {
         for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
             for mode in [
                 crate::agents::PermissionMode::Auto,
@@ -66,28 +78,27 @@ fn provider_sandbox_settings_stamp_and_yolo_warning_follow_the_resolved_level() 
                 let warnings = plan
                     .warnings
                     .iter()
+                    .filter(|warning| !matches!(warning, LaunchPlanWarning::DefaultReminders))
                     .map(ToString::to_string)
                     .collect::<Vec<_>>();
-                let wall_warnings = warnings
-                    .iter()
-                    .filter(|warning| warning.contains("sandbox wall"))
-                    .collect::<Vec<_>>();
                 assert_eq!(
-                    wall_warnings.len(),
-                    usize::from(
-                        isolation == Isolation::Sandbox
-                            && mode == crate::agents::PermissionMode::Yolo
-                    ),
+                    warnings.len(),
+                    usize::from(isolation == Isolation::Sandbox && kind == "muse"),
                     "{kind} {isolation} {mode:?}: {warnings:?}"
                 );
-                if let Some(warning) = wall_warnings.first() {
+                if let Some(warning) = warnings.first() {
                     assert!(warning.contains(kind), "{warning}");
-                    if kind == "claude" {
-                        assert!(
-                            warning.contains("sandbox.allowUnsandboxedCommands = false"),
-                            "{warning}"
-                        );
-                    }
+                    assert!(warning.contains("no sandbox flag"), "{warning}");
+                    assert!(warning.contains("host"), "{warning}");
+                }
+                if kind == "muse" {
+                    assert_eq!(
+                        plan.process()
+                            .provider_argv
+                            .iter()
+                            .any(|arg| arg == "--disable-sandbox"),
+                        isolation.is_scoped()
+                    );
                 }
                 if kind == "claude" {
                     let settings = plan
@@ -106,12 +117,8 @@ fn provider_sandbox_settings_stamp_and_yolo_warning_follow_the_resolved_level() 
                         }
                     );
                     assert_eq!(
-                        settings["sandbox"]["failIfUnavailable"],
-                        if isolation == Isolation::Sandbox {
-                            true.into()
-                        } else {
-                            serde_json::Value::Null
-                        }
+                        settings["sandbox"].as_object().unwrap().len(),
+                        2 + usize::from(isolation != Isolation::Host)
                     );
                     assert_eq!(
                         settings["sandbox"]["enableWeakerNestedSandbox"],

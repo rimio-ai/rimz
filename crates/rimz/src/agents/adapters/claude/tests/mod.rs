@@ -14,26 +14,14 @@ mod local_context;
 mod subagents;
 
 #[test]
-fn native_sandbox_warns_for_all_bypass_permission_flags() {
-    for flags in [
-        vec!["--dangerously-skip-permissions"],
-        vec!["--permission-mode", "bypassPermissions"],
-        vec!["--permission-mode=bypassPermissions"],
-    ] {
-        let args = flags
-            .iter()
-            .map(|flag| (*flag).to_owned())
-            .collect::<Vec<_>>();
-        assert!(
-            ClaudeAdapter.native_sandbox_warning(&args).is_some(),
-            "{flags:?}"
-        );
-    }
-    for mode in ["default", "auto", "acceptEdits", "plan"] {
-        assert!(
-            ClaudeAdapter
-                .native_sandbox_warning(&["--permission-mode".into(), mode.into()])
-                .is_none()
+fn provider_native_sandbox_capability_is_declared() {
+    for (kind, expected) in [("claude", true), ("codex", true), ("muse", false)] {
+        assert_eq!(
+            crate::agents::find_definition(kind)
+                .unwrap()
+                .has_native_sandbox(),
+            expected,
+            "{kind}"
         );
     }
 }

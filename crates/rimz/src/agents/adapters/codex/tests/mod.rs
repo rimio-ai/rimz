@@ -742,7 +742,7 @@ fn host_room_grants_follow_the_users_permission_selection() {
 }
 
 #[test]
-fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layers() {
+fn provider_sandbox_defaults_only_without_a_selection_and_reads_profile_layers() {
     use crate::config::Isolation::{Host, Sandbox, Scoped};
     let home = tempfile::tempdir().unwrap();
     let config = home.path().join("config.toml");
@@ -756,40 +756,32 @@ fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layer
     let profile = "permissions.dev.workspace_roots=";
     for isolation in [Host, Scoped, Sandbox] {
         for (content, flags, expected, forced) in [
-            ("", vec![], legacy, false),
-            (
-                "sandbox_mode = 'danger-full-access'",
-                vec![],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
-            ),
+            ("", vec![], legacy, isolation == Sandbox),
+            ("sandbox_mode = 'danger-full-access'", vec![], "", false),
             (
                 "default_permissions = ':danger-full-access'",
                 vec![],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
-            ),
-            (
                 "",
-                vec!["--sandbox=danger-full-access"],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
+                false,
             ),
+            ("", vec!["--sandbox=danger-full-access"], "", false),
+            ("", vec!["-s", "danger-full-access"], "", false),
             (
                 "",
                 vec!["-c", "sandbox_mode='danger-full-access'"],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
+                "",
+                false,
             ),
             (
                 "",
                 vec!["--config=default_permissions=':danger-full-access'"],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
+                "",
+                false,
             ),
             ("sandbox_mode = 'read-only'", vec![], "", false),
             ("default_permissions = ':read-only'", vec![], "", false),
             ("", vec!["-s", "read-only"], "", false),
+            ("", vec!["--sandbox=workspace-write"], legacy, false),
             ("", vec!["--approve-for-me"], legacy, false),
             ("", vec!["--not-so-yolo"], legacy, false),
             (
@@ -799,6 +791,13 @@ fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layer
                 false,
             ),
             ("default_permissions = 'dev'", vec![], profile, false),
+            ("", vec!["--yolo"], "", false),
+            (
+                "",
+                vec!["--dangerously-bypass-approvals-and-sandbox"],
+                "",
+                false,
+            ),
             (
                 "sandbox_mode = 'danger-full-access'",
                 vec!["--dangerously-bypass-approvals-and-sandbox"],
@@ -814,8 +813,8 @@ fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layer
             (
                 "sandbox_mode = 'read-only'",
                 vec!["--profile=unsafe"],
-                if isolation == Sandbox { legacy } else { "" },
-                isolation == Sandbox,
+                "",
+                false,
             ),
             (
                 "sandbox_mode = 'danger-full-access'",
@@ -852,22 +851,16 @@ fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layer
             );
             assert_eq!(
                 args.windows(2)
-                    .any(|pair| pair == ["--sandbox", "workspace-write"]),
-                forced,
+                    .filter(|pair| *pair == ["--sandbox", "workspace-write"])
+                    .count(),
+                usize::from(forced),
                 "{isolation}, {content}, {flags:?}: {args:?}"
             );
-            if forced {
-                assert!(
-                    !args.iter().any(|arg| arg.contains("danger-full-access")),
-                    "{args:?}"
-                );
-            } else {
-                assert_eq!(
-                    &args[..flags.len()],
-                    flags,
-                    "user flags must survive: {args:?}"
-                );
-            }
+            assert_eq!(
+                &args[..flags.len()],
+                flags,
+                "user flags must survive: {args:?}"
+            );
             assert_eq!(
                 args.iter().any(|arg| arg.starts_with(legacy)
                     || arg.starts_with(profile)
@@ -877,6 +870,8 @@ fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layer
             );
             if !expected.is_empty() {
                 assert!(args.iter().any(|arg| arg.starts_with(expected)), "{args:?}");
+            } else {
+                assert_eq!(args, flags, "no grant or selector: {args:?}");
             }
         }
     }
@@ -935,13 +930,22 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
     ];
     let root_key = project.display().to_string();
     for (base_mode, project_mode, nested_mode, trust, flags, forced) in [
+        ("", "", "", "trusted", vec![], true),
+        (
+            "sandbox_mode = 'read-only'",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "untrusted",
+            vec![],
+            false,
+        ),
         (
             "sandbox_mode = 'read-only'",
             "sandbox_mode = 'danger-full-access'",
             "",
             "trusted",
             vec![],
-            true,
+            false,
         ),
         (
             "sandbox_mode = 'read-only'",
@@ -949,7 +953,7 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
             "",
             "trusted",
             vec![],
-            true,
+            false,
         ),
         (
             "",
@@ -965,7 +969,7 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
             "sandbox_mode = 'danger-full-access'",
             "trusted",
             vec![],
-            true,
+            false,
         ),
         (
             "",
@@ -973,7 +977,7 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
             "",
             "untrusted",
             vec![],
-            false,
+            true,
         ),
         (
             "",
@@ -997,7 +1001,7 @@ fn provider_sandbox_respects_trusted_project_permission_layers() {
             "",
             "trusted",
             vec!["--profile", "safe"],
-            true,
+            false,
         ),
         (
             "sandbox_mode = 'danger-full-access'",

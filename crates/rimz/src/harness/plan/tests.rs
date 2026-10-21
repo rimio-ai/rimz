@@ -3562,6 +3562,30 @@ fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
 }
 
 #[test]
+fn sandbox_parent_caps_a_no_switch_child_without_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let machine = MachineConfig::default();
+    let mut request = supervised_request("pi", "work");
+    request.subagent = true;
+    let caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    let (planned, _) = SupervisedPlan {
+        request: &request,
+        caller: Some(&caller),
+        lane: None,
+        parent_isolation: Some(crate::config::Isolation::Sandbox),
+        machine: &machine,
+    }
+    .run(dir.path());
+    let launch = planned.expect("sandbox child plan");
+    let cell = planned_cell(&launch);
+    assert_eq!(cell.kind.as_str(), "pi");
+    assert_eq!(
+        cell.launch.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
+}
+
+#[test]
 fn supervised_permission_cap_renders_and_records_only_the_parent_grant() {
     let dir = tempfile::tempdir().unwrap();
     let mut request = supervised_request("codex", "work");

@@ -232,18 +232,13 @@ upward-dependencies = ["address"]
 # PermissionMode::rank shares the grant order with the supervised child cap (+1).
 # Test fixtures share the native hook trust writer through trust_hook_config_for_test (+1).
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
-# LaunchCapability::native_sandbox_prerequisites and native_sandbox_warning declare provider launch needs (+2).
-surface-budget = 1105
+# LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
+surface-budget = 1104
 
 [[verdict]]
 kind = "item"
-key = "agents::capabilities::LaunchCapability::native_sandbox_prerequisites"
-reason = "Launch admission asks the provider whether native sandbox isolation exists and which Linux tools it needs."
-
-[[verdict]]
-kind = "item"
-key = "agents::capabilities::LaunchCapability::native_sandbox_warning"
-reason = "Launch and explain share the provider's native bypass warning without interpreting provider argv outside agents."
+key = "agents::capabilities::LaunchCapability::has_native_sandbox"
+reason = "Launch and definition validation share whether sandbox isolation adds a provider-native flag."
 
 [[verdict]]
 kind = "item"
