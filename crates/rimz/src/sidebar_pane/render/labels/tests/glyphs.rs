@@ -1,6 +1,6 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
-use crate::config::AnimationRole;
+use crate::config::{AnimationRole, GlyphRole};
 use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
 use crate::sidebar_pane::render::theme::Component;
 
@@ -56,41 +56,71 @@ fn card_emphasis_maps_attention_tiers() {
 #[test]
 fn elapsed_glyph_fills_by_the_quarter_of_its_ceiling() {
     let theme = Theme::fixed(false);
-    for (secs, glyph) in [
-        (0, "◔"),
-        (900, "◔"),
-        (901, "◑"),
-        (1800, "◑"),
-        (1801, "◕"),
-        (2700, "◕"),
-        (2701, "●"),
-        (3600, "●"),
-        (3601, "◉"),
-        (48 * 3600, "◉"),
-    ] {
-        assert_eq!(
-            elapsed_glyph(&theme, secs, 3600),
-            glyph,
-            "elapsed_glyph({secs}, 3600)"
-        );
+    for ceiling in [3600, 1800] {
+        for secs in [0, 1] {
+            assert_eq!(elapsed_glyph(&theme, secs, ceiling), "◔");
+        }
+        for (step, before, reached, after) in [
+            (ceiling / 4, "◔", "◔", "◔"),
+            (ceiling / 2, "◔", "◑", "◑"),
+            (ceiling * 3 / 4, "◑", "◕", "◕"),
+            (ceiling, "◕", "●", "◉"),
+        ] {
+            for (secs, glyph) in [(step - 1, before), (step, reached), (step + 1, after)] {
+                assert_eq!(
+                    elapsed_glyph(&theme, secs, ceiling),
+                    glyph,
+                    "elapsed_glyph({secs}, {ceiling})"
+                );
+            }
+        }
     }
-    for (secs, glyph) in [
-        (0, "◔"),
-        (450, "◔"),
-        (451, "◑"),
-        (900, "◑"),
-        (901, "◕"),
-        (1350, "◕"),
-        (1351, "●"),
-        (1800, "●"),
-        (1801, "◉"),
-    ] {
-        assert_eq!(
-            elapsed_glyph(&theme, secs, 1800),
-            glyph,
-            "a 30m cache window fills twice as fast: elapsed_glyph({secs}, 1800)"
-        );
+    assert_eq!(elapsed_glyph(&theme, 0, 0), "◔");
+    assert_eq!(elapsed_glyph(&theme, 1, 0), "◉");
+    assert_eq!(elapsed_glyph(&theme, 0, -1), "◉");
+    assert_eq!(elapsed_glyph(&theme, 48 * 3600, 3600), "◉");
+}
+
+#[test]
+fn elapsed_glyph_fills_by_the_eighth_of_its_ceiling() {
+    let config = crate::config::ThemeConfig {
+        style: Some(crate::config::ThemeStyle::Modern),
+        ..Default::default()
+    };
+    let theme = Theme::fixed_for_theme(false, &config);
+    for ceiling in [3600, 1800] {
+        for secs in [0, 1] {
+            assert_eq!(elapsed_glyph(&theme, secs, ceiling), "\u{f0a9e}");
+        }
+        for (eighth, before, reached, after) in [
+            (1, "\u{f0a9e}", "\u{f0a9e}", "\u{f0a9e}"),
+            (2, "\u{f0a9e}", "\u{f0a9f}", "\u{f0a9f}"),
+            (3, "\u{f0a9f}", "\u{f0aa0}", "\u{f0aa0}"),
+            (4, "\u{f0aa0}", "\u{f0aa1}", "\u{f0aa1}"),
+            (5, "\u{f0aa1}", "\u{f0aa2}", "\u{f0aa2}"),
+            (6, "\u{f0aa2}", "\u{f0aa3}", "\u{f0aa3}"),
+            (7, "\u{f0aa3}", "\u{f0aa4}", "\u{f0aa4}"),
+            (8, "\u{f0aa4}", "\u{f0aa5}", "◉"),
+        ] {
+            let step = ceiling * eighth / 8;
+            for (secs, glyph) in [(step - 1, before), (step, reached), (step + 1, after)] {
+                assert_eq!(
+                    elapsed_glyph(&theme, secs, ceiling),
+                    glyph,
+                    "Nerd Font elapsed_glyph({secs}, {ceiling})"
+                );
+            }
+        }
     }
+    assert_eq!(elapsed_glyph(&theme, 0, 0), "\u{f0a9e}");
+    assert_eq!(
+        elapsed_glyph(&theme, 1, 0),
+        theme.glyph(GlyphRole::ClockOver)
+    );
+    assert_eq!(
+        elapsed_glyph(&theme, 0, -1),
+        theme.glyph(GlyphRole::ClockOver)
+    );
 }
 
 #[test]

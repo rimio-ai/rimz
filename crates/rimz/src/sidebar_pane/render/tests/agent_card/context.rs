@@ -1684,17 +1684,17 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         "warm cache rests at the dim weight once the clock shows past five minutes"
     );
     assert_eq!(
-        age_style(AgentStatus::Idle, 25 * 60, '◑'),
+        age_style(AgentStatus::Idle, 25 * 60, '◔'),
         theme.muted(),
-        "the half-full face is outside the expiry band"
+        "the cache is outside the expiry band at twenty-five minutes"
     );
     assert_eq!(
-        age_style(AgentStatus::Idle, 40 * 60, '◕'),
+        age_style(AgentStatus::Idle, 40 * 60, '◑'),
         heat(40 * 60),
         "the expiry band has started at forty minutes"
     );
     assert_eq!(
-        age_style(AgentStatus::Idle, 3_599, '●'),
+        age_style(AgentStatus::Idle, 3_599, '◕'),
         heat(3_599),
         "the pin heats until the cache ceiling"
     );
@@ -1757,10 +1757,10 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     let (hour_face, hour_style) = age_span(ttl(3600), 25 * 60);
     let (half_face, half_style) = age_span(ttl(1800), 25 * 60);
     assert_eq!(
-        hour_face, "◑ 25m",
+        hour_face, "◔ 25m",
         "the hour window is not half gone at 25m"
     );
-    assert_eq!(half_face, "● 25m", "a 30m window is in its last quarter");
+    assert_eq!(half_face, "◕ 25m", "a 30m window is in its last quarter");
     assert_eq!(
         age_span(None, 25 * 60).0,
         hour_face,
@@ -1791,7 +1791,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     };
     assert_eq!(
         age_span(held(70 * 60), 20 * 60),
-        ("◑ 50m".to_owned(), theme.good(Modifier::empty())),
+        ("◔ 50m".to_owned(), theme.good(Modifier::empty())),
         "held: time since the real turn, filling over the 2h horizon, no heat"
     );
     let expired = Some(crate::store::snapshot::CacheClock {
@@ -1800,7 +1800,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     });
     assert_eq!(
         age_span(expired, 20 * 60).0,
-        "◕ 20m",
+        "◑ 20m",
         "past the horizon the TTL ramp runs from the last ping"
     );
     let pinged = Some(crate::store::snapshot::CacheClock {

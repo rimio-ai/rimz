@@ -24,10 +24,7 @@ pub(in crate::sidebar_pane::render) fn status_glyph(theme: &Theme, status: Agent
         .to_owned()
 }
 
-/// The age clock's Nerd Font faces: the `circle_slice` series fills one eighth
-/// per 7.5-minute step, so the icon tracks elapsed time twice as finely as the
-/// four-quarter Unicode clock. No eighth-circle glyph exists in Unicode, so that
-/// preset keeps its quarter faces.
+/// The age clock's Nerd Font faces: the `circle_slice` series shows completed eighths of the ceiling (7.5-minute steps on an hour scale), clamped to slice 1. No eighth-circle glyph exists in Unicode, so that preset keeps its quarter faces.
 const NERD_AGE_SLICES: [&str; 8] = [
     "\u{f0a9e}", // nf-md-circle_slice_1
     "\u{f0a9f}", // nf-md-circle_slice_2
@@ -39,13 +36,7 @@ const NERD_AGE_SLICES: [&str; 8] = [
     "\u{f0aa5}", // nf-md-circle_slice_8
 ];
 
-/// The clock-fill glyph for an elapsed span, filling toward `ceiling_secs` —
-/// the hour for attention clocks, the provider's cache TTL for a card's age
-/// pin: Unicode fills a quarter per quarter of the ceiling (`◔`, `◑`, `◕`,
-/// `●`), while the Nerd Font preset fills an eighth per eighth across the
-/// `circle_slice` series. Both read the ringed `◉` past the ceiling, so any
-/// time readout on a card carries its magnitude iconographically. One cell, so
-/// it never disturbs alignment.
+/// The clock-fill glyph for an elapsed span, rounding down to completed fractions of `ceiling_secs`: the hour for attention clocks, the provider's cache TTL for a card's age pin. Unicode shows quarters (`◔`, `◑`, `◕`, `●`), while Nerd Font shows eighths across the `circle_slice` series, each clamped to its first face. The full face appears only at the ceiling; both read the ringed `◉` past it. One cell, so it never disturbs alignment.
 pub(in crate::sidebar_pane::render) fn elapsed_glyph(
     theme: &Theme,
     secs: i64,
@@ -56,8 +47,8 @@ pub(in crate::sidebar_pane::render) fn elapsed_glyph(
     }
     match theme.glyph_kind() {
         GlyphSetKind::NerdFont => {
-            let eighth = (secs.max(0) * 8 / ceiling_secs.max(1)).min(7) as usize;
-            NERD_AGE_SLICES[eighth].to_owned()
+            let eighth = (secs.max(0) * 8 / ceiling_secs.max(1)).clamp(1, 8) as usize;
+            NERD_AGE_SLICES[eighth - 1].to_owned()
         }
         GlyphSetKind::Unicode => theme
             .glyph(elapsed_quarter_role(secs, ceiling_secs))
@@ -65,12 +56,12 @@ pub(in crate::sidebar_pane::render) fn elapsed_glyph(
     }
 }
 
-/// The Unicode quarter-clock role for an elapsed span within its ceiling.
+/// The Unicode quarter-clock role for completed quarters, clamped to the first face.
 fn elapsed_quarter_role(secs: i64, ceiling_secs: i64) -> GlyphRole {
-    match 4 * secs {
-        quarters if quarters <= ceiling_secs => GlyphRole::ClockQ1,
-        quarters if quarters <= 2 * ceiling_secs => GlyphRole::ClockQ2,
-        quarters if quarters <= 3 * ceiling_secs => GlyphRole::ClockQ3,
+    match 4 * secs.max(0) / ceiling_secs.max(1) {
+        0..=1 => GlyphRole::ClockQ1,
+        2 => GlyphRole::ClockQ2,
+        3 => GlyphRole::ClockQ3,
         _ => GlyphRole::ClockQ4,
     }
 }

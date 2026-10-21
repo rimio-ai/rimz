@@ -27,13 +27,13 @@ expression: strip_sgr(&ansi)
   zellij-health                        ⇡1  +760 -210
   pi-2 · GPT 5.5 · xhigh · 272k                $5.76
    API error
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84% 󰪣 42m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84% 󰪢 42m
    󰿦 228k · 󱥸 219k  9k  28k
 
   pricing-refresh  #91               ⇡1  +1180 -430
   codex · GPT 5.5 · xhigh · 272k               $4.82
    approve pricing cache write
-   󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪠 18m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪟 18m
    󰿦 158k · 󱥸 151k  6k  19k
 
   main                     ⇡3 ⇣1  +1840 -620   main
@@ -48,7 +48,7 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh                       5m
  ▁ claude-2 · Opus 4.8 · xhigh · 1M            $28.90
    compact provider trace
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79% 󰪟  8m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79% 󰪞  8m
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
  ⣾ cargo nextest               37%   402M     8M/s
    integration::backend
@@ -60,7 +60,7 @@ expression: strip_sgr(&ansi)
    󰿦 103k · 󱥸 99k  4k  12k ·  1
  ⢄ codex-2 · GPT 5.5 · xhigh · 272k             $3.83
    triage stale pane sample
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺───────────   68% 󰪥 54m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺───────────   68% 󰪤 54m
    󰿦 185k · 󱥸 178k  7k  23k
     subagents (2)
      ⠁ Plan · run focused nextest

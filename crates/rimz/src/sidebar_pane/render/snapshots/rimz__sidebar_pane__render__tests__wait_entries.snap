@@ -15,7 +15,7 @@ expression: screen
 ▌  ▢ ────────────────────────────────────    0%      ▐
 ▌  ▤ 0                                               ▐
 ▌  ⧖ waits (4)                                       ▐
-▌    ◷ timer · in 12m                           ◑ <t>▐
+▌    ◷ timer · in 12m                           ◔ <t>▐
 ▌    ⣾ pid · 16776                              ◔  3m▐
 ▌    ⣾ command · cargo                          ◔  4m▐
 ▌      cargo xtask gate --name foo_test              ▐

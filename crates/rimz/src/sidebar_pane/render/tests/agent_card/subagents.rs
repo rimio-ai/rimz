@@ -121,8 +121,8 @@ fn child_clock_uses_muted_runtime_until_quiet_and_the_configured_stall_scale() {
     child.model = Some("Haiku".to_owned());
     for (status, quiet, ceiling, expected) in [
         (AgentStatus::Running, 299, 1_800, "   2h"),
-        (AgentStatus::Running, 480, 1_800, "◑  8m"),
-        (AgentStatus::Running, 960, 1_800, "◕ 16m"),
+        (AgentStatus::Running, 480, 1_800, "◔  8m"),
+        (AgentStatus::Running, 960, 1_800, "◑ 16m"),
         (AgentStatus::Running, 960, 900, "◉ 16m"),
         (AgentStatus::Running, 2_400, 1_800, "◉ 40m"),
         (AgentStatus::Paused, 480, 1_800, "   1h"),
