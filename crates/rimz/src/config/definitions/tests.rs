@@ -2605,3 +2605,28 @@ fn yaml_comments_quotes_and_null_tools_are_supported() {
     let argv = shlex::split(loaded.agent_profiles.0["probe"].args.as_deref().unwrap()).unwrap();
     assert!(argv.contains(&"features.shell_tool=false".to_owned()));
 }
+
+#[test]
+fn hook_trust_fix_keeps_team_members_out_of_solo_resume() {
+    let mut agent = crate::testkit::agent_state("codex", "session", jiff::Timestamp::UNIX_EPOCH);
+    agent.name = Some("worker".into());
+    agent.profile = Some("sol".into());
+    let fix = |agent: &crate::agents::AgentState, action| {
+        hook_trust_fix(&agent.kind, agent.profile.as_deref(), Some((agent, action)))
+    };
+    for action in ["resume", "restart", "fork"] {
+        assert_eq!(fix(&agent, action), format!("rimz agents {action} @worker"));
+    }
+    agent.team = Some("forge".into());
+    agent.role = Some("coder".into());
+    assert_eq!(fix(&agent, "resume"), "rimz agents sol");
+    for action in ["restart", "fork"] {
+        assert_eq!(fix(&agent, action), format!("rimz agents {action} @worker"));
+    }
+    agent.profile = None;
+    assert_eq!(fix(&agent, "resume"), "rimz agents codex");
+    assert_eq!(
+        hook_trust_fix(&agent.kind, Some("sol"), None),
+        "rimz agents sol"
+    );
+}
