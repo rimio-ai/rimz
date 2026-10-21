@@ -105,6 +105,7 @@ pub(super) struct Lsp {
 pub(super) struct LspServer {
     pub(super) entry: rimz::lsp::registry::Entry,
     pub(super) rss_bytes: u64,
+    pub(super) swap_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]

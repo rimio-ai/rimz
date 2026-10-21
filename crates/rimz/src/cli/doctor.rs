@@ -276,14 +276,12 @@ fn collect_lsp(
             servers: entries
                 .into_iter()
                 .map(|entry| {
-                    let rss_bytes = entry
-                        .server_pid
-                        .filter(|pid| {
-                            rimz::proc::process_is_live(*pid, entry.server_start_token.as_deref())
-                        })
-                        .and_then(rimz::proc::tree_totals)
-                        .map_or(0, |totals| totals.rss_kb.saturating_mul(1024));
-                    model::LspServer { entry, rss_bytes }
+                    let reading = rimz::lsp::memory::for_entry(&entry);
+                    model::LspServer {
+                        entry,
+                        rss_bytes: reading.rss_kb.saturating_mul(1024),
+                        swap_bytes: reading.swap_kb.saturating_mul(1024),
+                    }
                 })
                 .collect(),
             last_refusal,

@@ -663,36 +663,38 @@ fn status(
 fn list_table(
     entries: &[registry::Entry],
     now_ms: u64,
-    memory: impl Fn(u32) -> (u64, u64),
+    memory: impl Fn(&registry::Entry) -> rimz::lsp::memory::Reading,
 ) -> render::Table {
     use render::status;
     let mut entries: Vec<_> = entries.iter().collect();
     entries.sort_by_key(|entry| status::lsp_order(entry));
     let mut table = render::Table::new([
-        "STATE", "CHECKOUT", "SERVER", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS", "LEASES",
+        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "REQUESTS", "LAST",
+        "RESTARTS", "LEASES",
     ])
-    .right(&[3, 4, 5, 6, 7, 8]);
+    .right(&[3, 4, 5, 6, 7, 8, 9, 10]);
     for entry in entries {
         let running = entry.state.is_running();
         let (glyph, style) = render::verdict(status::lsp(&entry.state));
-        let (rss, peak) = if running {
-            let (rss_kb, peak_kb) = entry.server_pid.map_or((0, 0), &memory);
-            (
-                render::cell(rimz::utils::size::decimal_bytes(
-                    rss_kb.saturating_mul(1024),
-                )),
-                render::cell(rimz::utils::size::decimal_bytes(
-                    entry.peak_rss_kb.max(peak_kb).saturating_mul(1024),
-                )),
-            )
+        let [rss, swap, total, peak] = if running {
+            let reading = memory(entry);
+            [
+                reading.rss_kb,
+                reading.swap_kb,
+                reading.rss_kb.saturating_add(reading.swap_kb),
+                entry.peak_rss_kb.max(reading.peak_kb),
+            ]
+            .map(|kb| render::cell(rimz::utils::size::decimal_bytes(kb.saturating_mul(1024))))
         } else {
-            (render::cell("-").dash(), render::cell("-").dash())
+            std::array::from_fn(|_| render::cell("-").dash())
         };
         table.row([
             render::cell(format!("{glyph} {}", render::lsp_state_label(&entry.state))).fg(style),
             render::cell(render::home_relative_path(&entry.root)),
             render::cell(&entry.server),
             rss,
+            swap,
+            total,
             peak,
             render::cell(entry.request_count.to_string()),
             entry.last_request_at_ms.map_or_else(
@@ -739,10 +741,11 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&entries)?));
     }
     render::finish(
-        list_table(&entries, rimz::utils::time::unix_now_ms(), |pid| {
-            let reading = rimz::lsp::memory::tree(pid);
-            (reading.rss_kb, reading.peak_kb)
-        })
+        list_table(
+            &entries,
+            rimz::utils::time::unix_now_ms(),
+            rimz::lsp::memory::for_entry,
+        )
         .render(&mut out),
     )
 }
@@ -998,10 +1001,22 @@ mod tests {
                     reason: None,
                 },
             ),
+            entry(
+                "/d",
+                "rust",
+                State::Stopped {
+                    at_ms: 0,
+                    reason: StopReason::Released,
+                },
+            ),
         ];
-        let table = list_table(&entries, 56_000, |pid| {
-            assert_eq!(pid, 2);
-            (2, 8)
+        let table = list_table(&entries, 56_000, |entry| {
+            assert_eq!(entry.server_pid, Some(2));
+            rimz::lsp::memory::Reading {
+                rss_kb: 2,
+                swap_kb: 10,
+                peak_kb: 8,
+            }
         });
         let mut stripped = anstream::StripStream::new(Vec::new());
         table.render(&mut stripped).unwrap();
@@ -1014,29 +1029,59 @@ mod tests {
             rows,
             vec![
                 vec![
-                    "STATE", "CHECKOUT", "SERVER", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS",
-                    "LEASES"
+                    "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "REQUESTS",
+                    "LAST", "RESTARTS", "LEASES"
                 ],
                 vec![
-                    "✓", "ready", "/z", "rust", "2", "KB", "8.2", "KB", "3", "45s", "ago", "2", "0"
+                    "✓", "ready", "/z", "rust", "2", "KB", "10.2", "KB", "12.3", "KB", "8.2", "KB",
+                    "3", "45s", "ago", "2", "0"
                 ],
                 vec![
-                    "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "3", "-", "2", "0"
+                    "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "-", "-", "3", "-", "2",
+                    "0"
                 ],
                 vec![
-                    "·", "not", "started", "/a", "a", "-", "-", "3", "-", "2", "0"
+                    "·", "not", "started", "/a", "a", "-", "-", "-", "-", "3", "-", "2", "0"
                 ],
                 vec![
-                    "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "3", "-", "2", "0"
+                    "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "-", "-", "3", "-",
+                    "2", "0"
                 ],
                 vec![
-                    "·", "dormant:", "idle", "/a", "z", "-", "-", "3", "-", "2", "0"
+                    "·", "dormant:", "idle", "/a", "z", "-", "-", "-", "-", "3", "-", "2", "0"
                 ],
                 vec![
-                    "·", "not", "started", "/b", "rust", "-", "-", "3", "-", "2", "0"
+                    "·", "not", "started", "/b", "rust", "-", "-", "-", "-", "3", "-", "2", "0"
+                ],
+                vec![
+                    "·", "stopped:", "released", "/d", "rust", "-", "-", "-", "-", "3", "-", "2",
+                    "0"
                 ],
             ]
         );
+        let mut lines = text.lines();
+        let header = lines.next().unwrap();
+        let ready = lines.next().unwrap();
+        let mut from = ready.find("rust").unwrap() + "rust".len();
+        for (column, value) in [
+            ("RSS", "2 KB"),
+            ("SWAP", "10.2 KB"),
+            ("TOTAL", "12.3 KB"),
+            ("PEAK", "8.2 KB"),
+            ("REQUESTS", "3"),
+            ("LAST", "45s ago"),
+            ("RESTARTS", "2"),
+            ("LEASES", "0"),
+        ] {
+            let end = from + ready[from..].find(value).unwrap() + value.len();
+            let header_end = header.find(column).unwrap() + column.len();
+            assert_eq!(
+                ready[..end].chars().count(),
+                header[..header_end].chars().count(),
+                "{column} must be right-aligned"
+            );
+            from = end;
+        }
         let mut raw = Vec::new();
         table.render(&mut raw).unwrap();
         let raw = String::from_utf8(raw).unwrap();
