@@ -115,6 +115,7 @@ fn startup_checks_count_failures_but_only_warn_for_timeouts() {
             }))
             .unwrap(),
             rss_bytes: 1024,
+            swap_bytes: 0,
         })
         .collect(),
         last_refusal: Some(rimz::diag::lsp::Record {
@@ -204,6 +205,7 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
         servers: vec![super::super::model::LspServer {
             entry,
             rss_bytes: 0,
+            swap_bytes: 0,
         }],
         last_refusal: Some(rimz::diag::lsp::Record {
             at: "2026-01-01T00:00:00Z".parse().unwrap(),
@@ -305,6 +307,7 @@ fn shared_language_servers_read_like_lsp_list() {
             attached: vec![],
         },
         rss_bytes: 4_700_000_000,
+        swap_bytes: 8_300_000_000,
     };
     let dormant = |reason| State::Dormant {
         since_ms: 0,
@@ -341,12 +344,16 @@ fn shared_language_servers_read_like_lsp_list() {
         rows,
         vec![
             vec!["LSP"],
-            vec!["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"],
-            vec!["✓", "ready", "/z", "rust", "4.7", "GB", "0"],
-            vec!["✗", "dormant:", "crashed", "/c", "rust", "-", "0"],
-            vec!["·", "not", "started", "/a", "a", "-", "0"],
-            vec!["·", "dormant:", "idle", "/a", "z", "-", "0"],
-            vec!["·", "not", "started", "/b", "rust", "-", "0"],
+            vec![
+                "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "LEASES"
+            ],
+            vec![
+                "✓", "ready", "/z", "rust", "4.7", "GB", "8.3", "GB", "13", "GB", "0"
+            ],
+            vec!["✗", "dormant:", "crashed", "/c", "rust", "-", "-", "-", "0"],
+            vec!["·", "not", "started", "/a", "a", "-", "-", "-", "0"],
+            vec!["·", "dormant:", "idle", "/a", "z", "-", "-", "-", "0"],
+            vec!["·", "not", "started", "/b", "rust", "-", "-", "-", "0"],
         ]
     );
 }

@@ -513,7 +513,10 @@ fn render_lsp_servers(
         .collect();
     visible.sort_by_key(|server| status::lsp_order(&server.entry));
     let hidden = servers.len() - visible.len();
-    let mut table = Table::new(["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"]).right(&[3, 4]);
+    let mut table = Table::new([
+        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "LEASES",
+    ])
+    .right(&[3, 4, 5, 6]);
     for server in &visible {
         let label = lsp_state_label(&server.entry.state);
         let state = if matches!(
@@ -544,15 +547,23 @@ fn render_lsp_servers(
                 label,
             )
         };
+        let [rss, swap, total] = if server.entry.state.is_running() {
+            [
+                server.rss_bytes,
+                server.swap_bytes,
+                server.rss_bytes.saturating_add(server.swap_bytes),
+            ]
+            .map(|bytes| cell(rimz::utils::size::decimal_bytes(bytes)))
+        } else {
+            std::array::from_fn(|_| cell("-").dash())
+        };
         table.row([
             state,
             cell(home_relative_path(&server.entry.root)),
             cell(&server.entry.server),
-            if server.entry.state.is_running() {
-                cell(rimz::utils::size::decimal_bytes(server.rss_bytes))
-            } else {
-                cell("-").dash()
-            },
+            rss,
+            swap,
+            total,
             cell(server.entry.leases.len().to_string()),
         ]);
     }
