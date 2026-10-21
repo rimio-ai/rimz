@@ -1263,8 +1263,8 @@ fn warm_unchanged_refs_skip_trunk_base_and_head_forks() {
 
     assert_eq!(
         crate::proc::testkit::spawn_count() - before,
-        2,
-        "warm unchanged refs pay only diff and status"
+        1,
+        "warm unchanged refs on a clean tree pay only status"
     );
     assert_eq!(warm.branch.as_deref(), Some("main"));
     assert_eq!(warm.merge_base, cold.merge_base);
@@ -1301,8 +1301,8 @@ fn warm_unchanged_head_skips_commit_forks() {
     let warm = refresh_entry(repo.path_str(), Some(&cold), DueFacts::all(), None);
     assert_eq!(
         crate::proc::testkit::spawn_count() - before,
-        2,
-        "unchanged HEAD pays only diff and status; commit facts carry forward"
+        1,
+        "unchanged clean HEAD pays only status; diff and commit facts carry forward"
     );
     assert_eq!(warm.commits, cold.commits);
     assert_eq!(warm.behind, cold.behind);
@@ -1339,6 +1339,216 @@ fn warm_unchanged_head_skips_commit_forks() {
         "moved HEAD re-probes commit facts"
     );
     assert_eq!(moved.commits, Some(2));
+}
+
+fn feature_branch_fixture() -> GitFixture {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return repo;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    assert!(repo.git(&["checkout", "-q", "-b", "feature"]));
+    repo.write("feature.txt", "one\n");
+    let _ = repo.git(&["add", "feature.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "feature"]);
+    repo
+}
+
+const LOCAL_ONLY: DueFacts = DueFacts {
+    local: true,
+    commit: false,
+};
+
+fn spawns_during<T>(run: impl FnOnce() -> T) -> (T, u64) {
+    let before = crate::proc::testkit::spawn_count();
+    let value = run();
+    (value, crate::proc::testkit::spawn_count() - before)
+}
+
+#[test]
+fn dirty_then_clean_pays_one_diff_and_the_next_clean_pass_none() {
+    let repo = feature_branch_fixture();
+    if !repo.initialized {
+        return;
+    }
+    let cold = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let committed = DiffStats {
+        added: 1,
+        removed: 0,
+    };
+    assert_eq!(cold.stats(), Some(committed));
+
+    repo.write("scratch.txt", "scratch\n");
+    let (dirty, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&cold), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "a dirty tree always diffs");
+    assert_eq!(dirty.clean, Some(false));
+    assert_eq!(dirty.added, Some(2), "untracked lines fold into the churn");
+
+    std::fs::remove_file(repo.path().join("scratch.txt")).unwrap();
+    let (clean, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&dirty), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "the first clean pass after a dirty one diffs");
+    assert_eq!(clean.stats(), Some(committed));
+
+    let (settled, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&clean), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1, "the next clean pass pays only status");
+    assert_eq!(settled.stats(), Some(committed));
+}
+
+#[test]
+fn reused_stats_match_a_fresh_diff_when_index_bits_hide_an_edit() {
+    let repo = feature_branch_fixture();
+    if !repo.initialized {
+        return;
+    }
+    let cold = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    let base = cold.merge_base.clone().expect("merge-base resolved");
+    for bit in ["skip-worktree", "assume-unchanged"] {
+        assert!(repo.git(&["update-index", &format!("--{bit}"), "feature.txt"]));
+        repo.write("feature.txt", "one\ntwo\n");
+
+        let (reused, spawns) =
+            spawns_during(|| refresh_entry(repo.path_str(), Some(&cold), LOCAL_ONLY, None));
+        assert_eq!(
+            spawns, 1,
+            "{bit}: status reads clean, so the diff is skipped"
+        );
+        assert_eq!(
+            reused.stats(),
+            worktree_diff_stats(repo.path(), &base),
+            "{bit}: the reused numbers are what a fresh diff prints"
+        );
+
+        assert!(repo.git(&["update-index", &format!("--no-{bit}"), "feature.txt"]));
+        repo.write("feature.txt", "one\n");
+    }
+}
+
+#[test]
+fn commit_only_refresh_does_not_launder_stale_numbers_into_a_reuse() {
+    let repo = feature_branch_fixture();
+    if !repo.initialized {
+        return;
+    }
+    let cold = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(cold.added, Some(1));
+
+    repo.write("more.txt", "a\nb\n");
+    let _ = repo.git(&["add", "more.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "more"]);
+    let commit_only = refresh_entry(
+        repo.path_str(),
+        Some(&cold),
+        DueFacts {
+            local: false,
+            commit: true,
+        },
+        None,
+    );
+    assert_ne!(commit_only.head_sha, cold.head_sha, "HEAD moved");
+    assert_eq!(
+        commit_only.added,
+        Some(1),
+        "local numbers were not remeasured"
+    );
+
+    let (local, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&commit_only), LOCAL_ONLY, None));
+    assert_eq!(
+        spawns, 2,
+        "numbers measured at an older HEAD are not reused"
+    );
+    assert_eq!(local.added, Some(3));
+    assert_eq!(
+        local.stats(),
+        refresh_entry(repo.path_str(), None, DueFacts::all(), None).stats()
+    );
+}
+
+#[test]
+fn entry_without_stats_provenance_diffs_once_then_skips() {
+    let repo = feature_branch_fixture();
+    if !repo.initialized {
+        return;
+    }
+    let mut legacy = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    legacy.stats_head_sha = None;
+    legacy.stats_merge_base = None;
+
+    let (first, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&legacy), LOCAL_ONLY, None));
+    assert_eq!(spawns, 2, "a legacy entry pays one diff");
+    assert!(first.stats_head_sha.is_some() && first.stats_merge_base.is_some());
+
+    let (second, spawns) =
+        spawns_during(|| refresh_entry(repo.path_str(), Some(&first), LOCAL_ONLY, None));
+    assert_eq!(spawns, 1);
+    assert_eq!(second.stats(), first.stats());
+}
+
+#[test]
+fn diff_reuse_requires_clean_status_and_the_measured_inputs() {
+    let prior = DiffStatsCacheEntry {
+        added: Some(3),
+        removed: Some(1),
+        clean: Some(true),
+        stats_head_sha: Some("head".to_owned()),
+        stats_merge_base: Some("base".to_owned()),
+        ..DiffStatsCacheEntry::default()
+    };
+    let at = Some(("head", "base"));
+    let reused = DiffStats {
+        added: 3,
+        removed: 1,
+    };
+    assert_eq!(
+        reusable_diff_stats(Some(&prior), at, Some(true)),
+        Some(reused)
+    );
+    assert_eq!(
+        reusable_diff_stats(Some(&prior), at, None),
+        None,
+        "status failed"
+    );
+    assert_eq!(reusable_diff_stats(Some(&prior), at, Some(false)), None);
+    assert_eq!(reusable_diff_stats(None, at, Some(true)), None);
+    assert_eq!(reusable_diff_stats(Some(&prior), None, Some(true)), None);
+    assert_eq!(
+        reusable_diff_stats(Some(&prior), Some(("moved", "base")), Some(true)),
+        None
+    );
+    assert_eq!(
+        reusable_diff_stats(Some(&prior), Some(("head", "moved")), Some(true)),
+        None
+    );
+    for broken in [
+        DiffStatsCacheEntry {
+            clean: Some(false),
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            clean: None,
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            added: None,
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            stats_head_sha: None,
+            ..prior.clone()
+        },
+        DiffStatsCacheEntry {
+            stats_merge_base: None,
+            ..prior.clone()
+        },
+    ] {
+        assert_eq!(reusable_diff_stats(Some(&broken), at, Some(true)), None);
+    }
 }
 
 #[test]

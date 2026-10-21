@@ -1,10 +1,11 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
-//! refresh (trunk ref → merge-base → numstat + status → one folded `rev-parse`
-//! for head/branch/merge state → landed verdict + one `rev-list --left-right`),
-//! and their parsers. Commit-tier facts (ahead/behind, landed, did_work) carry
-//! forward while HEAD/trunk and the clean verdict stay unchanged. An unborn HEAD
-//! makes the folded `rev-parse` fail, so head/branch/merge facts publish as
-//! absent until the first commit.
+//! refresh (trunk ref → merge-base → status + numstat, where a clean tree at the
+//! HEAD and merge-base the stored `+/-` was measured at skips the numstat →
+//! one folded `rev-parse` for head/branch/merge state → landed verdict + one
+//! `rev-list --left-right`), and their parsers. Commit-tier facts (ahead/behind,
+//! landed, did_work) carry forward while HEAD/trunk and the clean verdict stay
+//! unchanged. An unborn HEAD makes the folded `rev-parse` fail, so
+//! head/branch/merge facts publish as absent until the first commit.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -158,6 +159,15 @@ pub struct DiffStatsCacheEntry {
     /// Merge-base between HEAD and the resolved trunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_base: Option<String>,
+    /// HEAD sha the stored `added`/`removed` were measured at, or reused for.
+    /// Unlike `head_sha`, a commit-only refresh leaves it alone, so it names
+    /// the commits behind the numbers. `None` when no diff ran or was reused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_head_sha: Option<String>,
+    /// Merge-base the stored `added`/`removed` were measured against; pairs
+    /// with `stats_head_sha`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_merge_base: Option<String>,
 }
 
 impl DiffStatsCacheEntry {
@@ -462,6 +472,8 @@ impl DueFacts {
 
 struct LocalFacts {
     stats: Option<DiffStats>,
+    /// The `(head, merge-base)` pair `stats` was measured or reused at.
+    stats_at: Option<(String, String)>,
     branch: Option<String>,
     clean: Option<bool>,
     merge_in_progress: Option<bool>,
@@ -559,15 +571,24 @@ fn refresh_entry_with_memo(
 
     let mut replacement_memo = None;
     if due.local {
+        let measured_at = refs
+            .as_ref()
+            .zip(base.as_deref())
+            .map(|(refs, base)| (refs.head_sha.as_str(), base));
         let local = refresh_local_facts(
             worktree,
             base.as_deref(),
+            measured_at,
+            prior,
             head.branch.clone(),
             head.merge_in_progress,
             prior_memo,
         );
         entry.added = local.stats.map(|stats| stats.added);
         entry.removed = local.stats.map(|stats| stats.removed);
+        let (stats_head_sha, stats_merge_base) = local.stats_at.unzip();
+        entry.stats_head_sha = stats_head_sha;
+        entry.stats_merge_base = stats_merge_base;
         entry.branch = local.branch;
         entry.clean = local.clean;
         entry.merge_in_progress = local.merge_in_progress;
@@ -641,6 +662,23 @@ fn cached_commit_facts_match(
         && landed_fact_reusable(prior)
 }
 
+/// The prior `added`/`removed`, when a clean tree at the same `(head, base)`
+/// they were measured at makes a fresh `git diff` redundant. `measured_at` is
+/// `None` without resolved refs or a base, which always diffs.
+fn reusable_diff_stats(
+    prior: Option<&DiffStatsCacheEntry>,
+    measured_at: Option<(&str, &str)>,
+    clean: Option<bool>,
+) -> Option<DiffStats> {
+    let (head_sha, merge_base) = measured_at?;
+    let prior = prior?;
+    (clean == Some(true)
+        && prior.clean == Some(true)
+        && prior.stats_head_sha.as_deref() == Some(head_sha)
+        && prior.stats_merge_base.as_deref() == Some(merge_base))
+    .then(|| prior.stats())?
+}
+
 fn landed_fact_reusable(prior: &DiffStatsCacheEntry) -> bool {
     matches!(
         (prior.commits, prior.clean, prior.landed),
@@ -650,16 +688,24 @@ fn landed_fact_reusable(prior: &DiffStatsCacheEntry) -> bool {
     )
 }
 
+/// Status runs first: a clean tree whose diff inputs match the prior entry's
+/// measurement reuses its numbers and forks no `git diff`.
 fn refresh_local_facts(
     worktree: &Path,
     base: Option<&str>,
+    measured_at: Option<(&str, &str)>,
+    prior: Option<&DiffStatsCacheEntry>,
     branch: Option<String>,
     merge_in_progress: Option<bool>,
     prior_memo: &UntrackedLineMemo,
 ) -> LocalFacts {
-    let stats = base.and_then(|base| worktree_diff_stats(worktree, base));
     let (status, untracked_memo) = worktree_status(worktree, prior_memo);
     let clean = status.as_ref().map(|status| status.clean);
+    let stats = reusable_diff_stats(prior, measured_at, clean)
+        .or_else(|| base.and_then(|base| worktree_diff_stats(worktree, base)));
+    let stats_at = stats
+        .and(measured_at)
+        .map(|(head_sha, merge_base)| (head_sha.to_owned(), merge_base.to_owned()));
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
     // never as landed.
@@ -672,6 +718,7 @@ fn refresh_local_facts(
     };
     LocalFacts {
         stats,
+        stats_at,
         branch,
         clean,
         merge_in_progress,
