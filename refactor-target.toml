@@ -1643,7 +1643,13 @@ path = "crates/rimz/src/store"
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
 # SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
 # UnitStatus and its five methods, unit_statuses, pipeline_owner and project_stuck_stages (+9).
-surface-budget = 490
+# MessageRecord::awaiting_registration shares the card-aware registration wait across delivery, expiry and resume dispatch (+1).
+surface-budget = 491
+
+[[verdict]]
+kind = "item"
+key = "store::message::MessageRecord::awaiting_registration"
+reason = "Delivery, registration expiry and in-flight resume detection must share the same enqueue/end ordering rule."
 
 [[verdict]]
 kind = "item"

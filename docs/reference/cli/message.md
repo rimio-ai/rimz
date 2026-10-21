@@ -223,7 +223,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `errored` | Delivery could not happen, for example the address matched no agent. |
 | `canceled` | `message cancel` or `message clear` stopped it. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
-| `expired` | An automatic command remained queued for ten minutes without delivery. It no longer blocks later messages, even before the next sweep records this status. Prompts and operator commands never expire. |
+| `expired` | An automatic command remained queued for ten minutes without delivery, or a resumed child did not register by its follow-up's deadline. Automatic commands stop blocking later messages even before the next sweep records expiry; registration expiry is recorded only while the card is absent or ended no later than enqueue. Other prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
 
 The last seven are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to [`gc.transcript_retention`](../../guide/configuration.md#garbage-collection), which defaults to `forever` and governs transcript history too. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained. Requeueing an expired automatic command starts a fresh ten-minute window. Steer and interrupt cannot deliver an expired queued command.
@@ -265,7 +265,7 @@ Trailing lines report what the view left out:
 | `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, and `compacted_context_tokens`.
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, and `compacted_context_tokens`.
 
 ### Show one message
 
@@ -279,6 +279,8 @@ DELIVERY CHECK
 ```
 
 A scheduled message suggests `rimz message edit <id> --no-schedule` as well. An open prompt points to `rimz asks show @coder` and `rimz answer @coder <choice>`, just like the send receipt. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
+
+A follow-up waiting for a resumed child says `waiting for @child to register after its resume`, with its absolute UTC deadline. The JSON message row and delivery check include `register_by` while it waits. Registration expiry applies only while the card is absent or ended no later than enqueue; once reconciled, `show` names the registration failure instead. A later end shows the ordinary receiver-ended reason.
 
 ### Change a queued message
 

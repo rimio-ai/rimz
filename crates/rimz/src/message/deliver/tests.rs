@@ -547,6 +547,7 @@ fn when_evaluation_handles_exact_boundary_clock_skew_and_expiry() {
 
 fn ready_check() -> DeliveryCheck {
     DeliveryCheck {
+        register_by: None,
         expiry: ExpiryCheck {
             expired: false,
             expires_at: None,

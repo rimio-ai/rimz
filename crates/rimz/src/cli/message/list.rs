@@ -50,6 +50,8 @@ pub(super) struct MessageListRow {
     pub(super) status: MessageStatus,
     pub(super) enqueued_at: Timestamp,
     pub(super) updated_at: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) register_by: Option<Timestamp>,
     pub(super) attempts: u32,
     pub(super) unconfirmed_sends: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +93,7 @@ impl MessageListRow {
             status: message.status,
             enqueued_at: message.enqueued_at,
             updated_at: message.updated_at,
+            register_by: message.register_by,
             attempts: message.attempts,
             unconfirmed_sends: message.unconfirmed_sends,
             last_attempt_at: message.last_attempt_at,
@@ -132,6 +135,7 @@ impl MessageListRow {
             status: payload.status,
             enqueued_at: payload.enqueued_at.unwrap_or(event.timestamp),
             updated_at: event.timestamp,
+            register_by: None,
             attempts: payload.attempts,
             unconfirmed_sends: payload.unconfirmed_sends,
             last_attempt_at: None,

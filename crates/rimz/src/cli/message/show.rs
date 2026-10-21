@@ -617,6 +617,9 @@ pub(super) fn render_verdict(
                 rimz::store::message::format_dwell(age),
             )
         }
+        deliver::DeliveryVerdict::WaitingForRegistration { register_by } => format!(
+            "waiting for {target} to register after its resume; fails if not registered by {register_by} (UTC)"
+        ),
         deliver::DeliveryVerdict::Scheduled { not_before } => not_before
             .as_ref()
             .copied()
@@ -739,6 +742,7 @@ pub(super) fn delivery_action_hint(
         )),
         deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
+        deliver::DeliveryVerdict::WaitingForRegistration { .. } => None,
         deliver::DeliveryVerdict::Expired { .. } => None,
     }
 }
@@ -796,6 +800,7 @@ mod tests {
     fn delivery_checks_report_recent_attempt_and_after_blocker() {
         let message_id = MessageId::parse("msg_0000000000000001").unwrap();
         let mut check = deliver::DeliveryCheck {
+            register_by: None,
             expiry: deliver::ExpiryCheck {
                 expired: false,
                 expires_at: None,
