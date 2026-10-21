@@ -1,7 +1,7 @@
 //! Integration coverage for `rimz loop` instance-bound delivery.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -5934,8 +5934,34 @@ fn loop_watch_requires_a_terminal() {
 }
 
 #[test]
+fn loop_watch_refuses_without_an_open_room() {
+    let env = Env::new();
+    let (output, status) = loop_watch_pty(&env, false, true);
+    let mut plain = anstream::StripStream::new(Vec::new());
+    plain.write_all(output.as_bytes()).unwrap();
+    assert_eq!(
+        String::from_utf8(plain.into_inner()).unwrap().trim(),
+        "error: `rimz loop watch` shows an open room's loops; start one with `rimz start`, or use `rimz loop list`"
+    );
+    assert_eq!(status, 1);
+    assert!(!output.contains("\x1b[?1049h"), "{output}");
+}
+
+#[test]
+fn loop_watch_pinned_room_paints_before_its_first_heartbeat() {
+    let env = Env::new();
+    let (output, _) = loop_watch_pty(&env, true, false);
+    assert!(
+        output.contains("no loop tasks") && output.contains("\x1b[J"),
+        "{output}"
+    );
+    assert!(!output.contains("error:"), "{output}");
+}
+
+#[test]
 fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let env = Env::new();
+    seed_loop_watch_room(&env);
     let Some(real_git) = find_real_git() else {
         crate::common::skip("git not on PATH");
         return;
@@ -5979,13 +6005,30 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    let (reload_tx, reload_rx) = std::sync::mpsc::sync_channel(1);
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
+        let mut buffer = [0; 4096];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            output.extend_from_slice(&buffer[..count]);
+            if let Some(end) = output.windows(3).rposition(|bytes| bytes == b"\x1b[J") {
+                let _ = startup_tx.try_send(());
+                if output[..end]
+                    .windows(14)
+                    .any(|bytes| bytes == b"watch-reloaded")
+                {
+                    let _ = reload_tx.try_send(());
+                }
+            }
+        }
         output
     });
 
-    std::thread::sleep(Duration::from_millis(1_200));
+    let startup = startup_rx.recv_timeout(Duration::from_secs(30));
     let exited_after_startup = child.try_wait().expect("poll loop watch");
     write_loop_config(
         &env,
@@ -5994,7 +6037,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
             env.project_root.display()
         ),
     );
-    std::thread::sleep(Duration::from_millis(1_300));
+    let reloaded = reload_rx.recv_timeout(Duration::from_secs(30));
     let exited_after_reload = child.try_wait().expect("poll loop watch");
     let exited_early = exited_after_startup.or(exited_after_reload);
     if exited_early.is_none() {
@@ -6005,7 +6048,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let output =
         String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
     assert!(
-        exited_early.is_none() && output.contains("watch-reloaded"),
+        startup.is_ok() && reloaded.is_ok() && exited_early.is_none(),
         "loop watch exited or missed config reload: {exited_early:?}\n{output}"
     );
 
@@ -8598,6 +8641,7 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
     use rimz::harness::schedule::run_log::SignalRecord;
 
     let env = Env::new();
+    seed_loop_watch_room(&env);
     write_loop_config(
         &env,
         &toml::to_string(&LoopConfig {
@@ -8647,23 +8691,18 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
 
     let output = loop_watch_frames(&env);
     let good = output.lines().find(|line| line.contains("good")).unwrap();
-    assert!(
-        good.contains("10m ago") && good.contains("completed"),
-        "{output}"
-    );
+    assert!(good.contains("✓ 10m ago"), "{output}");
     let bad = output.lines().find(|line| line.contains("bad")).unwrap();
-    assert!(
-        bad.contains("10m ago") && bad.contains("failed"),
-        "{output}"
-    );
-    assert!(output.contains("✗ 1 failed"), "{output}");
-    assert!(output.contains("heard ci.passed"), "{output}");
+    assert!(bad.contains("✗ failed 10m ago"), "{output}");
+    assert!(output.contains("✗ 1 needs you"), "{output}");
+    assert!(output.contains("heard ci.passed 5m ago"), "{output}");
     assert!(!output.contains("skipped"), "{output}");
 }
 
 #[test]
 fn loop_watch_scopes_to_the_whole_callers_room() {
     let env = Env::new();
+    seed_loop_watch_room(&env);
     let checkout = env.home_root.join("checkout");
     let elsewhere = env.home_root.join("elsewhere");
     std::fs::create_dir(&checkout).unwrap();
@@ -8714,7 +8753,6 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
     );
 
     let output = loop_watch_frames(&env);
-    assert!(output.contains("loop · 2 tasks"), "{output}");
     assert!(
         output.contains("local") && output.contains("bound"),
         "{output}"
@@ -8723,15 +8761,12 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
         !output.contains("remote-task") && !output.contains("~/elsewhere"),
         "{output}"
     );
-    assert!(
-        output.contains("waits for room") && !output.contains("next:"),
-        "{output}"
-    );
 }
 
 #[test]
 fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     let env = Env::new();
+    seed_loop_watch_room(&env);
     env.record(&env.project_root);
     let holder = RunLockInfo {
         pid: 42_424,
@@ -8742,8 +8777,7 @@ fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     let output = loop_watch_frames(&env);
 
     assert!(
-        output.contains("loop · 1 tasks")
-            && output.contains("▸ 1 running")
+        output.contains("▸ 1 running")
             && output.contains("later")
             && output.contains("▸ running 3m")
             && !output.contains("next:")
@@ -8755,6 +8789,7 @@ fn loop_watch_shows_a_run_whose_task_row_is_gone() {
 #[test]
 fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
     let env = Env::new();
+    seed_loop_watch_room(&env);
     loop_ok(
         &env,
         &["loop", "add", "probe", "--check", "true", "--every", "1h"],
@@ -8765,8 +8800,7 @@ fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
     let output = loop_watch_frames(&env);
 
     assert!(
-        output.contains("loop · 1 tasks")
-            && output.contains("probe")
+        output.contains("probe")
             && !output.contains("▸ running")
             && !output.contains("warning")
             && !output.contains("cannot read"),
@@ -8775,8 +8809,9 @@ fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
 }
 
 #[test]
-fn loop_watch_stays_silent_and_drops_a_group_holding_only_a_listing_error() {
+fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
     let env = Env::new();
+    seed_loop_watch_room(&env);
     let elsewhere = env.home_root.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
     write_loop_config(
@@ -8796,8 +8831,7 @@ fn loop_watch_stays_silent_and_drops_a_group_holding_only_a_listing_error() {
     let output = loop_watch_frames(&env);
 
     assert!(
-        output.contains("loop · 0 tasks")
-            && output.contains("no loop tasks")
+        output.starts_with("loop\n\nno loop tasks")
             && !output.contains("~/elsewhere")
             && !output.contains("remote-task")
             && !output.contains("~/project")
@@ -11469,8 +11503,28 @@ fn wait_for_path(path: &Path) {
     assert!(path.exists(), "timed out waiting for {}", path.display());
 }
 
+fn seed_loop_watch_room(env: &Env) {
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Tmux,
+        "watch",
+        "watch",
+    );
+}
+
 /// Run `loop watch --hold` in a pty through its first complete repaint, and return everything it wrote, stderr included.
 fn loop_watch_frames(env: &Env) -> String {
+    let (output, _) = loop_watch_pty(env, false, false);
+    assert!(
+        output.contains("\x1b[J"),
+        "loop watch did not repaint:\n{output}"
+    );
+    let mut terminal = vt100::Parser::new(24, 100, 0);
+    terminal.process(output.as_bytes());
+    terminal.screen().contents()
+}
+
+fn loop_watch_pty(env: &Env, pinned: bool, refusal: bool) -> (String, u32) {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -11481,6 +11535,15 @@ fn loop_watch_frames(env: &Env) -> String {
         .expect("open loop watch pty");
     let mut cmd = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut cmd);
+    cmd.env_remove("RIMZ_WORKSPACE_ID");
+    cmd.env_remove("RIMZ_PROJECT_ROOT");
+    if pinned {
+        cmd.env(
+            "RIMZ_WORKSPACE_ID",
+            WorkspaceId::from_project_root(&env.project_root).as_str(),
+        );
+        cmd.env("RIMZ_PROJECT_ROOT", &env.project_root);
+    }
     cmd.args(["loop", "watch", "--hold"]);
     cmd.cwd(env.project_root.as_os_str());
     cmd.env("TERM", "xterm-256color");
@@ -11496,24 +11559,27 @@ fn loop_watch_frames(env: &Env) -> String {
                 break;
             }
             output.extend_from_slice(&buffer[..count]);
-            // replace_frame ends each complete repaint with Clear(FromCursorDown).
-            if output.windows(3).any(|bytes| bytes == b"\x1b[J") {
+            // The refusal stays on the normal screen; a repaint ends with Clear(FromCursorDown).
+            let marker: &[u8] = if refusal {
+                b"or use `rimz loop list`"
+            } else {
+                b"\x1b[J"
+            };
+            if output.windows(marker.len()).any(|bytes| bytes == marker) {
                 let _ = ready_tx.send(());
             }
         }
         output
     });
     let ready = ready_rx.recv_timeout(Duration::from_secs(15));
-    child.kill().expect("terminate loop watch");
-    let _ = child.wait().expect("reap loop watch");
+    if !refusal || ready.is_err() {
+        child.kill().expect("terminate loop watch");
+    }
+    let status = child.wait().expect("reap loop watch").exit_code();
     drop(pair.master);
     let output = reader_thread.join().expect("join pty reader");
     let output = String::from_utf8_lossy(&output).into_owned();
-    assert!(
-        ready.is_ok(),
-        "loop watch did not repaint: {ready:?}\n{output}"
-    );
-    output
+    (output, status)
 }
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {

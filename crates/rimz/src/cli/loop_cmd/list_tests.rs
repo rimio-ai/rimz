@@ -126,13 +126,31 @@ fn here_marks_only_rows_that_name_a_worktree() {
 }
 
 #[test]
-fn shared_watch_state_preserves_strike_disabled_reason() {
+fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut row = TaskRow::rowless("struck".into(), None, None);
     row.state = TaskState::Off;
     row.attention = Some(Attention::Strikes);
     row.reason = "disabled after 3 strikes".into();
-    assert_eq!(row.state_text(now), "disabled after 3 strikes");
+    row.timing = Some(schedule::TaskTiming::evaluate(
+        &schedule::parse_trigger(
+            "struck",
+            &TaskEntry {
+                every: Some("1h".into()),
+                ..TaskEntry::default()
+            },
+        ),
+        TaskSource::Config,
+        None,
+        Some(&Arming {
+            enabled: false,
+            at: None,
+            pause_until: None,
+            strikes: Some(3),
+        }),
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+    ));
+    assert_eq!(row.state_text(now), "off");
 }
 
 #[test]
