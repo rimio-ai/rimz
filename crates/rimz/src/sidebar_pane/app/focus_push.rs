@@ -49,6 +49,7 @@ impl PushAck {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct FocusPush {
+    pub(super) source_view: Option<super::views::ViewId>,
     pub(in crate::sidebar_pane) anchor: FocusAnchor,
     pub(in crate::sidebar_pane) expected_panes:
         Option<Arc<HashMap<PaneId, crate::mux::FittedPane>>>,
@@ -73,6 +74,7 @@ impl FocusPush {
         lease: LeaseStamp,
     ) -> Self {
         Self {
+            source_view: None,
             anchor,
             expected_panes: None,
             ack,
@@ -110,6 +112,7 @@ pub(super) type FitView =
 
 #[derive(Clone)]
 pub(in crate::sidebar_pane) struct FocusPeers {
+    source_view: Option<super::views::ViewId>,
     subscribers: Subscribers,
     source: SidebarInstanceId,
     fit: Option<FitView>,
@@ -119,6 +122,10 @@ pub(in crate::sidebar_pane) struct FocusPeers {
 }
 
 impl FocusPeers {
+    pub(super) fn with_source_view(mut self, view: Option<super::views::ViewId>) -> Self {
+        self.source_view = view;
+        self
+    }
     pub(super) fn trace_stage(&self, stage: &str) {
         let Some(lease) = &self.lease else {
             return;
@@ -183,6 +190,7 @@ impl FocusPeers {
         jumps: Arc<JumpHost>,
     ) -> Self {
         Self {
+            source_view: None,
             subscribers,
             source,
             fit: None,
@@ -208,6 +216,14 @@ impl FocusPeers {
 
     pub(super) fn accepts(&self, nonce: Option<crate::ids::FocusNonce>, now: Instant) -> bool {
         self.jumps.accepts(nonce, now)
+    }
+
+    pub(super) fn paint_permit(
+        &self,
+        nonce: Option<crate::ids::FocusNonce>,
+        now: Instant,
+    ) -> Option<impl Fn() -> bool + use<>> {
+        self.jumps.paint_permit(&self.source, nonce, now)
     }
 
     pub(in crate::sidebar_pane) fn with_fit(mut self, fit: Option<FitView>) -> Self {
@@ -338,6 +354,7 @@ impl FocusPeers {
                 lease.stamp.clone(),
             );
             push.expected_panes = expected_panes.clone();
+            push.source_view = self.source_view;
             let mut trace = push.peer.clone();
             self.jumps.offer(push);
             trace.delivery = match peer.wake.try_send(Wakeup::Tick) {

@@ -4,8 +4,8 @@ use std::sync::mpsc::{Receiver, sync_channel};
 
 fn watched_row() -> (Rig, Receiver<ObserveMsg>, PaneId, Instant) {
     let mut rig = Rig::new();
-    rig.state.current = agent_snapshot(&rig.ws);
-    let row = rig.state.current.rows().next().unwrap();
+    rig.view().current = agent_snapshot(&rig.ws);
+    let row = rig.view().current.rows().next().unwrap().clone();
     let pane = row.pane.as_ref().unwrap().pane_id.clone();
     rig.state.ui.painted_rows = vec![(row.id.clone(), -1)];
     let (tx, rx) = sync_channel(1);
@@ -38,8 +38,8 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     rig.state.observe_tx = tx;
     rig.state.clicked_row = None;
     rig.state.ui.painted_rows.clear();
-    rig.state.ui.selected_index = Some(0);
-    rig.state.ui.selected_pane = Some(pane.clone());
+    rig.view().ui.selected_index = Some(0);
+    rig.view().ui.selected_pane = Some(pane.clone());
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
@@ -72,14 +72,18 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     .unwrap();
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     rig.state.apply_focus_anchor();
-    assert!(rig.state.ui.focus_placement.is_some());
+    assert!(rig.view().ui.focus_placement.is_some());
     (rig, rx, id)
 }
 
 #[test]
 fn displaced_landing_records_the_requested_row_once_and_watches_later_paints() {
     let (mut rig, rx, id) = landing(Some(1_000), false);
-    rig.state.ui.banner_shown = !rig.state.ui.banner_shown;
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.banner_shown = !state.ui.banner_shown;
+    }
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
@@ -107,7 +111,7 @@ fn displaced_landing_records_the_requested_row_once_and_watches_later_paints() {
         .find(|(row, _)| row == &id)
         .unwrap()
         .1 += 1;
-    rig.state.observe_paint(Instant::now());
+    rig.observe_paint(Instant::now());
     let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
     assert_eq!(wire["from_y"], y);
     assert_eq!(wire["to_y"], y + 1);
@@ -121,7 +125,7 @@ fn exact_landing_emits_no_displacement() {
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.state.ui.focus_placement.is_none());
+    assert!(rig.view().ui.focus_placement.is_none());
     assert!(rx.try_recv().is_err());
 }
 
@@ -129,14 +133,14 @@ fn exact_landing_emits_no_displacement() {
 fn landing_paints_rearm_the_freeze_after_adoption() {
     for requested_row in [None, Some(1_000)] {
         let (mut rig, _, _) = landing(requested_row, false);
-        layout_freeze::arm_freeze(&mut rig.state.ui, 0);
+        layout_freeze::arm_freeze(&mut rig.view().ui, 0);
         let before = Timestamp::now().as_millisecond();
         rig.state.dirty = true;
         rig.state
             .paint_now(&mut rig.terminal, Instant::now())
             .unwrap();
         let after = Timestamp::now().as_millisecond();
-        let armed = rig.state.ui.freeze.as_ref().unwrap().armed_ms;
+        let armed = rig.view().ui.freeze.as_ref().unwrap().armed_ms;
         assert!(
             (before..=after).contains(&armed),
             "landing paint, not adoption, starts the timer: {armed}"
@@ -170,16 +174,16 @@ fn same_tab_landing_keeps_the_local_click_watch_without_a_second_record() {
 #[test]
 fn landing_is_judged_only_at_the_paint_that_consumed_it() {
     let (mut rig, rx, _) = landing(Some(1_000), false);
-    let pane = rig.state.ui.selected_pane.take();
-    rig.state.ui.selected_index = None;
+    let pane = rig.view().ui.selected_pane.take();
+    rig.view().ui.selected_index = None;
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.state.ui.focus_placement.is_none());
+    assert!(rig.view().ui.focus_placement.is_none());
 
-    rig.state.ui.selected_index = Some(0);
-    rig.state.ui.selected_pane = pane;
+    rig.view().ui.selected_index = Some(0);
+    rig.view().ui.selected_pane = pane;
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now() + LAYOUT_FREEZE)
@@ -190,14 +194,17 @@ fn landing_is_judged_only_at_the_paint_that_consumed_it() {
 #[test]
 fn missing_landing_row_records_null_from_the_post_paint_zone() {
     let (mut rig, rx, id) = landing(Some(3), false);
-    rig.state.ui.focus_placement = None;
-    rig.state.ui.drawn_selection = Some(id);
+    rig.view().ui.focus_placement = None;
+    rig.view().ui.drawn_selection = Some(id);
     rig.state.ui.painted_rows.clear();
     rig.state.ui.scroll_zone_top = 7;
-    rig.state.ui.banner_shown = !rig.state.ui.banner_shown;
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.banner_shown = !state.ui.banner_shown;
+    }
     rig.state.hold_expired_since_paint = true;
-    rig.state
-        .observe_paint(Instant::now() + Duration::from_millis(120));
+    rig.observe_paint(Instant::now() + Duration::from_millis(120));
     let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
     assert_eq!(wire["from_y"], 10);
     assert_eq!(wire["to_y"], serde_json::Value::Null);
@@ -220,7 +227,7 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         rig.state.ui.anchor_clamped = cause == "no_room_clamp";
         if matches!(cause, "no_room_clamp" | "hold_expired") {
             rig.state.clock = LoopClock::play(Timestamp::UNIX_EPOCH);
-            super::super::super::layout_freeze::arm_freeze(&mut rig.state.ui, 0);
+            super::super::super::layout_freeze::arm_freeze(&mut rig.view().ui, 0);
             let prev = rig.state.current.clone();
             rig.state.reconcile_selection_and_order(
                 &prev,
@@ -237,10 +244,10 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         if cause == "selection_changed" {
             rig.state.ui.banner_shown = false;
         }
-        rig.state.ui.drawn_selection =
+        rig.view().ui.drawn_selection =
             (cause != "height_above_changed").then(|| "another-row".into());
         rig.state.ui.painted_rows[0].1 = 3;
-        rig.state.observe_paint(now + Duration::from_millis(120));
+        rig.observe_paint(now + Duration::from_millis(120));
         let draft = displacement(&rx, &rig.state.config.instance_id);
         let wire = serde_json::to_value(&draft.kind).unwrap();
         assert_eq!(wire["detector"], "clicked_row_displaced");
@@ -249,12 +256,12 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         assert_eq!(wire["to_y"], 3);
         assert_eq!(wire["dt_ms"], 120);
         assert_eq!(draft.window_ms, Some(5_000));
-        assert_eq!(draft.frame.rows, rig.state.current.rows().count());
-        rig.state.observe_paint(now + Duration::from_millis(130));
+        assert_eq!(draft.frame.rows, rig.view().current.rows().count());
+        rig.observe_paint(now + Duration::from_millis(130));
         assert!(rx.try_recv().is_err(), "unchanged paint must stay silent");
         rig.state.ui.anchor_clamped = false;
         rig.state.ui.painted_rows[0].1 = 4;
-        rig.state.observe_paint(now + Duration::from_millis(140));
+        rig.observe_paint(now + Duration::from_millis(140));
         let wire =
             serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
         assert_eq!(wire["from_y"], 3);
@@ -269,10 +276,10 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
 fn clicked_row_leaving_the_viewport_emits_null_and_disarms() {
     let (mut rig, rx, _, now) = watched_row();
     rig.state.ui.painted_rows.clear();
-    rig.state.observe_paint(now + Duration::from_millis(1));
+    rig.observe_paint(now + Duration::from_millis(1));
     let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
     assert_eq!(wire["to_y"], serde_json::Value::Null);
-    rig.state.observe_paint(now + Duration::from_millis(2));
+    rig.observe_paint(now + Duration::from_millis(2));
     assert!(rx.try_recv().is_err());
 }
 
@@ -286,12 +293,12 @@ fn clicked_row_watch_ends_on_input_or_at_the_hold_deadline() {
     ] {
         let (mut rig, rx, pane, now) = watched_row();
         rig.state.ui.painted_rows[0].1 = 1;
-        rig.state.observe_paint(now + Duration::from_millis(1));
+        rig.observe_paint(now + Duration::from_millis(1));
         let _ = displacement(&rx, &rig.state.config.instance_id);
         rig.state.arm_clicked_row(&pane, now);
         rig.state.apply_input([action], &mut rig.terminal).unwrap();
         rig.state.ui.painted_rows.clear();
-        rig.state.observe_paint(now + Duration::from_millis(1));
+        rig.observe_paint(now + Duration::from_millis(1));
         assert!(
             rx.try_recv().is_err(),
             "an intervening input ends the watch"
@@ -299,14 +306,12 @@ fn clicked_row_watch_ends_on_input_or_at_the_hold_deadline() {
     }
     let (mut rig, rx, pane, now) = watched_row();
     rig.state.ui.painted_rows[0].1 = 8;
-    rig.state
-        .observe_paint(now + LAYOUT_FREEZE - Duration::from_millis(1));
+    rig.observe_paint(now + LAYOUT_FREEZE - Duration::from_millis(1));
     let _ = displacement(&rx, &rig.state.config.instance_id);
     rig.state.arm_clicked_row(&pane, now);
     rig.state.ui.painted_rows[0].1 = 9;
-    rig.state.observe_paint(now + LAYOUT_FREEZE);
-    rig.state
-        .observe_paint(now + LAYOUT_FREEZE + Duration::from_millis(1));
+    rig.observe_paint(now + LAYOUT_FREEZE);
+    rig.observe_paint(now + LAYOUT_FREEZE + Duration::from_millis(1));
     assert!(rx.try_recv().is_err(), "the click window is half-open");
 }
 
@@ -314,14 +319,14 @@ fn clicked_row_watch_ends_on_input_or_at_the_hold_deadline() {
 fn clicked_row_rearms_only_for_a_painted_target_and_carries_channel_drops() {
     let (mut rig, rx, pane, now) = watched_row();
     rig.state.ui.painted_rows[0].1 = 2;
-    rig.state.observe_paint(now + Duration::from_millis(1));
+    rig.observe_paint(now + Duration::from_millis(1));
     rig.state.ui.painted_rows[0].1 = 3;
-    rig.state.observe_paint(now + Duration::from_millis(2)); // full channel
+    rig.observe_paint(now + Duration::from_millis(2)); // full channel
     let _ = displacement(&rx, &rig.state.config.instance_id);
     rig.state
         .arm_clicked_row(&pane, now + Duration::from_millis(10));
     rig.state.ui.painted_rows[0].1 = 4;
-    rig.state.observe_paint(now + Duration::from_millis(11));
+    rig.observe_paint(now + Duration::from_millis(11));
     let draft = displacement(&rx, &rig.state.config.instance_id);
     assert_eq!(draft.dropped_msgs, 1);
     let wire = serde_json::to_value(draft.kind).unwrap();
@@ -329,6 +334,6 @@ fn clicked_row_rearms_only_for_a_painted_target_and_carries_channel_drops() {
     assert_eq!(wire["dt_ms"], 1);
     rig.state.ui.painted_rows.clear();
     rig.state.arm_clicked_row(&pane, now);
-    rig.state.observe_paint(now + Duration::from_millis(1));
+    rig.observe_paint(now + Duration::from_millis(1));
     assert!(rx.try_recv().is_err(), "a hidden focus target cannot arm");
 }

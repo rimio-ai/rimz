@@ -1,4 +1,4 @@
-//! Renderer-local layout freeze.
+//! View-owned layout freeze.
 //!
 //! Ranking remains producer truth. This module reapplies the last painted order
 //! over a fresh, already-ranked snapshot for a short interaction window and
@@ -52,10 +52,11 @@ pub(super) fn apply_freeze(
 ) {
     if interacted {
         arm_freeze(ui, now_ms);
-    } else if ui
-        .freeze
-        .as_ref()
-        .is_some_and(|hold| now_ms >= hold.deadline_ms(parked))
+    } else if !ui.arrival_pending
+        && ui
+            .freeze
+            .as_ref()
+            .is_some_and(|hold| now_ms >= hold.deadline_ms(parked))
     {
         ui.freeze = None;
     }

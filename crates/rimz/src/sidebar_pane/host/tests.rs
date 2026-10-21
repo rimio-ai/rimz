@@ -10,6 +10,8 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
+mod restart;
+
 struct Room {
     _dir: tempfile::TempDir,
     runtime: RuntimePaths,
@@ -316,6 +318,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
         eventually("successor attachment released", || {
             lock(&room.host.attachments).is_empty()
         });
+        room.replace_host();
     }
 }
 
@@ -690,7 +693,7 @@ fn hidden_attachment_keeps_lifecycle_and_paints_on_viewed_fold() {
 }
 
 #[test]
-fn detached_attachment_keeps_lifecycle_and_paints_on_resize() {
+fn detached_attachment_keeps_lifecycle_and_hidden_resize_waits_for_visibility() {
     hidden_reveal(crate::store::snapshot::SidebarPresence::Detached, true);
 }
 
@@ -765,19 +768,17 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         room.heartbeat(&hidden_pane.instance_id).unwrap().last_seen > beat
     });
     assert_eq!(hidden.drain(), b"", "heartbeat maintenance does not paint");
-    for word in [b"press:-:char:?".as_slice(), b"press:-:esc".as_slice()] {
-        room.wake(&hidden_pane, word);
-        std::thread::sleep(Duration::from_millis(600));
-        assert_eq!(hidden.drain(), b"", "hidden input drains without painting");
-    }
-
-    let revealed = Instant::now();
     if reveal_by_resize {
         room.wake(&hidden_pane, b"resize");
-    } else {
-        snapshot.viewed_panes.push(hidden_id.clone());
-        publish(&snapshot);
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(
+            hidden.drain().is_empty(),
+            "uncorroborated hidden resize routes no view"
+        );
     }
+    let revealed = Instant::now();
+    snapshot.viewed_panes.push(hidden_id.clone());
+    publish(&snapshot);
     let mut bytes = Vec::new();
     while !String::from_utf8_lossy(&bytes).contains("hidden-latest") {
         assert!(

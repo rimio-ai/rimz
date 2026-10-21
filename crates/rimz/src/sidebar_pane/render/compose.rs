@@ -90,7 +90,7 @@ pub(in crate::sidebar_pane) fn compose_lines(
     clippy::too_many_arguments,
     reason = "lend pane-local caches independently of immutable UI state"
 )]
-pub(in crate::sidebar_pane) fn compose_lines_with_meter(
+pub(super) fn compose_lines_with_meter(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,

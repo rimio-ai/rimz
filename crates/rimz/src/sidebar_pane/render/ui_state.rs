@@ -106,12 +106,14 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// The armed layout freeze, or `None` while rows
     /// rank and cap live.
     pub(in crate::sidebar_pane) freeze: Option<LayoutFreeze>,
+    /// Preserve the last painted order until the arriving pane's first composition, even when its hold has expired.
+    pub(in crate::sidebar_pane) arrival_pending: bool,
     /// Target first scroll-zone content line of the agent-cards viewport.
     /// Resolved around the previous target window's selected or topmost card,
     /// clamped to the zone, and written back like frame interactions. Only this
     /// sidebar's own input reveals an off-screen selection; visible cards never reveal.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
-    /// Unwatched attachments adopt the watched target window through the host.
+    /// Travels with the client view between painting panes.
     pub(in crate::sidebar_pane) scroll_offset: usize,
     /// The wheel glide from the last shown line toward `scroll_offset`: armed
     /// by a wheel tick, observed at every draw's write-back, translated by card
@@ -129,7 +131,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// retain the set until the freeze releases it together with the order.
     /// A shared landing paint uses the source frame's carried set instead of
     /// these local candidates and the previous selection.
-    /// Host viewport adoption copies these sources and the drawn selection.
+    /// Forked views retain these sources and the drawn selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; explicit row and landed-chip reveals can still nudge their target into view.
@@ -188,7 +190,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
     /// Visibility of finished groups' receipts, shared with unviewed attachments.
     pub(in crate::sidebar_pane) landed_open: bool,
-    /// Open/closed choice, shared with unviewed attachments, for an agent card's delegation
+    /// View-owned open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
     /// (open under selection or `expanded` density) in both directions, stays
     /// for the renderer's life, and drops only when the row leaves the snapshot.
@@ -196,7 +198,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Delegation sections showing their older children through `+K older`
     /// (row id → the parent's user turn at the click). Expires at the parent's
     /// next user-authored prompt.
-    /// Copied into unviewed attachments through the host viewport.
+    /// Travels with the view, including a fork's initial state.
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
 }
 
@@ -322,7 +324,7 @@ pub(in crate::sidebar_pane) struct Browse {
     pub(in crate::sidebar_pane) baseline_at_start: Option<PaneId>,
 }
 
-/// Renderer-local layout freeze that keeps rows and groups stable while the user
+/// View-owned layout freeze that keeps rows and groups stable while the user
 /// is looking. Read state still clears immediately; position and held cap
 /// exemptions are presentation-only.
 #[derive(Clone, Debug)]

@@ -1071,18 +1071,20 @@ fn ensure_sidebar_loop_runtime_uses_driver_clock(root: &Path, files: &[PathBuf])
     let app_root = root.join("crates/rimz/src/sidebar_pane/app");
     let mut violations = Vec::new();
     for path in files {
-        if path.parent() != Some(app_root.as_path())
-            || !matches!(
-                path.file_name().and_then(OsStr::to_str),
-                Some(
-                    "loop_state.rs"
-                        | "view_state.rs"
-                        | "views.rs"
-                        | "health.rs"
-                        | "remind.rs"
-                        | "timing.rs"
-                )
-            )
+        let shared_view_runtime = path == &app_root.join("loop_state/shared.rs");
+        if !shared_view_runtime
+            && (path.parent() != Some(app_root.as_path())
+                || !matches!(
+                    path.file_name().and_then(OsStr::to_str),
+                    Some(
+                        "loop_state.rs"
+                            | "view_state.rs"
+                            | "views.rs"
+                            | "health.rs"
+                            | "remind.rs"
+                            | "timing.rs"
+                    )
+                ))
         {
             continue;
         }

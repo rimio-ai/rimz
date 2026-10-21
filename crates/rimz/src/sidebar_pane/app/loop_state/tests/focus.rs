@@ -6,6 +6,213 @@ use crate::mux::tmux::ControlLine;
 use crate::sidebar::presence::{projector::project_presence, tmux::TmuxPresenceState};
 use crate::sidebar_pane::app::fixtures::focus_fixture;
 
+fn sampled_focus_rig(mux: MuxName) -> (Rig, PaneId, PaneId, PaneId) {
+    let id = |index| {
+        PaneId::from_parts(
+            mux,
+            match mux {
+                MuxName::Tmux => format!("%{index}"),
+                MuxName::Zellij => format!("terminal_{index}"),
+            },
+        )
+    };
+    let (own, p, q) = (id(10), id(11), id(12));
+    let clock = LoopClock::play(Timestamp::now());
+    let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock);
+    let mut working = vec![pane(p.raw(), "tab_1", false), pane(q.raw(), "tab_1", false)];
+    working[0].pane_id = p.clone();
+    working[1].pane_id = q.clone();
+    let mut snapshot = snapshot_with_panes(&rig.ws, working.clone());
+    snapshot.focused_pane = Some(p.clone());
+    snapshot.viewed_panes = vec![p.clone()];
+    snapshot.own_view = Some(SidebarOwnView {
+        sibling_count: 2,
+        working_pane_ids: vec![p.clone(), q.clone()],
+        own_view_is_daemon: false,
+    });
+    let mut sidebar = pane(own.raw(), "tab_1", false);
+    sidebar.pane_id = own.clone();
+    sidebar.command = Some("rimz-sidebar".into());
+    working.push(sidebar);
+    let mut frame =
+        crate::sidebar::frame::assemble_frame(working, rig.state.clock.now_ms(), "rimz-test");
+    frame.client_views = vec![crate::pane::ClientPaneView {
+        client_id: match mux {
+            MuxName::Tmux => crate::ids::MuxClientId::Tmux("client-1".into()),
+            MuxName::Zellij => crate::ids::MuxClientId::Zellij(1),
+        },
+        pane_id: p.clone(),
+    }];
+    frame.client_view_fresh = true;
+    deliver_sampled(&mut rig, snapshot, frame);
+    (rig, own, p, q)
+}
+
+/// Deliver `frame` as the plane's next fold, so the client sample it carries is applied.
+fn deliver_sampled(
+    rig: &mut Rig,
+    snapshot: SidebarSnapshot,
+    frame: crate::sidebar::frame::PaneFrame,
+) {
+    rig.deliver(FetchUpdate::Fold {
+        fold: Arc::new(WorkspaceFold {
+            workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+            frame: Some(Arc::new(frame)),
+        }),
+        own_pane: rig.state.config.own_pane.clone(),
+        refresh_override: rig.state.config.refresh_ms_override,
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Produced,
+    });
+    assert!(
+        rig.views.lock().unwrap().has_sample(),
+        "the fold's client sample applied"
+    );
+}
+
+fn focus_event_advances_selection(mux: MuxName) {
+    let (mut rig, _, p, q) = sampled_focus_rig(mux);
+    assert!(rig.state.observed_watched());
+    assert!(rig.next_request().is_none());
+    assert_eq!(
+        rig.state.inspect_view(|ui, _| ui.selected_pane.clone()),
+        Some(p.clone())
+    );
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![q.clone()],
+        unfocused: vec![p],
+    });
+    assert_eq!(
+        rig.state.inspect_view(|ui, _| ui.selected_pane.clone()),
+        Some(q),
+        "{mux:?}"
+    );
+    assert!(rig.state.optimistic_watch_until.is_some());
+    assert!(
+        rig.next_request().is_none(),
+        "{mux:?}: focus within a watched tab needs no fresh production"
+    );
+}
+
+#[test]
+fn tmux_focus_event_advances_selection_before_the_next_client_sample() {
+    focus_event_advances_selection(MuxName::Tmux);
+}
+
+#[test]
+fn zellij_focus_event_advances_selection_before_the_next_client_sample() {
+    focus_event_advances_selection(MuxName::Zellij);
+}
+
+#[test]
+fn zellij_unattributable_focus_event_keeps_the_sample() {
+    let (mut rig, _, p, _) = sampled_focus_rig(MuxName::Zellij);
+    let fold = rig.views.lock().unwrap().fold.clone().unwrap();
+    let frame = fold.frame.as_ref().unwrap();
+    let foreign = zellij("terminal_50");
+    let mut panes: Vec<_> = frame
+        .tabs
+        .iter()
+        .flat_map(|tab| {
+            tab.panes.iter().map(|entry| {
+                let mut pane = pane(entry.pane_id.raw(), "tab_1", false);
+                pane.pane_id = entry.pane_id.clone();
+                pane.command = entry.current.command.clone();
+                pane
+            })
+        })
+        .collect();
+    panes.push(pane(foreign.raw(), "tab_2", false));
+    let previous = fold.workspace.snapshot();
+    let working = panes
+        .iter()
+        .filter(|pane| pane.command.as_deref() != Some("rimz-sidebar"))
+        .cloned()
+        .collect();
+    let mut snapshot = snapshot_with_panes(&rig.ws, working);
+    snapshot.focused_pane = previous.focused_pane.clone();
+    snapshot.viewed_panes = previous.viewed_panes.clone();
+    snapshot.own_view = previous.own_view.clone();
+    let mut sidebar = pane("sidebar_2", "tab_2", false);
+    sidebar.command = Some("rimz-sidebar".into());
+    panes.push(sidebar);
+    let mut next =
+        crate::sidebar::frame::assemble_frame(panes, rig.state.clock.now_ms(), "rimz-test");
+    next.client_views = frame.client_views.clone();
+    next.client_views.push(crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(2),
+        pane_id: foreign.clone(),
+    });
+    next.client_view_fresh = true;
+    deliver_sampled(&mut rig, snapshot, next);
+    assert_eq!(
+        rig.state.inspect_view(|ui, _| ui.selected_pane.clone()),
+        Some(p.clone())
+    );
+    assert!(
+        rig.state
+            .inspect_view(|_, view| view.current.row_owning_pane(&foreign).is_some()),
+        "the foreign client's pane has a row the selection could move to"
+    );
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![foreign],
+        unfocused: vec![],
+    });
+    assert_eq!(
+        rig.state.inspect_view(|ui, _| ui.selected_pane.clone()),
+        Some(p)
+    );
+}
+
+#[test]
+fn focus_failure_follows_its_source_view_after_rerouting() {
+    let (mut rig, _, [first, _]) = child_focus_rig();
+    let own = rig.state.config.own_pane.clone().unwrap();
+    let other = zellij("sidebar_other");
+    let sample = |rig: &Rig, swapped| {
+        rig.views.lock().unwrap().reconcile(
+            &[
+                crate::pane::ClientPaneView {
+                    client_id: crate::ids::MuxClientId::Zellij(1),
+                    pane_id: if swapped { other.clone() } else { own.clone() },
+                },
+                crate::pane::ClientPaneView {
+                    client_id: crate::ids::MuxClientId::Zellij(2),
+                    pane_id: if swapped { own.clone() } else { other.clone() },
+                },
+            ],
+            true,
+            rig.state.clock.now(),
+            Duration::from_secs(60),
+        );
+    };
+    sample(&rig, false);
+    let source = rig
+        .views
+        .lock()
+        .unwrap()
+        .presentation(&own, rig.state.clock.now(), false)
+        .0;
+    click_child(&mut rig, &first);
+    sample(&rig, true);
+    rig.state
+        .on_focus_failed(first, "target disappeared".into());
+    let mut views = rig.views.lock().unwrap();
+    let source = views.retained(source).unwrap();
+    assert!(
+        source.pending_input_focus.is_none(),
+        "the failed jump no longer keeps the source view's input focus pending"
+    );
+    assert_eq!(
+        source
+            .health
+            .alert
+            .as_ref()
+            .map(|alert| alert.reason.as_str()),
+        Some("focus failed: parent-at-click: target disappeared")
+    );
+}
+
 fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
     let mut rig = Rig::new();
     let baseline = zellij("terminal_1");
@@ -31,7 +238,7 @@ fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
             .unwrap()
         })
         .collect();
-    rig.state
+    rig.view()
         .ui
         .delegation_overrides
         .insert(row.id.clone(), true);
@@ -82,7 +289,7 @@ fn delegation_header_focuses_parent_while_a_child_pane_is_focused() {
         .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(applied.effects, vec![InputEffect::Focus(parent.clone())]);
-    assert_eq!(rig.state.ui.selected_pane, Some(parent));
+    assert_eq!(rig.view().ui.selected_pane, Some(parent));
 }
 
 #[test]
@@ -90,27 +297,28 @@ fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
     let (mut rig, baseline, [first, second]) = child_focus_rig();
     click_child(&mut rig, &first);
     click_child(&mut rig, &second);
-    let selected = rig.state.ui.selected_pane.clone();
-    let browse = rig.state.ui.browse.clone();
-    rig.state.ui.focus_placement = Some(crate::mux::focus_anchor::FocusPlacement {
+    let selected = rig.view().ui.selected_pane.clone();
+    let browse = rig.view().ui.browse.clone();
+    rig.view().ui.focus_placement = Some(crate::mux::focus_anchor::FocusPlacement {
         row_id: selected.as_ref().unwrap().to_string(),
         viewport_row: 2,
         held: Default::default(),
     });
-    let placement = rig.state.ui.focus_placement.clone();
+    let placement = rig.view().ui.focus_placement.clone();
     rig.state.on_focus_failed(first, "stale sibling".into());
     assert_eq!(
-        rig.state.ui.browse, browse,
+        rig.view().ui.browse,
+        browse,
         "older failure cannot clear the newer browse"
     );
-    assert_eq!(rig.state.ui.selected_pane, selected);
-    assert_eq!(rig.state.ui.focus_placement, placement);
-    assert!(rig.state.health.alert.is_none());
+    assert_eq!(rig.view().ui.selected_pane, selected);
+    assert_eq!(rig.view().ui.focus_placement, placement);
+    assert!(rig.view().health.alert.is_none());
     rig.state.on_focus_failed(second, "latest failure".into());
-    assert_eq!(rig.state.ui.baseline_pane, Some(baseline));
-    assert!(rig.state.ui.browse.is_none());
+    assert_eq!(rig.view().ui.baseline_pane, Some(baseline));
+    assert!(rig.view().ui.browse.is_none());
     assert_eq!(
-        rig.state.health.alert.as_ref().unwrap().reason,
+        rig.view().health.alert.as_ref().unwrap().reason,
         "focus failed: parent-at-click: latest failure"
     );
 }
@@ -119,15 +327,15 @@ fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
 fn failed_child_focus_after_card_departure_uses_the_clicked_label() {
     let (mut rig, baseline, [first, _]) = child_focus_rig();
     click_child(&mut rig, &first);
-    let parent = rig.state.ui.selected_pane.clone().unwrap();
+    let parent = rig.view().ui.selected_pane.clone().unwrap();
     rig.event(SidebarEvent::PaneClosed { pane_id: parent });
-    assert!(rig.state.current.row_owning_pane(&first).is_none());
+    assert!(rig.view().current.row_owning_pane(&first).is_none());
     rig.state
         .on_focus_failed(first, "target disappeared".into());
-    assert_eq!(rig.state.ui.baseline_pane, Some(baseline));
-    assert!(rig.state.ui.browse.is_none());
+    assert_eq!(rig.view().ui.baseline_pane, Some(baseline));
+    assert!(rig.view().ui.browse.is_none());
     assert_eq!(
-        rig.state
+        rig.view()
             .health
             .alert
             .as_ref()
@@ -152,7 +360,7 @@ fn picked_focus_rig() -> (Rig, PaneId, PaneId) {
     rig.state
         .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection, Some(picked.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(picked.to_string()));
     (rig, baseline, picked)
 }
 
@@ -164,16 +372,16 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
             let anchor =
                 requested_focus_anchor(picked.clone(), 2, crate::utils::time::unix_now_ms(), None);
             crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
-            rig.state.fold_focus_intent(anchor.clone(), Instant::now());
+            rig.state.fold_focus_intent(anchor.clone());
             assert!(
-                rig.state.ui.browse.is_none(),
+                rig.view().ui.browse.is_none(),
                 "intent adoption already ended browsing"
             );
-            assert_eq!(rig.state.ui.baseline_pane, Some(picked.clone()));
-            rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+            assert_eq!(rig.view().ui.baseline_pane, Some(picked.clone()));
+            rig.view().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
                 sampled_at: Instant::now(),
                 anchor: Some(anchor.clone()),
-                filter: rig.state.ui.make_up_filter.clone(),
+                filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
             }));
             assert!(crate::mux::focus_anchor::clear_matching(
                 &rig.runtime,
@@ -194,29 +402,30 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
             .paint_now(&mut rig.terminal, Instant::now())
             .unwrap();
         assert_eq!(
-            rig.state.ui.drawn_selection,
+            rig.view().ui.drawn_selection,
             Some(baseline.to_string()),
             "failed focus restores the pulled baseline"
         );
-        assert!(rig.state.ui.browse.is_none());
+        assert!(rig.view().ui.browse.is_none());
         let alert = rig
-            .state
+            .view()
             .view
             .health
             .alert
-            .as_ref()
+            .clone()
             .expect("focus failure notice");
         assert_eq!(alert.reason, "focus failed: zsh: target disappeared");
         assert!(!alert.is_active());
-        let theme = rig.state.ui.theme(&rig.state.view.current.theme);
-        let frame = render::compose_lines(
-            &rig.state.current,
-            Some(alert),
-            &rig.state.ui,
-            &theme,
-            80,
-            24,
-        );
+        let theme = {
+            let mut guard = rig.view();
+            let state = &mut *guard;
+            state.ui.theme(&state.view.current.theme)
+        };
+        let frame = {
+            let mut guard = rig.view();
+            let state = &mut *guard;
+            render::compose_lines(&state.current, Some(&alert), &state.ui, &theme, 80, 24)
+        };
         assert!(frame.lines.iter().any(|line| {
             line.to_string()
                 .contains("focus failed: zsh: target disappeared")
@@ -236,8 +445,8 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
             },
         )
         .unwrap();
-    assert_eq!(rig.state.ui.selected_pane, Some(baseline));
-    assert!(rig.state.health.alert.is_none());
+    assert_eq!(rig.view().ui.selected_pane, Some(baseline));
+    assert!(rig.view().health.alert.is_none());
 }
 
 #[test]
@@ -344,7 +553,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection, Some(baseline.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(baseline.to_string()));
     let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
     let outcome = rig
         .state
@@ -355,7 +564,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
             .effects
             .contains(&InputEffect::Focus(picked.clone()))
     );
-    assert_eq!(rig.state.ui.drawn_selection, Some(picked.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(picked.to_string()));
 
     let nonce = request_action_with_test_sample(
         &rig.runtime,
@@ -372,16 +581,16 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
     )
     .unwrap();
     let anchor = crate::mux::focus_anchor::load(&rig.runtime).unwrap();
-    rig.state.fold_focus_intent(anchor.clone(), Instant::now());
+    rig.state.fold_focus_intent(anchor.clone());
     assert!(
-        rig.state.ui.browse.is_none(),
+        rig.view().ui.browse.is_none(),
         "request adoption ended browsing before dispatch"
     );
-    assert_eq!(rig.state.ui.baseline_pane, Some(picked.clone()));
-    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+    assert_eq!(rig.view().ui.baseline_pane, Some(picked.clone()));
+    rig.view().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         sampled_at: Instant::now(),
         anchor: Some(anchor),
-        filter: rig.state.ui.make_up_filter.clone(),
+        filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
     }));
 
     // A backend mismatch fails before spawning, but runs real dispatch-error cleanup.
@@ -411,11 +620,11 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
     assert_eq!(
-        rig.state.ui.drawn_selection,
+        rig.view().ui.drawn_selection,
         Some(baseline.to_string()),
         "failed dispatch restores the pre-jump working-pane baseline while native focus stays on the sidebar"
     );
-    let alert = rig.state.health.alert.as_ref().unwrap();
+    let alert = rig.view().health.alert.clone().unwrap();
     assert!(alert.reason.starts_with("focus failed: zsh:"));
     assert!(!alert.is_active());
     rig.shared_fold(
@@ -423,14 +632,14 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         Arc::new(super::super::super::fetch::FoldInputs {
             sampled_at: Instant::now(),
             anchor: None,
-            filter: rig.state.ui.make_up_filter.clone(),
+            filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
         }),
     );
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
     assert_eq!(
-        rig.state.ui.drawn_selection,
+        rig.view().ui.drawn_selection,
         Some(baseline.to_string()),
         "the next shared cut must not revive the failed target"
     );
@@ -471,7 +680,7 @@ fn clicked_selection_stays_painted_through_late_native_confirmation_and_fence() 
         .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
     assert_eq!(
-        rig.state.ui.drawn_selection,
+        rig.view().ui.drawn_selection,
         Some(target.to_string()),
         "click paint selects B"
     );
@@ -482,19 +691,19 @@ fn clicked_selection_stays_painted_through_late_native_confirmation_and_fence() 
     rig.state
         .paint_now(&mut rig.terminal, now + Duration::from_millis(500))
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(target.to_string()));
     let mut anchor = applied_focus_anchor(target.clone(), 2, issued, None);
     anchor.pre_action = native.client_views.clone();
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     rig.fold(native.clone(), SnapshotSource::Produced);
     assert!(
-        rig.state.current.focused_pane.is_none(),
+        rig.view().current.focused_pane.is_none(),
         "aged anchor fences stale A"
     );
     rig.state
         .paint_now(&mut rig.terminal, now + Duration::from_millis(2_600))
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(target.to_string()));
     native.focused_pane = Some(target.clone());
     native.client_views[0].pane_id = target.clone();
     native.panes_observed_at_ms = Some(issued + 3_000);
@@ -502,7 +711,7 @@ fn clicked_selection_stays_painted_through_late_native_confirmation_and_fence() 
     rig.state
         .paint_now(&mut rig.terminal, now + Duration::from_millis(3_000))
         .unwrap();
-    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    assert_eq!(rig.view().ui.drawn_selection, Some(target.to_string()));
     for message in rx.try_iter() {
         if let ObserveMsg::OwnAnomaly { draft, .. } = message {
             assert_ne!(
@@ -581,8 +790,12 @@ fn tmux_sidebar_departure_releases_parked_freeze_before_the_next_pull() {
     ) {
         rig.event(event);
     }
-    rig.state.ui.theme(&rig.state.view.current.theme);
-    layout_freeze::arm_freeze(&mut rig.state.ui, now as i64 - 6_000);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.theme(&state.view.current.theme);
+    }
+    layout_freeze::arm_freeze(&mut rig.view().ui, now as i64 - 6_000);
     assert!(rig.state.parked(now));
     let departure = project_presence(
         producer
@@ -606,11 +819,12 @@ fn tmux_sidebar_departure_releases_parked_freeze_before_the_next_pull() {
         rig.event(event);
     }
     assert!(
-        rig.state.ui.freeze.is_none(),
+        rig.view().ui.freeze.is_none(),
         "departure releases in the event fold, not a later pull"
     );
     assert_eq!(
-        rig.state.current.client_views[0].pane_id, own,
+        rig.view().current.client_views[0].pane_id,
+        own,
         "pull still reports the sidebar"
     );
 }
@@ -639,8 +853,8 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
         tmux_focus_snapshot(&rig, third_window, stamp),
         SnapshotSource::Produced,
     );
-    assert_eq!(rig.state.ui.selected_pane, Some(tmux("%1")));
-    let clients = rig.state.current.client_views.clone();
+    assert_eq!(rig.view().ui.selected_pane, Some(tmux("%1")));
+    let clients = rig.view().current.client_views.clone();
     for event in project_presence(producer.apply(line, false).0) {
         let envelope = SidebarEventEnvelope::new(
             rig.ws.clone(),
@@ -651,9 +865,9 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
         rig.state
             .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
     }
-    assert_eq!(rig.state.current.client_views, clients);
+    assert_eq!(rig.view().current.client_views, clients);
     assert_eq!(
-        rig.state.ui.selected_pane,
+        rig.view().ui.selected_pane,
         Some(tmux(expected)),
         "interim selection"
     );
@@ -662,7 +876,7 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
         SnapshotSource::Produced,
     );
     assert_eq!(
-        rig.state.ui.selected_pane,
+        rig.view().ui.selected_pane,
         Some(tmux(expected)),
         "produced/final selection"
     );
@@ -674,7 +888,7 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
     }
     rig.fold(latest, SnapshotSource::Produced);
     assert_eq!(
-        rig.state.ui.selected_pane,
+        rig.view().ui.selected_pane,
         Some(tmux(expected)),
         "following pull selection"
     );
@@ -1262,6 +1476,15 @@ fn requested_focus_anchor(
 #[test]
 fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
     let mut rig = Rig::new();
+    {
+        // The intent targets a pane on this sidebar's viewed tab, which owns it.
+        let mut view = rig.view();
+        view.current.own_view = Some(crate::store::snapshot::SidebarOwnView {
+            working_pane_ids: vec![zellij("terminal_2")],
+            ..own_view()
+        });
+        view.current.viewed_panes = vec![zellij("terminal_2")];
+    }
     let now_ms = rig.state.clock.now_ms();
     let anchor = requested_focus_anchor(zellij("terminal_2"), 0, now_ms - 60_000, None);
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
@@ -1269,10 +1492,10 @@ fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
     let sampled_at = Instant::now();
     assert!(rig.state.pending_focus_intent(now_ms, stale_fold).is_none());
     assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
-    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+    rig.view().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         sampled_at,
         anchor: Some(anchor),
-        filter: rig.state.ui.make_up_filter.clone(),
+        filter: rig.state.inspect_view(|ui, _| ui.make_up_filter.clone()),
     }));
     assert!(
         matches!(
@@ -1292,13 +1515,12 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
     rig.fold(snapshot, SnapshotSource::Produced);
-    let selected = rig.state.ui.selected_pane.clone();
+    let selected = rig.view().ui.selected_pane.clone();
     let anchor = requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     let mut pending = rig.state.current.clone();
     pending.display_name = "waiting fold".to_owned();
-    rig.result_tx
-        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
         .unwrap();
     let (push, ack) = focus_push(&mut rig, anchor.clone());
     rig.state
@@ -1308,9 +1530,9 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
         rig.state.projections, 0,
         "non-owner must leave projection in the mailbox"
     );
-    assert_eq!(rig.state.last_folded_focus_intent, None);
-    assert_eq!(rig.state.ui.selected_pane, selected);
-    assert_ne!(rig.state.current.display_name, "waiting fold");
+    assert_eq!(rig.view().last_folded_focus_intent, None);
+    assert_eq!(rig.view().ui.selected_pane, selected);
+    assert_ne!(rig.view().current.display_name, "waiting fold");
     assert!(!rig.state.watched());
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
     rig.event(SidebarEvent::FocusIntent {
@@ -1321,8 +1543,8 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
         rig.state.projections, 0,
         "a foreign intent leaves the mailbox untouched"
     );
-    assert_ne!(rig.state.current.display_name, "waiting fold");
-    assert_eq!(rig.state.last_folded_focus_intent, None);
+    assert_ne!(rig.view().current.display_name, "waiting fold");
+    assert_eq!(rig.view().last_folded_focus_intent, None);
 }
 
 #[test]
@@ -1335,8 +1557,7 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
     let mut seed = pending.clone();
     seed.own_view = Some(own_view());
     rig.fold(seed, SnapshotSource::Produced);
-    rig.result_tx
-        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
         .unwrap();
     rig.state
         .paint_hold
@@ -1359,7 +1580,7 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
     rig.state.paint_hold.release();
     rig.paint(true);
     assert_eq!(
-        rig.state.ui.drawn_selection.as_deref(),
+        rig.view().ui.drawn_selection.as_deref(),
         Some(target.to_string().as_str())
     );
     assert_push_report(&ack, &rig, PushVerdict::Painted, true);
@@ -1377,7 +1598,7 @@ fn focus_push_with_unknown_own_view_takes_the_drain_and_fold_path() {
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.state.last_folded_focus_intent, Some(nonce));
+    assert_eq!(rig.view().last_folded_focus_intent, Some(nonce));
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
 
@@ -1388,13 +1609,12 @@ fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
     pending.own_view = Some(own_view());
     pending.display_name = "new target".to_owned();
     assert!(
-        rig.state
+        rig.view()
             .current
             .row_owning_pane(&zellij("terminal_2"))
             .is_none()
     );
-    rig.result_tx
-        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
         .unwrap();
     let anchor = requested_focus_anchor(
         zellij("terminal_2"),
@@ -1408,8 +1628,8 @@ fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.state.projections, 1);
-    assert_eq!(rig.state.current.display_name, "new target");
-    assert_eq!(rig.state.last_folded_focus_intent, Some(nonce));
+    assert_eq!(rig.view().current.display_name, "new target");
+    assert_eq!(rig.view().last_folded_focus_intent, Some(nonce));
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
 
@@ -1437,14 +1657,10 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
         rig.state
             .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
-        assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
-        if push_first {
-            assert_eq!(rig.state.ui.selected_pane, Some(first));
-            assert_eq!(rig.state.last_folded_focus_intent, None);
-            rig.event(event.clone());
-        }
-        assert_eq!(rig.state.ui.selected_pane, Some(target));
-        assert_eq!(rig.state.last_folded_focus_intent, Some(anchor.nonce));
+        // The target shares this sidebar's tab, so the first delivery folds and the push paints.
+        assert_push_report(&ack, &rig, PushVerdict::Painted, push_first);
+        assert_eq!(rig.view().ui.selected_pane, Some(target));
+        assert_eq!(rig.view().last_folded_focus_intent, Some(anchor.nonce));
         let next_frame = Instant::now() + Duration::from_secs(1);
         rig.state.next_frame = next_frame;
         rig.event(event);
@@ -1463,7 +1679,7 @@ fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
         rig.state.config.instance_id.clone(),
         crate::diag::DiagSink::disabled(),
     ));
-    rig.state.current.own_view = Some(own_view());
+    rig.view().current.own_view = Some(own_view());
     assert!(
         rig.state.focus_peers_for(&zellij("terminal_2")).is_some(),
         "cross-tab jumps push"
@@ -1472,7 +1688,7 @@ fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
         rig.state.focus_peers_for(&zellij("terminal_9")).is_none(),
         "same-tab jumps stay synchronous"
     );
-    rig.state.current.own_view = None;
+    rig.view().current.own_view = None;
     assert!(
         rig.state.focus_peers_for(&zellij("terminal_9")).is_some(),
         "unknown ownership uses the bounded wait"
@@ -1546,10 +1762,10 @@ fn assert_foreign_focus_anchor_is_ignored(shared: bool) {
         } else {
             rig.fold(snapshot, SnapshotSource::Produced);
         }
-        assert_eq!(rig.state.ui.selected_pane, Some(focused));
-        assert!(rig.state.ui.focus_placement.is_none());
-        assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
-        assert_eq!(rig.state.confirmed_focus_intent_ms, 0);
+        assert_eq!(rig.view().ui.selected_pane, Some(focused));
+        assert!(rig.view().ui.focus_placement.is_none());
+        assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
+        assert_eq!(rig.view().confirmed_focus_intent_ms, 0);
         assert_eq!(
             crate::mux::focus_anchor::load(&rig.runtime)
                 .expect("a foreign fold must not retire the anchor")
@@ -1583,8 +1799,8 @@ fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
         pane_id: target.clone(),
         nonce: anchor.nonce,
     });
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().ui.scroll_offset, 0);
 
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -1598,11 +1814,11 @@ fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
         }),
     });
     assert_eq!(
-        rig.state.ui.selected_pane,
+        rig.view().ui.selected_pane,
         Some(target),
         "an older shared cut must not rewind an already consumed focus intent"
     );
-    assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.scroll_offset, 0);
     assert_eq!(
         crate::mux::focus_anchor::load(&rig.runtime).unwrap().nonce,
         anchor.nonce
@@ -1615,47 +1831,50 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     let stamp = crate::utils::time::unix_now_ms();
     let old = applied_focus_anchor(zellij("terminal_1"), 7, stamp, None);
     let new = requested_focus_anchor(zellij("terminal_2"), 9, stamp + 1, None);
-    rig.state.current = snapshot_with_focused_pane(&rig.ws, old.pane_id.clone());
+    rig.view().current = snapshot_with_focused_pane(&rig.ws, old.pane_id.clone());
     crate::mux::focus_anchor::store(&rig.runtime, &new).unwrap();
-    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+    rig.view().fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
         anchor: Some(old.clone()),
         ..Default::default()
     }));
-    rig.state.ui.selected_pane = Some(old.pane_id.clone());
-    rig.state.ui.scroll_offset = 2;
+    rig.view().ui.selected_pane = Some(old.pane_id.clone());
+    rig.view().ui.scroll_offset = 2;
     rig.state.apply_focus_anchor();
-    assert_eq!(rig.state.ui.focus_placement, old.placement);
+    assert_eq!(rig.view().ui.focus_placement, old.placement);
     assert_eq!(
-        rig.state.ui.scroll_offset, 2,
+        rig.view().ui.scroll_offset,
+        2,
         "apply the fold's anchor against this pane's selection"
     );
 
-    rig.state.ui.selected_pane = Some(new.pane_id.clone());
-    rig.state.ui.last_focus_anchor_ms = 0;
-    rig.state.ui.scroll_offset = 2;
+    rig.view().ui.selected_pane = Some(new.pane_id.clone());
+    rig.view().ui.last_focus_anchor_ms = 0;
+    rig.view().ui.scroll_offset = 2;
     rig.state.apply_focus_anchor();
     assert_eq!(
-        rig.state.ui.scroll_offset, 2,
+        rig.view().ui.scroll_offset,
+        2,
         "a different selection must not adopt the cached anchor"
     );
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
 
-    rig.state.ui.selected_pane = Some(old.pane_id.clone());
-    rig.state.confirmed_focus_intent_ms = old.issued_at_ms;
+    rig.view().ui.selected_pane = Some(old.pane_id.clone());
+    rig.view().confirmed_focus_intent_ms = old.issued_at_ms;
     rig.state.apply_focus_anchor();
     assert_eq!(
         crate::mux::focus_anchor::load(&rig.runtime).unwrap().nonce,
         new.nonce,
         "live nonce comparison must preserve an intent written after the shared read"
     );
-    assert_eq!(rig.state.confirmed_focus_intent_ms, 0);
+    assert_eq!(rig.view().confirmed_focus_intent_ms, 0);
 
-    rig.state.fold_inputs = None;
-    rig.state.ui.selected_pane = Some(new.pane_id.clone());
+    rig.view().fold_inputs = None;
+    rig.view().ui.selected_pane = Some(new.pane_id.clone());
     rig.state.apply_focus_anchor();
-    assert_eq!(rig.state.ui.focus_placement, new.placement);
+    assert_eq!(rig.view().ui.focus_placement, new.placement);
     assert_eq!(
-        rig.state.ui.scroll_offset, 2,
+        rig.view().ui.scroll_offset,
+        2,
         "the event path reads the newer live anchor"
     );
 }
@@ -1677,8 +1896,8 @@ fn shared_focus_cut_converges_missed_intents_and_confirmation() {
             ..Default::default()
         }),
     );
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().ui.scroll_offset, 0);
 
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(stamp);
@@ -1695,15 +1914,15 @@ fn shared_focus_cut_converges_missed_intents_and_confirmation() {
         pane_id: target.clone(),
     }];
     rig.shared_fold(confirmed, applied_inputs.clone());
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
     assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
 
-    rig.state.ui.scroll_offset = 3;
+    rig.view().ui.scroll_offset = 3;
     rig.shared_fold(snapshot.clone(), applied_inputs);
-    assert_eq!(rig.state.ui.selected_pane, Some(target));
-    assert_eq!(rig.state.ui.scroll_offset, 3);
+    assert_eq!(rig.view().ui.selected_pane, Some(target));
+    assert_eq!(rig.view().ui.scroll_offset, 3);
     rig.shared_fold(snapshot, Arc::default());
-    assert_eq!(rig.state.ui.selected_pane, Some(first));
+    assert_eq!(rig.view().ui.selected_pane, Some(first));
 }
 
 #[test]
@@ -1788,25 +2007,25 @@ fn older_shared_inputs_preserve_a_consumed_native_focus_event() {
         focused: vec![target.clone()],
         unfocused: vec![first],
     });
-    assert_eq!(rig.state.current.focused_pane, Some(target.clone()));
+    assert_eq!(rig.view().current.focused_pane, Some(target.clone()));
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .name = "updated by pull".to_owned();
     rig.shared_fold(snapshot, inputs);
     assert!(
-        rig.state
+        rig.view()
             .current
             .rows()
             .any(|row| row.name == "updated by pull"),
         "an older input cut still applies the complete pulled snapshot"
     );
     assert_eq!(
-        rig.state.current.focused_pane,
+        rig.view().current.focused_pane,
         Some(target.clone()),
         "a live absence is not an intent-retirement fence over native focus"
     );
-    assert_eq!(rig.state.ui.selected_pane, Some(target));
+    assert_eq!(rig.view().ui.selected_pane, Some(target));
 }
 
 #[test]
@@ -1815,18 +2034,18 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    let order = layout_freeze::capture_order(&snapshot, &rig.state.ui);
+    let order = layout_freeze::capture_order(&snapshot, &rig.view().ui);
     let mut anchor = applied_focus_anchor(target.clone(), 7, stamp_ms, Some(order.clone()));
     anchor.placement = None;
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
-    rig.state.ui.scroll_offset = 2;
+    rig.view().ui.scroll_offset = 2;
 
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.selected_pane, Some(target));
-    assert_eq!(rig.state.ui.scroll_offset, 2);
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
-    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().frozen, order);
+    assert_eq!(rig.view().ui.selected_pane, Some(target));
+    assert_eq!(rig.view().ui.scroll_offset, 2);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, stamp_ms);
+    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().frozen, order);
 }
 
 #[test]
@@ -1861,11 +2080,11 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     rig.fold(snapshot, SnapshotSource::Produced);
     let after = Timestamp::now().as_millisecond();
 
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 0);
-    assert_eq!(rig.state.ui.focus_placement, anchor.placement);
+    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.focus_placement, anchor.placement);
     assert_eq!(
-        rig.state.current.worktree_groups[0]
+        rig.view().current.worktree_groups[0]
             .rows
             .iter()
             .map(|row| row.pane.as_ref().expect("pane").pane_id.clone())
@@ -1873,24 +2092,24 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
         vec![target.clone(), first],
         "fold snapshot adopts anchor row order before paint"
     );
-    let hold = rig.state.ui.freeze.as_ref().expect("shared hold");
+    let hold = rig.view().ui.freeze.clone().expect("shared hold");
     assert_eq!(hold.frozen.visible, HashSet::from([target.to_string()]));
     assert!(
         (before..=after).contains(&hold.armed_ms),
         "adoption starts at the fold, not the anchor stamp"
     );
 
-    rig.state.ui.scroll_offset = 4;
-    rig.state.ui.focus_placement = None;
+    rig.view().ui.scroll_offset = 4;
+    rig.view().ui.focus_placement = None;
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(crate::utils::time::unix_now_ms());
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.scroll_offset, 4);
-    assert!(rig.state.ui.focus_placement.is_none());
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
+    assert_eq!(rig.view().ui.scroll_offset, 4);
+    assert!(rig.view().ui.focus_placement.is_none());
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, stamp_ms);
 }
 
 #[test]
@@ -1932,13 +2151,20 @@ fn fresh_child_focus_anchor_selects_parent_and_queues_placement_and_hold() {
         }))
         .unwrap(),
     );
+    // The child's pane opened on this sidebar's tab, so its intent is this sidebar's.
+    snapshot
+        .own_view
+        .as_mut()
+        .unwrap()
+        .working_pane_ids
+        .push(child.clone());
     snapshot.focused_pane = Some(child);
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.selected_pane, Some(parent));
-    assert_eq!(rig.state.ui.scroll_offset, 0);
-    assert_eq!(rig.state.ui.focus_placement, anchor.placement);
-    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().frozen, order);
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
+    assert_eq!(rig.view().ui.selected_pane, Some(parent));
+    assert_eq!(rig.view().ui.scroll_offset, 0);
+    assert_eq!(rig.view().ui.focus_placement, anchor.placement);
+    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().frozen, order);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, stamp_ms);
 }
 
 #[test]
@@ -1954,16 +2180,16 @@ fn focus_anchor_stamp_applies_once() {
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.scroll_offset, 0);
-    assert!(rig.state.ui.focus_placement.is_some());
+    assert_eq!(rig.view().ui.scroll_offset, 0);
+    assert!(rig.view().ui.focus_placement.is_some());
 
-    rig.state.ui.scroll_offset = 4;
-    rig.state.ui.focus_placement = None;
+    rig.view().ui.scroll_offset = 4;
+    rig.view().ui.focus_placement = None;
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.scroll_offset, 4);
-    assert!(rig.state.ui.focus_placement.is_none());
+    assert_eq!(rig.view().ui.scroll_offset, 4);
+    assert!(rig.view().ui.focus_placement.is_none());
 }
 
 #[test]
@@ -1977,14 +2203,14 @@ fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
         &applied_focus_anchor(target.clone(), 7, stale_stamp, None),
     )
     .expect("store anchor");
-    rig.state.ui.scroll_offset = 3;
+    rig.view().ui.scroll_offset = 3;
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.selected_pane, None);
-    assert_eq!(rig.state.ui.scroll_offset, 3);
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+    assert_eq!(rig.view().ui.selected_pane, None);
+    assert_eq!(rig.view().ui.scroll_offset, 3);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
 }
 
 #[test]
@@ -1998,7 +2224,7 @@ fn superseding_client_observation_leaves_scroll_untouched() {
         pane_id: anchor.pane_id.clone(),
     }];
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
-    rig.state.ui.scroll_offset = 3;
+    rig.view().ui.scroll_offset = 3;
 
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, selected.clone());
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
@@ -2008,9 +2234,9 @@ fn superseding_client_observation_leaves_scroll_untouched() {
     }];
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.selected_pane, Some(selected));
-    assert_eq!(rig.state.ui.scroll_offset, 3);
-    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+    assert_eq!(rig.view().ui.selected_pane, Some(selected));
+    assert_eq!(rig.view().ui.scroll_offset, 3);
+    assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
 }
 
 #[test]
@@ -2040,7 +2266,7 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
         "the host decides without clearing attachment-local deferred work"
     );
     assert!(
-        rig.state.ui.freeze.is_none(),
+        rig.view().ui.freeze.is_none(),
         "reload must not freeze the refreshed order"
     );
 }
@@ -2054,19 +2280,22 @@ fn input_browse_arms_freeze_before_next_fold() {
     ];
     let first = panes[0].pane_id.clone();
     let second = panes[1].pane_id.clone();
-    rig.state.current = snapshot_with_panes(&rig.ws, panes);
-    rig.state.ui.selected_pane = Some(first);
-    rig.state.ui.selected_index = Some(0);
-    rig.state.ui.last_order =
-        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
+    rig.view().current = snapshot_with_panes(&rig.ws, panes);
+    rig.view().ui.selected_pane = Some(first);
+    rig.view().ui.selected_index = Some(0);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.last_order = super::super::layout_freeze::capture_order(&state.current, &state.ui);
+    }
 
     rig.state
         .apply_input([Wakeup::Key(KeyAction::Down)], &mut rig.terminal)
         .unwrap();
 
-    assert_eq!(rig.state.ui.selected_pane, Some(second));
+    assert_eq!(rig.view().ui.selected_pane, Some(second));
     assert!(
-        rig.state.ui.freeze.is_some(),
+        rig.view().ui.freeze.is_some(),
         "arrow-key browse arms the layout freeze immediately, without waiting for a fold"
     );
 }
@@ -2083,38 +2312,38 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_freeze() {
         .clone();
     rig.fold(framed.clone(), SnapshotSource::Produced);
     rig.input(KeyAction::Down);
-    let browse = rig.state.ui.browse.clone();
+    let browse = rig.view().ui.browse.clone();
     assert!(browse.is_some());
-    assert!(rig.state.ui.freeze.is_some());
-    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
+    assert!(rig.view().ui.freeze.is_some());
+    assert_eq!(rig.view().ui.selected_pane, Some(selected.clone()));
 
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
     std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
     rig.fold(frameless.clone(), SnapshotSource::Cached);
-    assert_eq!(rig.state.gate.reject_streak, 1);
-    assert_eq!(rig.state.current.panes_produced_at_ms, Some(1));
-    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
-    assert_eq!(rig.state.ui.browse, browse);
+    assert_eq!(rig.view().gate.reject_streak, 1);
+    assert_eq!(rig.view().current.panes_produced_at_ms, Some(1));
+    assert_eq!(rig.view().ui.selected_pane, Some(selected.clone()));
+    assert_eq!(rig.view().ui.browse, browse);
 
     let now_ms = jiff::Timestamp::now().as_millisecond();
-    rig.state.gate.rejecting_since =
+    rig.view().gate.rejecting_since =
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
     rig.fold(frameless, SnapshotSource::Cached);
 
-    assert_eq!(rig.state.gate.reject_streak, 0);
-    assert_eq!(rig.state.current.panes_produced_at_ms, None);
-    assert!(rig.state.current.worktree_groups.is_empty());
-    assert!(rig.state.ui.freeze.is_some());
-    assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
-    assert_eq!(rig.state.ui.browse, browse);
-    assert_eq!(rig.state.ui.selected_index, None);
+    assert_eq!(rig.view().gate.reject_streak, 0);
+    assert_eq!(rig.view().current.panes_produced_at_ms, None);
+    assert!(rig.view().current.worktree_groups.is_empty());
+    assert!(rig.view().ui.freeze.is_some());
+    assert_eq!(rig.view().ui.selected_pane, Some(selected.clone()));
+    assert_eq!(rig.view().ui.browse, browse);
+    assert_eq!(rig.view().ui.selected_index, None);
 
     rig.fold(framed, SnapshotSource::Produced);
 
-    assert_eq!(rig.state.ui.selected_pane, Some(selected));
-    assert_eq!(rig.state.ui.browse, browse);
-    assert_eq!(rig.state.ui.selected_index, Some(0));
+    assert_eq!(rig.view().ui.selected_pane, Some(selected));
+    assert_eq!(rig.view().ui.browse, browse);
+    assert_eq!(rig.view().ui.selected_index, Some(0));
 }
 
 #[test]
@@ -2139,14 +2368,18 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut before.worktree_groups)[0].rows)
         .push(other);
     before.focused_pane = Some(selected.clone());
-    // Keep this fold independent of the existing focus-read hold trigger.
-    before.viewed_panes.clear();
+    // Only the sidebar itself is viewed: the sidebar watches, and the fold stays independent of
+    // the existing focus-read hold trigger.
+    before.viewed_panes = rig.state.config.own_pane.clone().into_iter().collect();
     before.sort_groups_for_presentation();
-    rig.state.current = before.clone();
-    rig.state.ui.selected_pane = Some(selected.clone());
-    rig.state.ui.baseline_pane = Some(selected);
-    rig.state.ui.last_order =
-        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
+    rig.view().current = before.clone();
+    rig.view().ui.selected_pane = Some(selected.clone());
+    rig.view().ui.baseline_pane = Some(selected);
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.last_order = super::super::layout_freeze::capture_order(&state.current, &state.ui);
+    }
 
     let mut after = before;
     after.panes_produced_at_ms = Some(2);
@@ -2163,9 +2396,9 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
 
     rig.fold(after, SnapshotSource::Produced);
 
-    assert!(rig.state.ui.freeze.is_some());
+    assert!(rig.view().ui.freeze.is_some());
     assert_eq!(
-        rig.state.current.worktree_groups[0]
+        rig.view().current.worktree_groups[0]
             .rows
             .iter()
             .map(|row| row.id.as_str())
@@ -2191,15 +2424,18 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     second.unread = true;
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .push(second);
-    rig.state.current = snapshot;
-    rig.state.ui.unread_guard = Some("agent-1".to_owned());
-    rig.state.ui.last_order =
-        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
+    rig.view().current = snapshot;
+    rig.view().ui.unread_guard = Some("agent-1".to_owned());
+    {
+        let mut guard = rig.view();
+        let state = &mut *guard;
+        state.ui.last_order = super::super::layout_freeze::capture_order(&state.current, &state.ui);
+    }
 
     rig.input(KeyAction::MarkAllRead);
 
     assert!(
-        rig.state
+        rig.view()
             .current
             .worktree_groups
             .iter()
@@ -2207,7 +2443,7 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
             .all(|row| !row.unread),
         "all unread bits clear locally"
     );
-    assert_eq!(rig.state.ui.unread_guard, None);
+    assert_eq!(rig.view().ui.unread_guard, None);
     let marks = crate::sidebar::read_marks::ReadMarks::load(&rig.runtime);
     assert!(marks.cleared_at_ms("agent-1").is_some());
     assert!(marks.cleared_at_ms("agent-2").is_some());

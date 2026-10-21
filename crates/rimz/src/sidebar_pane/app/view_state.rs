@@ -79,6 +79,7 @@ pub(super) struct ViewContext {
     pub(super) fold_inputs: Option<Arc<FoldInputs>>,
     pub(super) observed_anchor: Option<(Instant, Option<FocusAnchor>)>,
     pub(super) last_folded_focus_intent: Option<FocusNonce>,
+    pub(super) live_focus_source: Option<FocusNonce>,
     pub(super) focus_landing: Option<(FocusAnchor, Instant)>,
     // Intent adoption can replace the hold-last baseline before dispatch fails.
     pub(super) focus_rollback: Option<FocusRollback>,
@@ -108,6 +109,7 @@ impl ViewContext {
             fold_inputs: None,
             observed_anchor: None,
             last_folded_focus_intent: None,
+            live_focus_source: None,
             focus_landing: None,
             focus_rollback: None,
             pending_input_focus: None,
@@ -127,22 +129,36 @@ impl ViewContext {
         session: &str,
         observed: Instant,
         loaded: Option<FocusAnchor>,
+        own_pane: Option<&PaneId>,
     ) -> Option<FocusAnchor> {
+        let accepts = |anchor: &FocusAnchor| {
+            anchor.session_name == session
+                && own_pane.is_none_or(|own| {
+                    own == &anchor.pane_id
+                        || self
+                            .current
+                            .own_view
+                            .as_ref()
+                            .is_some_and(|view| view.working_pane_ids.contains(&anchor.pane_id))
+                        || self.pending_input_focus.as_ref() == Some(&anchor.pane_id)
+                        || self.live_focus_source == Some(anchor.nonce)
+                })
+        };
         if let Some(inputs) = &self.fold_inputs {
             if let Some((observed, anchor)) = &self.observed_anchor
                 && inputs.sampled_at <= *observed
             {
-                return anchor.clone();
+                return anchor.as_ref().filter(|anchor| accepts(anchor)).cloned();
             }
             let anchor = inputs
                 .anchor
                 .as_ref()
-                .filter(|anchor| anchor.session_name == session)
+                .filter(|anchor| accepts(anchor))
                 .cloned();
             self.observed_anchor = Some((inputs.sampled_at, anchor.clone()));
             return anchor;
         }
-        let anchor = loaded.filter(|anchor| anchor.session_name == session);
+        let anchor = loaded.filter(accepts);
         if anchor.is_none()
             && let Some((_, Some(previous))) = &self.observed_anchor
         {
@@ -229,7 +245,9 @@ impl ViewContext {
                 ui.focus_placement = Some(placement.clone());
                 ui.scroll_ease.cancel();
             }
-            if let Some(order) = &anchor.order {
+            if let Some(order) = &anchor.order
+                && self.live_focus_source != Some(anchor.nonce)
+            {
                 layout_freeze::adopt_shared_order(
                     ui,
                     &mut self.current,
@@ -259,6 +277,44 @@ impl ViewContext {
         if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
             self.confirmed_focus_intent_ms = 0;
         }
+    }
+
+    /// Undo this view's optimistic jump to `target`, returning the jump's label; `None` when
+    /// this view did not dispatch it.
+    pub(super) fn roll_back_focus(
+        &mut self,
+        state: &mut ViewState,
+        target: &PaneId,
+        now: Instant,
+    ) -> Option<String> {
+        let rollback = self
+            .focus_rollback
+            .take_if(|request| request.target == *target)?;
+        state.baseline_pane = rollback.baseline;
+        state.browse = None;
+        state.focus_placement = None;
+        self.focus_landing = None;
+        // Dispatch removed the failed intent. Fence older retained cuts from reviving it,
+        // but do not fence the pulled baseline that the failed jump must restore.
+        self.observed_anchor = Some((now, None));
+        self.retired_anchor = None;
+        Some(rollback.label)
+    }
+
+    pub(super) fn alert_focus_failure(&mut self, label: &str, error: &str, now: Timestamp) {
+        if self
+            .health
+            .alert
+            .as_ref()
+            .is_some_and(render::Alert::is_active)
+        {
+            return;
+        }
+        self.health.alert = Some(render::Alert {
+            reason: format!("focus failed: {label}: {error}"),
+            since: now,
+            recovered_at: Some(now),
+        });
     }
 
     pub(super) fn fuse_pulled(

@@ -80,6 +80,7 @@ pub(super) enum FetchUpdate {
     Unchanged {
         clock: SnapshotClock,
         phase: FetchPhase,
+        full: Arc<FetchUpdate>,
     },
     Failed {
         error: String,
@@ -133,6 +134,7 @@ pub(super) struct WorkspaceFold {
 
 #[derive(Default)]
 pub(super) struct HostData {
+    pub(super) views: Arc<Mutex<super::views::Views>>,
     pub(super) last_fold: Option<Arc<WorkspaceFold>>,
     pub(super) inputs: Option<HostInputs>,
 }
@@ -152,7 +154,7 @@ pub(super) struct SnapshotClock {
 }
 
 impl SnapshotClock {
-    fn of(snapshot: &SidebarSnapshot) -> Self {
+    pub(super) fn of(snapshot: &SidebarSnapshot) -> Self {
         Self {
             now: snapshot.now,
             generated_at: snapshot.generated_at,
@@ -197,7 +199,7 @@ impl FetchUpdate {
         }
     }
 
-    fn is_success(&self) -> bool {
+    pub(super) fn is_success(&self) -> bool {
         match self {
             Self::Shared { update, .. } => update.is_success(),
             Self::Failed { .. } => false,
@@ -205,7 +207,7 @@ impl FetchUpdate {
         }
     }
 
-    fn is_unchanged(&self) -> bool {
+    pub(super) fn is_unchanged(&self) -> bool {
         match self {
             Self::Shared { update, .. } => update.is_unchanged(),
             Self::Unchanged { .. } => true,
@@ -213,7 +215,7 @@ impl FetchUpdate {
         }
     }
 
-    fn same_content(&self, previous: &Self) -> bool {
+    pub(super) fn same_content(&self, previous: &Self) -> bool {
         match (self, previous) {
             (
                 Self::Shared { update, context },
@@ -236,19 +238,31 @@ impl FetchUpdate {
         }
     }
 
-    fn into_unchanged(self) -> Self {
-        match self {
-            Self::Shared { update, context } => Self::Shared {
-                update: Box::new(update.into_unchanged()),
-                context,
-            },
+    pub(super) fn into_unchanged(self) -> Self {
+        Self::unchanged(Arc::new(self))
+    }
+
+    pub(super) fn unchanged(full: Arc<Self>) -> Self {
+        let update = match full.as_ref() {
+            Self::Shared { update, .. } => update.as_ref(),
+            update => update,
+        };
+        match update {
             Self::Snapshot {
                 snapshot, phase, ..
             } => Self::Unchanged {
-                clock: SnapshotClock::of(&snapshot),
-                phase,
+                clock: SnapshotClock::of(snapshot),
+                phase: *phase,
+                full,
             },
-            update => update,
+            _ => (*full).clone(),
+        }
+    }
+
+    pub(super) fn into_full(self) -> Arc<Self> {
+        match self {
+            Self::Unchanged { full, .. } => full,
+            update => Arc::new(update),
         }
     }
 
@@ -296,6 +310,13 @@ impl FetchUpdate {
     pub(super) fn into_parts(self) -> (Self, Option<Arc<FoldShared>>) {
         match self {
             Self::Shared { update, context } => (*update, Some(context)),
+            Self::Unchanged { ref full, .. } => {
+                let context = match full.as_ref() {
+                    Self::Shared { context, .. } => Some(context.clone()),
+                    _ => None,
+                };
+                (self, context)
+            }
             update => (update, None),
         }
     }
@@ -316,7 +337,7 @@ fn reuse_shared<T: PartialEq + ?Sized>(shared: &mut Arc<T>, local: &mut Arc<T>, 
     }
 }
 
-fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> bool {
+pub(super) fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> bool {
     // Exhaustive: a new snapshot field must join equality or explicitly be a clock.
     let SidebarSnapshot {
         snapshot_version,
@@ -1575,7 +1596,8 @@ impl ResultReceiver {
         update
     }
 
-    pub(super) fn acknowledge(&self, mut update: FetchUpdate, reusable: bool) {
+    pub(super) fn acknowledge(&self, update: impl Into<Arc<FetchUpdate>>, reusable: bool) {
+        let update = update.into();
         let mut delivery = self
             .0
             .delivery
@@ -1593,8 +1615,8 @@ impl ResultReceiver {
                 counts.content += 1;
             }
         }
-        if update.snapshot_mut().is_some() || !update.is_success() {
-            delivery.accepted = update.is_success().then(|| Arc::new(update));
+        if !update.is_unchanged() {
+            delivery.accepted = update.is_success().then_some(update);
         }
         delivery.reusable = reusable;
     }
@@ -1808,11 +1830,42 @@ impl ResultSink {
             self.covered.record(cycle);
         }
         let staged = staged.map(|(fold, pane)| (Arc::new(fold), pane));
+        let views = self
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .views
+            .clone();
         if is_snapshot && let Some((fold, _)) = &staged {
             self.host_data
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .last_fold = Some(fold.clone());
+        }
+        let retained = match (&update, &staged) {
+            (FetchUpdate::Snapshot { phase, source, .. }, Some((fold, _))) => {
+                Some(FetchUpdate::Fold {
+                    fold: fold.clone(),
+                    own_pane: None,
+                    refresh_override: None,
+                    phase: *phase,
+                    source: *source,
+                })
+            }
+            (FetchUpdate::Failed { .. }, _) => Some(update.clone()),
+            _ => None,
+        };
+        if let Some(mut retained) = retained {
+            if let Some(context) = &self.context {
+                retained = FetchUpdate::Shared {
+                    update: Box::new(retained),
+                    context: context.clone(),
+                };
+            }
+            views
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .publish(staged.as_ref().map(|(fold, _)| fold.clone()), retained);
         }
         let Some((eldest, others)) = self.cycle.split_first() else {
             return;

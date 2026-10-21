@@ -40,6 +40,23 @@ fn colocated_clients_split_and_rejoin_the_destination_view() {
 }
 
 #[test]
+fn arrival_keeps_evidence_input_despite_newer_coviewer_input() {
+    let clock = clock();
+    let mut views = Views::default();
+    sample(&mut views, &clock, &[(1, 10), (2, 10)]);
+    let (source, entry) = views.presentation(&pane(10), clock.now(), true);
+    entry.state.scroll_offset = 11;
+    let (evidence, entry) = views.presentation(&pane(20), clock.now(), true);
+    entry.state.scroll_offset = 22;
+    assert_ne!(source, evidence);
+    views.input(&pane(10), clock.now()).scroll_offset = 33;
+    sample(&mut views, &clock, &[(1, 20), (2, 10)]);
+    let (arrived, entry) = views.presentation(&pane(20), clock.now(), false);
+    assert_eq!((arrived, entry.state.scroll_offset), (evidence, 22));
+    assert_eq!(views.paint(&pane(10), clock.now()).scroll_offset, 33);
+}
+
+#[test]
 fn simultaneous_swaps_carry_each_clients_view_without_joining() {
     let clock = clock();
     let mut views = Views::default();
@@ -223,7 +240,7 @@ fn anonymous_views_expire_without_a_new_client_sample() {
     let mut views = Views::default();
     sample(&mut views, &clock, &[]);
     views.input(&pane(10), clock.now()).scroll_offset = 17;
-    views.panes.remove(&pane(10));
+    views.unpaint(&pane(10), clock.now());
     clock.advance(HOLD);
     assert_eq!(views.paint(&pane(20), clock.now()).scroll_offset, 0);
 }
@@ -268,6 +285,31 @@ fn simultaneous_arrivals_break_ties_before_any_arrival_bumps_recency() {
     sample(&mut views, &clock, &[(1, 20), (2, 30), (3, 30)]);
     assert_eq!(views.paint(&pane(20), clock.now()).scroll_offset, 11);
     assert_eq!(views.paint(&pane(30), clock.now()).scroll_offset, 8);
+}
+
+#[test]
+fn a_landing_holds_the_displaced_anonymous_view_from_its_departure() {
+    for elapsed in [HOLD - Duration::from_millis(1), HOLD] {
+        let clock = clock();
+        let mut views = Views::default();
+        sample(&mut views, &clock, &[]);
+        views.input(&pane(10), clock.now()).scroll_offset = 17;
+        let displaced = views.panes[&pane(10)];
+        views.input(&pane(20), clock.now()).scroll_offset = 29;
+        let source = views.panes[&pane(20)];
+        clock.advance(HOLD - Duration::from_millis(1));
+        views.land(source, &pane(10), clock.now());
+        clock.advance(elapsed);
+        views.refresh(clock.now());
+        assert_eq!(
+            views
+                .entries
+                .get(&displaced)
+                .map(|entry| entry.state.scroll_offset),
+            (elapsed < HOLD).then_some(17),
+            "elapsed {elapsed:?}"
+        );
+    }
 }
 
 fn frame(clients: &[(u32, u32)]) -> PaneFrame {
