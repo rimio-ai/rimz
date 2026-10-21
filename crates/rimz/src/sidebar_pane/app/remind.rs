@@ -1,20 +1,10 @@
-//! Renderer-local unread reminder timing, actionable attention scope, and delivery through terminal notifications and configured handlers.
-
-use std::collections::HashSet;
-
-use ratatui::Terminal;
-use tracing::debug;
+//! Room-wide unread reminder timing and actionable attention scope for the fetch worker.
 
 use crate::agents::AgentStatus;
 use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
-use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_handlers};
+use crate::sidebar::notify::{Notification, NotificationKind};
 use crate::store::snapshot::SidebarSnapshot;
-
-use super::ServeConfig;
-use super::backend::PaneBackend;
-use super::clock::LoopClock;
-use super::notify::{BellNotice, emit_terminal_notification};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct RemindState {
@@ -23,6 +13,24 @@ pub(super) struct RemindState {
 }
 
 impl RemindState {
+    pub(super) fn evaluate(
+        &mut self,
+        now_ms: u64,
+        snapshot: &SidebarSnapshot,
+        prefs: &NotificationsPrefs,
+    ) -> Option<(Notification, Vec<PaneId>)> {
+        let scope = unread_reminder_scope(snapshot, prefs);
+        if scope.count == 0 || !prefs.enabled || prefs.remind_secs == 0 {
+            self.clear();
+            return None;
+        }
+        self.note_scope_visible(now_ms);
+        if !self.due(now_ms, scope.count, prefs.remind_secs) {
+            return None;
+        }
+        self.last_reminded_at_ms = Some(now_ms);
+        Some((unread_reminder_notification(scope.count), scope.panes))
+    }
     pub(super) fn note_ring(&mut self, now_ms: u64) {
         self.armed_at_ms = Some(now_ms);
         self.last_reminded_at_ms = None;
@@ -35,58 +43,7 @@ impl RemindState {
         }
     }
 
-    pub(super) fn maybe_remind(
-        &mut self,
-        clock: &LoopClock,
-        config: &ServeConfig,
-        terminal: &mut Terminal<PaneBackend>,
-        snapshot: &SidebarSnapshot,
-        diag: &crate::diag::DiagSink,
-    ) {
-        let scope = unread_reminder_scope(snapshot, &config.notification_prefs);
-        if scope.count == 0
-            || !config.notification_prefs.enabled
-            || config.notification_prefs.remind_secs == 0
-        {
-            self.clear();
-            return;
-        }
-        let now_ms = clock.now_ms();
-        self.note_scope_visible(now_ms);
-        if !self.due(now_ms, scope.count, config.notification_prefs.remind_secs) {
-            return;
-        }
-
-        let notification = unread_reminder_notification(scope.count);
-        // The reminder scope is already unread `waiting`/`failed` rows, so ring
-        // directly rather than re-checking each pane's row. The daemon
-        // exclusion in `bell_decision` still applies.
-        if clock.effects_enabled()
-            && let Err(err) = emit_terminal_notification(
-                config,
-                terminal,
-                snapshot,
-                BellNotice {
-                    title: &notification.title,
-                    body: &notification.body,
-                    panes: &scope.panes,
-                    recheck_unread: false,
-                    kind: notification.kind_env(),
-                },
-                diag,
-            )
-        {
-            debug!(error = %err, "terminal unread reminder emit failed");
-        }
-        if config.notification_prefs.has_handlers() {
-            clock.notify(|| {
-                spawn_notify_handlers(&config.notification_prefs, &notification);
-            });
-        }
-        self.last_reminded_at_ms = Some(now_ms);
-    }
-
-    pub(super) fn due(&self, now_ms: u64, count: usize, remind_secs: u64) -> bool {
+    fn due(&self, now_ms: u64, count: usize, remind_secs: u64) -> bool {
         if count == 0 || remind_secs == 0 {
             return false;
         }
@@ -141,13 +98,6 @@ fn unread_reminder_notification(count: usize) -> Notification {
 }
 
 fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs) -> ReminderScope {
-    let Some(own_view) = &snapshot.own_view else {
-        return ReminderScope::default();
-    };
-    let working: HashSet<_> = own_view.working_pane_ids.iter().cloned().collect();
-    if working.is_empty() {
-        return ReminderScope::default();
-    }
     let focused = prefs.suppress_focused.then_some(&snapshot.viewed_panes[..]);
     let mut scope = ReminderScope::default();
     for row in snapshot
@@ -161,9 +111,7 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         let Some(pane) = row.pane.as_ref() else {
             continue;
         };
-        if working.contains(&pane.pane_id)
-            && !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id))
-        {
+        if !focused.is_some_and(|viewed| viewed.contains(&pane.pane_id)) {
             scope.add_pane_row(&pane.pane_id);
         }
     }
@@ -297,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn reminder_scope_counts_unread_waiting_and_failed_in_own_view() {
+    fn reminder_scope_counts_unread_waiting_and_failed_across_the_room() {
         let snapshot = snapshot_with(
             vec![
                 row("terminal_1", AgentStatus::Waiting, true),
@@ -318,12 +266,13 @@ mod tests {
         );
 
         let scope = unread_reminder_scope(&snapshot, &NotificationsPrefs::default());
-        assert_eq!(scope.count, 2);
+        assert_eq!(scope.count, 3);
         assert_eq!(
             scope.panes,
             vec![
                 PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
                 PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
+                PaneId::from_parts(crate::MuxName::Zellij, "terminal_6"),
             ]
         );
     }
@@ -371,5 +320,36 @@ mod tests {
             unread_reminder_notification(1).title,
             "RimZ: 1 unread row needs you"
         );
+    }
+
+    #[test]
+    fn room_timer_arms_from_scope_and_clears_when_disabled_or_empty() {
+        let mut state = RemindState::default();
+        let mut snapshot = snapshot_with(
+            vec![row("terminal_1", AgentStatus::Waiting, true)],
+            None,
+            vec![],
+        );
+        let mut prefs = NotificationsPrefs {
+            remind_secs: 1,
+            ..NotificationsPrefs::default()
+        };
+        assert!(state.evaluate(1_000, &snapshot, &prefs).is_none());
+        assert!(state.evaluate(1_999, &snapshot, &prefs).is_none());
+        let reminder = state.evaluate(2_000, &snapshot, &prefs);
+        assert!(
+            reminder.is_some(),
+            "room scope arms a reminder without an agent notification"
+        );
+        assert_eq!(reminder.unwrap().0.unread_count, Some(1));
+        assert!(state.evaluate(2_001, &snapshot, &prefs).is_none());
+        assert!(state.evaluate(3_000, &snapshot, &prefs).is_some());
+        prefs.enabled = false;
+        assert!(state.evaluate(4_000, &snapshot, &prefs).is_none());
+        prefs.enabled = true;
+        assert!(state.evaluate(5_000, &snapshot, &prefs).is_none());
+        snapshot.worktree_groups = Default::default();
+        assert!(state.evaluate(6_000, &snapshot, &prefs).is_none());
+        assert!(!state.due(7_000, 1, 1));
     }
 }
