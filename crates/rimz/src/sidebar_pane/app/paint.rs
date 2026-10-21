@@ -16,7 +16,7 @@ use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlo
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 
-use super::backend::PaneBackend;
+use super::backend::{BufferedFrame, PaneBackend};
 
 enum PixelSession {
     Disabled,
@@ -195,6 +195,17 @@ impl FramePainter {
         alert: Option<&render::Alert>,
         ui: &mut UiState,
     ) -> io::Result<()> {
+        let (body_result, frame) = self.compose_frame(terminal, snapshot, alert, ui);
+        body_result.and(frame.write(terminal.backend_mut()))
+    }
+
+    pub(super) fn compose_frame(
+        &mut self,
+        terminal: &mut Terminal<PaneBackend>,
+        snapshot: &SidebarSnapshot,
+        alert: Option<&render::Alert>,
+        ui: &mut UiState,
+    ) -> (io::Result<()>, BufferedFrame) {
         terminal.backend_mut().begin_frame();
         let mut graphics = Vec::new();
         let mut bracket = false;
@@ -210,8 +221,7 @@ impl FramePainter {
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)
         })();
-        let end_result = terminal.backend_mut().end_frame(bracket);
-        body_result.and(end_result)
+        (body_result, terminal.backend_mut().take_frame(bracket))
     }
 
     pub(super) fn ensure_pixel_transmitted<W: Write>(
