@@ -1350,7 +1350,7 @@ impl TmuxBackend {
                     .focus_position()
                     .checked_sub(start)
                     .and_then(|index| members.get(index))
-                    .unwrap_or(anchor);
+                    .unwrap_or(members.last().unwrap_or(anchor));
                 self.mark_stack(members, anchor, open, false, true)?;
             }
         }
