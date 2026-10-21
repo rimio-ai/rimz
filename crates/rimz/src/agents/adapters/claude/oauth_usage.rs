@@ -477,6 +477,10 @@ pub(super) fn load_account_key(login_env: &BTreeMap<String, String>) -> Result<S
     parse_account_key(&read_credentials_bytes(login_env)?)
 }
 
+pub(super) fn read_max_rate_limit_tier(login_env: &BTreeMap<String, String>) -> Option<String> {
+    parse_max_rate_limit_tier(&read_credentials_bytes(login_env).ok()?)
+}
+
 fn read_credentials_bytes(login_env: &BTreeMap<String, String>) -> Result<Vec<u8>> {
     let path = credentials_path(login_env).ok_or(ClaudeOauthUsageErr::NoCredentials)?;
     match std::fs::read(&path) {
@@ -489,6 +493,32 @@ fn read_credentials_bytes(login_env: &BTreeMap<String, String>) -> Result<Vec<u8
         }
         Err(err) => Err(ClaudeOauthUsageErr::Io(err)),
     }
+}
+
+fn parse_max_rate_limit_tier(bytes: &[u8]) -> Option<String> {
+    // Display metadata must not depend on the usage credential's token validity or schema.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SubscriptionFile {
+        claude_ai_oauth: Option<Subscription>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Subscription {
+        subscription_type: Option<String>,
+        rate_limit_tier: Option<String>,
+    }
+    let oauth = serde_json::from_slice::<SubscriptionFile>(bytes)
+        .ok()?
+        .claude_ai_oauth?;
+    if oauth
+        .subscription_type
+        .as_deref()
+        .is_some_and(|plan| plan != "max")
+    {
+        return None;
+    }
+    oauth.rate_limit_tier
 }
 
 /// Whether `CLAUDE_CONFIG_DIR` names a directory, parsed as `config_home`

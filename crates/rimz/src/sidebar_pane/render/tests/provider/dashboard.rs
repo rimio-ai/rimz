@@ -363,7 +363,10 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     };
     let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 34);
 
-    assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
+    assert!(
+        rendered.contains("ChatGPT Pro 200 · v0.135.0"),
+        "{rendered}"
+    );
     assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
     assert!(rendered.contains('▰'), "the full ∞ bar:\n{rendered}");
     assert!(!rendered.contains('▱'), "no empty track:\n{rendered}");
@@ -388,7 +391,10 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-    assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
+    assert!(
+        rendered.contains("ChatGPT Pro 200 · v0.135.0"),
+        "{rendered}"
+    );
     assert!(
         !rendered.contains("Claude Max"),
         "the other block stays off screen:\n{rendered}"
@@ -951,7 +957,7 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("Codex v0.135.0 · ChatGPT Pro"),
+        rendered.contains("Codex v0.135.0 · ChatGPT Pro 200"),
         "{rendered}"
     );
     assert!(rendered.contains("5h"), "stacked 5h label:\n{rendered}");

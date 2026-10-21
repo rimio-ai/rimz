@@ -694,8 +694,9 @@ pub struct AgentAccount {
     /// omitted so snapshots written before this field remain byte-compatible.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub scope: ProviderAccountScope,
-    /// Raw plan/subscription tier the provider reports (`max`, `team`, `pro`);
-    /// the renderer formats it into a brand label (`Claude Max`, `ChatGPT Pro`).
+    /// Plan/subscription tier (`max`, `team`, `pro`), including adapter-normalized
+    /// subtiers (`max_5x`, `max_20x`); the renderer formats its brand label
+    /// (`Claude Max 20x`, `ChatGPT Pro 200`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     /// Provider-native account identifier when an integration exposes one.

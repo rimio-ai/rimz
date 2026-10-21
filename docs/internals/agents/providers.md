@@ -106,7 +106,7 @@ Each panel field has one source:
 
 | Field | Source |
 | --- | --- |
-| `plan` | the session context with the newest `observed_at`, falling back to the probed account; `format_plan_label` brands the raw tier (`max` becomes `Claude Max`, `pro` becomes `ChatGPT Pro`, other kinds title-case it) |
+| `plan` | the session context with the newest `observed_at`, falling back to the probed account; `format_plan_label` uses the adapter's declared vocabulary (`max_20x` becomes `Claude Max 20x`, Codex `pro` becomes `ChatGPT Pro 200`), with title-case fallback for unknown kinds |
 | `version` | the newest version among the login's session contexts and the probed account, by [`newest_version`](../../../crates/rimz/src/agents/version.rs): a string that parses as a numeric `CliVersion` outranks one that does not, the greater `CliVersion` wins, and the greater string breaks what remains, so the answer does not depend on which session reported last |
 | `metered`, `account_scope` | the same account; a missing `metered` is inferred true when live windows exist or a keyed session owns the panel |
 | `account_key` | the newest-registered keyed session, by `registered_at` then session id |
@@ -319,7 +319,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 
 | Provider | Account identity → `AgentAccount` | Balance → `AgentRateLimits` / `ExtraCredits` |
 | --- | --- | --- |
-| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
+| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered; same-login credential metadata refines Max subtiers | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
 | Codex | app-server `planType`, or `$CODEX_HOME/auth.json` | app-server windows and credits, then the OAuth usage query with reset credits ([adapter_codex.md](./adapter_codex.md#account-and-balance)) |
 | Antigravity | statusline, or the running `agy` local service → plan, metered | paired status and quota read on one endpoint → hashed kind-wide owner, authoritative 5h and weekly windows; credits and dollars unknown ([adapter_antigravity.md](./adapter_antigravity.md#account-and-balance)) |
 | Copilot | `$COPILOT_HOME/config.json` non-secret login → metered | internal account query → plan, named monthly `AIC`, `cht`, and `prm` scopes; no paid usage or spend ([adapter_copilot.md](./adapter_copilot.md#account-and-balance)) |

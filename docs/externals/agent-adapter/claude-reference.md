@@ -776,7 +776,7 @@ Claude Code stores the login in `.credentials.json` under the config directory: 
 
 The Keychain item is a generic password with account `$USER` and service `Claude Code-credentials`. Under `CLAUDE_CONFIG_DIR`, the service gains a suffix of the first 8 hex characters of the SHA-256 of the directory, as in `Claude Code-credentials-1a2b3c4d`. The item name is read from the 2.1.270 binary.
 
-The file holds a root `claudeAiOauth` object; the docs publish no schema, and these keys are read from the 2.1.270 binary:
+The file holds a root `claudeAiOauth` object; the docs publish no schema. Token fields below were read from the 2.1.270 binary; subscription metadata was checked in the [Claude Code 2.1.306 package](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.306):
 
 | Field | Meaning |
 | --- | --- |
@@ -784,6 +784,10 @@ The file holds a root `claudeAiOauth` object; the docs publish no schema, and th
 | `refreshToken` | token Claude Code uses to refresh `accessToken` |
 | `expiresAt` | expiry in epoch milliseconds |
 | `scopes[]` | granted scopes, such as `user:profile` |
+| `subscriptionType` | cached subscription family, such as `max` or `pro` |
+| `rateLimitTier` | cached rate-limit tier; observed Max values are `default_claude_max_5x` and `default_claude_max_20x` |
+
+The 2.1.306 bundle takes `rateLimitTier` from `/api/oauth/profile`'s `organization.rate_limit_tier` and stores it beside `subscriptionType` on sign-in, token refresh, and profile re-verification. Its 20x check requires both `subscriptionType === "max"` and `rateLimitTier === "default_claude_max_20x"`. These are cached metadata, not a fresh profile read; [issue 87419](https://github.com/anthropics/claude-code/issues/87419) records a credential tier lagging the profile until another login.
 
 ### OAuth usage endpoint
 

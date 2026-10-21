@@ -336,6 +336,8 @@ The app-server client reuses this daemon as its second connection choice. Its `t
 
 Codex has two account sources, and both normalize through [`account.rs`](../../../crates/rimz/src/agents/adapters/codex/account.rs) into the model in [providers.md](./providers.md).
 
+The spec's plan-label table maps raw `prolite`, `pro`, and `promax` to `ChatGPT Pro 100`, `ChatGPT Pro 200`, and `ChatGPT Pro 500`, matching [Codex 0.163.0's subscription labels](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/subscription.rs#L10-L37). Other values retain the `ChatGPT` prefix and title-case fallback. This is display mapping only; the raw plan strings are unchanged.
+
 | Source | Supplies | When |
 | --- | --- | --- |
 | App-server `account/rateLimits/read` | plan (`planType`), `primary` and `secondary` windows with `windowDurationMins`, credits | on the session refresh, and first on each account usage refresh |

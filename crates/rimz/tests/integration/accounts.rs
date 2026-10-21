@@ -1241,6 +1241,24 @@ fn list_probes_default_under_the_native_home_from_a_named_account_pane() {
         &env,
         &["add", "claude", "work", "--home", home.to_str().unwrap()],
     ));
+    let native_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&native_home).unwrap();
+    for (home, tier) in [
+        (&home, "default_claude_max_20x"),
+        (&native_home, "default_claude_max_5x"),
+    ] {
+        std::fs::write(
+            home.join(".credentials.json"),
+            json!({"claudeAiOauth": {
+                "subscriptionType": "max",
+                "rateLimitTier": tier,
+                "expiresAt": 0,
+                "scopes": []
+            }})
+            .to_string(),
+        )
+        .unwrap();
+    }
     let log = env.home_root.join("claude-probe-homes");
     crate::common::write_path_shim(
         &provider_bin(&env),
@@ -1250,13 +1268,32 @@ fn list_probes_default_under_the_native_home_from_a_named_account_pane() {
             log.display()
         ),
     );
-    succeeded(
+    let text = succeeded(
         &hermetic(&env, &mut env.rimz())
             .env("CLAUDE_CONFIG_DIR", &home)
-            .args(["accounts", "list", "--json"])
+            .args(["accounts", "list"])
             .output()
             .unwrap(),
     );
+    assert!(text.contains("Claude Max 20x"), "{text}");
+    assert!(text.contains("Claude Max 5x"), "{text}");
+    let rows: Value =
+        serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+    for (name, plan, label) in [
+        ("claude@work", "max_20x", "Claude Max 20x"),
+        ("claude@default", "max_5x", "Claude Max 5x"),
+    ] {
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == name)
+            .unwrap();
+        assert_eq!(row["plan"], plan, "{row}");
+        assert_eq!(row["plan_label"], label, "{row}");
+        assert_eq!(row["status"], "ready", "{row}");
+        assert_eq!(row["metered"], true, "{row}");
+    }
     let probes = std::fs::read_to_string(log).unwrap();
     let mut homes: Vec<_> = probes.lines().collect();
     homes.sort_unstable();

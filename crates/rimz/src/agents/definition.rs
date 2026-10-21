@@ -854,9 +854,13 @@ pub struct Brand {
 /// How a raw plan tier string becomes its brand label.
 #[derive(Debug)]
 pub enum PlanLabel {
-    /// `"<prefix> <TitleCase(tier)>"` — Claude → "Claude Max",
-    /// Codex → "ChatGPT Pro".
+    /// `"<prefix> <TitleCase(tier)>"`, such as "Claude Max 20x".
     Prefixed { prefix: &'static str },
+    /// Prefix an exact raw tier's declared name, falling back to title-case.
+    NamedTiers {
+        prefix: &'static str,
+        tiers: &'static [(&'static str, &'static str)],
+    },
     /// Just title-case the tier — for an agent whose sessions span many
     /// provider accounts, where no single brand prefix is honest.
     TitleCaseOnly,
@@ -868,6 +872,13 @@ impl PlanLabel {
         let tier = crate::theme::provider_title_case(raw);
         match self {
             Self::Prefixed { prefix } => format!("{prefix} {tier}"),
+            Self::NamedTiers { prefix, tiers } => {
+                let name = tiers
+                    .iter()
+                    .find_map(|(key, name)| (*key == raw).then_some(*name))
+                    .unwrap_or(&tier);
+                format!("{prefix} {name}")
+            }
             Self::TitleCaseOnly => tier,
         }
     }
@@ -1440,6 +1451,27 @@ mod tests {
     use super::{CompactCommand, CompactInstruction, LaunchSpec, PromptStyle, program_names_kind};
     use crate::agents::AskKind;
     use crate::agents::registry::BUILTINS;
+
+    #[test]
+    fn plan_labels_use_named_tiers_with_title_case_fallbacks() {
+        for (kind, raw, expected) in [
+            ("codex", "prolite", "ChatGPT Pro 100"),
+            ("codex", "pro", "ChatGPT Pro 200"),
+            ("codex", "promax", "ChatGPT Pro 500"),
+            ("codex", "plus", "ChatGPT Plus"),
+            ("codex", "team", "ChatGPT Team"),
+            ("codex", "future_tier", "ChatGPT Future Tier"),
+            ("codex", "Pro", "ChatGPT Pro"),
+            ("claude", "max", "Claude Max"),
+            ("claude", "max_5x", "Claude Max 5x"),
+            ("claude", "max_20x", "Claude Max 20x"),
+            ("copilot", "pro", "Copilot Pro"),
+            ("pi", "pro", "Pro"),
+        ] {
+            let spec = crate::agents::spec_by_kind(kind).unwrap();
+            assert_eq!(spec.plan_label.format(raw), expected, "{kind}: {raw}");
+        }
+    }
 
     #[test]
     fn context_owner_start_requires_a_verified_live_owner() {

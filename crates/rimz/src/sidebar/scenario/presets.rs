@@ -804,7 +804,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro"),
+        Some("ChatGPT Pro 200"),
         true,
         true,
         budget_windows_timed(70, 90, 7_200, 423_360),
@@ -1231,7 +1231,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro"),
+        Some("ChatGPT Pro 200"),
         true,
         true,
         budget_windows_timed(70, 90, 7_200, 423_360),
@@ -1592,7 +1592,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
-        Some("ChatGPT Pro"),
+        Some("ChatGPT Pro 200"),
         true,
         true,
         budget_windows_timed(15, 47, 4 * 60 * 60 + 30 * 60, 6 * 24 * 60 * 60),
@@ -1949,7 +1949,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "codex",
             Some("0.135.0"),
-            Some("ChatGPT Pro"),
+            Some("ChatGPT Pro 200"),
             true,
             true,
             budget_windows(36, 54),
@@ -2408,7 +2408,7 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         provider_panel(
             "codex",
             Some("0.135.0"),
-            Some("ChatGPT Pro"),
+            Some("ChatGPT Pro 200"),
             false,
             false,
             Vec::new(),

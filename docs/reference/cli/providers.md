@@ -22,7 +22,7 @@ Flags follow the accounts command. The alias retains cached login records within
 | `status` | `logged_in`, `logged_out` (no login found, or the provider offers no login check), or `unavailable` (the probe did not complete). An `unavailable` account can still carry facts from its last good probe. |
 | `entitlement` | `"ok"`, or `{"lapsed":{"since_ms":N}}` when subscription access was rejected; `N` is the first-seen Unix-millisecond timestamp. Independent of `status`. |
 | `probed_at` | RFC 3339 time of the last account probe. |
-| `plan`, `plan_label` | Raw plan tier (`max`) and its display label (`Claude Max`); both `null` while lapsed. |
+| `plan`, `plan_label` | Plan tier (`max`) and its display label (`Claude Max`); both `null` while lapsed. Claude can report RimZ-normalized `max_5x` or `max_20x`, not untouched `subscriptionType` values. Subtier labels follow the [accounts JSON contract](./accounts.md#json-output). |
 | `account_id` | Non-secret provider account id. |
 | `sub_provider` | Backing provider name, for agents that run on another provider's account. |
 | `account_scope` | `{"kind": "kind_wide"}`, or `{"kind": "sub_provider", "provider": …, "variant": …}`. |
