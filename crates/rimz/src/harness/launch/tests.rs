@@ -1175,13 +1175,15 @@ fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissi
                     .is_scoped()
                     .then_some(&serde_json::Value::Bool(true))
             );
-            for key in ["enabled", "failIfUnavailable"] {
-                assert_eq!(
-                    sandbox.get(key),
-                    (isolation == crate::config::Isolation::Sandbox)
-                        .then_some(&serde_json::Value::Bool(true))
-                );
-            }
+            assert_eq!(
+                sandbox.get("enabled"),
+                (isolation == crate::config::Isolation::Sandbox)
+                    .then_some(&serde_json::Value::Bool(true))
+            );
+            assert_eq!(
+                sandbox.as_object().unwrap().len(),
+                3 + usize::from(isolation != crate::config::Isolation::Host)
+            );
             let excluded = sandbox["excludedCommands"].as_array().unwrap();
             assert!(excluded.contains(&serde_json::json!("custom *")));
             for prefix in ["rimz message", "rimz agents", "rimz subagents"] {

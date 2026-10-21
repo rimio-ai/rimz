@@ -144,7 +144,7 @@ fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
             .as_ref()
             .unwrap()
             .label(),
-        "isolation unavailable"
+        "scoped view unavailable"
     );
     park_roster(&fixture.paths).unwrap();
     plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
@@ -154,7 +154,7 @@ fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind() {
+fn rebirth_probes_only_scoped_candidates_once() {
     if let Ok(level) = std::env::var("RIMZ_TEST_REBIRTH_PROBE_LEVEL") {
         let fixture = Fixture::new(&[("lost", Path::new("/"), false)]);
         fixture.conversation("lost");
@@ -188,9 +188,10 @@ fn rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind() {
         let expected = if machine.agents.isolation.is_scoped() {
             2
         } else {
-            1
+            0
         };
         assert_eq!(plan.preview().unresumable.len(), expected);
+        assert_eq!(plan.preview().pane_count(), 2 - expected);
         assert!(
             plan.preview()
                 .unresumable
@@ -201,32 +202,36 @@ fn rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind() {
     }
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
-    for binary in ["bwrap", "socat"] {
-        let path = root.path().join(binary);
-        std::fs::write(
-            &path,
-            if binary == "bwrap" {
-                "#!/bin/sh\nprintf 'probe\\n' >> \"$RIMZ_TEST_REBIRTH_PROBE_LOG\"\nexit 1\n"
-            } else {
-                "#!/bin/sh\nexit 0\n"
-            },
-        )
-        .unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     for level in ["scoped", "sandbox"] {
+        let path = root.path().join("bwrap");
+        if level == "scoped" {
+            std::fs::write(
+                &path,
+                "#!/bin/sh\nprintf 'probe\\n' >> \"$RIMZ_TEST_REBIRTH_PROBE_LOG\"\nexit 1\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
         let log = root.path().join(level);
+        std::fs::write(&log, "").unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "harness::rebirth::tests::rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind", "--nocapture"])
+            .args([
+                "--exact",
+                "harness::rebirth::tests::rebirth_probes_only_scoped_candidates_once",
+                "--nocapture",
+            ])
             .env("PATH", root.path())
             .env("RIMZ_TEST_REBIRTH_PROBE_LEVEL", level)
             .env("RIMZ_TEST_REBIRTH_PROBE_LOG", &log)
-            .output().unwrap();
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{output:?}");
         assert_eq!(
             std::fs::read_to_string(log).unwrap(),
-            "probe\n",
-            "{level} must probe bwrap once"
+            if level == "scoped" { "probe\n" } else { "" },
+            "{level}"
         );
     }
 }

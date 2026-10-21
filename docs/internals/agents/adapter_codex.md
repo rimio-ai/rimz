@@ -95,7 +95,7 @@ Host skill lists render `-c skills.config` entries with `enabled=false` for unli
 
 Selection follows this order, using `PresetArgMatcher` for valued arguments. Repeated flags or config keys use their last occurrence; config values parse as TOML with a bare-string fallback:
 
-1. `--dangerously-bypass-approvals-and-sandbox`: full access.
+1. `--dangerously-bypass-approvals-and-sandbox`/`--yolo`: full access.
 2. `--sandbox`/`-s`: legacy syntax with that mode.
 3. `-c`/`--config default_permissions=V`: profile `V`.
 4. `-c`/`--config sandbox_mode=M`: legacy `M`; otherwise `--approve-for-me`/`--not-so-yolo`: legacy `workspace-write`.

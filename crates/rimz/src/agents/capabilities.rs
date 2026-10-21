@@ -575,14 +575,9 @@ pub trait LaunchCapability: CoreCapability {
     /// Approval flags stay as the mode set them; other providers keep their sandbox.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
 
-    /// Linux executables needed for native sandbox isolation; `None` means unsupported.
-    fn native_sandbox_prerequisites(&self) -> Option<&'static [&'static str]> {
-        None
-    }
-
-    /// A provider bypass that removes the sandbox wall or permits unprompted escape.
-    fn native_sandbox_warning(&self, _extra_args: &[String]) -> Option<&'static str> {
-        None
+    /// Whether sandbox isolation maps to a provider-native sandbox switch.
+    fn has_native_sandbox(&self) -> bool {
+        false
     }
 
     /// Grant a launch access to the room's state, runtime, and shared runtime roots.

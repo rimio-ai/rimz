@@ -31,53 +31,67 @@ fn enable(env: &Env) {
 }
 
 #[test]
-fn provider_sandbox_refuses_unsupported_providers_with_fixes() {
-    let blocker: rimz::blocker::Blocker = rimz::sandbox::preflight_launch(
-        Isolation::Sandbox,
-        &AgentKind::new_unchecked("pi"),
-        false,
-        ManualSkill::Unsupported,
-    )
-    .unwrap_err()
-    .into();
-    let text = blocker.to_string();
-    for expected in [
-        "pi",
-        "Claude Code",
-        "Codex",
-        "--isolation scoped",
-        "--isolation host",
-        "rimz config set agents.isolation",
-    ] {
-        assert!(text.contains(expected), "{text}");
+fn provider_sandbox_admits_every_provider_without_a_view() {
+    for kind in rimz::agents::known_kinds() {
+        assert_eq!(
+            rimz::sandbox::preflight_launch(
+                Isolation::Sandbox,
+                &AgentKind::new_unchecked(kind),
+                true,
+                ManualSkill::Unsupported,
+            )
+            .unwrap(),
+            None,
+            "{kind}"
+        );
     }
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn provider_sandbox_claude_missing_prerequisites_refuse_before_launch() {
+fn provider_sandbox_claude_launches_without_host_sandbox_tools() {
     let env = Env::new();
     env.record(&env.project_root);
     let shims = env.home_root.join("native-sandbox-bin");
     std::fs::create_dir(&shims).unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
     request.identity.params.isolation = Some(Isolation::Sandbox);
-    for missing in ["bwrap", "socat"] {
-        if missing == "socat" {
-            crate::common::write_path_shim(&shims, "bwrap", "exit 0");
-        }
-        let output = env
-            .rimz()
-            .args(exec_args(&env, &request))
-            .env("PATH", &shims)
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let text = String::from_utf8_lossy(&output.stderr);
-        for expected in [missing, "--isolation scoped", "--isolation host", "Install"] {
-            assert!(text.contains(expected), "{text}");
-        }
-    }
+    crate::common::write_path_shim(
+        &shims,
+        "claude",
+        "printf '%s\\n' \"$@\" > \"$RIMZ_TEST_AGENT_ENV_DUMP\"",
+    );
+    let probe = env.home_root.join("provider-argv");
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", &shims)
+        .env("SHELL", write_fake_login_shell(&env, "native-shell", &[]))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let dump = std::fs::read_to_string(probe).unwrap();
+    let argv = dump.lines().collect::<Vec<_>>();
+    let settings = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--settings")
+        .unwrap()[1];
+    let settings: serde_json::Value = serde_json::from_str(settings).unwrap();
+    let sandbox = &settings["sandbox"];
+    assert_eq!(sandbox["enabled"], true);
+    assert_eq!(sandbox.as_object().unwrap().len(), 3);
+    assert!(
+        sandbox["filesystem"]["allowWrite"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(env.store().paths().root))
+    );
+    assert!(
+        sandbox["excludedCommands"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("rimz message *"))
+    );
 }
 
 #[test]
@@ -2499,6 +2513,76 @@ fn a_nested_launch_drops_a_parent_temp_root_it_does_not_own() {
             );
         }
         std::fs::remove_file(&probe).unwrap();
+    }
+}
+
+#[test]
+fn provider_sandbox_no_switch_warning_reaches_stderr_and_agent_card() {
+    for from_config in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        if from_config {
+            std::fs::write(
+                env.rimz_home().join("config.toml"),
+                "[agents]\nisolation = 'sandbox'\n",
+            )
+            .unwrap();
+        }
+        let shell = write_fake_login_shell(&env, "warning-shell", &[]);
+        let shim = write_env_dump_shim(&env, "amp");
+        let probe = env.home_root.join("warning-provider-env");
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store()
+            .append_event(&rimz::store::event::EventEnvelope::new(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "amp",
+                "agent",
+                "agent.launched",
+                serde_json::json!({"agent_id": "launch-warning", "launch_id": "launch-warning",
+            "agent_name": "warning-agent", "agent_name_explicit": true, "state": "starting"}),
+            ))
+            .unwrap();
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
+        request.identity.launch_id = Some("launch-warning".into());
+        request.identity.name = Some("warning-agent".into());
+        request.identity.params.isolation = (!from_config).then_some(Isolation::Sandbox);
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&shim))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        let dump = std::fs::read_to_string(&probe).unwrap();
+        assert!(
+            dump.lines().any(|line| line == "RIMZ_ISOLATION=sandbox"),
+            "{dump}"
+        );
+        let warnings: Vec<_> = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("rimz: "))
+            .filter(|text| !text.starts_with("agent "))
+            .collect();
+        assert_eq!(warnings.len(), 1, "{stderr}");
+        let warning = warnings[0];
+        for text in ["amp", "no sandbox flag", "host"] {
+            assert!(warning.contains(text), "{warning}");
+        }
+        let shown = env
+            .rimz()
+            .args(["agents", "show", "@warning-agent", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(shown.status.success(), "{shown:?}");
+        let report: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+        assert_eq!(
+            report["agent"]["launch_warnings"],
+            serde_json::json!(warnings)
+        );
     }
 }
 

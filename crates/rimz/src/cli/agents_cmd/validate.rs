@@ -157,6 +157,15 @@ fn warnings(
         let Some(adapter) = rimz::agents::find_definition(&row.kind) else {
             continue;
         };
+        if profile.isolation == Some(Isolation::Sandbox) && !adapter.has_native_sandbox() {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: rimz::harness::launch_plan::LaunchPlanWarning::NoSandboxFlag {
+                    kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+                }
+                .to_string(),
+            });
+        }
         if profile.skills.is_some()
             && !Isolation::resolve(None, profile.isolation, machine).is_scoped()
             && matches!(

@@ -99,7 +99,7 @@ Claude Code and Codex each ship a command sandbox that you turn on with a flag o
 | Provider | What RimZ adds at `sandbox` |
 | --- | --- |
 | Claude Code | `sandbox.enabled: true` in the launch's merged `--settings`. |
-| Codex | `--sandbox workspace-write`, only when the launch's arguments and Codex config select no sandbox mode. A mode you select, including `danger-full-access`, a permission profile, or Yolo, stays, and RimZ adds nothing. |
+| Codex | `--sandbox workspace-write`, only when the launch's arguments and the [Codex config layers RimZ reads](../reference/agent-support.md#permission-modes) select no sandbox mode. A mode you select, including `danger-full-access`, a permission profile, or Yolo, stays, and RimZ adds nothing. |
 | Every other provider | Nothing. The launch prints a warning and starts as it would at `host`. |
 
 What these flags do is in the provider's own documentation: [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing) and [Codex sandboxing](https://learn.chatgpt.com/docs/sandboxing). RimZ does not check the provider's dependencies, override its fallback, or comment on your permission mode.

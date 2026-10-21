@@ -1093,15 +1093,8 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
     }
 
-    fn native_sandbox_prerequisites(&self) -> Option<&'static [&'static str]> {
-        Some(&[])
-    }
-
-    fn native_sandbox_warning(&self, extra_args: &[String]) -> Option<&'static str> {
-        extra_args
-            .iter()
-            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
-            .then_some("Yolo bypasses approvals and the command sandbox")
+    fn has_native_sandbox(&self) -> bool {
+        true
     }
 
     fn configure_room_permissions(
@@ -1119,7 +1112,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
 
         if extra_args
             .iter()
-            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox" || arg == "--yolo")
         {
             return;
         }
@@ -1177,7 +1170,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         );
         let layers = || projects.iter().rev().chain([&profile, &base]);
         let setting = |key: &str| layers().find_map(|config| config.get(key));
-        let mut selection = if let Some(mode) = flag_value(&["--sandbox", "-s"]) {
+        let selection = if let Some(mode) = flag_value(&["--sandbox", "-s"]) {
             Selection::Legacy(Some(toml::Value::String(mode)))
         } else if let Some(profile) = config_value("default_permissions") {
             Selection::Profile(profile)
@@ -1198,24 +1191,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 .find_map(|config| config.get("sandbox_workspace_write")?.get("writable_roots"))
                 .cloned()
         });
-        let full_access = match &selection {
-            Selection::Legacy(mode) => {
-                mode.as_ref().and_then(toml::Value::as_str) == Some("danger-full-access")
-            }
-            Selection::Profile(profile) => profile.as_str() == Some(":danger-full-access"),
-        };
-        if isolation == crate::config::Isolation::Sandbox && full_access {
-            crate::agents::PresetArgMatcher::Flag(vec!["--sandbox".into(), "-s".into()])
-                .remove_occurrences(extra_args);
-            for key in ["default_permissions", "sandbox_mode"] {
-                crate::agents::PresetArgMatcher::ConfigKey {
-                    flags: vec!["-c".into(), "--config".into()],
-                    key: key.into(),
-                }
-                .remove_occurrences(extra_args);
-            }
+        if isolation == crate::config::Isolation::Sandbox
+            && matches!(&selection, Selection::Legacy(None))
+        {
             extra_args.extend(["--sandbox".into(), "workspace-write".into()]);
-            selection = Selection::Legacy(None);
         }
         match selection {
             Selection::Legacy(mode) => {

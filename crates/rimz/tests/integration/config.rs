@@ -202,6 +202,49 @@ fn agents_validate_refuses_what_launch_refuses() {
 }
 
 #[test]
+fn agents_validate_warns_only_for_explicit_sandbox_without_a_switch() {
+    let env = Env::new();
+    write_machine_file(
+        &env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'sandbox'\n",
+    );
+    for (name, kind, isolation) in [
+        ("no-switch", "amp", "isolation: sandbox\n"),
+        ("native-switch", "claude", "isolation: sandbox\n"),
+        ("codex-switch", "codex", "isolation: sandbox\n"),
+        ("machine-default", "amp", ""),
+    ] {
+        let tools = if kind == "amp" { "" } else { "tools: []" };
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("agent: {kind}\ndescription: Worker\n{isolation}{tools}"),
+            "",
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["agents", "validate", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert!(
+        warnings[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("no-switch.md")
+    );
+    let warning = warnings[0]["message"].as_str().unwrap();
+    for text in ["amp", "no sandbox flag", "host"] {
+        assert!(warning.contains(text), "{warning}");
+    }
+}
+
+#[test]
 fn keep_warm_while_refusals_follow_definition_loading_boundaries() {
     for markdown in [true, false] {
         for (clause, expected) in [

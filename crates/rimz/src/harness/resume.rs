@@ -285,7 +285,7 @@ pub enum ResumeSkipReason {
     LoginMismatch,
     /// The kind's current account selection refuses a launch.
     AccountUnavailable,
-    /// The effective isolation cannot run on this host.
+    /// The scoped view cannot run on this host.
     SandboxUnavailable,
     /// A launch precondition in machine configuration cannot be satisfied.
     ConfigurationUnavailable,
@@ -303,7 +303,7 @@ impl ResumeSkipReason {
             Self::PromptUnsupported => "no prompt replacement",
             Self::LoginMismatch => "different account",
             Self::AccountUnavailable => "account unavailable",
-            Self::SandboxUnavailable => "isolation unavailable",
+            Self::SandboxUnavailable => "scoped view unavailable",
             Self::ConfigurationUnavailable => "configuration unavailable",
             Self::FreshRelaunch(spec) => {
                 return format!("no saved team to restore; relaunch with {spec}").into();
