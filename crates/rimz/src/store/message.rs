@@ -473,6 +473,8 @@ pub struct MessageRecord {
     pub status: MessageStatus,
     pub enqueued_at: Timestamp,
     pub updated_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub register_by: Option<Timestamp>,
     /// Delivery claims made against this record. Claim/pre-send failures use
     /// this as the `MAX_DELIVERY_ATTEMPTS` guard.
     #[serde(default)]
@@ -630,6 +632,7 @@ impl MessageRecord {
             status: MessageStatus::Queued,
             enqueued_at: now,
             updated_at: now,
+            register_by: None,
             attempts: 0,
             unconfirmed_sends: 0,
             last_attempt_at: None,
@@ -792,6 +795,20 @@ impl MessageRecord {
         self.same_card(agent.card_ref())
     }
 
+    /// Registration waits only against an absent card or an end no later than enqueue.
+    pub(crate) fn awaiting_registration(&self, agents: &[AgentState]) -> bool {
+        self.status == MessageStatus::Queued
+            && self.register_by.is_some()
+            && agents
+                .iter()
+                .filter(|agent| self.same_agent_card(agent))
+                .all(|agent| {
+                    agent
+                        .ended_at
+                        .is_some_and(|ended_at| ended_at <= self.enqueued_at)
+                })
+    }
+
     pub fn is_ready(&self, now: Timestamp) -> bool {
         self.not_before.is_none_or(|not_before| not_before <= now)
     }
@@ -864,7 +881,9 @@ impl MessageRecord {
                     .unwrap_or(self.updated_at);
                 Some(
                     self.expires_at()
-                        .map_or(deadline, |expires_at| deadline.min(expires_at)),
+                        .into_iter()
+                        .chain(self.register_by.filter(|register_by| *register_by > now))
+                        .fold(deadline, Timestamp::min),
                 )
             }
             MessageStatus::Sent => self.retry_after.or_else(|| self.sent_reconcile_deadline()),

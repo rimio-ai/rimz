@@ -1110,15 +1110,14 @@ impl Store {
                         .sent_reconcile_deadline()
                         .is_some_and(|deadline| now >= deadline)
             });
-            let compacting_agents = if stale_sent {
-                self.snapshot()?
-                    .agents
-                    .iter()
-                    .filter(|agent| agent.compacting_since.is_some())
-                    .cloned()
-                    .collect::<Vec<_>>()
+            let registration_due = queue.live().iter().any(|message| {
+                message.status == MessageStatus::Queued
+                    && message.register_by.is_some_and(|deadline| now >= deadline)
+            });
+            let agents = if stale_sent || registration_due {
+                self.snapshot()?.agents.clone()
             } else {
-                Vec::new()
+                Default::default()
             };
             let pending_ingress = if stale_sent {
                 ingress::read_cursor(&self.inner.paths)
@@ -1142,6 +1141,21 @@ impl Store {
                         reason: Some(format!(
                             "expired: automatic command not delivered within {} of queueing",
                             message::format_dwell(message::command_validity().as_secs())
+                        )),
+                    };
+                }
+                if message.awaiting_registration(&agents)
+                    && let Some(register_by) = message.register_by.filter(|deadline| now >= *deadline)
+                {
+                    report.expired += 1;
+                    let address = message.address.clone().unwrap_or_else(|| {
+                        format!("@{}", message.agent_name.as_deref().unwrap_or(message.agent_id.as_str()))
+                    });
+                    return MessageUpdate::Finalize {
+                        status: MessageStatus::Expired,
+                        reason: Some(format!(
+                            "expired: {address} did not register within {} of its resume",
+                            message::format_dwell(register_by.duration_since(message.enqueued_at).as_secs().max(0) as u64)
                         )),
                     };
                 }
@@ -1170,9 +1184,9 @@ impl Store {
                 if now < deadline {
                     return MessageUpdate::Keep;
                 }
-                if compacting_agents
+                if agents
                     .iter()
-                    .any(|agent| message.same_agent_card(agent))
+                    .any(|agent| agent.compacting_since.is_some() && message.same_agent_card(agent))
                 {
                     message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;

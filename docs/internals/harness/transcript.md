@@ -118,7 +118,7 @@ A requeued message keeps `in_reply_to`, so retried text keeps its causal positio
 
 ## Asks and answers
 
-An agent holding a permission prompt, plan approval, or question reserves its pane input: [delivery check 9](./messaging.md#the-ordered-check) holds queued text, and [model.md § Waiting and asks](../agents/model.md#waiting-and-asks) owns the `is_awaiting_input` guard that decides whether the ask still holds. The ask records described here turn that reservation into structured data a script can read and answer.
+An agent holding a permission prompt, plan approval, or question reserves its pane input: [delivery check 13](./messaging.md#the-ordered-check) holds queued text, and [model.md § Waiting and asks](../agents/model.md#waiting-and-asks) owns the `is_awaiting_input` guard that decides whether the ask still holds. The ask records described here turn that reservation into structured data a script can read and answer.
 
 ### Recording an ask
 

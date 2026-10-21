@@ -122,6 +122,9 @@ pub enum DeliveryVerdict {
     Expired {
         expires_at: Timestamp,
     },
+    WaitingForRegistration {
+        register_by: Timestamp,
+    },
     Scheduled {
         not_before: Option<Timestamp>,
     },
@@ -189,6 +192,7 @@ impl DeliveryVerdict {
             | Self::WaitingOnAfter { .. }
             | Self::WaitingOnWhen { .. }
             | Self::BehindFifo { .. }
+            | Self::WaitingForRegistration { .. }
             | Self::Expired { .. }
             | Self::Ready => None,
         }
@@ -202,6 +206,9 @@ impl DeliveryVerdict {
             Self::AskWaiting => "waiting on input in its pane".to_owned(),
             Self::ReceiverGone => "receiver has no current card".to_owned(),
             Self::ReceiverEnded => "receiver ended".to_owned(),
+            Self::WaitingForRegistration { register_by } => {
+                format!("waiting for registration after resume until {register_by}")
+            }
             Self::Compacting => "compacting".to_owned(),
             Self::GateClosed {
                 status: Some(AgentStatus::Running),
@@ -728,7 +735,13 @@ pub fn sweep(
                 Some(sentence) => BlockerUpdate::Set(sentence),
                 None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
             };
-            store.defer_message_wake(&head.message_id, now + delivery_window, blocker)?;
+            let retry_at = head
+                .register_by
+                .filter(|deadline| *deadline > now)
+                .map_or(now + delivery_window, |deadline| {
+                    deadline.min(now + delivery_window)
+                });
+            store.defer_message_wake(&head.message_id, retry_at, blocker)?;
         }
     }
     store.rearm_message_wake(Timestamp::now());
@@ -802,6 +815,8 @@ struct DeliveryCandidate<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeliveryCheck {
     pub expiry: ExpiryCheck,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub register_by: Option<Timestamp>,
     pub schedule: ScheduleCheck,
     pub after: Vec<AfterConditionCheck>,
     pub when: Vec<WhenConditionCheck>,
@@ -836,6 +851,11 @@ impl DeliveryCheck {
             && let Some(expires_at) = self.expiry.expires_at
         {
             return DeliveryVerdict::Expired { expires_at };
+        }
+        if (!self.agent.present || self.agent.ended)
+            && let Some(register_by) = self.register_by
+        {
+            return DeliveryVerdict::WaitingForRegistration { register_by };
         }
         if !self.schedule.ready {
             return DeliveryVerdict::Scheduled {
@@ -1085,6 +1105,9 @@ fn evaluate_delivery<'a>(
         .filter_map(|(index, evaluation)| evaluation.stamp_needed.then_some(index))
         .collect();
     let check = DeliveryCheck {
+        register_by: message
+            .register_by
+            .filter(|_| message.awaiting_registration(&snapshot.agents)),
         expiry: ExpiryCheck {
             expired: message.expired(now),
             expires_at: message.expires_at(),

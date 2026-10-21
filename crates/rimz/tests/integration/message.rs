@@ -1780,6 +1780,158 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
 }
 
 #[test]
+fn sweep_keeps_follow_up_waiting_for_registration() {
+    assert_sweep_registration_wait(false);
+}
+
+#[test]
+fn sweep_archives_follow_up_after_resumed_child_ends() {
+    assert_sweep_registration_wait(true);
+}
+
+fn assert_sweep_registration_wait(ends_again: bool) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    append_lifecycle(
+        &env,
+        "claude",
+        "test",
+        "parent",
+        LifecycleSignal::Registered,
+        |_| {},
+    );
+    for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
+        append_lifecycle(&env, "claude", "test", "child", signal, |o| {
+            o.agent_name = Some("otter".into());
+            o.launch.parent_agent_id = Some("parent".into());
+            o.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            o.launch.launch_depth = Some(1);
+        });
+    }
+    let store = env.store();
+    let receiver = store
+        .snapshot()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("otter"))
+        .unwrap()
+        .clone();
+    let now = jiff::Timestamp::now();
+    let deadline = now + Duration::from_secs(10);
+    let mut record = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "follow up".into(),
+        DeliveryGate::Done,
+    );
+    record.register_by = Some(deadline);
+    store.queue_message(&record, "rimz-test").unwrap();
+    if ends_again {
+        for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
+            append_lifecycle(&env, "claude", "test", "child", signal, |_| {});
+        }
+        let snapshot = store.snapshot().unwrap();
+        let ended = snapshot
+            .agents
+            .iter()
+            .find(|agent| record.same_agent_card(agent))
+            .unwrap();
+        assert!(ended.ended_at.unwrap() > record.enqueued_at);
+    }
+    let panes = env.write_pane_fixture(&[]);
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "sweep"]),
+        "defer resuming child",
+    );
+    let live = store
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .chain(store.list_message_history().unwrap())
+        .find(|message| message.message_id == record.message_id)
+        .expect("follow-up retained in the queue or history");
+    if ends_again {
+        assert_eq!(
+            live.status,
+            MessageStatus::Archived,
+            "the resumed child registered, then ended"
+        );
+        assert_eq!(
+            live.last_error.as_deref(),
+            Some("receiver ended; rimz message @otter#main resumes it")
+        );
+        assert!(store.list_pending_messages().unwrap().is_empty());
+        return;
+    }
+    assert_eq!(live.status, MessageStatus::Queued);
+    assert!(store.list_message_history().unwrap().is_empty());
+    assert!(
+        live.retry_after
+            .is_some_and(|wake| wake > now && wake <= deadline),
+        "registration wait must defer its wake no later than the deadline: {live:?}"
+    );
+    let shown = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
+            "message",
+            "show",
+            record.message_id.as_str(),
+        ]),
+        "show registration wait",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("waiting for @otter#main to register after its resume"),
+        "{shown}"
+    );
+    assert!(shown.contains(&deadline.to_string()), "{shown}");
+    assert!(!shown.contains("resumes it"), "{shown}");
+    let shown = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
+            "message",
+            "show",
+            record.message_id.as_str(),
+            "--json",
+        ]),
+        "show registration wait json",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["message"]["register_by"], deadline.to_string());
+    assert_eq!(
+        shown["delivery"]["check"]["register_by"],
+        deadline.to_string()
+    );
+    store
+        .reconcile_stale_messages("rimz-test", deadline, 3)
+        .unwrap();
+    assert_eq!(
+        store
+            .list_message_history()
+            .unwrap()
+            .into_iter()
+            .find(|message| message.message_id == record.message_id)
+            .expect("expired follow-up in history")
+            .status,
+        MessageStatus::Expired
+    );
+    let shown = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
+            "message",
+            "show",
+            record.message_id.as_str(),
+        ]),
+        "show expired registration",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("expired") && shown.contains("did not register within"),
+        "{shown}"
+    );
+}
+
+#[test]
 fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
     let env = Env::new();
     env.record(&env.project_root);

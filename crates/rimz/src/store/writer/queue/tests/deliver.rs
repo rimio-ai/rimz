@@ -971,6 +971,116 @@ fn fifth_expired_claim_abandons_once() {
 }
 
 #[test]
+fn registration_deadline_round_trips_and_defaults_to_absent() {
+    let q = Queue::new();
+    let record = q.record(1);
+    let mut wire = serde_json::to_value(&record).unwrap();
+    assert!(wire.get("register_by").is_none());
+    let deadline = record.enqueued_at + Duration::from_secs(120);
+    wire["register_by"] = serde_json::to_value(deadline).unwrap();
+    let decoded: MessageRecord = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap(),
+        wire,
+        "resume deadline must survive a queue rewrite"
+    );
+}
+
+#[test]
+fn reconcile_registration_deadline_is_card_aware() {
+    for (end_after_enqueue, remaining, has_deadline, expires) in [
+        (Some(-1), -1, true, true),
+        (None, -1, true, false),
+        (Some(-1), 0, true, true),
+        (Some(-1), 1, true, false),
+        (Some(-1), -1, false, false),
+        (Some(0), -1, true, true),
+        (Some(1), -1, true, false),
+    ] {
+        let q = Queue::new();
+        let receiver = agent();
+        let now = Timestamp::now();
+        let mut record = q.record(1);
+        record.enqueued_at = now - Duration::from_secs(120);
+        record.register_by = has_deadline.then(|| now + jiff::SignedDuration::from_secs(remaining));
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            receiver.kind.as_str(),
+            "test",
+            &AgentLifecycleObservation::new(Some("parent".into()), LifecycleSignal::Registered),
+        ))
+        .unwrap();
+        for (signal, timestamp) in [
+            Some((
+                LifecycleSignal::Registered,
+                record.enqueued_at - Duration::from_secs(2),
+            )),
+            end_after_enqueue.map(|offset| {
+                (
+                    LifecycleSignal::Ended,
+                    record.enqueued_at + jiff::SignedDuration::from_secs(offset),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let mut observation =
+                AgentLifecycleObservation::new(Some(receiver.agent_id.clone()), signal);
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(receiver.kind.clone());
+            observation.launch.launch_depth = Some(1);
+            let mut event = EventEnvelope::agent_lifecycle(
+                q.workspace_id.clone(),
+                "session",
+                receiver.kind.as_str(),
+                "test",
+                &observation,
+            );
+            event.timestamp = timestamp;
+            q.append_event(&event).unwrap();
+        }
+        let snapshot = q.snapshot().unwrap();
+        let observed_receiver = snapshot
+            .agents
+            .iter()
+            .find(|agent| record.same_agent_card(agent))
+            .expect("ended child stays visible while its parent is live");
+        assert_eq!(
+            observed_receiver.ended_at,
+            end_after_enqueue
+                .map(|offset| record.enqueued_at + jiff::SignedDuration::from_secs(offset))
+        );
+        q.queue_message(&record, "session").unwrap();
+        let report = q.reconcile_stale_messages("session", now, 3).unwrap();
+        assert_eq!(
+            report.expired,
+            usize::from(expires),
+            "end_after_enqueue={end_after_enqueue:?}, remaining={remaining}, has_deadline={has_deadline}"
+        );
+        if expires {
+            let history = q.history();
+            assert_eq!(history[0].status, MessageStatus::Expired);
+            let reason = history[0].last_error.as_deref().unwrap();
+            assert!(reason.contains("did not register within"), "{reason}");
+            assert!(
+                reason.contains(
+                    receiver
+                        .name
+                        .as_deref()
+                        .unwrap_or(receiver.agent_id.as_str())
+                ),
+                "{reason}"
+            );
+        } else {
+            assert_eq!(q.live()[0].status, MessageStatus::Queued);
+        }
+    }
+}
+
+#[test]
 fn reconcile_expires_only_past_window_automatic_queued_commands() {
     let q = Queue::new();
     let now = Timestamp::now();
