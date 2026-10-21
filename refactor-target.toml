@@ -99,7 +99,8 @@ path = "crates/rimz/src/lsp"
 # Pass 26a: internal helpers narrowed; ledger reopens after 30 scoped commits.
 # check::Mode carries `--fix [--hints]` from the CLI into check::run (+1).
 # admission::revive lets a query bring back a lost broker for its live lease holders (+1).
-surface-budget = 82
+# memory::Reading and for_entry share RSS, swap, and peak accounting (+2).
+surface-budget = 84
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -1133,7 +1134,33 @@ upward-dependencies = [
 # MemoryStat and memory_stat share anonymous-memory and refault readings with hibernation (+2).
 # input_tty provides the detached focus helper's non-consuming pty probe (+1).
 # `memory::Pressure` and `memory::pressure` give the lsp kill and eviction records the memory stall averages (+2).
-surface-budget = 139
+# TreeMemory adds swap to the existing status walk (+1).
+surface-budget = 140
+
+[[verdict]]
+kind = "item"
+key = "proc::TreeMemory"
+reason = "LSP accounting reads resident high-water and swap from one status walk."
+
+[[verdict]]
+kind = "item"
+key = "proc::tree_memory_kb"
+reason = "Linux and non-Linux readers share the status-walk contract with LSP accounting."
+
+[[verdict]]
+kind = "item"
+key = "lsp::memory::Reading"
+reason = "Broker, watchdog, list, and doctor share one RSS, swap, and peak reading."
+
+[[verdict]]
+kind = "item"
+key = "lsp::memory::tree"
+reason = "One LSP tree sample combines the existing stat and status walks."
+
+[[verdict]]
+kind = "item"
+key = "lsp::memory::for_entry"
+reason = "List and doctor must reject gone or reused server process identities identically."
 
 [[verdict]]
 kind = "item"

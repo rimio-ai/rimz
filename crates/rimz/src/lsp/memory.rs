@@ -3,18 +3,41 @@
 
 use super::Result;
 
-pub fn tree_peak_kb(pid: u32) -> u64 {
-    tree_peak_kb_with(pid, crate::proc::tree_peak_rss_kb, |pid| {
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    pub rss_kb: u64,
+    pub swap_kb: u64,
+    pub peak_kb: u64,
+}
+
+pub fn tree(pid: u32) -> Reading {
+    tree_with(pid, crate::proc::tree_memory_kb, |pid| {
         crate::proc::tree_totals(pid).map(|totals| totals.rss_kb)
     })
 }
 
-fn tree_peak_kb_with(
+pub fn for_entry(entry: &super::registry::Entry) -> Reading {
+    if !entry.state.is_running() {
+        return Reading::default();
+    }
+    entry
+        .server_pid
+        .filter(|pid| crate::proc::process_is_live(*pid, entry.server_start_token.as_deref()))
+        .map_or_else(Reading::default, tree)
+}
+
+fn tree_with(
     pid: u32,
-    peak: impl FnOnce(u32) -> Option<u64>,
+    status: impl FnOnce(u32) -> Option<crate::proc::TreeMemory>,
     rss: impl FnOnce(u32) -> Option<u64>,
-) -> u64 {
-    peak(pid).unwrap_or(0).max(rss(pid).unwrap_or(0))
+) -> Reading {
+    let status = status(pid).unwrap_or_default();
+    let rss_kb = rss(pid).unwrap_or(0);
+    Reading {
+        rss_kb,
+        swap_kb: status.swap_kb,
+        peak_kb: status.peak_rss_kb.max(rss_kb),
+    }
 }
 
 /// What a server can draw on: available memory plus free swap, both from one `proc::memory`
@@ -49,7 +72,21 @@ mod tests {
             (Some(100), None, 100),
             (None, None, 0),
         ] {
-            assert_eq!(tree_peak_kb_with(1, |_| peak, |_| rss), expected);
+            assert_eq!(
+                tree_with(
+                    1,
+                    |_| peak.map(|peak_rss_kb| crate::proc::TreeMemory {
+                        peak_rss_kb,
+                        swap_kb: 50
+                    }),
+                    |_| rss
+                ),
+                Reading {
+                    rss_kb: rss.unwrap_or(0),
+                    swap_kb: if peak.is_some() { 50 } else { 0 },
+                    peak_kb: expected
+                }
+            );
         }
     }
 }
