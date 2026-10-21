@@ -5024,7 +5024,7 @@ fn scenes_without_a_verb_or_launch_target_refuse_with_their_list_command() {
         (&["agents", "launch", "#auth"], "rimz agents list '#auth'"),
         (&["subagents"], "rimz subagents list"),
         (&["subagents", "--json"], "rimz subagents list --json"),
-        (&["subagents", "--detach"], "rimz subagents list"),
+        (&["subagents", "--keep"], "rimz subagents list"),
         (&["subagents", " "], "rimz subagents list"),
         (&["teams"], "rimz teams list"),
         (&["teams", "--json"], "rimz teams list --json"),
@@ -5039,6 +5039,33 @@ fn scenes_without_a_verb_or_launch_target_refuse_with_their_list_command() {
             .output()
             .expect("run scene without a verb");
         assert_usage_refusal(&out, list);
+    }
+    for argv in [
+        &["subagents", "--detach"][..],
+        &["subagents", "codex", "task", "--detach"],
+        &["subagents", "launch", "codex", "task", "--detach"],
+        &["subagents", "fanout", "--detach"],
+    ] {
+        let out = env
+            .rimz()
+            .current_dir(&env.home_root)
+            .args(argv)
+            .output()
+            .expect("refuse retired subagent detach");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{argv:?}: {stderr}");
+        assert!(
+            out.stdout.is_empty(),
+            "{argv:?}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert_eq!(
+            stderr.lines().next(),
+            Some(
+                "error: --detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`"
+            ),
+            "{argv:?}: {stderr}"
+        );
     }
 }
 

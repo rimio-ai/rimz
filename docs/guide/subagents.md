@@ -135,7 +135,7 @@ rimz agents stop @calm-fox
 
 Stopping a parent, with `rimz agents stop` or `rimz teams stop`, stops its live children first. A parent that ends any other way takes its children with it: each child watches its parent and cancels itself when the parent's session ends, and the room sweeps up any child still running ten minutes after its parent ended.
 
-A child launched with `--detach` stays out of the report and the parent is never held waiting for it. Its pane closes when it finishes or its parent ends, and `rimz subagents wait <name>` still reads its answer if the parent wants it after all. Stopping the parent still stops it.
+For work that must outlive its launcher, use a [detached peer run](../reference/cli/agents.md#supervised-runs--p): `rimz agents <spec> "<prompt>" -p --bg --detach`.
 
 A child launched with `--keep` holds its pane after it finishes, for you to read, until its parent ends. Press Ctrl-C in the held pane to close it sooner without declining the answer. While the provider is running, Ctrl-C remains the provider's own interrupt.
 

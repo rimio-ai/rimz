@@ -1170,7 +1170,7 @@ fn into_supervised_request(
     ))
 }
 
-pub(in crate::cli) fn report_to(detach: bool) -> rimz::store::run::ReportTo {
+fn report_to(detach: bool) -> rimz::store::run::ReportTo {
     if detach {
         rimz::store::run::ReportTo::Nobody
     } else {

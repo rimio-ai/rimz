@@ -112,11 +112,11 @@ struct FanoutArgs {
     /// Time to report after the deadline; `0s` kills at the deadline.
     #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
     grace: Option<Duration>,
-    /// Disable automatic completion and parent-exit cleanup; hold the panes until explicitly stopped (run timeouts still apply).
+    /// Disable automatic completion cleanup; hold each child's pane after exit until its parent ends or Ctrl-C is pressed in the pane (run timeouts still apply).
     #[arg(long)]
     keep: bool,
-    /// Launch without a report and without holding the launcher; each result stays readable with `wait`.
-    #[arg(long)]
+    /// Retired; independent runs use `rimz agents -p --bg --detach`.
+    #[arg(long, hide = true)]
     detach: bool,
     /// Emit JSON.
     #[arg(long)]
@@ -205,11 +205,11 @@ struct SubagentLaunchArgs {
         value_parser = crate::cli::supervised::parse_timeout
     )]
     wait: Option<Option<Duration>>,
-    /// Disable automatic completion and parent-exit cleanup; hold the pane until explicitly stopped (run timeouts still apply).
+    /// Disable automatic completion cleanup; hold the child's pane after exit until its parent ends or Ctrl-C is pressed in the pane (run timeouts still apply).
     #[arg(long)]
     keep: bool,
-    /// Launch without a report and without holding the launcher; the result stays readable with `wait`.
-    #[arg(long)]
+    /// Retired; independent runs use `rimz agents -p --bg --detach`.
+    #[arg(long, hide = true)]
     detach: bool,
     /// Seed the child card's description.
     #[arg(long, value_name = "TEXT")]
@@ -223,6 +223,7 @@ struct SubagentLaunchArgs {
 }
 
 pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
+    reject_detach(&args)?;
     if command_is_agent_only(&args) {
         require_agent_caller(resolve_agent_caller(globals)?)?;
     }
@@ -289,20 +290,24 @@ fn resolve_agent_caller(globals: &GlobalFlags) -> Result<bool> {
     Ok(crate::cli::send::resolve_caller(&store)?.is_some())
 }
 
-/// A detached launch holds nobody, so it cannot also block on its result.
-fn reject_detach_with_wait(detach: bool, wait: bool) -> Result<()> {
-    if detach && wait {
-        bail!(
-            "--detach cannot be combined with --wait: a detached launch holds nobody; drop --detach to block on the result, or drop --wait and run `rimz subagents wait <name>` later"
-        );
+fn reject_detach(args: &SubagentsArgs) -> Result<()> {
+    let detach = match args.command.as_ref() {
+        Some(SubagentsSubcmd::Launch(args)) => args.launch.detach,
+        Some(SubagentsSubcmd::Fanout(args)) => args.detach,
+        None => args.launch.detach,
+        _ => false,
+    };
+    if detach {
+        return Err(UsageError::new(
+            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`".into(),
+        )
+        .into());
     }
     Ok(())
 }
 
 fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
     let wait = args.wait;
-    let report_to = agents_cmd::report_to(args.detach);
-    reject_detach_with_wait(args.detach, wait.is_some())?;
     if json && wait.is_none() {
         bail!("--json on a single launch requires --wait");
     }
@@ -326,7 +331,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
             &[child.name.as_str()],
             child.response_path.as_deref(),
             true,
-            report_to,
+            rimz::store::run::ReportTo::Launcher,
         )?;
         return Ok(());
     };
@@ -342,7 +347,6 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
 }
 
 fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
-    reject_detach_with_wait(args.detach, args.wait.is_some())?;
     let (raw, source) = match args.file.as_deref() {
         Some(path) => (
             fs::read_to_string(path)
@@ -392,7 +396,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
                 .first()
                 .and_then(|child| child.response_path.as_deref()),
             true,
-            agents_cmd::report_to(args.detach),
+            rimz::store::run::ReportTo::Launcher,
         )?;
         if args.json {
             #[derive(Serialize)]
@@ -510,7 +514,7 @@ impl FanoutTask {
             grace,
             wait: None,
             keep: fanout.keep,
-            detach: fanout.detach,
+            detach: false,
             description: self.description,
             max_turns: self.max_turns,
             passthrough: Vec::new(),
@@ -587,7 +591,6 @@ impl SubagentLaunchArgs {
             cohort: agents_cmd::CohortLaunchArgs {
                 description: self.description,
                 bg: true,
-                detach: self.detach,
                 ..Default::default()
             },
             overrides: agents_cmd::LaunchOverrideArgs {
