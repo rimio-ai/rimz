@@ -186,25 +186,5 @@ fn spawn_queue_delivery_with(
     if !delivery_checkpoint {
         return;
     }
-    // FIFO spans this card's provisional and registered ids, so the stable
-    // agent name folds a message queued before registration into the same queue.
-    let Some(head) = rimz::store::message::queue_head(
-        pending.iter(),
-        kind,
-        agent_id,
-        agent_name,
-        jiff::Timestamp::now(),
-    ) else {
-        return;
-    };
-    spawn(&rimz::agents::RefreshSpawn {
-        args: vec![
-            "--root".to_owned(),
-            workspace.project_root.display().to_string(),
-            "message".to_owned(),
-            "deliver".to_owned(),
-            "--message-id".to_owned(),
-            head.message_id.to_string(),
-        ],
-    });
+    rimz::message::spawn_queued_head(workspace, &pending, card, spawn);
 }

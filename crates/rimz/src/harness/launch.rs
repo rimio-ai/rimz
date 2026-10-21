@@ -15,7 +15,7 @@ use crate::disk::paths::RuntimePaths;
 use crate::harness::launch_reminders::LaunchReminders;
 use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, prompt_artifact_path};
 use crate::harness::spec::AgentCell;
-use crate::ids::{AgentKind, RunId};
+use crate::ids::{AgentKind, MessageId, RunId};
 
 const ENV_BIN: &str = "/usr/bin/env";
 const POSIX_LOGIN_SHELL_SCRIPT: &str = r#"exec /usr/bin/env "$@""#;
@@ -619,6 +619,8 @@ pub struct ExecRequest {
     /// `rimz subagents`.
     #[serde(default)]
     pub subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up_message: Option<MessageId>,
     /// The `### Loop` or headless `### Judge` reminder body composed for this launch; set on a resident's prompt leader, a loop single run, or a judge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_reminder: Option<String>,
@@ -668,6 +670,7 @@ impl ExecRequest {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            follow_up_message: None,
             loop_reminder: None,
             headless: None,
             identity: ExecIdentity::default(),

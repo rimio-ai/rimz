@@ -223,6 +223,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: true,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: Default::default(),
@@ -378,6 +379,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
@@ -507,6 +509,7 @@ fn bare_exec_args() -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity {
@@ -556,6 +559,7 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         close_pane_on_exit: true,
         exit_on_run_completion: true,
         subagent: true,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity {

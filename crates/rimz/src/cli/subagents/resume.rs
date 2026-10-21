@@ -170,7 +170,7 @@ fn resume_resolved(
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let mut request = resume_request(child, run, &posture, action, login);
+    let mut request = resume_request(child, run, &posture, action.clone(), login.clone(), None);
     request.identity.params.isolation = capped.isolation;
     if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
@@ -233,6 +233,15 @@ fn resume_resolved(
                 return Ok(());
             }
         }
+        let mut request = resume_request(
+            child,
+            run,
+            &posture,
+            action,
+            login,
+            Some(message_id.clone()),
+        );
+        request.identity.params.isolation = capped.isolation;
         let pane = rimz::mux::PaneCmd {
             argv: rimz::harness::launch::exec_argv(
                 &rimz::proc::rimz_exe(),
@@ -291,6 +300,7 @@ fn resume_request(
     posture: &ResumePosture,
     action: ExecAction,
     login: Option<rimz::ids::LoginName>,
+    follow_up_message: Option<rimz::ids::MessageId>,
 ) -> ExecRequest {
     let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
@@ -298,6 +308,7 @@ fn resume_request(
     ExecRequest {
         run_id: Some(run.run_id.clone()),
         subagent: true,
+        follow_up_message,
         close_pane_on_exit,
         exit_on_run_completion,
         ..request

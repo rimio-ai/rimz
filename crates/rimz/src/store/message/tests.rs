@@ -7,6 +7,46 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn status_lookup_reads_live_and_all_retained_history_without_a_fold() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        WorkspaceId::from_project_root(dir.path()),
+        &dir.path().join("state"),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut message = delivery_message(1, &agent("child", None), DeliveryGate::Done, None);
+    codec::write_queue(&paths.messages_dir, &[message.clone()]).unwrap();
+    assert_eq!(
+        read_status(&paths, &message.message_id).unwrap(),
+        Some(MessageStatus::Queued)
+    );
+    codec::write_queue(&paths.messages_dir, &[]).unwrap();
+    message.status = MessageStatus::Delivered;
+    let mut history = vec![message.clone()];
+    for id in 2..504 {
+        let mut other = message.clone();
+        other.message_id =
+            delivery_message(id, &agent("child", None), DeliveryGate::Done, None).message_id;
+        history.push(other);
+    }
+    codec::append_history_many(&paths.message_history_dir, &history).unwrap();
+    assert!(
+        !codec::list_history(&paths.message_history_dir)
+            .unwrap()
+            .iter()
+            .any(|row| row.message_id == message.message_id)
+    );
+    assert_eq!(
+        read_status(&paths, &message.message_id).unwrap(),
+        Some(MessageStatus::Delivered)
+    );
+    assert_eq!(read_status(&paths, &MessageId::new()).unwrap(), None);
+    std::fs::write(paths.message_queue_file(), "not json\n").unwrap();
+    assert!(read_status(&paths, &message.message_id).is_err());
+}
+
+#[test]
 fn agent_sender_codec_preserves_optional_identity_without_changing_headers() {
     let legacy = serde_json::json!({"origin": "agent", "kind": "claude", "name": "launcher"});
     let sender: MessageSender = serde_json::from_value(legacy.clone()).unwrap();

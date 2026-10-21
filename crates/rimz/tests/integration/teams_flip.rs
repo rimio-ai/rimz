@@ -969,6 +969,7 @@ impl Fixture {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
+            follow_up_message: None,
             loop_reminder: None,
             headless: None,
             skills: None,

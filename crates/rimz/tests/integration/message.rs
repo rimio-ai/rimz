@@ -4999,6 +4999,12 @@ fn assert_parent_follow_up_case(
         "child resume must recreate its recorded empty directory before opening a pane"
     );
     env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
+    let records = store.list_messages().unwrap();
+    let message = records
+        .iter()
+        .find(|record| record.text == "follow up")
+        .unwrap();
+    assert_eq!(message.status, MessageStatus::Queued);
     let mut request = ExecRequest {
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -5017,6 +5023,7 @@ fn assert_parent_follow_up_case(
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        follow_up_message: Some(message.message_id.clone()),
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
@@ -5065,12 +5072,6 @@ fn assert_parent_follow_up_case(
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("is resuming"));
     }
-    let records = store.list_messages().unwrap();
-    let message = records
-        .iter()
-        .find(|record| record.text == "follow up")
-        .unwrap();
-    assert_eq!(message.status, MessageStatus::Queued);
     let zellij = zellij_trace_shim();
     // Provider PID publication follows the wrapper's resume stamp and pane binding.
     let deadline = Instant::now() + Duration::from_secs(10);

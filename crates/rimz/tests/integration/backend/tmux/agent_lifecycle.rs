@@ -928,6 +928,7 @@ fn tmux_agent_exec_command(
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
@@ -976,6 +977,7 @@ fn tmux_resume_command(
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity::default(),
@@ -1019,6 +1021,7 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: rimz::harness::launch::ExecIdentity {

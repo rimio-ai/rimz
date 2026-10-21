@@ -567,6 +567,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
@@ -1978,6 +1979,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         close_pane_on_exit: true,
         exit_on_run_completion: true,
         subagent: true,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity {
@@ -2009,6 +2011,27 @@ fn exec_wire_round_trips_maximal_launch_identity() {
     for removed in ["--agent-name", "--launch-id", "--prompt", "--agent-profile"] {
         assert!(!argv.iter().any(|arg| arg == removed));
     }
+}
+
+#[test]
+fn exec_wire_preserves_a_resume_follow_up_message() {
+    let request = request(
+        "codex",
+        ExecAction::Resume {
+            session_id: "child".into(),
+            extra_args: vec![],
+        },
+    );
+    let mut wire = serde_json::to_value(&request).unwrap();
+    assert!(wire.get("follow_up_message").is_none());
+    wire["follow_up_message"] = serde_json::to_value(crate::ids::MessageId::new()).unwrap();
+    let request: ExecRequest = serde_json::from_value(wire.clone()).unwrap();
+    let (_, decoded) = round_trip(&request);
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap(),
+        wire,
+        "the exec wire must retain its follow-up id"
+    );
 }
 
 #[test]

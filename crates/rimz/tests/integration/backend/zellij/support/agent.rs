@@ -43,6 +43,7 @@ pub(in crate::backend::zellij) fn zellij_agent_exec_command(
         close_pane_on_exit: true,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
