@@ -290,6 +290,54 @@ fn silent_launched_child_frees_parent_without_lifting_attention() {
 }
 
 #[test]
+fn answered_launched_child_releases_parent_card_attention() {
+    let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);
+    child.launch_depth = Some(1);
+    child.waiting_since = Some(ago(60));
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "sess-root");
+    let parent_pane = &parent_row.pane.as_ref().unwrap().pane_id;
+
+    assert_eq!(parent_row.sub_agents()[0].status, AgentStatus::Running);
+    assert_eq!(parent_row.sub_agents()[0].phase, TurnPhase::Reasoning);
+    assert_eq!(parent_row.attention_status(), Some(AgentStatus::Running));
+    assert_eq!(parent_row.attention_pane(), Some(parent_pane));
+    assert_eq!(parent_row.status(), Some(AgentStatus::Running));
+    assert!(
+        !snapshot.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Waiting)
+    );
+}
+
+#[test]
+fn keyed_launched_child_keeps_parent_card_attention_after_activity() {
+    let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);
+    child.launch_depth = Some(1);
+    child.waiting_since = Some(ago(60));
+    child.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: None,
+        native_key: Some("ask-call".to_owned()),
+        since: child.waiting_since.unwrap(),
+    });
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "sess-root");
+
+    assert_eq!(parent_row.sub_agents()[0].status, AgentStatus::Waiting);
+    assert_eq!(parent_row.attention_status(), Some(AgentStatus::Waiting));
+    assert_eq!(
+        parent_row.attention_pane(),
+        parent_row.sub_agents()[0].pane.as_ref()
+    );
+    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+}
+
+#[test]
 fn waiting_launched_child_lifts_parent_card_attention() {
     let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
     let mut child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);

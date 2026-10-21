@@ -31,7 +31,7 @@ fn awaiting_input_outranks_derived_statuses() {
 }
 
 #[test]
-fn fresh_stale_waiting_preserves_source_fallback() {
+fn answered_waiting_reads_running() {
     let mut session = agent("claude", "claude-ask", AgentStatus::Waiting, 0)
         .worktree("/repo/main")
         .active_ago(5);
@@ -41,13 +41,13 @@ fn fresh_stale_waiting_preserves_source_fallback() {
     let row = row(&snapshot, "claude-ask");
     assert_eq!(
         row.status(),
-        Some(AgentStatus::Waiting),
-        "the source agent's effective-status clock remains the fallback"
+        Some(AgentStatus::Running),
+        "newer activity proves the keyless ask was answered"
     );
     assert_eq!(
         row.phase(),
-        TurnPhase::Idle,
-        "the fallback Waiting verdict drops the temporary reasoning phase"
+        TurnPhase::Reasoning,
+        "an answered ask resumes reasoning until a durable clear arrives"
     );
 }
 
