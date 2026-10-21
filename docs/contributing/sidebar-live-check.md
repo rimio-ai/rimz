@@ -477,6 +477,26 @@ rz config set harness.prompt_cache_ttl.claude 24m
 
 With a 24-minute lifetime the band starts at 12 minutes quiet (half the lifetime, which comes before its last ten minutes) and the cache expires at 24. Prime the agent as that section does: a SessionStart, then `UserPromptSubmit` and `Stop` for the same session. Select the card with the sidebar's Click command so its stats and cache line show. Confirm that the card's row reads `cache.ceiling_secs` 1440 ([Inspect the data behind a card](#inspect-the-data-behind-a-card)), then run Look and Capture from a detached script at each quiet age you check, as the time rules there say. The pin stays muted before 12 minutes. From 12 it turns yellow and the countdown line appears, it is orange near 18 and red near 24, and past 24 it reads a greyed-red `◉` with `cache expired`.
 
+## Capture a CLI frame at a chosen size
+
+A full-screen CLI view such as `rimz loop watch` paints its own terminal, so a capture of a room pane shows it only at that pane's size. To read its frame at a width and height you choose, run it on a private tmux server inside the sandbox and capture that server's pane. With `$BIN` the card's `rimz` path and `ROOT` its sandbox root, from the checkout root:
+
+```sh
+cat > "$ROOT/tmp/frame.sh" <<EOF
+#!/bin/sh
+tmux -L frame new-session -d -s frame -x 64 -y 38 "$BIN loop watch --hold"
+sleep 4
+tmux -L frame capture-pane -p -t frame
+tmux -L frame kill-server
+EOF
+chmod +x "$ROOT/tmp/frame.sh"
+target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/room" -- "$ROOT/tmp/frame.sh"
+```
+
+The `--cwd` places the view in the held room, since `loop watch` refuses outside an open room. To compare sizes in one run, start one session per size on the same server before the `sleep`.
+
+Check a line that fills the view's last column here, not only in a unit test. An erase sent while the cursor sits on a line's last cell clears that cell in tmux, as in a real terminal, while the `vt100` crate behind the unit and integration tests keeps it. That is why `crates/rimz/src/tui.rs::write_crlf` issues each erase while the cursor is still at the start of its line. Running the view under `script` with an `stty` size printed no frame, for a reason not established, so use tmux for this capture.
+
 ## Capture kitty graphics
 
 A held room draws cell bars, never pixel meters or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
