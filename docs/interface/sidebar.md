@@ -366,7 +366,7 @@ A card with waits uses the same entry layout:
 
 Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card where it appears, and that choice outranks selection and `card_density` until the sidebar restarts, and follows the viewed sidebar into unviewed tabs. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
 
-Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
+Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 
 Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. A launched child's displayed error label replaces the description or task in italics, for both paused and failed states. Detail sits on a muted, indented second line.
 
@@ -808,7 +808,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `H` / `L` | select the first or last row on screen |
 | `Enter`, `l` | focus the selected row's pane |
 | `1` to `9` | focus the pane of the Nth row, counted from the top of the list |
-| `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first |
+| `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first; attention lifted by a waiting launched child targets its live pane, first in entry order, otherwise the parent's pane |
 | `N` | the same walk, backward |
 | `m` | mark the selected card read or unread, without jumping; with no selection, do nothing |
 | `M` | mark every card read |

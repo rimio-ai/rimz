@@ -290,6 +290,63 @@ fn silent_launched_child_frees_parent_without_lifting_attention() {
 }
 
 #[test]
+fn waiting_launched_child_lifts_parent_card_attention() {
+    let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);
+    child.launch_depth = Some(1);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "sess-root");
+
+    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.attention_status(), Some(AgentStatus::Waiting));
+    assert!(parent_row.attention_score >= 600);
+    assert!(!parent_row.sub_agents()[0].provider_native);
+    assert!(!parent_row.sub_agents()[0].stalled);
+    assert!(
+        snapshot.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Waiting && count.count == 1)
+    );
+
+    let encoded = serde_json::to_vec(&snapshot).expect("snapshot serializes");
+    let published: SidebarSnapshot =
+        serde_json::from_slice(&encoded).expect("snapshot deserializes");
+    assert_eq!(
+        row(&published, "sess-root").status(),
+        Some(AgentStatus::Idle)
+    );
+    assert_eq!(
+        row(&published, "sess-root").attention_status(),
+        Some(AgentStatus::Waiting)
+    );
+    assert!(!row(&published, "sess-root").sub_agents()[0].provider_native);
+    assert!(
+        published.worktree_groups[0]
+            .status_counts
+            .iter()
+            .any(|count| count.status == AgentStatus::Waiting && count.count == 1)
+    );
+}
+
+#[test]
+fn failed_launched_child_does_not_lift_parent_card_attention() {
+    let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
+    let mut child =
+        child_state("sess-root", "child-1", AgentStatus::Running, 5).turn_error(0, "API error");
+    child.launch_depth = Some(1);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent_row = row(&snapshot, "sess-root");
+
+    assert_eq!(parent_row.status(), Some(AgentStatus::Idle));
+    assert_eq!(parent_row.attention_status(), Some(AgentStatus::Idle));
+    let child = &parent_row.sub_agents()[0];
+    assert_eq!(child.status, AgentStatus::Failed);
+    assert!(!child.provider_native);
+    assert!(!child.stalled);
+}
+
+#[test]
 fn waiting_provider_child_lifts_parent_card_attention() {
     let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
     let child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);

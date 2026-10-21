@@ -35,7 +35,7 @@ pub struct NeedsYou {
     pub since: jiff::Timestamp,
 }
 
-/// Project attention using the sidebar's native-child lift and rowless demotion.
+/// Project attention using the sidebar's waiting-child and native-failure lifts and rowless demotion.
 pub fn needs_you(
     agent: &crate::agents::AgentState,
     row: Option<&SidebarRow>,

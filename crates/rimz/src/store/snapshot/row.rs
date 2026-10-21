@@ -149,9 +149,7 @@ impl SidebarRow {
             .unwrap_or(self.last_activity)
     }
 
-    /// Status that determines row-level attention. A provider child has no pane
-    /// of its own, so its actionable state lifts the parent card without
-    /// changing the parent's displayed lifecycle status.
+    /// Status that determines row-level attention. A current child's waiting or a provider-native child's failure lifts the parent card without changing its displayed lifecycle status; the parent's own actionable status takes precedence.
     pub fn attention_status(&self) -> Option<AgentStatus> {
         let status = self.status()?;
         if status.is_actionable() {
@@ -160,7 +158,7 @@ impl SidebarRow {
         let agent = self.as_agent()?;
         if agent
             .current_sub_agents()
-            .any(|child| child.provider_native && child.status == AgentStatus::Waiting)
+            .any(|child| child.status == AgentStatus::Waiting)
         {
             return Some(AgentStatus::Waiting);
         }
@@ -171,6 +169,20 @@ impl SidebarRow {
             return Some(AgentStatus::Failed);
         }
         Some(status)
+    }
+
+    /// Pane for an attention jump: the first current waiting launched child's live pane when the parent is not itself actionable, otherwise the row's own pane. Ordinary card focus keeps using the row pane.
+    pub(crate) fn attention_pane(&self) -> Option<&PaneId> {
+        if let Some(agent) = self.as_agent()
+            && !agent.status.is_actionable()
+            && let Some(pane) = agent
+                .current_sub_agents()
+                .filter(|child| !child.provider_native && child.status == AgentStatus::Waiting)
+                .find_map(|child| child.pane.as_ref())
+        {
+            return Some(pane);
+        }
+        self.pane.as_ref().map(|pane| &pane.pane_id)
     }
 
     pub fn phase(&self) -> TurnPhase {
