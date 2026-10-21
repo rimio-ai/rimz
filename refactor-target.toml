@@ -1723,10 +1723,9 @@ surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
-# `report_to` maps `--detach` to the run policy for both launch commands, so `subagents` keeps no copy (+1).
 # `AgentsArgs::launch_verb` lets `rimz teams <name>` launch through the explicit
 # verb, past the bare-word live-agent refusal, without a caller flag (+1).
-surface-budget = 26
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

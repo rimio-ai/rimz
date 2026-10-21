@@ -70,23 +70,29 @@ fn parse(argv: &[&str]) -> SubagentsArgs {
 }
 
 #[test]
-fn detach_parses_on_launch_and_fanout_and_refuses_wait() {
-    let launch = parse(&["subagents", "claude", "Task", "--detach", "--keep"]);
-    assert!(launch.launch.detach && launch.launch.keep);
-    let Some(SubagentsSubcmd::Fanout(fanout)) =
-        parse(&["subagents", "fanout", "--detach", "--wait"]).command
-    else {
-        panic!("fanout parses")
-    };
-    assert!(fanout.detach);
-    assert_eq!(
-        reject_detach_with_wait(fanout.detach, fanout.wait.is_some())
-            .expect_err("refuse a detached wait")
-            .to_string(),
-        "--detach cannot be combined with --wait: a detached launch holds nobody; drop --detach to block on the result, or drop --wait and run `rimz subagents wait <name>` later"
-    );
-    reject_detach_with_wait(true, false).expect("detached");
-    reject_detach_with_wait(false, true).expect("waited");
+fn detach_refuses_every_launch_form_with_a_peer_run_pointer() {
+    for argv in [
+        &["subagents", "--detach"][..],
+        &["subagents", "claude", "Task", "--detach", "--keep"],
+        &["subagents", "launch", "claude", "Task", "--detach"],
+        &["subagents", "launch", "--detach"],
+        &["subagents", "fanout", "--detach"],
+        &["subagents", "fanout", "--detach", "--wait"],
+    ] {
+        let error = reject_detach(&parse(argv)).expect_err("refuse the retired flag");
+        assert!(error.downcast_ref::<UsageError>().is_some(), "{argv:?}");
+        assert_eq!(
+            error.to_string(),
+            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`",
+            "{argv:?}"
+        );
+    }
+    for argv in [
+        &["subagents", "claude", "Task"][..],
+        &["subagents", "fanout", "--wait"],
+    ] {
+        reject_detach(&parse(argv)).expect("ordinary launch");
+    }
 }
 
 #[test]
