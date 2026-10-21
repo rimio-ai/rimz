@@ -1,7 +1,7 @@
 //! Unified account readings, compatibility projection, and provider tables.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -69,8 +69,7 @@ pub(super) fn list(
     if let Some(blocked) = standing.blocked() {
         writeln!(std::io::stderr().lock(), "rimz: warning: {blocked}")?;
     }
-    let spinner = (!args.json && std::io::stdout().is_terminal())
-        .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
+    let spinner = Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE);
     let (catalog, errors) = LoginCatalog::room_view(&config.accounts);
     for error in errors.values() {
         writeln!(std::io::stderr().lock(), "rimz: warning: {error}")?;
@@ -119,9 +118,7 @@ pub(super) fn list(
     if !legacy && !stale.is_empty() && !args.refresh {
         accounts = query_provider_accounts(&runtime, &stale, &probe_logins, true);
     }
-    if let Some(spinner) = &spinner {
-        spinner.set("Refreshing provider usage");
-    }
+    spinner.set("Refreshing provider usage");
     for login in &logins {
         let Some(record) = accounts.logins.get(&login.key()) else {
             continue;
