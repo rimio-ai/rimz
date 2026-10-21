@@ -140,6 +140,9 @@ enum AccountsSubcmd {
         /// `standalone` keeps the account's sessions and transcripts apart.
         #[arg(long, value_name = "MODE")]
         history: Option<AccountHistory>,
+        /// Display label for the dashboard; an empty string clears it.
+        #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+        label: Option<String>,
     },
     /// Preview and spend one reset credit by hand (claude or codex).
     Redeem {
@@ -170,7 +173,8 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
             name,
             home,
             history,
-        } => add(&account_kind(&kind)?, name, home, history),
+            label,
+        } => add(&account_kind(&kind)?, name, home, history, label),
         AccountsSubcmd::List(args) => report::list(args, None, false, globals),
         AccountsSubcmd::Show {
             account,
@@ -479,9 +483,13 @@ fn add(
     name: LoginName,
     home: Option<PathBuf>,
     history: Option<AccountHistory>,
+    label: Option<String>,
 ) -> Result<()> {
     if name.is_default() {
         bail!("`default` is {kind}'s own home and needs no declaring; choose another name");
+    }
+    if let Some(label) = label.as_deref().filter(|label| !label.is_empty()) {
+        NamedAccount::validate_label(label).context("invalid --label")?;
     }
     let home_flag = home
         .map(std::path::absolute)
@@ -501,6 +509,7 @@ fn add(
             .or_insert_with(|| NamedAccount {
                 home: home_flag.clone(),
                 history: AccountHistory::default(),
+                ..Default::default()
             });
         account.history = history.unwrap_or(account.history);
     }
@@ -544,13 +553,14 @@ fn add(
     let named_home = login.home().expect("a named account has a home");
     rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
     // A first declaration is written before the home changes, so a rerun
-    // finds it; a mode switch is written only once the home matches it.
+    // finds it; mode and label updates wait until the home is reconciled.
     let write_declaration = || {
         ConfigEditor::machine().upsert_named_account(
             kind,
             &name,
             home_flag.as_deref().filter(|_| declaring),
             history,
+            label.as_deref(),
         )
     };
     if declaring {
@@ -564,7 +574,7 @@ fn add(
     let shared = rimz::agents::account_links::reconcile(&login, &ambient, &|| {
         rimz::room::other_live_agents_on(&account, &[]).ok()
     })?;
-    if !declaring && history.is_some() {
+    if !declaring && (history.is_some() || label.is_some()) {
         write_declaration()?;
     }
     let mut out = render::out();

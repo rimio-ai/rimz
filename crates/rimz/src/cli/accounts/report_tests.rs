@@ -6,6 +6,101 @@ use rimz::config::MachineConfig;
 use rimz::ids::LoginName;
 use rimz::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
 
+#[test]
+fn account_label_titles_use_the_theme_with_or_without_a_panel() {
+    let mut config: MachineConfig = toml::from_str("[theme.providers.codex]\nproduct_name = 'Code'\n[accounts.codex.team-1]\nhome = '/accounts/team-1'\n").unwrap();
+    config.accounts.codex.get_mut("team-1").unwrap().label = Some("work".to_owned());
+    let catalog = LoginCatalog::from_config(&config.accounts).unwrap();
+    let kind = AgentKind::new_unchecked("codex");
+    let login = catalog.select(&kind, &"team-1".parse().unwrap()).unwrap();
+    let mut provider = panel("codex");
+    provider.account = login.name().clone();
+    provider.product_name = "Code · work".to_owned();
+    for panel in [None, Some(&provider)] {
+        let report = build_report(
+            &login,
+            None,
+            panel,
+            &ProviderSpendingCache::default(),
+            &ReportContext {
+                day_cutoff_secs: None,
+                config: &config,
+                agents: None,
+                installed: &BTreeSet::new(),
+                spend_step: &|_| SpendStep::Subscription,
+            },
+        );
+        assert_eq!(report.product_name, "Code · work");
+        assert_eq!(report.account.to_string(), "codex@team-1");
+    }
+}
+
+#[test]
+fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
+    let mut config: MachineConfig = toml::from_str("[accounts.codex.team-1]\nhome = '/accounts/team-1'\n[accounts.codex.team-2]\nhome = '/accounts/team-2'\n[accounts.claude.personal]\nhome = '/accounts/personal'\n[accounts.use]\nclaude = 'missing'\n").unwrap();
+    config.accounts.codex.get_mut("team-1").unwrap().label = Some("work".to_owned());
+    config.accounts.codex.get_mut("team-2").unwrap().label = Some(" bad".to_owned());
+    let catalog = LoginCatalog::from_config(&config.accounts).unwrap();
+    let mut rows = account_rows(
+        &config.accounts,
+        &catalog,
+        &AccountStanding::machine_only(&config),
+        &BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]),
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    rows.retain(|row| matches!(row.kind.as_str(), "claude" | "codex"));
+    for row in &mut rows {
+        row.expanded = true;
+    }
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_overview(
+        &mut out,
+        &rows,
+        Timestamp::UNIX_EPOCH,
+        &TimeZone::UTC,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert_eq!(text.matches("LABEL").count(), 1, "{text}");
+    let header = text.lines().find(|line| line.contains("LABEL")).unwrap();
+    assert_eq!(&cells(header)[..3], ["NAME", "LABEL", "PLAN"]);
+    insta::assert_snapshot!("account_labels_overview", text);
+
+    let row = rows
+        .iter()
+        .find(|row| row.account.to_string() == "codex@team-1")
+        .unwrap();
+    let mut out = anstream::StripStream::new(Vec::new());
+    super::write_pretty(
+        &mut out,
+        std::slice::from_ref(row),
+        Timestamp::UNIX_EPOCH,
+        &TimeZone::UTC,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.contains("Codex · codex@team-1"), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("label:") && line.ends_with("work")),
+        "{text}"
+    );
+    insta::assert_snapshot!("account_labels_detail", text);
+    for row in rows {
+        let json = serde_json::to_value(&row).unwrap();
+        let expected = if row.account.to_string() == "codex@team-1" {
+            serde_json::json!("work")
+        } else {
+            serde_json::Value::Null
+        };
+        assert_eq!(json.get("label"), Some(&expected), "{json}");
+    }
+}
+
 fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
     reports
         .iter()
@@ -18,6 +113,7 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
                 PathBuf::from(format!("/accounts/{}", report.account.name))
             }),
             history: None,
+            label: None,
             machine_default: report.default_for.contains(Scope::NewRooms),
             problem: None,
             status: AccountStatus::Ready,

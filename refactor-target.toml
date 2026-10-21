@@ -545,7 +545,33 @@ upward-dependencies = [
 # GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
 # TranscriptRetention carries the independent history policy through GC (+1).
 # Isolation::is_scoped shares the mount-view predicate with harness and CLI (+1).
-surface-budget = 205 # SpendOrder shares typed capacity ordering with harness and CLI.
+# SpendOrder shares typed capacity ordering with harness and CLI.
+surface-budget = 210 # AccountLabelError, validate_label, label, label_warnings, provider_title share display-only account labels (+5).
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountLabelError"
+reason = "Shared label validation reports broken display rules without rejecting account identity."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::NamedAccount::validate_label"
+reason = "Config edits and account declaration share the same display-label write rules."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountsConfig::label"
+reason = "Account reports and dashboard titles read only valid display labels."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountsConfig::provider_title"
+reason = "Dashboard panels and CLI fallback titles share the theme-resolved label-or-name rule."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountsConfig::label_warnings"
+reason = "Room-start and account-list warnings share invalid-label keys, effects, and fixes."
 
 [[verdict]]
 kind = "item"

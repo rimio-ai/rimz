@@ -1119,7 +1119,7 @@ fn merge_keeps_empty_named_account() {
         editor.merge_defaults().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
         editor
-            .upsert_named_account(&claude, &personal, None, None)
+            .upsert_named_account(&claude, &personal, None, None, None)
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
     }
@@ -1962,10 +1962,16 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     let personal = "personal".parse::<crate::ids::LoginName>().unwrap();
 
     editor
-        .upsert_named_account(&claude, &work, Some(Path::new("/srv/homes/work")), None)
+        .upsert_named_account(
+            &claude,
+            &work,
+            Some(Path::new("/srv/homes/work")),
+            None,
+            None,
+        )
         .expect("declare work");
     editor
-        .upsert_named_account(&claude, &personal, None, None)
+        .upsert_named_account(&claude, &personal, None, None, None)
         .expect("declare personal");
     let text = std::fs::read_to_string(&path).expect("read config");
     assert!(text.contains("# my machine"), "{text}");
@@ -1997,6 +2003,7 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
             &work,
             None,
             Some(crate::config::AccountHistory::Standalone),
+            None,
         )
         .expect("set history");
     let edited = std::fs::read_to_string(&path).expect("read config");
@@ -2029,6 +2036,61 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     let text = std::fs::read_to_string(&path).expect("read config");
     assert!(!text.contains("[accounts.claude"), "{text}");
     assert!(text.contains("[accounts.budget]"), "{text}");
+}
+
+#[test]
+fn account_label_edits_preserve_comments_siblings_and_strict_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "# machine\n[accounts.codex.team]\nhome = '/srv/team' # home\nhistory = 'standalone'\n\n[accounts.codex.other]\n# sibling\n";
+    std::fs::write(&path, original).unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let name = "team".parse().unwrap();
+    editor
+        .upsert_named_account(&kind, &name, None, None, Some("work"))
+        .unwrap();
+    let labelled = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        labelled,
+        original.replace(
+            "history = 'standalone'\n",
+            "history = 'standalone'\nlabel = \"work\"\n"
+        )
+    );
+    editor
+        .upsert_named_account(&kind, &name, None, None, None)
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), labelled);
+    editor
+        .upsert_named_account(&kind, &name, None, None, Some(""))
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    std::fs::write(
+        &path,
+        original.replace(
+            "history = 'standalone'\n",
+            "history = 'standalone'\nlabel = ''\n",
+        ),
+    )
+    .unwrap();
+    let machine = MachineConfig::load_from(&path, &dir.path().join("agents-home"));
+    assert!(
+        machine.is_ok(),
+        "an invalid display label never breaks strict loading: {machine:?}"
+    );
+    editor.set("accounts.codex.team.history", "shared").unwrap();
+    let edited = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        edited.contains("label = ''") && edited.contains("history = \"shared\""),
+        "{edited}"
+    );
+    assert!(editor.set("accounts.codex.team.label", " work").is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
 }
 
 #[test]
@@ -2074,7 +2136,7 @@ fn machine_selection_edits_preserve_comments_and_clear_on_removal() {
         Some("work")
     );
     editor
-        .upsert_named_account(&kind, &"personal".parse().unwrap(), None, None)
+        .upsert_named_account(&kind, &"personal".parse().unwrap(), None, None, None)
         .unwrap();
     editor.remove_named_account(&kind, &work).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
@@ -2116,7 +2178,7 @@ fn account_tables_land_beside_the_templated_accounts_block() {
     let rimio = "rimio".parse::<crate::ids::LoginName>().unwrap();
 
     editor
-        .upsert_named_account(&codex, &rimio, None, None)
+        .upsert_named_account(&codex, &rimio, None, None, None)
         .unwrap();
     editor.use_account(&codex, &rimio).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();

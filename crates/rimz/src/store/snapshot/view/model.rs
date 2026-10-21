@@ -154,7 +154,8 @@ pub struct SidebarProviderPanel {
     /// Opaque account fingerprint whose live windows this panel represents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_key: Option<String>,
-    /// Header display name (`Claude`, `Codex`, …).
+    /// Theme-resolved product title; named accounts append ` · label`, falling
+    /// back to the account name when no valid display label is set.
     pub product_name: String,
     /// Multi-line ASCII emblem, painted brand-colored at the block's left.
     pub art: Vec<String>,

@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use unicode_width::UnicodeWidthStr;
 
 use super::harness::DayCap;
-use crate::ids::{AgentKind, LoginName, RoomLogins};
+use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AccountBudgetConfigError {
@@ -44,10 +45,14 @@ pub struct AccountsConfig {
 }
 
 /// One declared account of a provider kind. An empty table takes the default
-/// home under the RimZ data root.
+/// home under the RimZ data root. Unknown fields are refused because a mistyped
+/// `home` must not silently launch the account into a different home.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NamedAccount {
+    /// Display text only; the name remains the account's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// The provider home this account launches into. `None` means the default
     /// location RimZ derives from the kind and the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +60,39 @@ pub struct NamedAccount {
     /// Absent means shared; only `standalone` is written back.
     #[serde(default, skip_serializing_if = "AccountHistory::is_shared")]
     pub history: AccountHistory,
+}
+
+/// A display label's broken rule, independent of account usability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AccountLabelError {
+    #[error("must not be empty")]
+    Empty,
+    #[error("must be at most 32 columns wide")]
+    TooLong,
+    #[error("must not contain control characters")]
+    Control,
+    #[error("must not have leading or trailing whitespace")]
+    Whitespace,
+}
+
+impl NamedAccount {
+    /// Validate a label on write; readers ignore invalid labels instead.
+    pub fn validate_label(label: &str) -> Result<(), AccountLabelError> {
+        if label.chars().any(char::is_control) {
+            return Err(AccountLabelError::Control);
+        }
+        let width = UnicodeWidthStr::width(label);
+        if width == 0 {
+            return Err(AccountLabelError::Empty);
+        }
+        if width > 32 {
+            return Err(AccountLabelError::TooLong);
+        }
+        if label.trim() != label {
+            return Err(AccountLabelError::Whitespace);
+        }
+        Ok(())
+    }
 }
 
 /// Whether a named account keeps its provider history to itself.
@@ -92,6 +130,49 @@ impl std::str::FromStr for AccountHistory {
 }
 
 impl AccountsConfig {
+    /// The valid display label of a declared named account, never an identity.
+    pub fn label(&self, key: &LoginKey) -> Option<&str> {
+        if key.name.is_default() {
+            return None;
+        }
+        let label = self.named(&key.kind)?.get(&key.name)?.label.as_deref()?;
+        NamedAccount::validate_label(label).ok()?;
+        Some(label)
+    }
+
+    /// Dashboard title using the theme-resolved product and the label or name.
+    pub fn provider_title(&self, product: &str, key: &LoginKey) -> String {
+        if key.name.is_default() {
+            return product.to_owned();
+        }
+        format!(
+            "{product} · {}",
+            self.label(key).unwrap_or(key.name.as_str())
+        )
+    }
+
+    /// Invalid labels and their fixes for room-start and account-list warnings.
+    pub fn label_warnings(&self) -> Vec<(String, String)> {
+        let mut warnings = Vec::new();
+        for kind in crate::agents::known_kinds() {
+            let Some(accounts) = self.named(&AgentKind::new_unchecked(kind)) else {
+                continue;
+            };
+            for (name, account) in accounts {
+                let Some(error) = account
+                    .label
+                    .as_deref()
+                    .and_then(|label| NamedAccount::validate_label(label).err())
+                else {
+                    continue;
+                };
+                let key = format!("accounts.{kind}.{name}.label");
+                warnings.push((key.clone(), format!("{key} {error}; the dashboard shows the account name instead; set it with `rimz accounts add {kind} {name} --label <TEXT>`, or clear it with `--label ''`")));
+            }
+        }
+        warnings
+    }
+
     pub fn budget(&self, kind: &str) -> Option<DayCap> {
         self.budget.get(kind).copied()
     }
@@ -231,6 +312,61 @@ impl Visitor<'_> for UsageLimitVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_labels_parse_and_unset_labels_stay_absent() {
+        let parsed = toml::from_str::<AccountsConfig>("[codex.team]\nlabel = 'work'\n");
+        assert!(parsed.is_ok(), "a string label must parse: {parsed:?}");
+        assert_eq!(parsed.unwrap().codex["team"].label.as_deref(), Some("work"));
+        let unset: AccountsConfig = toml::from_str("[codex.team]\n").unwrap();
+        assert!(!toml::to_string(&unset).unwrap().contains("label"));
+        assert!(toml::from_str::<AccountsConfig>("[codex.team]\nlabel = 5\n").is_err());
+    }
+
+    #[test]
+    fn account_labels_count_display_columns() {
+        for label in ["x".repeat(32), "界".repeat(16), "e\u{301}".repeat(32)] {
+            assert_eq!(NamedAccount::validate_label(&label), Ok(()), "{label}");
+        }
+        for label in ["x".repeat(33), "界".repeat(17)] {
+            assert_eq!(
+                NamedAccount::validate_label(&label),
+                Err(AccountLabelError::TooLong),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn account_labels_refuse_empty_values() {
+        for label in ["", "\u{200b}", "\u{301}"] {
+            assert_eq!(
+                NamedAccount::validate_label(label),
+                Err(AccountLabelError::Empty)
+            );
+        }
+    }
+
+    #[test]
+    fn account_labels_refuse_control_characters() {
+        for label in ["\n", "\0", "wo\nrk", "wo\trk", "work\u{7f}"] {
+            assert_eq!(
+                NamedAccount::validate_label(label),
+                Err(AccountLabelError::Control)
+            );
+        }
+    }
+
+    #[test]
+    fn account_labels_refuse_edge_whitespace() {
+        for label in [" work", "work ", "\u{2003}work", "work\u{a0}"] {
+            assert_eq!(
+                NamedAccount::validate_label(label),
+                Err(AccountLabelError::Whitespace)
+            );
+        }
+        assert_eq!(NamedAccount::validate_label("work team"), Ok(()));
+    }
 
     #[test]
     fn usage_limit_keeps_cents_exactly() {

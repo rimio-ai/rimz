@@ -34,6 +34,7 @@ rimz accounts add
     -h, --help  [action=help takes=0..=0]
     --history <MODE>  [action=set takes=1..=1]
     --home <HOME>  [action=set takes=1..=1]
+    --label <TEXT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]

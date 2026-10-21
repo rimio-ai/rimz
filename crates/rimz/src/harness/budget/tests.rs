@@ -1336,6 +1336,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     let work_key = LoginKey::new(work.kind.clone(), work.login.clone().expect("login"));
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![default, work], now)
         .with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),

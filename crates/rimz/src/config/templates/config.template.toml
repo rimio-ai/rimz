@@ -60,9 +60,11 @@
 # the RimZ hooks into it. An empty table takes RimZ's default location.
 # `history` is "shared" (the default: the account joins the provider's own
 # history pool) or "standalone" (the account is a pool of its own).
+# Optional `label` replaces the name in the dashboard title, not in selections.
 ## [accounts.claude.work]
 ## home = "/home/you/.claude-work"
 ## history = "standalone"
+## label = "Work subscription"
 ## [accounts.codex.personal]
 
 # Defaults for new rooms and rooms following the machine selection live,

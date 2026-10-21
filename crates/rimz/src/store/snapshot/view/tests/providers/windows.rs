@@ -12,6 +12,7 @@ fn every_provider_paints_its_own_session_window() {
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
 
     let snapshot = room(vec![opencode, claude]).with_provider_aggregates(
+        &Default::default(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -39,6 +40,7 @@ fn every_provider_paints_its_own_session_window() {
 fn claude_panel(agents: Vec<AgentState>) -> SidebarProviderPanel {
     room(agents)
         .with_provider_aggregates(
+            &Default::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
