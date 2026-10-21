@@ -18,8 +18,9 @@ use crate::lane::WorkLane;
 /// Lifecycle frames are pinned under 1KiB; a 100-agent burst folds about 100KiB,
 /// and warm unchanged logs fold zero bytes. Cold catch-up trips one tick only.
 const TICK_FOLD_BYTES_BUDGET: u64 = 256 * 1024;
-/// Warm produce with fresh inputs is pinned at zero spawns; hot git sweeps burst
-/// once per diff-stats TTL rather than on consecutive ticks.
+/// Warm produce with fresh inputs is pinned at zero spawns; a host git pass
+/// refreshes at most one wave of worktrees, so a backlog spreads over passes
+/// rather than bursting past this in one.
 const TICK_SPAWN_BUDGET: u64 = 32;
 /// Mux subprocess wait budget. Mux waits are accounted separately from
 /// in-process work.

@@ -207,6 +207,10 @@ fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBu
         .collect()
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each caller states its spending startup and git pass explicitly; neither has a default"
+)]
 pub(super) fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
     daemon_probe_agents: &[AgentState],
@@ -214,6 +218,7 @@ pub(super) fn refresh_heavy_lanes(
     runtime: &RuntimePaths,
     config: &MachineConfig,
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
+    git_pass: git_stats::GitPass,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
     let logins = crate::agents::RoomLoginSet::resolve(
@@ -346,6 +351,7 @@ pub(super) fn refresh_heavy_lanes(
         base,
         runtime,
         config.sidebar.trunk.as_deref(),
+        git_pass,
         &mut state.git,
     );
     refresh_cohort_spend_for(

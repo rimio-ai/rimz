@@ -403,6 +403,7 @@ pub fn refresh_producer_caches(
         runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::HostEligible,
+        crate::sidebar::refresh::git_stats::GitPass::Host,
         refresh_state,
     );
     Ok(())
@@ -507,6 +508,7 @@ fn enrich_with_refresh(
         runtime,
         &config,
         crate::agents::spending::service::SpendingServiceStartup::OneShot,
+        crate::sidebar::refresh::git_stats::GitPass::OneShot,
         &mut Default::default(),
     );
     enrich(

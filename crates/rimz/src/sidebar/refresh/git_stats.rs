@@ -199,6 +199,24 @@ pub(in crate::sidebar) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> 
         || trunk.map(|trunk| trunk.strip_prefix("origin/").unwrap_or(trunk)) == Some(branch)
 }
 
+/// Which pass is refreshing: the long-lived host takes a bounded share of its
+/// due worktrees each pass and works off a backlog over the next ones, while a
+/// one-shot CLI has no next pass and refreshes everything due.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar) enum GitPass {
+    Host,
+    OneShot,
+}
+
+impl GitPass {
+    fn entry_limit(self) -> Option<usize> {
+        match self {
+            Self::Host => Some(MAX_HOST_PASS_ENTRIES),
+            Self::OneShot => None,
+        }
+    }
+}
+
 /// Refresh the producer's per-worktree git facts. The git forks are the
 /// producer's job — consumers and the fetch worker project the published cache
 /// without reaching here. `configured_trunk` is the per-machine `[sidebar] trunk`
@@ -207,6 +225,7 @@ pub(super) fn refresh_diff_stats_for(
     snapshot: &SidebarSnapshot,
     runtime: &crate::RuntimePaths,
     configured_trunk: Option<&str>,
+    pass: GitPass,
     state: &mut GitRefreshState,
 ) {
     let cache_path = runtime.diff_stats_path();
@@ -227,6 +246,7 @@ pub(super) fn refresh_diff_stats_for(
         &hot,
         now_ms,
         configured_trunk,
+        pass,
         state,
     );
 }
@@ -340,9 +360,11 @@ pub(super) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<Str
 /// to project. Single-flighted across the fleet, mirroring the snapshot cache:
 /// the common case — every needed entry already fresh — touches no lock and
 /// forks no git. Otherwise one elected producer forks git for the stale entries
-/// and writes the shared cache once; the rest read its write back, or (if it
-/// wedges) refresh locally for their own frame without writing — never
-/// clobbering the producer's fresher map.
+/// ([`select_for_pass`]: on a [`GitPass::Host`] pass only a capped share) and
+/// writes the shared cache once; the rest read its write back once their own
+/// selection is fresh, or (if it wedges) refresh that selection locally for
+/// their own frame without writing — never clobbering the producer's fresher
+/// map.
 #[allow(
     clippy::too_many_arguments,
     reason = "the refresh boundary carries its selected roots, cadence tiers, and process-local memo"
@@ -355,6 +377,7 @@ fn refresh_diff_stats(
     hot: &BTreeSet<String>,
     now_ms: u64,
     configured_trunk: Option<&str>,
+    pass: GitPass,
     state: &mut GitRefreshState,
 ) -> DiffStatsCache {
     state.retain_needed(needed);
@@ -371,10 +394,20 @@ fn refresh_diff_stats(
         return cache;
     }
 
+    // The capped winner leaves some entries due on purpose, so the loser waits
+    // for, and falls back to, only the selection it fixed from its first read.
+    let select = |cache: &DiffStatsCache| {
+        select_for_pass(stale(cache), cache, focused, hot, pass.entry_limit())
+    };
+    let selection = select(&cache);
+    let selected: HashSet<&str> = selection.iter().map(|(path, _)| path.as_str()).collect();
     let lock_path = runtime.lock_path("diff-stats.lock");
     let fresh = || {
         let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
-        stale(&cache).is_empty().then_some(cache)
+        let selection_stale = stale(&cache)
+            .iter()
+            .any(|(path, _)| selected.contains(path.as_str()));
+        (!selection_stale).then_some(cache)
     };
     match single_flight::coalesce(
         &lock_path,
@@ -382,15 +415,15 @@ fn refresh_diff_stats(
         DIFF_STATS_WAIT_STEPS,
         fresh,
     ) {
-        // A peer already refreshed every entry we need.
+        // A peer already refreshed every entry we selected.
         Coalesced::Shared(cache) => cache,
         // We won: re-read (a peer may have written between our miss and the
-        // lock), refresh only what is still stale against that read — git forks
+        // lock), refresh this pass's selection of what is still stale — git forks
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
             let mut cache: DiffStatsCache = atomic::read_json_cache(cache_path);
             let refreshed =
-                refresh_entries(&stale(&cache), &cache, configured_trunk, &state.untracked);
+                refresh_entries(&select(&cache), &cache, configured_trunk, &state.untracked);
             let changed = !refreshed.is_empty();
             for (path, entry, memo) in refreshed {
                 cache.entries.insert(path.clone(), entry);
@@ -406,7 +439,7 @@ fn refresh_diff_stats(
         Coalesced::ProduceLocal => {
             let mut cache = cache;
             for (path, entry, memo) in
-                refresh_entries(&stale(&cache), &cache, configured_trunk, &state.untracked)
+                refresh_entries(&selection, &cache, configured_trunk, &state.untracked)
             {
                 cache.entries.insert(path.clone(), entry);
                 state.replace_if_successful(path, memo);
@@ -443,6 +476,37 @@ fn stale_paths(
             due.any().then(|| (path.clone(), due))
         })
         .collect()
+}
+
+/// The due entries this pass refreshes, in refresh order: focused paths, then
+/// hot ones (each in `needed` order), then the rest oldest due stamp first
+/// (a missing entry or stamp reads 0), ties in `needed` order. A limit keeps
+/// every priority entry and fills up to it from the rest.
+fn select_for_pass(
+    due: Vec<(String, DueFacts)>,
+    cache: &DiffStatsCache,
+    focused: &BTreeSet<String>,
+    hot: &BTreeSet<String>,
+    limit: Option<usize>,
+) -> Vec<(String, DueFacts)> {
+    let (mut priority, mut rest): (Vec<_>, Vec<_>) = due
+        .into_iter()
+        .partition(|(path, _)| focused.contains(path) || hot.contains(path));
+    // Stable sorts keep `needed` order on ties; `false` sorts focused first.
+    priority.sort_by_key(|(path, _)| !focused.contains(path));
+    rest.sort_by_key(|(path, _)| oldest_due_stamp(cache.entries.get(path.as_str())));
+    let take = limit.map_or(rest.len(), |limit| limit.saturating_sub(priority.len()));
+    rest.truncate(take);
+    priority.extend(rest);
+    priority
+}
+
+fn oldest_due_stamp(entry: Option<&DiffStatsCacheEntry>) -> u64 {
+    entry.map_or(0, |entry| {
+        entry
+            .refreshed_at_ms
+            .min(entry.commit_refreshed_at_ms.unwrap_or(0))
+    })
 }
 
 /// `(local, commit)` TTLs for one path: focused, then hot, then settled (the
@@ -518,6 +582,12 @@ struct HeadFacts {
 /// worktrees saturated while each worktree's own chain stays sequential; the cap
 /// keeps a many-worktree fleet from bursting a fork storm.
 const MAX_PARALLEL_GIT: usize = 8;
+
+/// Most due worktrees one host pass refreshes, one wave of the worker pool. A
+/// cold start or a clump of expiring stamps then spreads over several passes
+/// instead of bursting in one. Viewed and hot worktrees count against it but
+/// are always selected, first.
+const MAX_HOST_PASS_ENTRIES: usize = 8;
 
 /// Refresh several worktrees' due diff-stats facts concurrently, returning each
 /// path's merged entry. Independent worktrees run in parallel — bounded to
