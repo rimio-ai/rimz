@@ -1271,7 +1271,7 @@ impl MuxBackend for ZellijBackend {
             (&target, opts.placement),
             (
                 SplitTarget::SessionPane { .. },
-                SplitPlacement::Directional(_)
+                SplitPlacement::Directional(_) | SplitPlacement::Rejoin(_)
             )
         );
         let no_focus = (!opts.focus || directional_session_pane) && self.supports_no_focus();
@@ -1286,7 +1286,7 @@ impl MuxBackend for ZellijBackend {
                     spec = spec.arg("--near-current-pane");
                 }
             }
-            SplitPlacement::Directional(direction) => {
+            SplitPlacement::Directional(direction) | SplitPlacement::Rejoin(direction) => {
                 spec = spec.args(["--direction", split_direction(direction)]);
             }
         }
@@ -1304,7 +1304,7 @@ impl MuxBackend for ZellijBackend {
                 session_name,
                 pane_id,
             },
-            SplitPlacement::Directional(_),
+            SplitPlacement::Directional(_) | SplitPlacement::Rejoin(_),
         ) = (&target, opts.placement)
             && !no_focus
         {

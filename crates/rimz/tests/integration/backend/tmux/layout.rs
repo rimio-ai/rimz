@@ -1059,7 +1059,7 @@ fn collapsed_member_can_split_and_restart_without_losing_membership() {
     let replacement = stack_split(
         &server,
         &members[0],
-        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+        SplitPlacement::Rejoin(rimz::mux::SplitDirection::Right),
     );
     members.push(replacement.raw().into());
     let old = members.remove(0);
@@ -1127,7 +1127,7 @@ fn lone_stack_member_restart_preserves_panes_above_the_caller() {
     let replacement = stack_split(
         &server,
         &members[0],
-        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+        SplitPlacement::Rejoin(rimz::mux::SplitDirection::Right),
     );
     assert_eq!(server.display(&above, "#{pane_height}"), height);
     assert_eq!(

@@ -1472,6 +1472,40 @@ exit 0
         "{log}"
     );
     assert_eq!(log.lines().count(), 5, "expected split calls:\n{log}");
+
+    for target in [
+        SplitTarget::Ambient,
+        SplitTarget::SessionPane {
+            session_name: "rimz-test".into(),
+            pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+        },
+    ] {
+        for focus in [false, true] {
+            for direction in [SplitDirection::Right, SplitDirection::Down] {
+                let start = shim_log(&temp).lines().count();
+                for placement in [
+                    SplitPlacement::Directional(direction),
+                    SplitPlacement::Rejoin(direction),
+                ] {
+                    backend
+                        .split_pane(SplitPaneOptions {
+                            target: target.clone(),
+                            placement,
+                            focus,
+                            ..Default::default()
+                        })
+                        .expect("directional or rejoin split");
+                }
+                let log = shim_log(&temp);
+                let commands = log.lines().skip(start).collect::<Vec<_>>();
+                assert_eq!(commands.len(), 2, "{log}");
+                assert_eq!(
+                    commands[0], commands[1],
+                    "{target:?}, {focus}, {direction:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
