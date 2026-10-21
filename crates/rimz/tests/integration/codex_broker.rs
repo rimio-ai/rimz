@@ -7,9 +7,10 @@
 
 use std::fs::{File, FileTimes};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -166,6 +167,220 @@ fn old_login_context_refresh_does_not_connect_to_room_broker() {
         matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
         "old-login refresh must never touch the current-login broker"
     );
+}
+
+/// A room whose Codex default is login `rimio`, beside a second login `team-1`,
+/// and a listener on the room's broker socket that behaves as a pre-fix broker
+/// (no `rimzServedBy`) proxying a stub child under team-1's home. The stub
+/// reports the plan its serving home names: `team` for team-1, `pro` for rimio.
+struct RimioRoom {
+    env: Env,
+    methods: Arc<Mutex<Vec<String>>>,
+    _homes: tempfile::TempDir,
+}
+
+fn rimio_room_behind_a_prefix_broker() -> RimioRoom {
+    let env = Env::new();
+    let homes = tempfile::tempdir().unwrap();
+    for (name, plan) in [("rimio", "pro"), ("team-1", "team")] {
+        let home = homes.path().join(name);
+        assert!(
+            env.rimz()
+                .args(["accounts", "add", "codex", name, "--home"])
+                .arg(&home)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        std::fs::write(home.join("stub-plan"), plan).unwrap();
+    }
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = rimz::ids::AgentKind::new_unchecked("codex");
+    let store = env.store();
+    store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                kind: kind.clone(),
+                login: rimz::store::writer::LaunchLogin::Pinned("rimio".parse().unwrap()),
+                agent_id: "rimio-session".into(),
+                name: rimz::store::writer::AgentLaunchName::Explicit("rimio-session".into()),
+                launch: Default::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    store
+        .switch_room_login(&workspace, &kind, &"rimio".parse().unwrap())
+        .unwrap();
+
+    let socket = env.runtime_paths().codex_app_server_socket_path();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(socket).unwrap();
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let served = Arc::clone(&methods);
+    let team_home = homes.path().join("team-1");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let served = Arc::clone(&served);
+            let team_home = team_home.clone();
+            std::thread::spawn(move || proxy_to_stub_child(stream, &team_home, &served));
+        }
+    });
+    RimioRoom {
+        env,
+        methods,
+        _homes: homes,
+    }
+}
+
+/// Answer each request line from a stub child under `home`, in the frame shape
+/// a broker from before `rimzServedBy` wrote: `{jsonrpc, id, result}`.
+fn proxy_to_stub_child(stream: UnixStream, home: &PathBuf, served: &Mutex<Vec<String>>) {
+    let mut child = std::process::Command::new(codex_appserver_stub())
+        .arg("app-server")
+        .env("RIMZ_CODEX_INTERNAL_APP_SERVER", "1")
+        .env("CODEX_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child_in = child.stdin.take().unwrap();
+    let mut child_out = BufReader::new(child.stdout.take().unwrap());
+    let mut writer = stream.try_clone().unwrap();
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        let Ok(request) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(id) = request.get("id") else {
+            continue;
+        };
+        let method = request["method"].as_str().unwrap_or_default().to_owned();
+        served.lock().unwrap().push(method);
+        writeln!(child_in, "{request}").unwrap();
+        let mut reply = String::new();
+        child_out.read_line(&mut reply).unwrap();
+        let reply: Value = serde_json::from_str(reply.trim()).unwrap();
+        let frame = json!({ "jsonrpc": "2.0", "id": id, "result": reply["result"] });
+        if writeln!(writer, "{frame}").is_err() {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+impl RimioRoom {
+    fn assert_only_the_handshake_reached_the_prefix_broker(&self) {
+        let methods = self.methods.lock().unwrap();
+        assert!(!methods.is_empty(), "the ladder must try the broker first");
+        assert!(
+            methods.iter().all(|method| method == "initialize"),
+            "no read may be served by a broker that cannot name its child: {methods:?}"
+        );
+    }
+
+    fn rimio_plan_in_credits(&self) -> Option<String> {
+        let credits: Value = serde_json::from_slice(
+            &std::fs::read(self.env.runtime_paths().shared_credits_path()).unwrap(),
+        )
+        .unwrap();
+        credits["logins"]["codex@rimio"]["plan"]
+            .as_str()
+            .map(ToOwned::to_owned)
+    }
+}
+
+#[test]
+fn account_refresh_ignores_a_broker_that_cannot_name_its_child() {
+    let room = rimio_room_behind_a_prefix_broker();
+    let runtime = room.env.runtime_paths();
+    let claim_id = uuid::Uuid::now_v7();
+    let now = rimz::utils::time::unix_now_ms();
+    std::fs::write(
+        runtime.shared_credits_path(),
+        serde_json::to_vec(&json!({
+            "refreshed_at_ms": now,
+            "logins": { "codex@rimio": {
+                "observed_at_ms": 0, "ok": false,
+                "direct_query_claim": {
+                    "nonce": claim_id, "claimed_at_ms": now,
+                    "requested_scope": rimz::agents::ProviderAccountScope::default()
+                }
+            }}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        login: "codex@rimio".parse().unwrap(),
+        claim_id,
+    };
+    let output = room
+        .env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "refresh-usage",
+            &request,
+        ))
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    room.assert_only_the_handshake_reached_the_prefix_broker();
+    assert_eq!(room.rimio_plan_in_credits().as_deref(), Some("pro"));
+}
+
+#[test]
+fn session_context_refresh_ignores_a_broker_that_cannot_name_its_child() {
+    let room = rimio_room_behind_a_prefix_broker();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    let request = rimz::agents::LifecycleRefreshRequest {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        session_id: "rimio-session".into(),
+        workspace_id: workspace.workspace_id,
+        model: None,
+        server_url: None,
+    };
+    let output = room
+        .env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "refresh-context",
+            &request,
+        ))
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    room.assert_only_the_handshake_reached_the_prefix_broker();
+    assert_eq!(room.rimio_plan_in_credits().as_deref(), Some("pro"));
+    let plans: Vec<_> = room
+        .env
+        .agent_contexts()
+        .iter()
+        .filter_map(|record| record.context.account.as_ref()?.plan.clone())
+        .collect();
+    assert_eq!(plans, ["pro"], "the sidecar's account plan");
 }
 
 /// One JSON-RPC round-trip over the broker socket: write a framed request, then
