@@ -41,10 +41,11 @@ pub use model::{
     DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
     RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi,
-    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, card_status, lead_unread_row, needs_you,
+    SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
+    UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, card_status,
+    lead_unread_row, needs_you,
 };
-pub(crate) use model::{SidebarUnitKey, actionable_unread_count, triage_key};
+pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
 
 #[cfg(test)]
@@ -521,6 +522,60 @@ impl SidebarSnapshot {
     /// the producer's row cap and status counts; it only changes visible order.
     pub fn sort_groups_for_presentation(&mut self) {
         layout::sort_groups_for_presentation(&mut self.worktree_groups);
+    }
+
+    pub(crate) fn project_stuck_stages(&mut self) {
+        use crate::agents::AgentStatus;
+
+        let windows = aggregate::AttentionWindows::from_config(&self.attention);
+        for group in Arc::make_mut(&mut self.worktree_groups) {
+            let Some(pipeline) = group
+                .pipeline
+                .as_ref()
+                .filter(|pipeline| pipeline.position() != PipelinePosition::Done)
+            else {
+                continue;
+            };
+            let Some(owner) = group.pipeline_owner() else {
+                continue;
+            };
+            let unit = group.unit_key(owner);
+            let members = group.rows.iter().filter(|row| group.unit_key(row) == unit);
+            if members.clone().any(|row| {
+                !matches!(
+                    row.attention_status(),
+                    Some(AgentStatus::Idle | AgentStatus::Success)
+                )
+            }) {
+                continue;
+            }
+            let latest = members
+                .map(|row| row.last_activity)
+                .chain(pipeline.stage_started_at)
+                .fold(owner.last_activity, std::cmp::max);
+            let age = self.now.duration_since(latest).as_secs();
+            if age < i64::from(windows.stalled_after_secs) {
+                continue;
+            }
+            let owner_id = owner.id.clone();
+            let label = format!(
+                "stage {}: nothing running {}",
+                pipeline.stage,
+                crate::utils::time::format_duration_coarse(age)
+            );
+            let rows = Arc::make_mut(&mut group.rows);
+            let Some(card) = rows
+                .iter_mut()
+                .find(|row| row.id == owner_id)
+                .and_then(SidebarRow::as_agent_mut)
+            else {
+                continue;
+            };
+            card.status = AgentStatus::Failed;
+            card.turn_error_label = Some(label);
+            aggregate::stamp_attention(rows, self.now, windows);
+            layout::refresh_overlay_group(group);
+        }
     }
 
     /// Attach each session's rich context sidecar to its `AgentState` by

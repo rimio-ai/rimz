@@ -239,7 +239,7 @@ chrome        │                                            ? for help
 cockpit       │  ⌘ query-engine                /srv/code/query-engine
 cockpit       │
 cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
-cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ¤ 2                                            $0.00
 cockpit       │  ────────────────────────────────────────────────────
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │
@@ -275,7 +275,7 @@ chrome        │                                            ? for help
 cockpit       │  ⌘ query-engine                /srv/code/query-engine
 cockpit       │
 cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
-cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ¤ 2                                            $0.00
 cockpit       │  ────────────────────────────────────────────────────
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │
@@ -311,7 +311,7 @@ chrome        │                                            ? for help
 cockpit       │  ⌘ query-engine                /srv/code/query-engine
 cockpit       │
 cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
-cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ¤ 2                                            $0.00
 cockpit       │  ────────────────────────────────────────────────────
 cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
 cockpit       │

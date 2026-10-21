@@ -165,12 +165,9 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         block.push_inert(Line::default());
     } else if let Some(pipeline) = pipeline {
         let rows = visible_group.rows(roster);
-        let owner = pipeline.owner.as_deref().and_then(|owner| {
-            rows.iter().position(|row| {
-                row.team() == group.team.as_deref()
-                    && row.as_agent().and_then(|card| card.handle.as_deref()) == Some(owner)
-            })
-        });
+        let owner = group
+            .pipeline_owner()
+            .and_then(|owner| rows.iter().position(|row| row.id == owner.id));
         let target = owner
             .or_else(|| {
                 rows.iter().position(|row| {

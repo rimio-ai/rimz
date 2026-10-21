@@ -63,10 +63,11 @@ pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,
     RuntimeReapInputs, SNAPSHOT_VERSION, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
-    TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    SidebarSnapshot, SidebarStatusCount, SidebarUnitKey, SidebarWorktreeGroup, SidebarWorktreeKind,
+    StackPr, TruthNotice, UnitStatus, WorktreeCi, WorktreePrQueue, WorktreePrState,
+    WorktreeTrunkSync, lead_unread_row,
 };
-pub(crate) use view::{SidebarUnitKey, actionable_unread_count, triage_key};
+pub(crate) use view::{actionable_unread_count, triage_key};
 pub(crate) use view::{format_plan_label, sort_windows};
 
 #[derive(Debug, thiserror::Error)]

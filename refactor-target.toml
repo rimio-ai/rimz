@@ -1391,6 +1391,46 @@ kind = "item"
 key = "store::snapshot::view::model::SidebarWorktreeGroup::unit_key"
 reason = "One method owns team-versus-solo identity including the external-group exception."
 
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::UnitStatus"
+reason = "The cockpit and CLI consumers share one work-unit verdict and its bucket carriers."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::UnitStatus::from_members"
+reason = "Rowless cohorts use the same pure verdict as projected group units."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::UnitStatus::buckets"
+reason = "The cockpit counts only the buckets supplied by the shared verdict."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::UnitStatus::carries"
+reason = "The cockpit's emphasis and counts use the same bucket carriers."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::UnitStatus::headline"
+reason = "CLI and tab consumers share the verdict's attention priority."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarWorktreeGroup::unit_statuses"
+reason = "Every status consumer can read the projected group's unit verdicts."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarWorktreeGroup::pipeline_owner"
+reason = "The verdict, stuck projection and renderer resolve the same stage owner."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::SidebarSnapshot::project_stuck_stages"
+reason = "Shared enrichment projects idle unfinished stages after attaching pipeline facts."
+
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
 # render_section_line_ansi exposes the CLI's full-frame section filter.
@@ -1530,7 +1570,8 @@ path = "crates/rimz/src/store"
 # idle_stop::withdraw_before and message::human_opened_turn share conditional withdrawal and authorship with hooks (+2).
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
 # SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
-surface-budget = 482
+# UnitStatus and its four methods, unit_statuses, pipeline_owner and project_stuck_stages (+8).
+surface-budget = 490
 
 [[verdict]]
 kind = "item"

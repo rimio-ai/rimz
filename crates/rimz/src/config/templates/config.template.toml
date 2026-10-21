@@ -238,7 +238,7 @@ aggressive_resize = true
 
 # [agents.attention]
 # active_grace_secs = 180              # silence credited to active time before the estimate pauses
-# stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
+# stalled_after_secs = 1800            # silent running agent or idle unfinished stage becomes actionable
 # tool_repeat_warn_after = 3            # identical calls before the card gains a warning marker
 # tool_repeat_attention_after = 20      # identical calls before the agent becomes actionable
 # inactive_after_secs = 3600           # calm and parked cards sink after this silence; asks and failures stay hot

@@ -37,6 +37,7 @@ pub struct AttentionConfig {
     pub active_grace_secs: NonZeroU32,
     /// Seconds a `running` agent may record no completed tool or turn activity
     /// before the sidebar projects it to the actionable `!` attention bucket.
+    /// Also bounds an unfinished resting stage since its latest member activity or stage start.
     pub stalled_after_secs: NonZeroU32,
     /// Consecutive identical tool calls before the sidebar annotates the card.
     pub tool_repeat_warn_after: NonZeroU32,

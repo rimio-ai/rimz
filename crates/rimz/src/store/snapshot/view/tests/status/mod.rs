@@ -5,6 +5,7 @@ mod compaction;
 mod native_permission;
 mod sleeping;
 mod stall;
+mod stuck;
 mod turn_complete;
 mod turn_interrupted;
 mod waiting;
