@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
 use super::TmuxBackend;
+use super::layout::{Layout, Refusal};
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
     sidebar_serve_command, sidebar_width_option_set_cmd, stack_hook_commands, stack_window_options,
@@ -32,6 +33,39 @@ use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
 /// column amount — its step is Zellij's own ~5%-of-view increment.
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
+
+struct StackLayoutRead {
+    raw: String,
+    order: Vec<String>,
+    members: Vec<String>,
+    open: Option<String>,
+    has_floating: bool,
+}
+
+impl StackLayoutRead {
+    fn layout(&self) -> Result<Layout> {
+        if self.has_floating {
+            return Err(stack_layout_error(Refusal::Floating));
+        }
+        Layout::parse(&self.raw).ok_or_else(|| stack_layout_error("window layout does not parse"))
+    }
+}
+
+fn stack_layout_error(reason: impl ToString) -> MuxErr {
+    MuxErr::Output {
+        program: "tmux".into(),
+        reason: reason.to_string(),
+    }
+}
+
+fn warn_stack_join(target: &str, error: &MuxErr) {
+    tracing::warn!(
+        pane = target,
+        error = error as &dyn std::error::Error,
+        tags.operation = "tmux.split_pane.beside",
+        "could not split beside the stack; joining it instead"
+    );
+}
 
 fn server_is_absent(stderr: &str) -> Result<bool> {
     let stderr = stderr.trim();
@@ -428,7 +462,7 @@ impl MuxBackend for TmuxBackend {
             .trim()
             .split_once('|')
             .unwrap_or((snapshot.trim(), ""));
-        let stack = if !mark.is_empty() {
+        let mut stack = if !mark.is_empty() {
             Some(mark.to_owned())
         } else {
             (opts.placement == SplitPlacement::Stacked).then(|| target.to_owned())
@@ -437,24 +471,46 @@ impl MuxBackend for TmuxBackend {
         if let Some(stack) = &stack {
             if mark.is_empty() {
                 members.push(target.to_owned());
-            } else {
-                let output = self
-                    .cmd()
-                    .args([
-                        "list-panes",
-                        "-t",
-                        target,
-                        "-F",
-                        "#{pane_id}|#{@rimz_stack}",
-                    ])
-                    .run()?;
-                members.extend(String::from_utf8_lossy(&output.stdout).lines().filter_map(
-                    |line| {
-                        let (id, mark) = line.split_once('|')?;
-                        (mark == stack).then(|| id.to_owned())
-                    },
-                ));
+            } else if !matches!(opts.placement, SplitPlacement::Directional(_)) {
+                members = self.stack_members(target, stack)?;
             }
+        }
+        let mut beside = None;
+        if let SplitPlacement::Directional(direction) = opts.placement
+            && let Some(stack_id) = &stack
+        {
+            match self.read_stack_layout(target, stack_id) {
+                Ok(read) => {
+                    members = read.members.clone();
+                    if members.len() == 1 {
+                        self.batch(&["@rimz_stack", "@rimz_stack_open"].map(|option| {
+                            vec![
+                                "set-option".into(),
+                                "-pu".into(),
+                                "-t".into(),
+                                target.into(),
+                                option.into(),
+                            ]
+                        }))?;
+                        stack = None;
+                    } else {
+                        match read.layout().and_then(|layout| {
+                            layout
+                                .check_stack(&read.order, &members, read.open.as_deref(), direction)
+                                .map_err(stack_layout_error)
+                        }) {
+                            Ok(()) => beside = Some((read, direction)),
+                            Err(err) => warn_stack_join(target, &err),
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn_stack_join(target, &err);
+                    members = self.stack_members(target, stack_id)?;
+                }
+            }
+        }
+        if stack.is_some() && beside.is_none() {
             // Neutralize restore before making room: the split's layout hook
             // must not squeeze the unmarked newcomer before its open decision.
             let mut commands = members
@@ -483,17 +539,33 @@ impl MuxBackend for TmuxBackend {
         }
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
-        let flag = match opts.placement {
-            SplitPlacement::Directional(SplitDirection::Right)
-            | SplitPlacement::Rejoin(SplitDirection::Right) => "-h",
-            SplitPlacement::Directional(SplitDirection::Down)
-            | SplitPlacement::Rejoin(SplitDirection::Down)
-            | SplitPlacement::Stacked => "-v",
+        let flag = if beside.is_some() {
+            "-h"
+        } else {
+            match opts.placement {
+                SplitPlacement::Directional(SplitDirection::Right)
+                | SplitPlacement::Rejoin(SplitDirection::Right) => "-h",
+                SplitPlacement::Directional(SplitDirection::Down)
+                | SplitPlacement::Rejoin(SplitDirection::Down)
+                | SplitPlacement::Stacked => "-v",
+            }
+        };
+        // Splits insert into both native orders immediately after their leaf.
+        let split_target = if beside.is_some() {
+            members.last().map(String::as_str).unwrap_or(target)
+        } else {
+            target
         };
         let title = opts.title;
-        let mut spec =
-            self.cmd()
-                .args(["split-window", flag, "-P", "-F", "#{pane_id}", "-t", target]);
+        let mut spec = self.cmd().args([
+            "split-window",
+            flag,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            split_target,
+        ]);
         if !opts.focus {
             spec = spec.arg("-d");
         }
@@ -517,12 +589,28 @@ impl MuxBackend for TmuxBackend {
         if let Some(title) = title {
             self.set_pane_rimz_title(&pane_id, &title);
         }
+        if let Some((before, direction)) = &beside
+            && let Some(stack_id) = &stack
+        {
+            match self.apply_stack_beside(split_target, before, stack_id, &pane_id, *direction) {
+                Ok(()) => stack = None,
+                Err(err) => warn_stack_join(split_target, &err),
+            }
+        }
         if let Some(stack) = stack {
-            let resize_open = members.len() > 1 || flag == "-v";
-            members.push(pane_id.clone());
+            let members = if beside.is_some() {
+                self.stack_members(&pane_id, &stack)
+            } else {
+                Ok(members)
+            };
             // The pane already runs its command: an Err here would send the
             // caller to a fallback placement and orphan it.
-            if let Err(err) = self.mark_stack(&members, &stack, &pane_id, true, resize_open) {
+            let marked = members.and_then(|mut members| {
+                let resize_open = members.len() > 1 || flag == "-v";
+                members.push(pane_id.clone());
+                self.mark_stack(&members, &stack, &pane_id, true, resize_open)
+            });
+            if let Err(err) = marked {
                 tracing::warn!(
                     pane = %pane_id,
                     tags.operation = "tmux.split_pane.mark_stack",
@@ -1308,6 +1396,163 @@ impl MuxBackend for TmuxBackend {
 }
 
 impl TmuxBackend {
+    fn stack_members(&self, target: &str, stack: &str) -> Result<Vec<String>> {
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                target,
+                "-F",
+                "#{pane_id}|#{@rimz_stack}",
+            ])
+            .run()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (id, mark) = line.split_once('|')?;
+                (mark == stack).then(|| id.to_owned())
+            })
+            .collect())
+    }
+
+    fn read_stack_layout(&self, target: &str, stack: &str) -> Result<StackLayoutRead> {
+        let output = self
+            .batch_spec(&[
+                vec![
+                    "display-message".into(),
+                    "-p".into(),
+                    "-t".into(),
+                    target.into(),
+                    "#{window_layout}".into(),
+                ],
+                vec![
+                    "list-panes".into(),
+                    "-t".into(),
+                    target.into(),
+                    "-F".into(),
+                    "#{pane_id}|#{pane_floating_flag}|#{@rimz_stack}|#{@rimz_stack_open}".into(),
+                ],
+            ])
+            .run()?;
+        let output = String::from_utf8_lossy(&output.stdout);
+        let mut lines = output.lines();
+        let raw = lines
+            .next()
+            .ok_or_else(|| stack_layout_error("window layout is missing"))?
+            .to_owned();
+        let mut order = Vec::new();
+        let mut members = Vec::new();
+        let mut open = None;
+        let mut has_floating = false;
+        for line in lines {
+            let fields = line.split('|').collect::<Vec<_>>();
+            let [id, floating, mark, expanded] = fields.as_slice() else {
+                return Err(stack_layout_error("invalid pane-list snapshot"));
+            };
+            has_floating |= !floating.is_empty() && *floating != "0";
+            order.push((*id).to_owned());
+            if *mark == stack {
+                members.push((*id).to_owned());
+                if *expanded == "1" && open.replace((*id).to_owned()).is_some() {
+                    return Err(stack_layout_error("stack has multiple open members"));
+                }
+            }
+        }
+        Ok(StackLayoutRead {
+            raw,
+            order,
+            members,
+            open,
+            has_floating,
+        })
+    }
+
+    fn apply_stack_beside(
+        &self,
+        target: &str,
+        before: &StackLayoutRead,
+        stack: &str,
+        newcomer: &str,
+        direction: SplitDirection,
+    ) -> Result<()> {
+        let after = self.read_stack_layout(target, stack)?;
+        if after.members != before.members {
+            return Err(stack_layout_error(
+                "stack membership changed during the split",
+            ));
+        }
+        let after_layout = after.layout()?;
+        after_layout
+            .check_split_order(&after.order, &before.order, target, newcomer)
+            .map_err(stack_layout_error)?;
+        let before_layout = before.layout()?;
+        after_layout
+            .check_split_geometry(&before_layout, target, newcomer)
+            .map_err(stack_layout_error)?;
+        let layout = before_layout
+            .beside_stack(
+                &before.order,
+                &before.members,
+                before.open.as_deref(),
+                newcomer,
+                direction,
+            )
+            .map_err(stack_layout_error)?
+            .legacy();
+        let applied = "rimz-stack-layout-applied";
+        let guard = "@rimz_stack_layout_guard";
+        // Legacy select-layout rebinds by order, not the ids in its string.
+        // Check the observed post-split tree in the same queue as the rewrite.
+        let unchanged = format!("#{{==:#{{window_layout}},#{{{guard}}}}}");
+        let apply = format!(
+            "select-layout -t {target} '{layout}' ; display-message -p -t {target} '{applied}'"
+        );
+        let output = self
+            .batch_spec(&[
+                vec![
+                    "set-option".into(),
+                    "-w".into(),
+                    "-t".into(),
+                    target.into(),
+                    guard.into(),
+                    after.raw,
+                ],
+                vec![
+                    "if-shell".into(),
+                    "-F".into(),
+                    "-t".into(),
+                    target.into(),
+                    unchanged,
+                    apply,
+                ],
+                vec![
+                    "set-option".into(),
+                    "-wu".into(),
+                    "-t".into(),
+                    target.into(),
+                    guard.into(),
+                ],
+            ])
+            .run();
+        if output.is_err() {
+            let _ = self
+                .cmd()
+                .args(["set-option", "-wu", "-t", target, guard])
+                .run();
+        }
+        let output = output?;
+        if !String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == applied)
+        {
+            return Err(stack_layout_error(
+                "window layout changed before the guarded apply",
+            ));
+        }
+        Ok(())
+    }
+
     /// Birth a tab's layout inside `first_pane`: every column first, as one
     /// sized `-h` run while each target is still full height, then each
     /// column's rows as a sized `-v` run inside it. Splitting rows first would

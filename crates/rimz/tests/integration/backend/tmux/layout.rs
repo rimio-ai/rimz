@@ -975,6 +975,448 @@ fn stack_focus_resize_close_and_zoom_restore_the_open_member() {
     assert_stack(&server, &members, &members[0]);
 }
 
+fn pane_shapes(
+    server: &TmuxServer,
+    anchor: &str,
+    count: usize,
+) -> BTreeMap<String, (u64, u64, u64, u64)> {
+    server
+        .wait_for_panes(anchor, count)
+        .into_iter()
+        .map(|pane| (pane.id, (pane.left, pane.top, pane.width, pane.height)))
+        .collect()
+}
+
+fn assert_directional_beside(
+    server: &TmuxServer,
+    members: &[String],
+    foreign: &[String],
+    direction: rimz::mux::SplitDirection,
+    focus: bool,
+) {
+    let count = members.len() + foreign.len();
+    let before = pane_shapes(server, &members[0], count);
+    let window = server.display(&members[0], "#{window_id}");
+    let active = server.display(&window, "#{pane_id}");
+    let open = members
+        .iter()
+        .find(|id| server.display(id, "#{@rimz_stack_open}") == "1")
+        .unwrap();
+    let left = before[&members[0]].0;
+    let width = before[&members[0]].2;
+    let top = members.iter().map(|id| before[id].1).min().unwrap();
+    let bottom = members
+        .iter()
+        .map(|id| before[id].1 + before[id].3)
+        .max()
+        .unwrap();
+    let created = server
+        .backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::Pane(PaneId::from_parts(MuxName::Tmux, &members[0])),
+            placement: SplitPlacement::Directional(direction),
+            focus,
+            command: Some(vec!["sleep".into(), "600".into()]),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        server.display(created.raw(), "#{@rimz_stack}"),
+        "",
+        "a beside pane is not a stack member"
+    );
+    assert_stack(server, members, open);
+    let after = pane_shapes(server, &members[0], count + 1);
+    let new = after[created.raw()];
+    match direction {
+        rimz::mux::SplitDirection::Right => {
+            assert_eq!((new.1, new.3), (top, bottom - top));
+            assert!(new.2.abs_diff(width / 2) <= 1, "{before:?}; {after:?}");
+            for id in members {
+                let member = after[id];
+                assert!(member.0 + member.2 < new.0, "{after:?}");
+                assert_eq!((member.1, member.3), (before[id].1, before[id].3));
+            }
+        }
+        rimz::mux::SplitDirection::Down => {
+            assert_eq!((new.0, new.2), (left, width));
+            assert!(
+                new.3.abs_diff((bottom - top) / 2) <= 1,
+                "{before:?}; {after:?}"
+            );
+            for id in members {
+                assert!(after[id].1 + after[id].3 < new.1, "{after:?}");
+            }
+        }
+    }
+    for id in foreign {
+        assert_eq!(after[id], before[id], "foreign pane {id}");
+    }
+    assert_eq!(
+        server.display(&window, "#{pane_id}"),
+        if focus { created.raw() } else { &active }
+    );
+    let mut ordered = members.to_vec();
+    ordered.sort_by_key(|id| after[id].1);
+    assert_eq!(&ordered, members);
+    server.tmux(&["select-pane", "-t", &members[1]]);
+    assert_stack(server, members, &members[1]);
+    let restored = pane_shapes(server, &members[0], count + 1);
+    assert_eq!(
+        restored[created.raw()],
+        new,
+        "stack focus must not resize its neighbour"
+    );
+    for id in foreign {
+        assert_eq!(restored[id], before[id], "foreign pane {id} after focus");
+    }
+}
+
+#[test]
+fn directional_right_split_goes_beside_the_whole_stack() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    server.tmux(&["new-window", "-t", "stacks", "-n", "other", "sleep 600"]);
+    assert_directional_beside(
+        &server,
+        &members,
+        &[caller],
+        rimz::mux::SplitDirection::Right,
+        false,
+    );
+    assert_eq!(server.display("stacks", "#{window_name}"), "other");
+}
+
+#[test]
+fn directional_down_split_goes_beside_the_whole_stack() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    assert_directional_beside(
+        &server,
+        &members,
+        &[caller],
+        rimz::mux::SplitDirection::Down,
+        true,
+    );
+}
+
+#[test]
+fn directional_right_split_needs_no_open_member() {
+    directional_split_without_an_open_member(rimz::mux::SplitDirection::Right);
+}
+
+#[test]
+fn directional_down_split_needs_no_open_member() {
+    directional_split_without_an_open_member(rimz::mux::SplitDirection::Down);
+}
+
+fn directional_split_without_an_open_member(direction: rimz::mux::SplitDirection) {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, mut members) = stack_fixture(&server);
+    server.tmux(&["kill-pane", "-t", &members.pop().unwrap()]);
+    let before = pane_shapes(&server, &caller, 3);
+    let mark = server.display(&members[0], "#{@rimz_stack}");
+    for id in &members {
+        assert_eq!(server.display(id, "#{@rimz_stack_open}"), "");
+    }
+    let new = stack_split(&server, &members[0], SplitPlacement::Directional(direction));
+    assert_eq!(
+        server.display(new.raw(), "#{@rimz_stack}"),
+        "",
+        "{direction:?} must go beside a stack with no open flag"
+    );
+    let after = pane_shapes(&server, &caller, 4);
+    assert_eq!(after[&caller], before[&caller]);
+    let neighbour = after[new.raw()];
+    for id in &members {
+        assert_eq!(server.display(id, "#{@rimz_stack}"), mark);
+        assert_eq!(server.display(id, "#{@rimz_stack_open}"), "");
+        match direction {
+            rimz::mux::SplitDirection::Right => {
+                assert!(after[id].0 + after[id].2 < neighbour.0, "{after:?}");
+                assert_eq!((after[id].1, after[id].3), (before[id].1, before[id].3));
+            }
+            rimz::mux::SplitDirection::Down => {
+                assert!(after[id].1 + after[id].3 < neighbour.1, "{after:?}");
+                assert_eq!((after[id].0, after[id].2), (before[id].0, before[id].2));
+            }
+        }
+    }
+    match direction {
+        rimz::mux::SplitDirection::Right => {
+            assert_eq!(
+                (neighbour.1, neighbour.3),
+                (before[&caller].1, before[&caller].3)
+            )
+        }
+        rimz::mux::SplitDirection::Down => assert_eq!(
+            (neighbour.0, neighbour.2),
+            (before[&members[0]].0, before[&members[0]].2)
+        ),
+    }
+}
+
+#[test]
+fn directional_splits_isolate_a_stack_from_foreign_rows() {
+    require_tmux!();
+    for direction in [
+        rimz::mux::SplitDirection::Right,
+        rimz::mux::SplitDirection::Down,
+    ] {
+        let server = TmuxServer::new();
+        ensure_rimz_session(&server, "stacks", Some((160, 70)));
+        let above = server.display("stacks", "#{pane_id}");
+        let first = stack_split(
+            &server,
+            &above,
+            SplitPlacement::Directional(rimz::mux::SplitDirection::Down),
+        );
+        let second = stack_split(&server, first.raw(), SplitPlacement::Stacked);
+        let third = stack_split(&server, second.raw(), SplitPlacement::Stacked);
+        let members: [String; 3] = [first.raw().into(), second.raw().into(), third.raw().into()];
+        server.tmux(&["select-pane", "-t", &members[0]]);
+        assert_directional_beside(&server, &members, &[above], direction, false);
+    }
+}
+
+#[test]
+fn directional_split_dissolves_a_lone_stack_even_after_refocus() {
+    require_tmux!();
+    for direction in [
+        rimz::mux::SplitDirection::Down,
+        rimz::mux::SplitDirection::Right,
+    ] {
+        let server = TmuxServer::new();
+        let (caller, members) = stack_fixture(&server);
+        let anchor = stack_split(
+            &server,
+            &caller,
+            SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+        );
+        let second = stack_split(&server, anchor.raw(), SplitPlacement::Stacked);
+        server.tmux(&["select-pane", "-t", &members[0]]);
+        for id in &members[1..] {
+            server.tmux(&["kill-pane", "-t", id]);
+        }
+        server.tmux(&["select-pane", "-t", &caller]);
+        let before = pane_shapes(&server, &caller, 4)[&members[0]];
+        let new = stack_split(&server, &members[0], SplitPlacement::Directional(direction));
+        let initial = pane_shapes(&server, &caller, 5)[new.raw()];
+        match direction {
+            rimz::mux::SplitDirection::Down => assert!(
+                initial.3.abs_diff(before.3 / 2) <= 1,
+                "{direction:?} newcomer crushed at birth: before {before:?}, new {initial:?}"
+            ),
+            rimz::mux::SplitDirection::Right => assert!(
+                initial.2.abs_diff(before.2 / 2) <= 1,
+                "{direction:?} newcomer crushed at birth: before {before:?}, new {initial:?}"
+            ),
+        }
+        server.tmux(&["select-pane", "-t", &members[0]]);
+        // Exercise restore after refocus without changing the requested geometry.
+        let layout = server.display(&caller, "#{window_layout}");
+        server.tmux(&["select-layout", "-t", &caller, &layout]);
+        assert_eq!(
+            pane_shapes(&server, &caller, 5)[new.raw()],
+            initial,
+            "{direction:?} newcomer resized by restore after refocusing the survivor"
+        );
+        server.tmux(&["select-pane", "-t", anchor.raw()]);
+        assert_eq!(
+            pane_shapes(&server, &caller, 5)[new.raw()],
+            initial,
+            "{direction:?} newcomer resized after refocusing the other stack"
+        );
+        assert_stack(
+            &server,
+            &[anchor.raw().into(), second.raw().into()],
+            anchor.raw(),
+        );
+        for pane in [members[0].as_str(), new.raw()] {
+            assert_eq!(server.display(pane, "#{@rimz_stack}"), "");
+            assert_eq!(server.display(pane, "#{@rimz_stack_open}"), "");
+        }
+    }
+}
+
+#[test]
+fn directional_split_of_a_broken_stack_falls_back_to_join() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    server.tmux(&["swap-pane", "-s", &members[1], "-t", &caller]);
+    let mark = server.display(&members[0], "#{@rimz_stack}");
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(server.display(new.raw(), "#{@rimz_stack}"), mark);
+}
+
+#[test]
+fn directional_stack_split_refreshes_members_after_a_member_exits() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-split-window",
+        &format!(
+            "set-hook -gu -t {caller} after-split-window ; kill-pane -t {}",
+            members[1]
+        ),
+    ]);
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert!(!pane_shapes(&server, &caller, 4).contains_key(&members[1]));
+    assert_joined_after_stack_refusal(
+        &server,
+        &[members[0].clone(), members[2].clone(), new.raw().into()],
+        new.raw(),
+    );
+}
+
+#[test]
+fn directional_stack_split_refuses_changed_marks_without_changed_leaves() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-split-window",
+        &format!(
+            "set-hook -gu -t {caller} after-split-window ; set-option -pu -t {} @rimz_stack",
+            members[1]
+        ),
+    ]);
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(server.display(&members[1], "#{@rimz_stack}"), "");
+    assert_joined_after_stack_refusal(
+        &server,
+        &[members[0].clone(), members[2].clone(), new.raw().into()],
+        new.raw(),
+    );
+}
+
+#[test]
+fn directional_stack_split_refreshes_flags_on_a_concurrent_joiner() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, mut members) = stack_fixture(&server);
+    let mark = server.display(&members[0], "#{@rimz_stack}");
+    let incoming = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        "stacks",
+        "sleep 600",
+    ]);
+    server.tmux(&["set-hook", "-g", "after-split-window", &format!(
+        "set-hook -gu -t {caller} after-split-window ; join-pane -v -d -s {incoming} -t {} ; set-option -p -t {incoming} @rimz_stack {mark} ; set-option -p -t {incoming} @rimz_stack_open 1", members[2]
+    )]);
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(pane_shapes(&server, &caller, 6).len(), 6);
+    members.extend([incoming, new.raw().into()]);
+    assert_joined_after_stack_refusal(&server, &members, new.raw());
+}
+
+fn assert_joined_after_stack_refusal(server: &TmuxServer, members: &[String], open: &str) {
+    let mark = server.display(&members[0], "#{@rimz_stack}");
+    assert!(!mark.is_empty());
+    for pane in members {
+        assert_eq!(
+            server.display(pane, "#{@rimz_stack}"),
+            mark,
+            "member {pane}"
+        );
+        assert_eq!(
+            server.display(pane, "#{@rimz_stack_open}"),
+            if pane == open { "1" } else { "" },
+            "open flag on {pane}"
+        );
+    }
+    assert!(
+        server
+            .display(open, "#{pane_height}")
+            .parse::<u64>()
+            .unwrap()
+            > 1
+    );
+    assert_eq!(server.display(open, "#{@rimz_stack_layout_guard}"), "");
+}
+
+#[test]
+fn directional_stack_split_preserves_an_after_split_resize() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, mut members) = stack_fixture(&server);
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-split-window",
+        &format!("set-hook -gu -t {caller} after-split-window ; resize-pane -t {caller} -x 110"),
+    ]);
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(
+        server.display(&caller, "#{pane_width}"),
+        "110",
+        "the rewrite must not undo the after-split hook's resize"
+    );
+    members.push(new.raw().into());
+    assert_joined_after_stack_refusal(&server, &members, new.raw());
+}
+
+#[test]
+fn directional_stack_split_guards_the_layout_read_before_apply() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    // Change geometry after the applying batch records the read, before its check.
+    server.tmux(&["set-hook", "-g", "after-set-option", &format!(
+        "if-shell -F -t {caller} '#{{@rimz_stack_layout_guard}}' {{ set-hook -gu -t {caller} after-set-option ; resize-pane -t {caller} -x 90 }}"
+    )]);
+    let new = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(
+        server.display(&caller, "#{pane_width}"),
+        "90",
+        "a stale rewrite must not undo the intervening resize"
+    );
+    assert_eq!(
+        server.display(new.raw(), "#{@rimz_stack}"),
+        server.display(&members[0], "#{@rimz_stack}")
+    );
+    assert_eq!(server.display(new.raw(), "#{@rimz_stack_layout_guard}"), "");
+}
+
 #[test]
 fn focus_changes_preserve_two_independent_stacks() {
     require_tmux!();
