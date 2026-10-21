@@ -766,8 +766,11 @@ fn pasted_definition_span_is_a_line_anchor() {
     assert_eq!(anchors.len(), 1, "pasted definition must be recognized");
     let parsed = &anchors[0];
     assert_eq!(parsed.symbol, None);
-    assert_eq!(parsed.hint, Some([120, 184]));
-    assert_eq!(anchor("src/lib.rs:124:12").hint, Some([124, 124]));
+    assert_eq!(parsed.hint.map(|hint| hint.lines), Some([120, 184]));
+    assert_eq!(
+        anchor("src/lib.rs:124:12").hint.map(|hint| hint.lines),
+        Some([124, 124])
+    );
 }
 
 #[test]
@@ -866,7 +869,7 @@ fn sample_anchors_match_the_hand_read_grammar() {
                 a.line,
                 a.path.as_str(),
                 a.symbol.as_ref().map(|s| s.join("::")).unwrap_or_default(),
-                a.hint,
+                a.hint.map(|hint| hint.lines),
             )
         })
         .collect();
@@ -887,19 +890,22 @@ fn extractor_handles_decorations_hints_and_excludes_nonanchors() {
         &["ConfigErr", "Definition"]
     );
     assert_eq!(anchors[1].symbol.as_ref().unwrap(), &["Type", "method"]);
-    assert_eq!(anchors[1].hint, Some([12, 14]));
+    assert_eq!(anchors[1].hint.map(|hint| hint.lines), Some([12, 14]));
     assert!(anchors[1].text.ends_with("(~12-14)"));
     assert_eq!(anchors[2].symbol.as_ref().unwrap(), &["Type", "field"]);
-    assert_eq!(anchors[3].hint, Some([9, 9]));
-    assert_eq!(anchors[4].hint, Some([7, 8]));
+    assert_eq!(anchors[3].hint.map(|hint| hint.lines), Some([9, 9]));
+    assert_eq!(anchors[4].hint.map(|hint| hint.lines), Some([7, 8]));
     for hint in [
         "(~12)", "(12)", "(~12-14)", "(12-14)", "~12", ":~12", ":12", ":12:3",
     ] {
         assert_eq!(
-            extract(&format!("`a.rs::f` {hint}"))[0].hint.unwrap()[0],
+            extract(&format!("`a.rs::f` {hint}"))[0].hint.unwrap().lines[0],
             12
         );
-        assert_eq!(anchor(&format!("a.rs::f {hint}")).hint.unwrap()[0], 12);
+        assert_eq!(
+            anchor(&format!("a.rs::f {hint}")).hint.unwrap().lines[0],
+            12
+        );
     }
     assert_eq!(anchor("../src/a.rs::f").path, "../src/a.rs");
     assert_eq!(anchor(".../x.rs::f").path, ".../x.rs");
@@ -960,12 +966,12 @@ fn repo_qualifiers_wrap_local_anchor_grammar() {
             actual.symbol,
             symbol.map(|s| s.into_iter().map(str::to_owned).collect())
         );
-        assert_eq!(actual.hint, hint);
+        assert_eq!(actual.hint.map(|hint| hint.lines), hint);
         assert_eq!(actual.text, text);
     }
     let trailing = extract("`o/r@v1:a.zig::f` (~12)");
     assert_eq!(trailing.len(), 1);
-    assert_eq!(trailing[0].hint, Some([12, 12]));
+    assert_eq!(trailing[0].hint.map(|hint| hint.lines), Some([12, 12]));
     assert_eq!(trailing[0].text, "o/r@v1:a.zig::f (~12)");
     for text in [
         "o/r@v1",
@@ -1093,7 +1099,10 @@ fn numeric_symbol_segments_stay_distinct_from_line_hints() {
         assert_eq!(extracted.symbol.unwrap(), ["Tuple", "0"]);
         assert_eq!(extracted.hint, None);
     }
-    assert_eq!(anchor("a.rs::Tuple::0:12").hint, Some([12, 12]));
+    assert_eq!(
+        anchor("a.rs::Tuple::0:12").hint.map(|hint| hint.lines),
+        Some([12, 12])
+    );
 }
 
 #[test]
