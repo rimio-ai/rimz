@@ -297,6 +297,29 @@ Two rules for a check whose subject is time:
 - A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and do not delegate work to provider subagents, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
 - Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
 
+## Land the team's worktree
+
+A fresh room's `probe` worktree is pristine, not finished, so it draws no receipt and no landed chip. To check a folded finished group, give each agent a finished turn, close the board, and merge a commit from the worktree into the trunk. The `--no-ff` merge matters: the branch commit that is not on the trunk's first-parent line is the evidence that the worktree did work. Run this with `$ROOT`, `$BIN` and `<mux>` from the room card:
+
+```sh
+WT="$ROOT/home/room-worktrees/probe"
+feed() {
+  jq -nc --arg event "$2" --arg role "$1" --arg cwd "$WT" \
+    '{hook_event_name:$event,session_id:("landed-"+$role),cwd:$cwd,source:"startup",prompt:"landed check"}' |
+    target/debug/xtask sandbox in "$ROOT" --as "@$1#probe" -- "$BIN" --<mux> hooks feed --source claude
+}
+for role in coder reviewer; do feed "$role" SessionStart; feed "$role" UserPromptSubmit; done
+sleep 2
+for role in coder reviewer; do feed "$role" Stop; done
+target/debug/xtask sandbox in "$ROOT" -- "$BIN" --<mux> teams flip Done 'landed check' --team forge
+target/debug/xtask sandbox in "$ROOT" --cwd "$WT" -- git commit --allow-empty -m 'Exercise landed receipt'
+target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/room" -- git merge --no-ff probe -m 'Land probe'
+target/debug/xtask sandbox in "$ROOT" -- "$BIN" --<mux> sidebar snapshot --json |
+  jq '.worktree_groups[] | {key, finished, clean, trunk_sync}'
+```
+
+The `probe` group should report `finished: true`, `clean: true` and `trunk_sync: "merged"`. Focus a pane outside the group (a new pane started in `$ROOT/home/room`), since focusing a member keeps its cards open. Then click `[ ▸ 1 landed ]` to show the receipt.
+
 ## Native subagent replay
 
 The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.
