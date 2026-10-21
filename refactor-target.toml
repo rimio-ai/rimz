@@ -1418,6 +1418,11 @@ reason = "CLI and tab consumers share the verdict's attention priority."
 
 [[verdict]]
 kind = "item"
+key = "store::snapshot::view::model::UnitStatus::is_board_done"
+reason = "Team reports distinguish board completion from a member-turn Success headline."
+
+[[verdict]]
+kind = "item"
 key = "store::snapshot::view::model::SidebarWorktreeGroup::unit_statuses"
 reason = "Every status consumer can read the projected group's unit verdicts."
 
@@ -1570,8 +1575,8 @@ path = "crates/rimz/src/store"
 # idle_stop::withdraw_before and message::human_opened_turn share conditional withdrawal and authorship with hooks (+2).
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
 # SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
-# UnitStatus and its four methods, unit_statuses, pipeline_owner and project_stuck_stages (+8).
-surface-budget = 490
+# UnitStatus and its five methods, unit_statuses, pipeline_owner and project_stuck_stages (+9).
+surface-budget = 491
 
 [[verdict]]
 kind = "item"
@@ -3912,8 +3917,8 @@ reason = "Uses the same closest-tier presentation for bare team words and explic
 
 [[verdict]]
 kind = "item"
-key = "cli::teams::list::instance_state"
-reason = "Catalog and wait diagnostics fold the same typed attention statuses."
+key = "cli::teams::list::CohortState::for_cohort"
+reason = "Catalog and wait diagnostics map the same published work-unit verdict."
 
 [[verdict]]
 kind = "item"

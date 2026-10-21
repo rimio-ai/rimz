@@ -156,15 +156,18 @@ Roles with a resolved [keep-warm](../definitions.md#keep-warm) policy also show 
 
 ### Cohort state
 
-A cohort's state is the first rule that matches its members' projected card statuses, including the sidebar's attention lift when a current child of either origin waits or a provider-native child fails:
+A cohort uses the sidebar's shared unit verdict. Attention from any member takes precedence, including the sidebar's attention lift when a current child of either origin waits or a provider-native child fails. A staged board at `Done` gives `done`, including without an owner. Otherwise the owner's projected status decides the calm state; without a usable owner, the first matching member state wins:
 
 | State | When |
 | --- | --- |
 | `blocked` | Any member is `waiting` or `failed`. |
 | `paused` | Any member is `paused`. |
-| `working` | Any member is `running`. |
-| `sleeping` | Any member is `sleeping`: at rest with a one-shot wait or delivery armed. Standing subscriptions do not count. |
-| `idle` | Otherwise, including members whose last turn succeeded. Whether the pipeline finished is the [board stage](#board-stage), never member status. |
+| `working` | The stage owner is `running`, or any member is `running` without a usable owner. In-flight waits and listed background shells count as running. |
+| `sleeping` | The stage owner is `sleeping`, or any member is `sleeping` without a usable owner and none is running. Sleeping means resting on a timer, signal, condition, or file watch, including through a child. |
+| `idle` | The stage owner is `idle` or `success` before `Done`, or an ownerless team's members are all `idle` or `success` without a board at `Done`. |
+| `done` | The board is at `Done`. |
+
+With no projected rows, the same ownerless rule uses the live members' display statuses. An all-resting stage past the [stall window](../../guide/configuration.md#sidebar-rendering) makes its owner `failed`, so the cohort reads `blocked`.
 
 ### Board stage
 
@@ -324,7 +327,7 @@ A missing board, or a member waiting on you or failed, keeps the wait blocked: o
 
 With one name, a completed wait prints the board's `## Result` section on stdout and nothing else; a board without one prints a note on stderr instead, and a failed wait prints `rimz: <team>#<lane>: cohort ended before Done (stage: <stage>)` on stderr. With several names, or `--any`, each cohort prints as it settles under a `--- <team>#<lane> ---` header, suffixed with its status when it did not complete.
 
-In both human and `--json` modes, stderr reports each cohort's stage, owner, and state at the start, then changes to the stage, owner availability, or set of members needing you. A missing owner reads `@<owner> not live`, with no focus command, since focusing the cohort does not reach an absent owner; attention changes include a `rimz teams focus` command. Age changes alone print nothing. These diagnostics do not end the wait when a person is needed. On timeout, each pending cohort gets a line naming the elapsed limit and stage, ending `cohort left running`.
+In both human and `--json` modes, stderr reports each cohort's stage, owner, and state at the start, then changes to the stage, owner availability, or set of members needing you. Progress uses the published sidebar verdict, like `teams list`; completion still reads the board directly. A missing owner reads `@<owner> not live`, with no focus command, since focusing the cohort does not reach an absent owner; attention changes include a `rimz teams focus` command. Age changes alone print nothing. These diagnostics do not end the wait when a person is needed. On timeout, each pending cohort gets a line naming the elapsed limit and stage, ending `cohort left running`.
 
 `--json` prints one object for a single name, and an object keyed by `<team>#<lane>` for several once the wait ends:
 

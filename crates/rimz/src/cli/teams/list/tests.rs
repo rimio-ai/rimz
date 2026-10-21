@@ -885,6 +885,11 @@ fn invalid_team_stays_visible_with_its_error() {
 
 #[test]
 fn live_instance_state_follows_team_attention_priority() {
+    let cohort = rimz::address::TeamCohort {
+        team: "forge",
+        channel: "feat".into(),
+        members: Vec::new(),
+    };
     for (other, expected) in [
         (AgentStatus::Waiting, "blocked"),
         (AgentStatus::Failed, "blocked"),
@@ -894,20 +899,184 @@ fn live_instance_state_follows_team_attention_priority() {
         (AgentStatus::Idle, "sleeping"),
     ] {
         assert_eq!(
-            instance_state([AgentStatus::Sleeping, other]).as_str(),
+            CohortState::for_cohort(
+                &snapshot(Vec::new()),
+                &cohort,
+                [AgentStatus::Sleeping, other]
+            )
+            .as_str(),
             expected,
             "sleeping with {other:?}"
         );
     }
     assert_eq!(
-        instance_state([AgentStatus::Running, AgentStatus::Failed]),
+        CohortState::for_cohort(
+            &snapshot(Vec::new()),
+            &cohort,
+            [AgentStatus::Running, AgentStatus::Failed]
+        ),
         CohortState::Blocked
     );
     assert_eq!(
-        instance_state([AgentStatus::Success, AgentStatus::Paused]),
+        CohortState::for_cohort(
+            &snapshot(Vec::new()),
+            &cohort,
+            [AgentStatus::Success, AgentStatus::Paused]
+        ),
         CohortState::Paused
     );
-    assert_eq!(instance_state([AgentStatus::Success]), CohortState::Idle);
+    assert_eq!(
+        CohortState::for_cohort(&snapshot(Vec::new()), &cohort, [AgentStatus::Success]).as_str(),
+        "idle"
+    );
+}
+
+#[test]
+fn live_instances_use_the_published_unit_in_the_matching_cohort() {
+    use rimz::store::snapshot::{
+        AgentCard, RowCard, SidebarPipeline, SidebarRow, SidebarWorktreeGroup,
+    };
+
+    for ((owner, other, stage, owner_handle, expected), channel) in [
+        (
+            AgentStatus::Idle,
+            AgentStatus::Running,
+            Some("Implement"),
+            Some("owner"),
+            "idle",
+        ),
+        (
+            AgentStatus::Sleeping,
+            AgentStatus::Running,
+            Some("Implement"),
+            Some("owner"),
+            "sleeping",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            Some("Done"),
+            None,
+            "done",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Failed,
+            Some("Done"),
+            None,
+            "blocked",
+        ),
+        (
+            AgentStatus::Success,
+            AgentStatus::Success,
+            None,
+            None,
+            "idle",
+        ),
+        (
+            AgentStatus::Success,
+            AgentStatus::Success,
+            Some("Implement"),
+            None,
+            "idle",
+        ),
+        (
+            AgentStatus::Success,
+            AgentStatus::Paused,
+            Some("Implement"),
+            Some("owner"),
+            "paused",
+        ),
+    ]
+    .into_iter()
+    .flat_map(|case| [Some("feat"), None].map(move |channel| (case, channel)))
+    {
+        let agents = ["owner", "other"].map(|id| {
+            let mut agent = AgentState::stub("claude", id, AgentStatus::Running);
+            agent.team = Some("forge".into());
+            agent.channel = channel.map(str::to_owned);
+            agent.worktree_path = Some("/repo/feat".into());
+            agent
+        });
+        let mut snapshot = snapshot(agents.to_vec());
+        let rows = agents
+            .iter()
+            .zip([owner, other])
+            .map(|(agent, status)| SidebarRow {
+                id: agent.agent_id.to_string(),
+                name: "claude".into(),
+                channel: channel.map(str::to_owned),
+                card: RowCard::Agent(std::sync::Arc::new(AgentCard {
+                    status,
+                    team: Some("forge".into()),
+                    handle: Some(agent.agent_id.to_string()),
+                    ..AgentCard::default()
+                })),
+                checkout: None,
+                pane: None,
+                worktree_path: None,
+                worktree_branch: None,
+                unread: false,
+                inactive: false,
+                archived: false,
+                attention_score: 0,
+                last_activity: jiff::Timestamp::UNIX_EPOCH,
+            })
+            .collect::<Vec<_>>();
+        let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
+            "key": "feat", "label": "feat", "kind": "worktree", "status_counts": [], "rows": []
+        }))
+        .unwrap();
+        group.team = Some("forge".into());
+        group.pipeline = stage.map(|stage| SidebarPipeline {
+            stages: vec!["Implement".into()],
+            stage: stage.into(),
+            owner: owner_handle.map(str::to_owned),
+            started_at: None,
+            stage_started_at: None,
+            stage_prior_secs: 0,
+            visited: Default::default(),
+            done_at: None,
+        });
+        group.rows = rows.into();
+        let mut wrong_lane = group.clone();
+        wrong_lane.rows = group
+            .rows
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.id = format!("elsewhere-{}", row.id);
+                row.channel = Some("elsewhere".into());
+                row
+            })
+            .collect::<Vec<_>>()
+            .into();
+        if let Some(pipeline) = &mut wrong_lane.pipeline {
+            pipeline.stage = "Done".into();
+        }
+        snapshot.worktree_groups = vec![wrong_lane, group].into();
+        let instances = live_instances(
+            &TeamsConfig::default(),
+            LiveCatalog {
+                demotion: &Default::default(),
+                isolation: Isolation::Host,
+                shared_dir: Path::new("/state/room/shared"),
+                tasks: &BTreeMap::new(),
+                flips: &[],
+                runs: &BTreeMap::new(),
+                snapshot: &snapshot,
+                audit_agents: &[],
+                lifetimes: &rimz::worktree::lane_lifetimes([]),
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&instances["forge"][0]).unwrap()["state"],
+            expected,
+            "{owner:?}, {other:?}, {stage:?}, {owner_handle:?}, {channel:?}"
+        );
+    }
 }
 
 #[test]

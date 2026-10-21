@@ -16,7 +16,9 @@ use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::harness::team_stage::StageSignal;
-use rimz::store::snapshot::{SidebarSnapshot, WorktreeCi, WorktreePrState};
+use rimz::store::snapshot::{
+    SidebarSnapshot, SidebarUnitKey, UnitStatus, WorktreeCi, WorktreePrState,
+};
 use rimz::utils::path::normalize_path_lexical;
 use rimz::workspace::WorkspaceResolver;
 
@@ -98,8 +100,7 @@ pub(super) struct StageReport {
     pub since: Option<jiff::Timestamp>,
 }
 
-/// A cohort's attention state, folded from its members' statuses.
-/// Pipeline completion is the board's `Done` stage, never a member status.
+/// The shared work-unit headline in the team report's vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum CohortState {
@@ -108,9 +109,47 @@ pub(super) enum CohortState {
     Working,
     Sleeping,
     Idle,
+    Done,
 }
 
 impl CohortState {
+    pub(super) fn for_cohort(
+        snapshot: &SidebarSnapshot,
+        cohort: &rimz::address::TeamCohort<'_>,
+        statuses: impl IntoIterator<Item = AgentStatus>,
+    ) -> Self {
+        let unit = snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| {
+                group.rows.iter().any(|row| {
+                    cohort
+                        .members
+                        .iter()
+                        .any(|member| row.id == member.agent_id.as_str())
+                })
+            })
+            .find_map(|group| {
+                group
+                    .unit_statuses()
+                    .remove(&SidebarUnitKey::Team(cohort.team))
+            })
+            .unwrap_or_else(|| {
+                UnitStatus::from_members(
+                    statuses.into_iter().map(|status| (status, false, "")),
+                    None,
+                )
+            });
+        match unit.headline() {
+            AgentStatus::Waiting | AgentStatus::Failed => Self::Blocked,
+            AgentStatus::Paused => Self::Paused,
+            AgentStatus::Running => Self::Working,
+            AgentStatus::Sleeping => Self::Sleeping,
+            AgentStatus::Success if unit.is_board_done() => Self::Done,
+            AgentStatus::Idle | AgentStatus::Success => Self::Idle,
+        }
+    }
+
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",
@@ -118,6 +157,7 @@ impl CohortState {
             Self::Working => "working",
             Self::Sleeping => "sleeping",
             Self::Idle => "idle",
+            Self::Done => "done",
         }
     }
 }
@@ -565,7 +605,7 @@ fn live_instances(
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
     for cohort in cohorts {
         let instance = format!("{}#{}", cohort.team, cohort.channel);
-        let members = cohort.members;
+        let members = &cohort.members;
         let team = teams.0.get(cohort.team);
         let worktree = unique_value(members.iter().map(|agent| {
             agent
@@ -687,7 +727,7 @@ fn live_instances(
                             ..signal
                         })
                         .collect(),
-                    handle: rimz::address::agent_handle(agent, &members, false),
+                    handle: rimz::address::agent_handle(agent, members, false),
                     kind: agent.kind.to_string(),
                     status,
                     phase,
@@ -706,12 +746,11 @@ fn live_instances(
                 .entry(member.status.as_str().to_owned())
                 .or_default() += 1;
         }
-        let state = instance_state(members.iter().map(|member| {
-            member
-                .needs_you
-                .as_ref()
-                .map_or(member.status, |attention| attention.status)
-        }));
+        let state = CohortState::for_cohort(
+            snapshot,
+            &cohort,
+            members.iter().map(|member| member.status),
+        );
         let last_activity_at = members.iter().map(|member| member.last_activity_at).max();
         let role_rank = |member: &LiveMember| {
             team.and_then(|team| {
@@ -782,20 +821,6 @@ fn live_signal(
     })
 }
 
-pub(super) fn instance_state(statuses: impl IntoIterator<Item = AgentStatus>) -> CohortState {
-    statuses
-        .into_iter()
-        .map(|status| match status {
-            AgentStatus::Waiting | AgentStatus::Failed => CohortState::Blocked,
-            AgentStatus::Paused => CohortState::Paused,
-            AgentStatus::Running => CohortState::Working,
-            AgentStatus::Sleeping => CohortState::Sleeping,
-            _ => CohortState::Idle,
-        })
-        .min()
-        .unwrap_or(CohortState::Idle)
-}
-
 fn write_catalog(
     w: &mut impl Write,
     reports: &[TeamReport],
@@ -836,6 +861,7 @@ fn write_catalog(
         CohortState::Working,
         CohortState::Sleeping,
         CohortState::Idle,
+        CohortState::Done,
     ] {
         let count = instances
             .iter()
@@ -889,6 +915,7 @@ fn write_catalog(
                     CohortState::Idle => 4,
                     CohortState::Working => 5,
                     CohortState::Sleeping => 6,
+                    CohortState::Done => 7,
                 }
             })
         };

@@ -69,6 +69,7 @@ fn snapshot(rows: Vec<(AgentStatus, &str, Timestamp)>, now: Timestamp) -> Sideba
         .into_iter()
         .map(|(status, pane_id, at)| {
             let mut row = activity_row(true, Some(status), at, std::path::Path::new("/repo"));
+            row.id = pane_id.to_owned();
             row.pane = Some(pane(pane_id));
             row
         })
@@ -119,6 +120,112 @@ fn success_expires_to_the_bare_manual_name() {
 }
 
 #[test]
+fn every_team_pane_uses_the_unit_headline_and_board_completion_age() {
+    use crate::store::snapshot::{RowCard, SidebarPipeline};
+
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let old = now - SignedDuration::from_mins(6);
+    for (owner, other, stage, done_at, activity, expected) in [
+        (
+            AgentStatus::Idle,
+            AgentStatus::Running,
+            "Implement",
+            None,
+            now,
+            "team",
+        ),
+        (
+            AgentStatus::Sleeping,
+            AgentStatus::Running,
+            "Implement",
+            None,
+            now,
+            "team",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            "Implement",
+            None,
+            now,
+            "team ⢿",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Failed,
+            "Implement",
+            None,
+            now,
+            "team !",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Waiting,
+            "Done",
+            Some(now),
+            now,
+            "team ?",
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            "Done",
+            Some(now),
+            old,
+            "team ✓",
+        ),
+        (
+            AgentStatus::Success,
+            AgentStatus::Success,
+            "Done",
+            Some(old),
+            now,
+            "team",
+        ),
+        (
+            AgentStatus::Success,
+            AgentStatus::Success,
+            "Done",
+            None,
+            now,
+            "team",
+        ),
+    ] {
+        let mut snapshot = snapshot(vec![(owner, "%1", activity), (other, "%2", activity)], now);
+        let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+        group.team = Some("forge".into());
+        group.pipeline = Some(SidebarPipeline {
+            stages: vec!["Implement".into()],
+            stage: stage.into(),
+            owner: Some("owner".into()),
+            started_at: None,
+            stage_started_at: None,
+            stage_prior_secs: 0,
+            visited: Default::default(),
+            done_at,
+        });
+        for (index, row) in std::sync::Arc::make_mut(&mut group.rows)
+            .iter_mut()
+            .enumerate()
+        {
+            let RowCard::Agent(card) = &mut row.card else {
+                unreachable!()
+            };
+            let card = std::sync::Arc::make_mut(card);
+            card.team = Some("forge".into());
+            card.handle = Some(if index == 0 { "owner" } else { "other" }.into());
+        }
+        for pane in ["%1", "%2"] {
+            let renames = desired_tab_renames(&snapshot, &frame("team ⏸\u{fe0e}", &[pane]), "zsh");
+            assert_eq!(
+                renames[0].desired_name, expected,
+                "{owner:?}, {other:?}, {stage}, {done_at:?}, {pane}"
+            );
+        }
+    }
+}
+
+#[test]
 fn status_change_replaces_both_catalog_variants() {
     let now = Timestamp::from_second(1_700_000_000).expect("time");
     let snapshot = snapshot(vec![(AgentStatus::Waiting, "%1", now)], now);
@@ -140,7 +247,7 @@ fn tab_status_always_uses_unicode_glyphs() {
         (AgentStatus::Success, "#feat ✓"),
     ] {
         assert_eq!(
-            TabStatus::from_row(status, true)
+            TabStatus::from_headline(status, true)
                 .expect("tab status fixture")
                 .glyph(),
             theme::unicode_glyph(theme::agent_status_glyph_role(status)),
