@@ -189,6 +189,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         subagent: false,
+        follow_up_message: None,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
@@ -4247,6 +4248,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            follow_up_message: None,
             loop_reminder: None,
             headless: None,
             identity: ExecIdentity::default(),
@@ -4399,6 +4401,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             close_pane_on_exit: false,
             exit_on_run_completion: false,
             subagent: false,
+            follow_up_message: None,
             loop_reminder: None,
             headless: None,
             identity: ExecIdentity::default(),
@@ -4436,17 +4439,38 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 #[cfg(unix)]
 #[test]
 fn resume_exec_waits_for_turn_started_before_self_cleanup() {
-    resume_exec_cleanup_case(false);
+    resume_exec_cleanup_case(ResumeExecCleanupCase::Reopened);
 }
 
 #[cfg(unix)]
 #[test]
 fn resume_exec_archives_queued_messages_after_provider_exit() {
-    resume_exec_cleanup_case(true);
+    resume_exec_cleanup_case(ResumeExecCleanupCase::QueuedOnExit);
 }
 
 #[cfg(unix)]
-fn resume_exec_cleanup_case(queue_before_exit: bool) {
+#[test]
+fn resume_exec_exits_when_its_follow_up_expired() {
+    resume_exec_cleanup_case(ResumeExecCleanupCase::FailedFollowUp);
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_exec_triggers_queued_head_without_provider_registration() {
+    resume_exec_cleanup_case(ResumeExecCleanupCase::QueuedHeadTrigger);
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResumeExecCleanupCase {
+    Reopened,
+    QueuedOnExit,
+    FailedFollowUp,
+    QueuedHeadTrigger,
+}
+
+#[cfg(unix)]
+fn resume_exec_cleanup_case(case: ResumeExecCleanupCase) {
     use notify::Watcher as _;
     use std::time::{Duration, Instant};
 
@@ -4501,11 +4525,76 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
     run.status = rimz::store::run::RunStatus::Completed;
     run.joined_at = Some(jiff::Timestamp::now());
     rimz::harness::run::create(store.paths(), &run).unwrap();
+    assert!(
+        !run.owes_report(),
+        "the historical answer is already joined"
+    );
+    let failed_follow_up = (case == ResumeExecCleanupCase::FailedFollowUp).then(|| {
+        let receiver = store
+            .snapshot()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == session_id)
+            .unwrap()
+            .clone();
+        let mut message = rimz::store::message::MessageRecord::new(
+            env.workspace_id.clone(),
+            &receiver,
+            "undelivered follow up".into(),
+            rimz::store::message::DeliveryGate::Done,
+        );
+        message.register_by = Some(jiff::Timestamp::now());
+        store
+            .queue_message(&message, &workspace.session_name)
+            .unwrap();
+        store
+            .reconcile_stale_messages(&workspace.session_name, jiff::Timestamp::now(), 3)
+            .unwrap();
+        assert_eq!(
+            store.list_message_history().unwrap()[0].status,
+            rimz::store::message::MessageStatus::Expired
+        );
+        message.message_id
+    });
 
     // No natural provider exit may masquerade as the wrapper's self-cleanup.
     let shim_dir = crate::common::write_long_lived_agent_shim(&env, "codex");
     std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
         .unwrap();
+    let queued_head = (case == ResumeExecCleanupCase::QueuedHeadTrigger).then(|| {
+        let receiver = store
+            .snapshot()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == session_id)
+            .unwrap()
+            .clone();
+        let mut records = Vec::new();
+        for text in ["queued before registration", "second follow up"] {
+            let record = rimz::store::message::MessageRecord::new(
+                env.workspace_id.clone(),
+                &receiver,
+                text.into(),
+                rimz::store::message::DeliveryGate::Done,
+            );
+            store
+                .queue_message(&record, &workspace.session_name)
+                .unwrap();
+            records.push(record);
+        }
+        records
+    });
+    let delivery_trace = env.home_root.join("resume-delivery.log");
+    let rimz_shim = crate::common::write_path_shim(
+        &shim_dir,
+        "resume-delivery",
+        r#"case " $* " in
+  *' message deliver --message-id '*) printf '%s\n' "$@" >> "$RIMZ_TEST_DELIVERY_TRACE" ;;
+  *) exec "$RIMZ_TEST_REAL_BIN" "$@" ;;
+esac"#,
+    );
     let mut resume = ExecRequest {
         isolation_default: None,
         kind: kind.clone(),
@@ -4524,13 +4613,14 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         close_pane_on_exit: false,
         exit_on_run_completion: true,
         subagent: true,
+        follow_up_message: failed_follow_up,
         loop_reminder: None,
         headless: None,
         identity: ExecIdentity::default(),
     };
     resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
-    let mut wrapper = env
-        .rimz()
+    let mut wrapper_command = env.rimz();
+    wrapper_command
         .args(exec_args(&env, &resume))
         .args([
             "--root",
@@ -4542,10 +4632,31 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         .env("PATH", path_with_front(&shim_dir))
         .env("ZELLIJ_PANE_ID", "4")
         .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
-        .spawn()
-        .unwrap();
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+    if queued_head.is_some() {
+        wrapper_command
+            .env("RIMZ_BIN", rimz_shim)
+            .env("RIMZ_TEST_DELIVERY_TRACE", &delivery_trace)
+            .env("RIMZ_TEST_REAL_BIN", env.rimz_bin());
+    }
+    let mut wrapper = wrapper_command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
+    if case == ResumeExecCleanupCase::FailedFollowUp {
+        while wrapper.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "an expired follow-up must release the reopened supervisor"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        assert!(settled.provider_pid.is_some());
+        assert_eq!(settled.status, run.status);
+        assert_eq!(settled.follow_ups, run.follow_ups);
+        assert_eq!(settled.joined_at, run.joined_at);
+        assert!(!settled.owes_report());
+        return;
+    }
     while rimz::harness::run::load(store.paths(), &run.run_id)
         .unwrap()
         .provider_pid
@@ -4586,6 +4697,31 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
     }
     drop(watcher);
 
+    if let Some(records) = queued_head {
+        let trace = std::fs::read_to_string(&delivery_trace).unwrap_or_default();
+        assert_eq!(
+            trace.lines().collect::<Vec<_>>(),
+            [
+                "--root",
+                env.project_root.to_str().unwrap(),
+                "message",
+                "deliver",
+                "--message-id",
+                records[0].message_id.as_str(),
+            ],
+            "a resumed lazy wrapper must spawn exactly its queued head after binding"
+        );
+        for record in records {
+            store
+                .cancel_message(
+                    &record.message_id,
+                    &workspace.session_name,
+                    "test trigger observed",
+                )
+                .unwrap();
+        }
+    }
+
     let started = observe(
         "TurnStarted",
         LifecycleSignal::TurnStarted { turn_id: None },
@@ -4622,7 +4758,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         rimz::store::message::DeliveryGate::Done,
     )
     .with_not_before(Some(jiff::Timestamp::now() + Duration::from_secs(3600)));
-    if queue_before_exit {
+    if case == ResumeExecCleanupCase::QueuedOnExit {
         for record in [&queued, &later] {
             store
                 .queue_message(record, &workspace.session_name)
@@ -4654,7 +4790,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         "test parent received answer",
     )
     .unwrap();
-    if queue_before_exit {
+    if case == ResumeExecCleanupCase::QueuedOnExit {
         let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
             .unwrap()
             .provider_pid
@@ -4695,7 +4831,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
         ],
         "self-cleanup must wait for the resumed child's TurnStarted"
     );
-    if !queue_before_exit {
+    if case != ResumeExecCleanupCase::QueuedOnExit {
         return;
     }
     let panes = env.write_pane_fixture(&[]);

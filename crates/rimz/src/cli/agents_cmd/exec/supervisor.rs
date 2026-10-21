@@ -527,7 +527,8 @@ fn run_loop(
                 },
                 awaiting_reopen,
                 Instant::now(),
-            ),
+            )
+            .with_follow_up_message(request.follow_up_message.clone()),
             parent_watchdog.take(),
             &mut drainer_lease,
         )
@@ -828,6 +829,8 @@ struct RunMonitor {
     stop_policy: StopPolicy,
     awaiting_reopen: Option<u32>,
     next_park_check: Instant,
+    follow_up_message: Option<rimz::ids::MessageId>,
+    follow_up_held: Option<bool>,
     next_receipt_check: Instant,
     reported_revision: Option<jiff::Timestamp>,
     strand: Option<DutyChild>,
@@ -853,6 +856,11 @@ impl Drop for RunMonitor {
 }
 
 impl RunMonitor {
+    fn with_follow_up_message(mut self, message_id: Option<rimz::ids::MessageId>) -> Self {
+        self.follow_up_message = message_id;
+        self
+    }
+
     fn new(
         self_cleanup: bool,
         stop_policy: StopPolicy,
@@ -864,6 +872,8 @@ impl RunMonitor {
             stop_policy,
             awaiting_reopen,
             next_park_check: now,
+            follow_up_message: None,
+            follow_up_held: None,
             next_receipt_check: now,
             reported_revision: None,
             strand: None,
@@ -886,7 +896,7 @@ impl RunMonitor {
         mut spawn: impl FnMut(Duty) -> Result<DutyChild>,
     ) -> bool {
         self.waiting_for_receipt = false;
-        let record = match rimz::harness::run::load(&context.paths, &context.run_id) {
+        let mut record = match rimz::harness::run::load(&context.paths, &context.run_id) {
             Ok(record) => record,
             Err(error) => {
                 tracing::debug!(run_id = %context.run_id, %error, "could not read supervised run record while monitoring pane");
@@ -927,9 +937,18 @@ impl RunMonitor {
             return record.status.is_terminal() && run_ready(context);
         }
         if let Some(ordinal) = self.awaiting_reopen {
-            if record.follow_ups <= ordinal {
+            if record.follow_ups <= ordinal && self.follow_up_holds(&context.paths, parent_changed)
+            {
                 return false;
             }
+            // The follow-up read can wait on the workspace lock; refresh the cleanup decision afterward.
+            record = match rimz::harness::run::load(&context.paths, &context.run_id) {
+                Ok(record) => record,
+                Err(error) => {
+                    tracing::debug!(run_id = %context.run_id, %error, "could not reread supervised run after resume follow-up");
+                    return false;
+                }
+            };
             self.awaiting_reopen = None;
         }
         if !record.status.is_terminal() {
@@ -948,13 +967,9 @@ impl RunMonitor {
         self.waiting_for_receipt = true;
         self.receipt_dirty |= ready && !self.run_was_ready;
         self.run_was_ready = ready;
-        let queue_stamp = std::fs::metadata(context.paths.message_queue_file())
-            .ok()
-            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
-        self.receipt_dirty |= parent_changed
-            || queue_stamp != self.queue_stamp
-            || self.reported_revision != Some(record.updated_at);
-        self.queue_stamp = queue_stamp;
+        let queue_changed = self.refresh_queue_stamp(&context.paths);
+        self.receipt_dirty |=
+            parent_changed || queue_changed || self.reported_revision != Some(record.updated_at);
         if let Some(code) = self.receipt.as_mut().and_then(DutyChild::poll) {
             self.receipt = None;
             self.receipt_ready = code == 0;
@@ -988,6 +1003,38 @@ impl RunMonitor {
             self.next_receipt_check = now + PARENT_RECEIPT_POLL;
         }
         ready && self.receipt_ready && !self.receipt_dirty && self.receipt.is_none()
+    }
+
+    fn follow_up_holds(&mut self, paths: &rimz::StatePaths, parent_changed: bool) -> bool {
+        let Some(message_id) = self.follow_up_message.clone() else {
+            return true;
+        };
+        let queue_changed = self.refresh_queue_stamp(paths);
+        self.receipt_dirty |= parent_changed || queue_changed;
+        if self.follow_up_held.is_none() || queue_changed {
+            self.follow_up_held = Some(
+                match rimz::store::message::read_status(paths, &message_id) {
+                    Ok(status) => status.is_some_and(|status| {
+                        !status.is_terminal()
+                            || status == rimz::store::message::MessageStatus::Delivered
+                    }),
+                    Err(error) => {
+                        tracing::debug!(%message_id, %error, "could not read resume follow-up while monitoring pane");
+                        true
+                    }
+                },
+            );
+        }
+        self.follow_up_held != Some(false)
+    }
+
+    fn refresh_queue_stamp(&mut self, paths: &rimz::StatePaths) -> bool {
+        let stamp = std::fs::metadata(paths.message_queue_file())
+            .ok()
+            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        let changed = stamp != self.queue_stamp;
+        self.queue_stamp = stamp;
+        changed
     }
 }
 

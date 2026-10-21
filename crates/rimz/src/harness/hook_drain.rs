@@ -127,6 +127,24 @@ pub fn capture_env() -> BTreeMap<String, String> {
         })
 }
 
+/// Spawn a refresh helper with fresh null stdio and the captured hook environment, handing it to the shared reaper without waiting for completion.
+pub fn spawn_refresh_detached(
+    spawn: &crate::agents::RefreshSpawn,
+    label: &'static str,
+) -> io::Result<u32> {
+    crate::child_process::spawn_detached_reaped(
+        crate::proc::rimz_exe(),
+        |command| {
+            for name in HOOK_ENV_NAMES {
+                command.env_remove(name);
+            }
+            command.args(&spawn.args).envs(capture_env());
+            Ok(())
+        },
+        label,
+    )
+}
+
 pub fn with_frame_env<T>(
     frame: &HookIngress,
     attempt: FrameAttempt,

@@ -442,6 +442,28 @@ fn launch_and_supervise(
             ),
             &request.identity.params,
         );
+        match invocation
+            .store()
+            .and_then(|store| Ok(store.list_pending_messages()?))
+        {
+            Ok(pending) => rimz::message::spawn_queued_head(
+                workspace,
+                &pending,
+                rimz::agents::AgentCardRef::new(
+                    &target.0,
+                    &target.1,
+                    request.identity.name.as_deref(),
+                ),
+                |spawn| {
+                    if let Err(error) =
+                        rimz::harness::hook_drain::spawn_refresh_detached(spawn, "resume-delivery")
+                    {
+                        tracing::debug!(%error, "could not spawn resumed card's queued delivery");
+                    }
+                },
+            ),
+            Err(error) => tracing::debug!(%error, "could not read resumed card's queued messages"),
+        }
     }
     if let Some(target) = attach_target.as_ref() {
         rewake_resumed(invocation, target, globals.mux, resume_since);

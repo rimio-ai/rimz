@@ -29,7 +29,7 @@ pub enum InterruptConfirmation {
 }
 
 use crate::address::recipient_channel;
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentCardRef, AgentState, AgentStatus, RefreshSpawn};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
@@ -57,6 +57,35 @@ const COMMAND_SUBMIT_DELAY_ENV: &str = "RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS";
 /// Default cap for unconfirmed `Sent` reconciliation attempts.
 const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
 const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
+
+/// Trigger the card's FIFO head; the detached deliverer rechecks durable state before claiming.
+pub fn spawn_queued_head(
+    workspace: &crate::ResolvedWorkspace,
+    pending: &[MessageRecord],
+    card: AgentCardRef<'_>,
+    mut spawn: impl FnMut(&RefreshSpawn),
+) {
+    // A stable name folds provisional and registered ids into the same queue.
+    let Some(head) = crate::store::message::queue_head(
+        pending.iter(),
+        card.kind,
+        card.agent_id,
+        card.name,
+        Timestamp::now(),
+    ) else {
+        return;
+    };
+    spawn(&RefreshSpawn {
+        args: vec![
+            "--root".to_owned(),
+            workspace.project_root.display().to_string(),
+            "message".to_owned(),
+            "deliver".to_owned(),
+            "--message-id".to_owned(),
+            head.message_id.to_string(),
+        ],
+    });
+}
 
 /// Split appended arguments from the adapter's declared compact command while
 /// keeping the separating space with the command. This keeps a slash out of a

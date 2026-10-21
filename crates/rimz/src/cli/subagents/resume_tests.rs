@@ -79,6 +79,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 extra_args: Vec::new(),
             },
             Some("work".parse().unwrap()),
+            None,
         );
         assert_eq!(
             request,
@@ -100,6 +101,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 close_pane_on_exit: !keep,
                 exit_on_run_completion: !keep,
                 subagent: true,
+                follow_up_message: None,
                 loop_reminder: None,
                 headless: None,
                 identity: ExecIdentity {

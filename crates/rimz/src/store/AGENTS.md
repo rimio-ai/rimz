@@ -16,6 +16,7 @@ Store folds the agent model, so `store` imports `agents` and nothing under `agen
 
 ## Reads
 
+- `store::message::read_status` is the parked resume monitor's fold-free lookup for one message id. It holds the workspace lock across live queue and all retained history, not the newest-500 history view, so a terminal transition cannot appear missing between the two reads.
 - `snapshot/` reducers stay pure over the event log plus caller-supplied inputs. The sidebar's produce module ([`src/sidebar/produce/`](../sidebar/produce/mod.rs)) supplies the live pane list; nothing under `snapshot/` calls the mux.
 - `Store::snapshot` folds the event log alone: its `focused_pane` and pane enrichment stay empty, since only the sidebar's producer fuses them in. A decision that needs focus reads the published sidebar snapshot or the mux focus anchor, never a fresh store snapshot.
 - The fold stays resumable: carryover plus the rollup cache and its extent stamp preserve continuing and ended rows across rotation, so a rebuild never silently drops launch identity or a resumable session.

@@ -511,6 +511,90 @@ mod monitor {
     use super::*;
     use std::rc::Rc;
 
+    #[test]
+    fn reopen_hold_follows_the_follow_up_record() {
+        use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+        for status in [
+            Some(MessageStatus::Expired),
+            Some(MessageStatus::Archived),
+            Some(MessageStatus::Errored),
+            Some(MessageStatus::TimedOut),
+            Some(MessageStatus::Abandoned),
+            Some(MessageStatus::Canceled),
+            None,
+            Some(MessageStatus::Queued),
+            Some(MessageStatus::Claimed),
+            Some(MessageStatus::Sent),
+            Some(MessageStatus::Delivered),
+        ] {
+            let (_dir, context, mut run) = fixture(rimz::store::run::RunStatus::Completed);
+            run.report_to = rimz::store::run::ReportTo::Nobody;
+            rimz::harness::run::create(&context.paths, &run).unwrap();
+            let store = rimz::Store::open(context.paths.clone(), context.runtime.clone()).unwrap();
+            let child = rimz::testkit::agent_state("codex", "child", jiff::Timestamp::now());
+            let mut message = MessageRecord::new(
+                context.paths.workspace_id.clone(),
+                &child,
+                "follow up".into(),
+                DeliveryGate::Done,
+            );
+            if let Some(status) = status {
+                message.status = status;
+                store.queue_message(&message, "room").unwrap();
+            }
+            let now = Instant::now();
+            let mut monitor =
+                RunMonitor::new(true, StopPolicy::ParentReceived, Some(run.follow_ups), now)
+                    .with_follow_up_message(Some(message.message_id));
+            let releases = status
+                .is_none_or(|status| status.is_terminal() && status != MessageStatus::Delivered);
+            assert_eq!(
+                monitor.poll(&context, now, false, |_| panic!(
+                    "joined run needs no helper"
+                )),
+                releases,
+                "follow-up={status:?}"
+            );
+            assert_eq!(monitor.awaiting_reopen.is_none(), releases);
+        }
+    }
+
+    #[test]
+    fn reopen_hold_keeps_an_unreadable_follow_up_until_the_queue_changes() {
+        let (_dir, context, mut run) = fixture(rimz::store::run::RunStatus::Completed);
+        run.report_to = rimz::store::run::ReportTo::Nobody;
+        rimz::harness::run::create(&context.paths, &run).unwrap();
+        let store = rimz::Store::open(context.paths.clone(), context.runtime.clone()).unwrap();
+        let child = rimz::testkit::agent_state("codex", "child", jiff::Timestamp::now());
+        let message = rimz::store::message::MessageRecord::new(
+            context.paths.workspace_id.clone(),
+            &child,
+            "follow up".into(),
+            rimz::store::message::DeliveryGate::Done,
+        );
+        store.queue_message(&message, "room").unwrap();
+        let now = Instant::now();
+        let mut monitor =
+            RunMonitor::new(true, StopPolicy::ParentReceived, Some(run.follow_ups), now)
+                .with_follow_up_message(Some(message.message_id.clone()));
+        let no_helper = |_| panic!("joined run needs no helper");
+        assert!(!monitor.poll(&context, now, false, no_helper));
+        let queue_path = context.paths.message_queue_file();
+        std::fs::remove_file(&queue_path).unwrap();
+        std::fs::create_dir(&queue_path).unwrap();
+        assert!(!monitor.poll(&context, now, false, no_helper));
+        assert!(!monitor.poll(&context, now, false, no_helper));
+        std::fs::remove_dir(&queue_path).unwrap();
+        store.queue_message(&message, "room").unwrap();
+        store
+            .cancel_message(&message.message_id, "room", "failed follow up")
+            .unwrap();
+        assert!(
+            monitor.poll(&context, now, false, no_helper),
+            "a readable terminal record must release the hold after the queue changes"
+        );
+    }
+
     fn fixture(
         status: rimz::store::run::RunStatus,
     ) -> (tempfile::TempDir, RunPaths, rimz::store::run::RunRecord) {

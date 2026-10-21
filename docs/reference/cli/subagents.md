@@ -274,6 +274,8 @@ The registration limit is two minutes (`RIMZ_MESSAGE_REGISTER_TIMEOUT_MS` overri
 
 A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended; rimz message @<handle> resumes it`. The parent resends with `rimz message @<handle>`, which resumes the child. A follow-up queued after that end waits for resume registration instead.
 
+A resumed child whose follow-up fails before starting its next turn is cleaned up by its supervisor. Its earlier reported answer remains unchanged and is not reported again.
+
 Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory (recreated when an empty-dir child's directory is missing), conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. A replayed permission mode above the parent's current recorded ceiling (unrecorded is auto) refuses with both modes and asks for a new child, rather than lowering the resumed session's grant. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 
 Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.

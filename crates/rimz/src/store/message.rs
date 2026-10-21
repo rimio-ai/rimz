@@ -33,6 +33,19 @@ pub const COMMAND_VALIDITY_ENV: &str = "RIMZ_MESSAGE_COMMAND_VALIDITY_MS";
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub(super) const CLAIM_TTL: Duration = Duration::from_secs(15);
 
+/// Read one live or retained terminal status without opening or folding a store.
+pub fn read_status(
+    paths: &crate::StatePaths,
+    message_id: &MessageId,
+) -> crate::store::Result<Option<MessageStatus>> {
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    Ok(codec::read_status(
+        &paths.messages_dir,
+        &paths.message_history_dir,
+        message_id,
+    )?)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]
 pub enum MessageSender {

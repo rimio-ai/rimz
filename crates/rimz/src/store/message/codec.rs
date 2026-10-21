@@ -83,6 +83,60 @@ pub(in crate::store) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageR
         .collect())
 }
 
+pub(super) fn read_status(
+    messages_dir: &Path,
+    history_dir: &Path,
+    message_id: &crate::ids::MessageId,
+) -> Result<Option<MessageStatus>> {
+    if let Some(status) = status_in_file(&queue_path(messages_dir), message_id)? {
+        return Ok(Some(status));
+    }
+    let mut files = bucket_files(history_dir).map_err(|source| MessageStoreErr::Io {
+        path: history_dir.to_path_buf(),
+        source,
+    })?;
+    files.sort();
+    for path in files.into_iter().rev() {
+        if let Some(status) = status_in_file(&path, message_id)? {
+            return Ok(Some(status));
+        }
+    }
+    Ok(None)
+}
+
+fn status_in_file(
+    path: &Path,
+    message_id: &crate::ids::MessageId,
+) -> Result<Option<MessageStatus>> {
+    #[derive(serde::Deserialize)]
+    struct StatusRow {
+        message_id: crate::ids::MessageId,
+        status: MessageStatus,
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(MessageStoreErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    for row in
+        serde_json::Deserializer::from_reader(io::BufReader::new(file)).into_iter::<StatusRow>()
+    {
+        let row = row.map_err(|source| MessageStoreErr::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if row.message_id == *message_id {
+            return Ok(Some(row.status));
+        }
+    }
+    Ok(None)
+}
+
 pub(in crate::store) fn read_queue(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     let path = queue_path(messages_dir);
     if !path.exists() {

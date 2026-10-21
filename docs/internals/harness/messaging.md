@@ -239,7 +239,7 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 13 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
 | 14 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
-All fourteen pass and the verdict is `Ready`. An `Ended` receiver keeps refusing delivery until a later lifecycle fold revives its card: pane attach is not one, and the exec wrapper's `rimz.agent-resumed` stamp on every resume is. A record queued to an ended card before its resume, such as a cohort resume's positional prompt, waits for that stamp. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
+All fourteen pass and the verdict is `Ready`. An `Ended` receiver keeps refusing delivery until a later lifecycle fold revives its card: pane attach is not one, and the exec wrapper's `rimz.agent-resumed` stamp on every resume is. A record queued to an ended card before its resume, such as a cohort resume's positional prompt, needs that stamp to revive the card. The plain append does not invoke the hook reactor: the wrapper separately triggers delivery after spawning the provider and recording its pane, including for lazy providers with no registration hook. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
 
 A queued follow-up with `register_by` waits for registration only while its card is absent or every matching row has `ended_at <= enqueued_at`; a tie keeps waiting. This avoids archiving against the child's previous end. A child that registers and then ends after enqueue instead reaches `ReceiverEnded`, and the sweep archives the record with the ordinary receiver-ended reason. While registration is still awaited, the sweep wake is deferred by at most one delivery window, capped at the registration deadline. `Store::reconcile_stale_messages` alone writes `Expired` at or after that deadline under the same card-aware predicate, with a reason naming the child and the registration limit. A live row wins even after the deadline if reconciliation has not yet expired the record; a registered child waiting on its own prompt does not expire. The deadline stays on the record but is inert outside `Queued`; it does not change pure record expiry or deliverability.
 
@@ -257,11 +257,13 @@ For `ReceiverGone`, `rimz message show` consults the audit rollup. When the dura
 
 ### What triggers a delivery
 
-Three paths converge on the same helper.
+Four paths converge on the same delivery helper.
 
 **Lifecycle hooks.** The lifecycle reactor declares [`DELIVERY_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs) as `Registered`, `TurnEnded`, `TurnInterrupted`, and `CompactionEnded`. On one of those it finds the FIFO head for the event's card and spawns a detached `rimz message deliver --message-id <id>`. Registration releases messages parked while a resumed provider starts; the helper still settles and re-checks the gates before claiming. Subagent stops and compaction starts do not check the queue.
 
 The same reactor nudges the sweep when the event's agent is referenced by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, and `when` conditions on the wider [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which adds `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions run after the `LifecycleEvent` commits, and the helper re-checks durable state before claiming.
+
+**Resumed wrappers.** After the provider spawn and `record_own_resume_pane`, every exec wrapper with an attach target selects that card's FIFO head through `message::spawn_queued_head`, shared with the lifecycle reactor, and spawns the detached deliverer. This covers parent follow-ups and ordinary resume prompts alike. A failed queue read or helper spawn logs at `debug` and does not fail the resume; the sweep remains the backstop within one delivery window.
 
 **The host sweep.** The room's sidebar host spawns `rimz --mux <mux> message sweep --workspace-id <id>` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)). Its argv names the room and mux even though the host inherits no pane environment.
 
@@ -505,7 +507,7 @@ Adapters without durable turn starts keep only the context-baseline guard.
 
 Preparation refuses what a reply wait cannot follow. Every target must be a lifecycle-bound card with installed, trusted hooks, checked once per login key. The resume doorway's explicit ended child is accepted and waits through registration and delivery; a terminal delivery failure prints the record's reason. Broadcasts and fan-out are accepted; create-on-miss, schedules, `--after`, `--when`, bare pane targets, and unsubmitted pastes are rejected before dispatch.
 
-Dispatch captures one frame-aligned event-log base before enqueue and copies it into every leg, so each leg folds terminal message events from its own cursor. Each `Sent` leg anchors a skip-existing transcript cursor before dispatch, so it reads only assistant messages written after the prompt.
+Dispatch captures one frame-aligned event-log base before enqueue and copies it into every leg, so each leg folds terminal message events from its own cursor. Each `Sent` leg anchors a skip-existing transcript cursor before dispatch, so it reads only assistant messages written after the prompt. Ordinary queued legs re-anchor when delivery starts to exclude intervening turns. A follow-up queued to an ended, resuming child keeps its pre-dispatch anchor instead: there is no intervening live turn, and its reply may finish before the first delivery poll.
 
 Each leg is a two-phase machine:
 
@@ -599,7 +601,7 @@ History is audit, so an append failure warns and leaves the queue transition sta
 
 `Expired` adds a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries sharing the workspace store fail history reads used by `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup until upgraded. The terminal commit removes it from the live queue, so older queue transactions never encounter that status. Event-log readers retain unknown methods through their existing catch-all.
 
-The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only).
+The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only). The parked resume monitor instead uses `store::message::read_status` for one id, under the workspace lock across live queue and all retained history, without opening or folding a store. It does not use the newest-500 history view: an older `Delivered` follow-up must keep the reopen hold, not look missing. The monitor caches the result behind the queue file's stamp.
 
 The event log carries these methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, `message.expired`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Not every transition writes one: a claim, a retryable pre-send failure returning a claim to `Queued`, a `Sent` record held during compaction, and a sweep that only moves `retry_after` and its blocker rewrite the queue silently. An explicit claim release (`release_message_claims`) does write `message.queued`.
 

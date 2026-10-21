@@ -1061,8 +1061,9 @@ pub struct LocalSessionObservation {
 }
 
 /// A detached `rimz` helper an adapter requests after a lifecycle event lands
-/// — just the argv. The CLI owns the spawn discipline (fresh, fully-nulled
-/// stdio; fire-and-forget), so adapters stay pure mappers.
+/// — just the argv. [`crate::harness::hook_drain::spawn_refresh_detached`]
+/// owns the spawn discipline (fresh, fully-nulled stdio; fire-and-forget), so
+/// adapters stay pure mappers.
 pub struct RefreshSpawn {
     /// Arguments to the `rimz` binary itself.
     pub args: Vec<String>,
