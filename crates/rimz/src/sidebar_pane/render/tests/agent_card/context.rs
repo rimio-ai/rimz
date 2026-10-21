@@ -54,7 +54,12 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
     let theme = Theme::fixed(false);
     for width in [45, 46, 47] {
         let wide = width >= 46;
-        for (quiet, minutes) in [(22 * 60 + 1, 8), (29 * 60 + 59, 1), (30 * 60, 1)] {
+        for (quiet, minutes) in [
+            (15 * 60 + 1, 15),
+            (22 * 60 + 1, 8),
+            (29 * 60 + 59, 1),
+            (30 * 60, 1),
+        ] {
             let snapshot = cache_meter_snapshot(quiet, Some(half_hour_cache()));
             let lines = group_lines_at_width(&snapshot, &theme, 0, width);
             let cache = lines
@@ -71,7 +76,8 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
                 .iter()
                 .flat_map(|line| &line.spans)
                 .find(|span| {
-                    span.content.contains("29m")
+                    span.content.contains("15m")
+                        || span.content.contains("29m")
                         || span.content.contains("22m")
                         || span.content.contains("30m")
                 })
@@ -440,7 +446,7 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
 }
 
 #[test]
-fn cache_clock_heat_is_confined_to_the_last_ten_minutes() {
+fn cache_clock_heat_starts_halfway_through_the_ttl() {
     let theme = truecolor_sidebar_theme();
     let style = |age, ttl: Option<u32>| {
         let snapshot = cache_meter_snapshot(
@@ -461,8 +467,15 @@ fn cache_clock_heat_is_confined_to_the_last_ten_minutes() {
             .unwrap()
             .style
     };
-    assert_eq!(style(1199, Some(1800)), theme.muted());
-    assert_eq!(style(1200, Some(1800)), theme.muted());
+    for (ttl, start, midpoint) in [(3600, 1800, 2700), (1800, 900, 1350)] {
+        assert_eq!(style(start - 1, Some(ttl)), theme.muted());
+        assert_eq!(style(start, Some(ttl)), theme.muted());
+        assert_ne!(style(start + 1, Some(ttl)), theme.muted());
+        assert_eq!(
+            style(midpoint, Some(ttl)),
+            theme.style(theme.warm_heat_tone(0.5), Modifier::empty())
+        );
+    }
     assert_eq!(
         style(1800, Some(1800)),
         theme.style(theme.heat_tone(1.0), Modifier::empty())
@@ -471,7 +484,6 @@ fn cache_clock_heat_is_confined_to_the_last_ten_minutes() {
         style(1801, Some(1800)),
         theme.style(theme.component(Component::CacheExpired), Modifier::empty())
     );
-    assert_ne!(style(1201, Some(1800)), theme.muted());
     for age in [300, 900, 1201, 1800, 3599, 3600, 3601] {
         assert_eq!(
             style(age, None),
@@ -1629,10 +1641,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         "the cache-read health run leads the bar before the accents: {bar_styles:?}"
     );
 }
-/// The card's age cluster pairs a clock-fill glyph (the face fills with the
-/// idle span) with a continuous caution-to-alarm tone in the last ten minutes
-/// before expiry. Before that band the pin stays muted, and past the ceiling it
-/// wears the expired-cache tone.
+/// The card's age cluster pairs a clock-fill glyph with a continuous warn-to-alarm tone after half the TTL, or in the last ten minutes if earlier. Before that band the pin stays muted, and past the ceiling it wears the expired-cache tone.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
@@ -1664,7 +1673,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     };
     let heat = |age_secs: i64| {
         theme.style(
-            theme.warm_heat_tone((1.0 + (age_secs - 3000) as f32 / 600.0) / 2.0),
+            theme.warm_heat_tone((age_secs - 1800) as f32 / 1800.0),
             Modifier::empty(),
         )
     };
@@ -1681,8 +1690,8 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 40 * 60, '◕'),
-        theme.muted(),
-        "the expiry band has not started at forty minutes"
+        heat(40 * 60),
+        "the expiry band has started at forty minutes"
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 3_599, '●'),
@@ -1759,7 +1768,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     );
     assert_eq!(
         half_style,
-        theme.style(theme.warm_heat_tone(0.75), Modifier::empty(),)
+        theme.style(theme.warm_heat_tone(2.0 / 3.0), Modifier::empty())
     );
     assert_ne!(half_style, hour_style);
     assert_eq!(
