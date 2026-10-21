@@ -7,6 +7,8 @@ use serde::Serialize;
 
 #[path = "list_render.rs"]
 mod text;
+#[path = "list_watch.rs"]
+mod watch;
 pub(super) use text::action_text as action;
 #[cfg(test)]
 use text::wrap_trigger;
@@ -79,20 +81,40 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     text::write(&mut ui::out(), &model, &rooms, args.all, width)
 }
 
-pub(super) struct ListModel {
-    pub(super) rooms: Vec<Room>,
-    pub(super) caller_root: Option<PathBuf>,
-    pub(super) now: Timestamp,
-    pub(super) warnings: Vec<String>,
+pub(super) fn render_watch_frame(
+    out: &mut impl Write,
+    workspace: &rimz::ResolvedWorkspace,
+    hold: bool,
+    held_stats: &mut run_log::HeldStats,
+) -> Result<()> {
+    let model = load(Some(workspace), LoadScope::CallerRoom, held_stats)?;
+    let (cols, rows) = rimz::mux::detect_terminal_size().unwrap_or((80, 24));
+    // CallerRoom with a resolved workspace always loads exactly one room.
+    watch::write(
+        out,
+        &model.rooms[0],
+        model.now,
+        usize::from(cols),
+        usize::from(rows),
+        hold,
+    )?;
+    Ok(())
+}
+
+struct ListModel {
+    rooms: Vec<Room>,
+    caller_root: Option<PathBuf>,
+    now: Timestamp,
+    warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
-pub(super) struct Room {
-    pub(super) root: PathBuf,
-    pub(super) open: bool,
-    pub(super) here: bool,
-    pub(super) spend_today_usd: f64,
-    pub(super) tasks: Vec<TaskRow>,
+struct Room {
+    root: PathBuf,
+    open: bool,
+    here: bool,
+    spend_today_usd: f64,
+    tasks: Vec<TaskRow>,
     retired: Vec<Retired>,
 }
 
@@ -107,9 +129,55 @@ struct Retired {
     worktree_here: bool,
 }
 
+enum DoneEntry<'a> {
+    Task(&'a TaskRow),
+    Retired(&'a Retired),
+}
+
+impl DoneEntry<'_> {
+    fn name(&self) -> &str {
+        match self {
+            Self::Task(row) => &row.name,
+            Self::Retired(row) => &row.name,
+        }
+    }
+
+    fn at(&self) -> Timestamp {
+        match self {
+            Self::Task(row) => row
+                .running_since
+                .or_else(|| row.launch.as_ref().map(|launch| launch.at))
+                .or_else(|| row.last.as_ref().map(|last| last.at))
+                .unwrap_or(Timestamp::UNIX_EPOCH),
+            Self::Retired(row) => row.at,
+        }
+    }
+
+    fn running(&self) -> bool {
+        matches!(self, Self::Task(row) if row.running.is_some())
+    }
+}
+
+fn done_entries(room: &Room) -> Vec<DoneEntry<'_>> {
+    let mut entries = room
+        .tasks
+        .iter()
+        .filter(|row| row.section == Section::Done)
+        .map(DoneEntry::Task)
+        .chain(room.retired.iter().map(DoneEntry::Retired))
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| {
+        b.running()
+            .cmp(&a.running())
+            .then(b.at().cmp(&a.at()))
+            .then(a.name().cmp(b.name()))
+    });
+    entries
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Section {
+enum Section {
     NeedsYou,
     Routine,
     Waiting,
@@ -119,7 +187,7 @@ pub(super) enum Section {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Attention {
+enum Attention {
     CheckoutGone,
     Strikes,
     Failing,
@@ -132,7 +200,7 @@ pub(super) enum Attention {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum TaskState {
+enum TaskState {
     Live,
     Off,
     NotEnabled,
@@ -153,7 +221,7 @@ impl TaskState {
         }
     }
 
-    pub(super) fn observe(timing: &schedule::TaskTiming, running: bool, open: bool) -> Self {
+    fn observe(timing: &schedule::TaskTiming, running: bool, open: bool) -> Self {
         if running {
             return Self::Running;
         }
@@ -173,7 +241,7 @@ impl TaskState {
         }
     }
 
-    pub(super) fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
+    fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
         Some(match state {
             schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
                 Self::NotEnabled.label().into()
@@ -231,13 +299,13 @@ struct Owner {
 }
 
 #[derive(Serialize)]
-pub(super) struct LastRun {
-    pub(super) at: Timestamp,
+struct LastRun {
+    at: Timestamp,
     result: LoopRunResult,
-    pub(super) ok: bool,
+    ok: bool,
     streak: usize,
     #[serde(skip)]
-    pub(super) record: LoopRunRecord,
+    record: LoopRunRecord,
 }
 
 impl From<&run_log::ActingRun> for LastRun {
@@ -253,9 +321,9 @@ impl From<&run_log::ActingRun> for LastRun {
 }
 
 #[derive(Serialize)]
-pub(super) struct Heard {
-    pub(super) signal: String,
-    pub(super) at: Timestamp,
+struct Heard {
+    signal: String,
+    at: Timestamp,
 }
 
 impl From<&run_log::HeardSignal> for Heard {
@@ -269,14 +337,14 @@ impl From<&run_log::HeardSignal> for Heard {
 
 #[derive(Serialize)]
 pub(super) struct TaskRow {
-    pub(super) name: String,
-    pub(super) section: Section,
+    name: String,
+    section: Section,
     kind: TaskKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     condition: Option<schedule::when::ConditionCount>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) attention: Option<Attention>,
-    pub(super) state: TaskState,
+    attention: Option<Attention>,
+    state: TaskState,
     trigger: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
@@ -290,18 +358,18 @@ pub(super) struct TaskRow {
     owner: Option<Owner>,
     you: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) next_at: Option<Timestamp>,
+    next_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) running_since: Option<Timestamp>,
+    running_since: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) last: Option<LastRun>,
+    last: Option<LastRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) heard: Option<Heard>,
+    heard: Option<Heard>,
     spend_today_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     budget_per_day_usd: Option<f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(super) workflow_runs: Vec<WorkflowRunRow>,
+    workflow_runs: Vec<WorkflowRunRow>,
     #[serde(skip)]
     head: String,
     #[serde(skip)]
@@ -309,11 +377,11 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     reason: String,
     #[serde(skip)]
-    pub(super) task: Option<LoadedTask>,
+    task: Option<LoadedTask>,
     #[serde(skip)]
-    pub(super) timing: Option<schedule::TaskTiming>,
+    timing: Option<schedule::TaskTiming>,
     #[serde(skip)]
-    pub(super) running: Option<Option<RunLockInfo>>,
+    running: Option<Option<RunLockInfo>>,
     #[serde(skip)]
     held: Vec<Held>,
     #[serde(skip)]
@@ -337,7 +405,7 @@ struct RowContext<'a> {
     now: Timestamp,
 }
 
-pub(super) enum LoadScope {
+enum LoadScope {
     CallerRoom,
     AllRooms,
 }
@@ -357,7 +425,7 @@ pub(super) fn room_roots(
     Ok(roots)
 }
 
-pub(super) fn load(
+fn load(
     workspace: Option<&rimz::ResolvedWorkspace>,
     scope: LoadScope,
     held_stats: &mut run_log::HeldStats,
@@ -735,21 +803,9 @@ impl TaskRow {
             .map(Heard::from);
     }
 
-    pub(super) fn state_text(&self, now: Timestamp) -> String {
+    fn state_text(&self, now: Timestamp) -> String {
         if self.state == TaskState::Running {
             return render::in_flight_text(self.running.flatten(), &self.held, now);
-        }
-        if matches!(
-            self.attention,
-            Some(
-                Attention::CheckoutGone
-                    | Attention::Strikes
-                    | Attention::Blocked
-                    | Attention::Invalid
-                    | Attention::Parked
-            )
-        ) {
-            return self.reason.clone();
         }
         if self.state == TaskState::WaitsForRoom {
             return self.state.label().into();
@@ -769,7 +825,7 @@ impl TaskRow {
         }
     }
 
-    pub(super) fn last_text(&self, now: Timestamp) -> String {
+    fn last_text(&self, now: Timestamp) -> String {
         let mut parts = vec![match self.state {
             TaskState::Running => self.state_text(now),
             TaskState::Off | TaskState::NotEnabled => self.state.label().into(),
@@ -852,12 +908,16 @@ fn last_run_text(
             )
         });
     };
-    Some(if last.ok {
-        let mut text = format!("✓ {}", ui::rel_age(last.at, now));
-        if last.streak > 1 && action != Some(ActionKind::Wake) {
-            text.push_str(&format!(" · {} in a row", last.streak));
-        }
-        text
+    let mut text = acting_run_text(last, exit, now);
+    if last.ok && last.streak > 1 && action != Some(ActionKind::Wake) {
+        text.push_str(&format!(" · {} in a row", last.streak));
+    }
+    Some(text)
+}
+
+fn acting_run_text(last: &LastRun, exit: Option<&str>, now: Timestamp) -> String {
+    if last.ok {
+        format!("✓ {}", ui::rel_age(last.at, now))
     } else {
         format!(
             "✗ failed {}{}",
@@ -865,7 +925,7 @@ fn last_run_text(
             exit.map(|exit| format!(" · exit {exit}"))
                 .unwrap_or_default()
         )
-    })
+    }
 }
 
 /// One nonterminal workflow run a loop task started.

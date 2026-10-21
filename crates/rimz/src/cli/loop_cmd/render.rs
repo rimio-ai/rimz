@@ -21,16 +21,8 @@ fn root_with_room(root: &Path, room_is_open: bool) -> String {
     )
 }
 
-pub(super) fn room_label(room_is_open: bool) -> &'static str {
+fn room_label(room_is_open: bool) -> &'static str {
     if room_is_open { "room open" } else { "no room" }
-}
-
-pub(super) fn room_style(room_is_open: bool) -> anstyle::Style {
-    if room_is_open {
-        ui::palette::good()
-    } else {
-        ui::palette::muted()
-    }
 }
 
 fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {

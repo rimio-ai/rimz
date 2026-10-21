@@ -396,43 +396,34 @@ fn done_rows(
     all: bool,
     width: Option<usize>,
 ) -> Result<()> {
-    let mut rows = room
-        .tasks
-        .iter()
-        .filter(|row| row.section == Section::Done)
-        .map(|row| {
-            let at = row
-                .running_since
-                .or_else(|| row.launch.as_ref().map(|launch| launch.at))
-                .or_else(|| row.last.as_ref().map(|last| last.at))
-                .unwrap_or(Timestamp::UNIX_EPOCH);
-            let fired = if row.running.is_some() {
-                row.state_text(now)
-            } else if let Some(launch) = &row.launch {
-                format!(
-                    "{} · launched {} @{}",
-                    ui::rel_age(launch.at, now),
-                    row.action
-                        .as_ref()
-                        .map(|action| action.subject.as_str())
-                        .unwrap_or_default(),
-                    launch.leader.trim_start_matches('@')
+    let mut rows = done_entries(room)
+        .into_iter()
+        .map(|entry| match entry {
+            DoneEntry::Task(row) => {
+                let fired = if row.running.is_some() {
+                    row.state_text(now)
+                } else if let Some(launch) = &row.launch {
+                    format!(
+                        "{} · launched {} @{}",
+                        ui::rel_age(launch.at, now),
+                        row.action
+                            .as_ref()
+                            .map(|action| action.subject.as_str())
+                            .unwrap_or_default(),
+                        launch.leader.trim_start_matches('@')
+                    )
+                } else {
+                    row.last_text(now)
+                };
+                (
+                    row.name.as_str(),
+                    row.worktree.as_ref().map(|_| worktree_text(row)),
+                    fired,
+                    last_style(row),
+                    row.running.is_some(),
                 )
-            } else {
-                row.last_text(now)
-            };
-            (
-                at,
-                row.name.as_str(),
-                row.worktree.as_ref().map(|_| worktree_text(row)),
-                fired,
-                last_style(row),
-                row.running.is_some(),
-            )
-        })
-        .chain(room.retired.iter().map(|row| {
-            (
-                row.at,
+            }
+            DoneEntry::Retired(row) => (
                 row.name.as_str(),
                 row.checkout.as_ref().map(|path| {
                     format!(
@@ -444,24 +435,23 @@ fn done_rows(
                 format!("{} · {}", ui::rel_age(row.at, now), row.result.label()),
                 render::loop_result_mark(row.result).style,
                 false,
-            )
-        }))
+            ),
+        })
         .collect::<Vec<_>>();
     if rows.is_empty() {
         return Ok(());
     }
-    rows.sort_by(|a, b| b.5.cmp(&a.5).then(b.0.cmp(&a.0)).then(a.1.cmp(b.1)));
     let older = if all {
         0
     } else {
-        rows.iter().filter(|row| !row.5).count().saturating_sub(5)
+        rows.iter().filter(|row| !row.4).count().saturating_sub(5)
     };
     rows.truncate(rows.len() - older);
-    let worktree = rows.iter().any(|row| row.2.is_some());
+    let worktree = rows.iter().any(|row| row.1.is_some());
     section_heading(out, "DONE", "recent one-offs", width)?;
     let cells = rows
         .into_iter()
-        .map(|(_, name, checkout, fired, style, _)| {
+        .map(|(name, checkout, fired, style, _)| {
             let mut cells = vec![name.to_owned()];
             if worktree {
                 cells.push(checkout.unwrap_or_default());
@@ -728,7 +718,7 @@ fn last_style(row: &TaskRow) -> anstyle::Style {
     }
 }
 
-fn reason_style(attention: Option<Attention>) -> anstyle::Style {
+pub(super) fn reason_style(attention: Option<Attention>) -> anstyle::Style {
     use ui::status::{StateRole, role};
 
     match attention {
