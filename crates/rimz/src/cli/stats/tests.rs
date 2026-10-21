@@ -483,7 +483,7 @@ fn one_shot_refreshes_previous_local_day_but_serves_today() {
 }
 
 #[test]
-fn subagent_note_includes_the_partial_oldest_day_of_a_trailing_window() {
+fn roles_note_includes_the_partial_oldest_day_of_a_trailing_window() {
     let published = "2026-10-17T15:00:00Z".parse::<Timestamp>().unwrap();
     let since = "2026-10-11T12:00:00Z".parse::<Timestamp>().unwrap();
     let mut cache = ProviderSpendingCache {
@@ -562,7 +562,7 @@ fn provider_breakdowns_default_to_today() {
 }
 
 #[test]
-fn agent_rate_is_optional_and_full_tier_only() {
+fn provider_rate_is_optional_and_full_tier_only() {
     let text = |cells: &[StatCell], compact| {
         let mut lines = Vec::new();
         emit_stat_section(
@@ -2469,7 +2469,7 @@ fn agent_display_name_uses_descriptor_and_kind_fallback() {
 }
 
 #[test]
-fn agent_cells_rank_by_dollars_and_skip_empty_agents() {
+fn provider_cells_rank_by_dollars_and_skip_empty_providers() {
     let mut claude = tally(300, 3.0, 2);
     claude.year.cache_read = 50;
     let stats = Stats {
@@ -2681,7 +2681,7 @@ fn provider_breakdown_cap_keeps_earlier_display_rows_at_equal_significance() {
 }
 
 #[test]
-fn subagent_breakdown_folds_against_profile_spend_not_fleet() {
+fn profile_breakdown_folds_against_profile_spend_not_fleet() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
@@ -2718,7 +2718,7 @@ fn subagent_breakdown_folds_against_profile_spend_not_fleet() {
 }
 
 #[test]
-fn subagent_breakdown_names_the_sections_work_and_unpriced_profiles() {
+fn profile_breakdown_names_the_sections_work_and_unpriced_profiles() {
     let mut stats = dual_share_models();
     stats.subagents = BTreeMap::from([
         ("implementer".into(), tally(9_700, 99.8, 9)),
