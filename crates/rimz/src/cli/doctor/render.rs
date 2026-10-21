@@ -596,9 +596,7 @@ fn render_lsp_refusal(
     record: &rimz::diag::lsp::Record,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    let (reason, fix) = if let Ok(shortfall) =
-        serde_json::from_value::<rimz::lsp::admission::Shortfall>(record.details.clone())
-    {
+    let (reason, fix) = if let Some(shortfall) = super::refusal_shortfall(record) {
         let bytes = rimz::utils::size::decimal_bytes;
         let swap = if shortfall.swap_free_bytes > 0 {
             format!(" + {} free swap", bytes(shortfall.swap_free_bytes))
