@@ -238,11 +238,14 @@ fn failure_message(result: &ReplyResult, failure: &ReplyFailure) -> String {
             "{} ({}) is waiting on your input in its pane; answer it or pass --force",
             result.label, result.message_id
         ),
-        ReplyFailure::DeliveryFailed { status } => format!(
-            "message {} for {} ({})",
+        ReplyFailure::DeliveryFailed { status, reason } => format!(
+            "message {} for {} ({}){}",
             status.as_str(),
             result.label,
-            result.message_id
+            result.message_id,
+            reason
+                .as_ref()
+                .map_or(String::new(), |reason| format!(": {reason}")),
         ),
         ReplyFailure::AgentGone => {
             format!("{} stopped before its reply turn completed", result.label)

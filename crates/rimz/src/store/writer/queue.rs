@@ -624,6 +624,32 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn queue_resuming_message(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+    ) -> Result<bool> {
+        self.commit_queue(|queue| {
+            if self
+                .snapshot()?
+                .agents
+                .iter()
+                .any(|agent| agent.ended_at.is_none() && message.same_agent_card(agent))
+            {
+                return Ok(false);
+            }
+            queue.upsert(message.clone());
+            queue.stage_event(EventEnvelope::message_event(
+                message,
+                session_name,
+                MessageEventMethod::Queued,
+                None,
+            ));
+            Ok(true)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn queue_still_queued_notice(
         &self,
         stalled: &MessageId,

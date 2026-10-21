@@ -5,6 +5,71 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
 #[test]
+fn in_flight_recheck_excludes_the_follow_up_just_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        crate::StatePaths::under(id.clone(), dir.path()).unwrap(),
+        crate::RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let mut child = agent("child", AgentStatus::Idle);
+    child.ended_at = Some(Timestamp::now() - std::time::Duration::from_secs(1));
+    let agents = std::slice::from_ref(&child);
+    let mut message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &child,
+        "new follow up".into(),
+        DeliveryGate::Done,
+    );
+    message.register_by = Some(Timestamp::now() + std::time::Duration::from_secs(120));
+    store.queue_message(&message, "room").unwrap();
+    assert!(
+        !resume_in_flight(&store, &child, agents, Some(&message.message_id)).unwrap(),
+        "a newly queued follow-up is not evidence of an earlier resume"
+    );
+    let mut earlier = message.clone();
+    earlier.message_id = MessageId::new();
+    store.queue_message(&earlier, "room").unwrap();
+    assert!(resume_in_flight(&store, &child, agents, Some(&message.message_id)).unwrap());
+    store
+        .cancel_message(&earlier.message_id, "room", "canceled during preflight")
+        .unwrap();
+    assert!(!resume_in_flight(&store, &child, agents, Some(&message.message_id)).unwrap());
+}
+
+#[test]
+fn resume_is_not_in_flight_after_the_child_ends_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        crate::StatePaths::under(id.clone(), dir.path()).unwrap(),
+        crate::RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let mut stale = agent("child", AgentStatus::Idle);
+    let mut message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &stale,
+        "follow up".into(),
+        DeliveryGate::Done,
+    );
+    message.register_by = Some(message.enqueued_at + std::time::Duration::from_secs(120));
+    store.queue_message(&message, "room").unwrap();
+    stale.ended_at = Some(message.enqueued_at);
+    assert!(
+        resume_in_flight(&store, &stale, std::slice::from_ref(&stale), None).unwrap(),
+        "an enqueue/end tie still waits"
+    );
+    let mut ended_again = stale.clone();
+    ended_again.ended_at = Some(message.enqueued_at + jiff::SignedDuration::from_nanos(1));
+    assert!(
+        !resume_in_flight(&store, &stale, std::slice::from_ref(&ended_again), None).unwrap(),
+        "the row read under the zone lock decides, not the caller's earlier read"
+    );
+}
+
+#[test]
 fn fanout_matches_pin_panes_and_round_trip_recorded_agents() {
     let mut pane = owner_pane("unused", Some("coder"));
     pane.agent_id = None;
@@ -63,6 +128,7 @@ fn dispatch_park_causes_follow_schedule_conditions_readiness_and_fifo() {
         agent: Some(receiver.clone()),
     };
     let mut mode = PreparedMode {
+        resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
             body: MessageBody::Prompt,
@@ -213,6 +279,7 @@ fn resumed_provider_parks_until_registration_or_the_window() {
     receiver.resumed_at = Some(now());
     let pane = owner_pane("session", None);
     let mut mode = PreparedMode {
+        resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
             body: MessageBody::Prompt,
@@ -334,6 +401,7 @@ fn provisional_pane_skips_readiness_gate() {
     };
     assert!(target.bound(&snapshot).is_none());
     let mode = PreparedMode {
+        resuming: false,
         kind: DeliveryKind::Boundary,
         draft: MessageDraft {
             body: MessageBody::Prompt,

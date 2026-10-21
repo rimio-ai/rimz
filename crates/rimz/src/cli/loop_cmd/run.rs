@@ -590,6 +590,7 @@ fn execute_prepared_delivery(
         &workspace,
         &store,
         rimz::message::dispatch::DispatchRequest {
+            resuming_recipient: None,
             target: format!("@{}", prepared.target.session),
             text: prepared.prompt,
             target_scope: None,

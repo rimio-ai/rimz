@@ -4486,6 +4486,61 @@ fn parent_message_resumes_child_in_its_own_trusted_non_git_directory() {
 
 #[cfg(unix)]
 fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: Option<bool>) {
+    assert_parent_follow_up_case(empty_grant, foreign_repo, ResumeFollowUpCase::Ordinary);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResumeFollowUpCase {
+    Ordinary,
+    Late,
+    InFlight,
+    EndedDuringRetry,
+    SplitFailed,
+    WaitReply,
+    WaitExpired,
+    AfterSelf,
+}
+
+#[test]
+fn parent_message_survives_late_child_registration() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::Late);
+}
+
+#[test]
+fn parent_message_queues_second_follow_up_without_second_pane() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::InFlight);
+}
+
+#[test]
+fn parent_message_retry_opens_a_pane_when_the_child_ends_while_it_waits() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::EndedDuringRetry);
+}
+
+#[test]
+fn parent_message_split_failure_errors_the_queued_follow_up() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::SplitFailed);
+}
+
+#[test]
+fn parent_message_waits_for_reply_through_late_registration() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::WaitReply);
+}
+
+#[test]
+fn parent_message_wait_reports_registration_expiry() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::WaitExpired);
+}
+
+#[test]
+fn parent_message_reports_condition_error_without_a_recipient_miss() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::AfterSelf);
+}
+
+fn assert_parent_follow_up_case(
+    empty_grant: Option<bool>,
+    foreign_repo: Option<bool>,
+    case: ResumeFollowUpCase,
+) {
     use crate::common::{
         CommandTimeoutExt, exec_args, path_with_front, write_long_lived_agent_shim,
     };
@@ -4683,12 +4738,17 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
     run.subagent = true;
     run.status = rimz::store::run::RunStatus::Completed;
     run.joined_at = Some(jiff::Timestamp::now());
+    run.last_message = Some("previous answer".into());
     rimz::harness::run::create(store.paths(), &run).unwrap();
+    let previous_answer = rimz::harness::run::publish_response(store.paths(), &run)
+        .unwrap()
+        .unwrap();
     let target = channel.map_or_else(
         || format!("@{child_name}"),
         |channel| format!("@{child_name}#{channel}"),
     );
-    let mut sender = traced_rimz(&env, &trace)
+    let mut send_command = traced_rimz(&env, &trace);
+    send_command
         .args(["--mux", "zellij", "message", &target, "follow up"])
         .env("PATH", path_with_front(&shim))
         .env(
@@ -4701,9 +4761,78 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
         .env("ZELLIJ_PANE_ID", "1")
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let waiting = matches!(
+        case,
+        ResumeFollowUpCase::WaitReply | ResumeFollowUpCase::WaitExpired
+    );
+    if waiting {
+        send_command.arg("--wait=60s");
+    }
+    if case == ResumeFollowUpCase::WaitExpired {
+        send_command.env("RIMZ_MESSAGE_REGISTER_TIMEOUT_MS", "4000");
+    }
+    if case == ResumeFollowUpCase::SplitFailed {
+        send_command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+    }
+    if case == ResumeFollowUpCase::AfterSelf {
+        send_command.args(["--after", &target]);
+    }
+    let sender = send_command.spawn().unwrap();
+    if case == ResumeFollowUpCase::AfterSelf {
+        let output = sender.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            stderr.contains(&format!(
+                "--after `{target}` names the message recipient; use --on to gate on the recipient's turn"
+            )),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("cannot resume"), "{stderr}");
+        assert!(
+            !stderr.to_ascii_lowercase().contains("available agents"),
+            "{stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(store.list_pending_messages().unwrap().is_empty());
+        assert!(store.list_message_history().unwrap().is_empty());
+        let errors = env
+            .read_events()
+            .into_iter()
+            .filter(|event| event.method == "message.errored")
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "no unresolved-message event: {errors:?}");
+        let trace = std::fs::read_to_string(&trace).unwrap_or_default();
+        assert!(
+            !trace.contains("\tnew-tab\t") && !trace.contains("\tnew-pane\t"),
+            "{trace}"
+        );
+        return;
+    }
+    if case == ResumeFollowUpCase::SplitFailed {
+        let output = sender.wait_with_output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(store.list_pending_messages().unwrap().is_empty());
+        let history = store.list_message_history().unwrap();
+        assert_eq!(
+            history.len(),
+            1,
+            "split failure must settle its durable record: {output:?}"
+        );
+        assert_eq!(history[0].status, MessageStatus::Errored);
+        let errors = env
+            .read_events()
+            .into_iter()
+            .filter(|event| event.method == "message.errored")
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1, "no extra unresolved-message event");
+        assert_eq!(
+            errors[0].params_value()["message_id"],
+            history[0].message_id.as_str()
+        );
+        return;
+    }
     if empty_grant == Some(false) {
         let output = sender.wait_with_output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4714,7 +4843,138 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
             !trace.contains("\tnew-tab\t") && !trace.contains("\tnew-pane\t"),
             "{trace}"
         );
+        assert!(store.list_pending_messages().unwrap().is_empty());
         return;
+    }
+    let mut sender = Some(sender);
+    let early_output = if matches!(
+        case,
+        ResumeFollowUpCase::Late
+            | ResumeFollowUpCase::InFlight
+            | ResumeFollowUpCase::EndedDuringRetry
+    ) {
+        let output = sender.take().unwrap().wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "the bind wait must not reject a kept follow-up: {output:?}"
+        );
+        let records = store.list_pending_messages().unwrap();
+        assert_eq!(records.len(), 1);
+        let register_by = records[0]
+            .register_by
+            .expect("a resume follow-up carries its registration deadline");
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            receipt.contains("is resuming")
+                && receipt.contains("delivers when")
+                && receipt.contains("registers")
+                && receipt.contains("fails if"),
+            "{receipt}"
+        );
+        assert!(receipt.contains(&register_by.to_string()), "{receipt}");
+        if case != ResumeFollowUpCase::Late {
+            let before = std::fs::read_to_string(&trace).unwrap();
+            let mut retry = traced_rimz(&env, &trace);
+            retry
+                .args(["--mux", "zellij", "message", &target, "second follow up"])
+                .env("PATH", path_with_front(&shim))
+                .env(
+                    "SHELL",
+                    crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+                )
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "parent")
+                .env("ZELLIJ_PANE_ID", "1")
+                .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+            let ends_again = case == ResumeFollowUpCase::EndedDuringRetry;
+            if ends_again {
+                retry_after_child_ends_again(&env, &mut retry, &child_name, &cwd);
+            } else {
+                run_success(&mut retry, "queue second follow-up");
+            }
+            let after = std::fs::read_to_string(&trace).unwrap();
+            let opens = |log: &str| {
+                log.lines()
+                    .filter(|line| line.contains("\tnew-tab\t") || line.contains("\tnew-pane\t"))
+                    .count()
+            };
+            assert_eq!(opens(&before), 1);
+            if ends_again {
+                assert_eq!(
+                    opens(&after),
+                    2,
+                    "a follow-up queued before the child's latest end cannot suppress the retry's pane: {after}"
+                );
+                return;
+            }
+            assert_eq!(
+                opens(&after),
+                1,
+                "a pending resume cannot open another pane: {after}"
+            );
+            let records = store.list_pending_messages().unwrap();
+            assert_eq!(
+                records
+                    .iter()
+                    .map(|record| record.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["follow up", "second follow up"]
+            );
+            return;
+        }
+        Some(output)
+    } else {
+        None
+    };
+    if waiting {
+        let sink = rimz::diag::DiagSink::under(
+            store.paths().root.clone(),
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            None,
+        );
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if std::fs::read_to_string(sink.log_path().unwrap())
+                .unwrap_or_default()
+                .contains("subagent_pane_bind_timeout")
+            {
+                break;
+            }
+            assert!(
+                sender.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "--wait must survive the bind timeout: {:?}",
+                sender.take().unwrap().wait_with_output().unwrap()
+            );
+            assert!(
+                Instant::now() < deadline,
+                "bind waiter never reached its timeout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            store.list_pending_messages().unwrap().len(),
+            1,
+            "--wait must retain the follow-up through the bind timeout"
+        );
+        if case == ResumeFollowUpCase::WaitExpired {
+            let records = store.list_pending_messages().unwrap();
+            let deadline = records[0]
+                .register_by
+                .expect("a resume follow-up carries its registration deadline");
+            assert_eq!(deadline, records[0].enqueued_at + Duration::from_secs(4));
+            store
+                .reconcile_stale_messages(&workspace.session_name, deadline, 3)
+                .unwrap();
+            let output = sender.take().unwrap().wait_with_output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("did not register within"),
+                "{output:?}"
+            );
+            return;
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -4723,9 +4983,9 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
             break;
         }
         assert!(
-            sender.try_wait().unwrap().is_none(),
+            sender.as_mut().unwrap().try_wait().unwrap().is_none(),
             "sender exited before opening: {:?}",
-            sender.wait_with_output().unwrap()
+            sender.take().unwrap().wait_with_output().unwrap()
         );
         assert!(
             Instant::now() < deadline,
@@ -4795,31 +5055,24 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let output = sender.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = early_output
+        .or_else(|| (!waiting).then(|| sender.take().unwrap().wait_with_output().unwrap()));
+    if let Some(output) = &output {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("is resuming"));
+    }
     let records = store.list_messages().unwrap();
     let message = records
         .iter()
         .find(|record| record.text == "follow up")
         .unwrap();
     assert_eq!(message.status, MessageStatus::Queued);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("is resuming"));
-    let shown = run_success(
-        traced_rimz(&env, &trace)
-            .env("RIMZ_TEST_PANE_LIST", &panes)
-            .args(["message", "show", message.message_id.as_str()]),
-        "show resumed queue",
-    );
-    assert!(
-        String::from_utf8_lossy(&shown.stdout)
-            .contains("is resuming; delivers when its provider registers")
-    );
     let zellij = zellij_trace_shim();
-    // The sender returns once the wrapper binds the pane, which the wrapper writes before the provider PID.
+    // Provider PID publication follows the wrapper's resume stamp and pane binding.
     let deadline = Instant::now() + Duration::from_secs(10);
     let provider_pid = loop {
         let record = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
@@ -4832,9 +5085,22 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
         );
         std::thread::sleep(Duration::from_millis(10));
     };
+    let shown = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "show", message.message_id.as_str()]),
+        "show resumed queue",
+    );
+    assert!(
+        String::from_utf8_lossy(&shown.stdout)
+            .contains("is resuming; delivers when its provider registers"),
+        "{}",
+        String::from_utf8_lossy(&shown.stdout)
+    );
     let hook_env = [
         ("ZELLIJ_PANE_ID", "3"),
         ("RIMZ_AGENT_PID", provider_pid.as_str()),
+        ("RIMZ_RUN_ID", run.run_id.as_str()),
         ("RIMZ_MESSAGE_SETTLE_MS", "0"),
         ("RIMZ_TEST_PANE_LIST", panes.to_str().unwrap()),
         ("RIMZ_ZELLIJ_BIN", zellij.to_str().unwrap()),
@@ -4891,6 +5157,23 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
             .any(|record| record.message_id == message.message_id
                 && record.status == MessageStatus::Delivered)
     );
+    let reopened = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(reopened.follow_ups, 1);
+    assert_eq!(
+        std::fs::read_to_string(previous_answer).unwrap(),
+        "previous answer\n"
+    );
+    if waiting {
+        append_claude_assistant(&transcript, "follow-up answer");
+        let stopped = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"Stop", "session_id":"child", "transcript_path":transcript, "cwd":cwd}).to_string(), &hook_env);
+        assert!(stopped.status.success());
+        let output = sender.take().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "follow-up answer\n"
+        );
+    }
     wrapper.kill().unwrap();
     wrapper.wait().unwrap();
 }
@@ -11648,6 +11931,66 @@ fn stamp_worktree_path(env: &Env, payload: &mut serde_json::Value) {
     object.insert(
         "worktree_path".to_owned(),
         json!(env.home_root.join(branch).display().to_string()),
+    );
+}
+
+/// Holds the subagent zone lock until `retry` has read the ended child and opened
+/// the lock, then registers and ends the child again before letting it through.
+fn retry_after_child_ends_again(
+    env: &Env,
+    retry: &mut std::process::Command,
+    child_name: &str,
+    cwd: &Path,
+) {
+    use std::os::unix::fs::MetadataExt as _;
+    let zone_path = env.runtime_paths().lock_path("subagent-zone.lock");
+    let zone = rimz::disk::lock::WorkspaceLock::acquire(&zone_path).unwrap();
+    let zone_file = std::fs::metadata(&zone_path).unwrap();
+    let mut sender = retry
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let fds = PathBuf::from(format!("/proc/{}/fd", sender.id()));
+    let holds_zone = || {
+        std::fs::read_dir(&fds)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|fd| {
+                std::fs::metadata(fd.path()).is_ok_and(|file| {
+                    file.dev() == zone_file.dev() && file.ino() == zone_file.ino()
+                })
+            })
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !holds_zone() {
+        if sender.try_wait().unwrap().is_some() {
+            panic!(
+                "retry exited before the zone lock: {:?}",
+                sender.wait_with_output()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "retry never reached the zone lock"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for (event, signal) in [
+        ("SessionStart", LifecycleSignal::Registered),
+        ("SessionEnd", LifecycleSignal::Ended),
+    ] {
+        append_lifecycle(env, "claude", event, "child", signal, |o| {
+            o.agent_name = Some(child_name.to_owned());
+            o.worktree_path = Some(cwd.display().to_string());
+        });
+    }
+    drop(zone);
+    let output = sender.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "retry after the child ended again: {output:?}"
     );
 }
 

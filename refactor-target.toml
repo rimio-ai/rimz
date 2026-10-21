@@ -1062,7 +1062,13 @@ upward-dependencies = [
 # TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
-surface-budget = 84
+# resume_in_flight shares durable resume deduplication with the parent-only doorway (+1).
+surface-budget = 85
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::resume_in_flight"
+reason = "The parent-only resume doorway uses the message owner's queued registration deadlines to avoid opening a second pane."
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -1643,13 +1649,19 @@ path = "crates/rimz/src/store"
 # Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
 # SidebarRow::attention_pane shares waiting-child jump targeting with the renderer (+1).
 # UnitStatus and its five methods, unit_statuses, pipeline_owner and project_stuck_stages (+9).
+# Store::queue_resuming_message rechecks the live card atomically with resume enqueue (+1).
 # MessageRecord::awaiting_registration shares the card-aware registration wait across delivery, expiry and resume dispatch (+1).
-surface-budget = 491
+surface-budget = 492
 
 [[verdict]]
 kind = "item"
 key = "store::message::MessageRecord::awaiting_registration"
 reason = "Delivery, registration expiry and in-flight resume detection must share the same enqueue/end ordering rule."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::queue::Store::queue_resuming_message"
+reason = "Dispatch's resume enqueue checks for a newly live card under the same workspace lock as its durable queue write."
 
 [[verdict]]
 kind = "item"

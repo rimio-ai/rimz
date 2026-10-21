@@ -18,7 +18,7 @@ use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, fresh_boundary_blocker, queue_head,
+    WhenCondition, env_ms, fresh_boundary_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::store::writer::BoundaryClaim;
@@ -26,6 +26,9 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
 use super::{deliver, send};
+
+const RESUME_REGISTER_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+const RESUME_REGISTER_LIMIT_ENV: &str = "RIMZ_MESSAGE_REGISTER_TIMEOUT_MS";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhenRequest {
@@ -89,6 +92,7 @@ pub struct DispatchRequest {
     /// `[harness] smart_compact` machine default in [`dispatch`].
     pub auto_compact: Option<AutoCompact>,
     pub mode: DispatchMode,
+    pub resuming_recipient: Option<AgentState>,
 }
 
 pub struct DispatchResult {
@@ -124,6 +128,9 @@ pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
     ProviderStarting,
+    Resuming {
+        register_by: Timestamp,
+    },
     Scheduled(Timestamp),
     After(String),
     When {
@@ -185,6 +192,8 @@ pub struct FanoutMatch {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchErr {
+    #[error("the resuming recipient became live before enqueue")]
+    RecipientBecameLive,
     #[error(transparent)]
     Recipient(#[from] TargetErr),
     #[error(
@@ -250,7 +259,8 @@ pub fn dispatch(
         .or(crate::config::MachineConfig::load_lenient()
             .harness
             .smart_compact);
-    let boundary = request.mode.kind() == DeliveryKind::Boundary;
+    let resuming = request.resuming_recipient.is_some();
+    let boundary = request.mode.kind() == DeliveryKind::Boundary || resuming;
     let pending = if boundary {
         store.list_messages()?
     } else {
@@ -264,28 +274,34 @@ pub fn dispatch(
         needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
 
     let cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
-    let rollup_only = cached_snapshot.as_ref().is_some_and(|snapshot| {
-        targets_all_park_without_live(
-            snapshot,
-            &request.target,
-            request.target_scope.as_deref(),
-            &request.current_channel,
-            &pending,
-            request.mode.gate(),
-            request.force,
-        )
-    });
+    let rollup_only = resuming
+        || cached_snapshot.as_ref().is_some_and(|snapshot| {
+            targets_all_park_without_live(
+                snapshot,
+                &request.target,
+                request.target_scope.as_deref(),
+                &request.current_channel,
+                &pending,
+                request.mode.gate(),
+                request.force,
+            )
+        });
     let mut snapshot = if rollup_only {
-        // Rollup-only is computed solely from the cached snapshot above.
+        // Both rollup-only paths require the boundary snapshot above.
         cached_snapshot.expect("rollup-only proof requires cached snapshot")
     } else {
         crate::sidebar::produce::resolution_snapshot(workspace, store, request.mux)?
     };
-    if !rollup_only && let Some(context) = agent_context {
+    if (!rollup_only || resuming)
+        && let Some(context) = agent_context
+    {
         snapshot = snapshot.with_agent_context(context);
     }
-    // Ended children linger on their parent's card for presentation, not delivery.
+    // Ordinary delivery excludes ended rows; only the resume doorway names one explicitly.
     std::sync::Arc::make_mut(&mut snapshot.agents).retain(|agent| agent.ended_at.is_none());
+    if let Some(child) = request.resuming_recipient.as_ref() {
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(child.clone());
+    }
 
     let durable_agents = durable_target_agents(store)?;
     let resolution = ResolutionView {
@@ -295,7 +311,16 @@ pub fn dispatch(
         channel: &request.current_channel,
         rollup_only,
     };
-    let (mut targets, recorded) = resolution.resolve(&request.target)?;
+    let (mut targets, recorded) = match request.resuming_recipient.as_ref() {
+        Some(child) => (
+            vec![ResolvedTarget {
+                pane: None,
+                agent: Some(child.clone()),
+            }],
+            true,
+        ),
+        None => resolution.resolve(&request.target)?,
+    };
     exclude_broadcast_caller(
         &request.target,
         &mut targets,
@@ -505,6 +530,7 @@ fn agent_needs_live_resolution(
 struct PreparedMode {
     kind: DeliveryKind,
     draft: MessageDraft,
+    resuming: bool,
 }
 
 struct ResolutionView<'a> {
@@ -641,7 +667,12 @@ fn prepare_mode(
     recipients: &[ResolvedTarget],
     pending: &[MessageRecord],
 ) -> Result<PreparedMode> {
-    let kind = request.mode.kind();
+    let resuming = request.resuming_recipient.is_some();
+    let kind = if resuming {
+        DeliveryKind::Boundary
+    } else {
+        request.mode.kind()
+    };
     if kind == DeliveryKind::Interrupt {
         for target in recipients {
             let label = target.label(resolution.snapshot);
@@ -679,6 +710,7 @@ fn prepare_mode(
     };
     Ok(PreparedMode {
         kind,
+        resuming,
         draft: MessageDraft {
             body: MessageBody::Prompt,
             enter: request.enter,
@@ -815,7 +847,7 @@ impl DispatchState<'_> {
                 });
             }
         };
-        let message = mode
+        let mut message = mode
             .draft
             .record(
                 self.workspace.workspace_id.clone(),
@@ -826,6 +858,19 @@ impl DispatchState<'_> {
             )
             .with_reply_wait(self.reply_wait)
             .with_in_reply_to(self.in_reply_to.to_vec());
+        if mode.resuming {
+            message.register_by = Some(
+                message.enqueued_at
+                    + env_ms(RESUME_REGISTER_LIMIT_ENV).unwrap_or(RESUME_REGISTER_LIMIT),
+            );
+            if !self
+                .store
+                .queue_resuming_message(&message, &self.workspace.session_name)?
+            {
+                return Err(DispatchErr::RecipientBecameLive);
+            }
+            return Ok((message, None));
+        }
         if pane.is_some() {
             #[cfg(feature = "testkit")]
             crate::testkit::rendezvous("RIMZ_TEST_FRESH_SEND_BEFORE_CLAIM");
@@ -909,6 +954,9 @@ fn dispatch_decision(
     mode: &PreparedMode,
     now: Timestamp,
 ) -> DispatchDecision {
+    if mode.resuming {
+        return DispatchDecision::Parked { reason: None };
+    }
     if mode.kind != DeliveryKind::Boundary {
         return if target.pane.is_some() {
             DispatchDecision::Live
@@ -1068,15 +1116,35 @@ fn dispatch_parked(
     handle: String,
     reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
-    let message_id = state
-        .enqueue(target, None, text, mode, &handle)?
-        .0
-        .message_id;
+    let (message, _) = state.enqueue(target, None, text, mode, &handle)?;
+    let reason = message
+        .register_by
+        .map(|register_by| ParkReason::Resuming { register_by })
+        .or(reason);
     Ok(DispatchOutcome::Queued {
         label: handle,
-        message_id,
+        message_id: message.message_id,
         reason,
     })
+}
+
+/// Whether an unexpired follow-up to `child`'s card still waits for the resume
+/// that queued it. `agents` must be read after the subagent zone lock, so an end
+/// that landed while the caller waited for that lock releases the wait.
+pub fn resume_in_flight(
+    store: &Store,
+    child: &AgentState,
+    agents: &[AgentState],
+    exclude_message: Option<&MessageId>,
+) -> crate::store::Result<bool> {
+    let pending = store.list_pending_messages()?;
+    let now = Timestamp::now();
+    Ok(pending.iter().any(|message| {
+        exclude_message != Some(&message.message_id)
+            && message.same_agent_card(child)
+            && message.awaiting_registration(agents)
+            && message.register_by.is_some_and(|deadline| now < deadline)
+    }))
 }
 
 fn preflight_queue_hooks(

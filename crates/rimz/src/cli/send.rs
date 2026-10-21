@@ -357,6 +357,9 @@ pub(crate) fn render_dispatch_outcome(
             Some(ParkReason::ProviderStarting) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
             ),
+            Some(ParkReason::Resuming { register_by }) => format!(
+                "queued for {label} ({message_id}) — {label} is resuming; delivers when {label} registers; fails if {label} has not registered by {register_by}"
+            ),
         }),
         DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
             "compacting {label}; queued {message_id} (delivers when compaction completes)"
@@ -790,6 +793,28 @@ mod tests {
                 "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
             )
         );
+    }
+
+    #[test]
+    fn resumed_child_receipt_names_registration_deadline_in_every_send_mode() {
+        let register_by = "2026-01-01T00:02:00Z".parse().unwrap();
+        let outcome = DispatchOutcome::Queued {
+            label: "@otter".to_owned(),
+            message_id: "msg_0123456789abcdef".parse().unwrap(),
+            reason: Some(ParkReason::Resuming { register_by }),
+        };
+        for kind in [
+            DeliveryKind::Boundary,
+            DeliveryKind::Steer,
+            DeliveryKind::Interrupt,
+        ] {
+            assert_eq!(
+                render_dispatch_outcome(kind, &outcome).as_deref(),
+                Some(
+                    "queued for @otter (msg_0123456789abcdef) — @otter is resuming; delivers when @otter registers; fails if @otter has not registered by 2026-01-01T00:02:00Z"
+                )
+            );
+        }
     }
 
     #[test]

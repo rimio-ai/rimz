@@ -4,6 +4,9 @@ use super::*;
 use crate::cli::supervised;
 use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
+use rimz::message::dispatch::{
+    self, DispatchErr, DispatchOutcome, DispatchRequest, DispatchResult,
+};
 use rimz::store::run::RunRecord;
 use std::path::Path;
 
@@ -20,24 +23,44 @@ fn ended_child<'a>(
         .filter(|child| child.ended_at.is_some())
 }
 
+pub(in crate::cli) enum ResumeChildOutcome {
+    NotApplicable,
+    AlreadyBound,
+    Dispatched(DispatchResult),
+    DispatchFailed(DispatchErr),
+    DeliveryFailed(anyhow::Error),
+}
+
 pub(in crate::cli) fn resume_child(
     ctx: &Ctx,
     target: &str,
     scope: Option<&str>,
     channel: &rimz::address::AddressContext,
-) -> Result<bool> {
+    request: DispatchRequest,
+) -> Result<ResumeChildOutcome> {
     let audit = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&audit.agents) else {
-        return Ok(false);
+        return Ok(ResumeChildOutcome::NotApplicable);
     };
     let Some(child) = ended_child(&audit.agents, caller, target, scope, channel) else {
-        return Ok(false);
+        return Ok(ResumeChildOutcome::NotApplicable);
     };
-    resume_resolved(ctx, child, caller).with_context(|| format!("cannot resume {target}"))?;
-    Ok(true)
+    let resume_context = || format!("cannot resume {target}");
+    let outcome = resume_resolved(ctx, child, caller, request).with_context(resume_context)?;
+    Ok(match outcome {
+        ResumeChildOutcome::DeliveryFailed(error) => {
+            ResumeChildOutcome::DeliveryFailed(error.context(resume_context()))
+        }
+        outcome => outcome,
+    })
 }
 
-fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result<()> {
+fn resume_resolved(
+    ctx: &Ctx,
+    child: &AgentState,
+    caller: &AgentState,
+    mut dispatch_request: DispatchRequest,
+) -> Result<ResumeChildOutcome> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let cwd = child
@@ -177,14 +200,6 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         parent_pane.pane_id.mux(),
         rimz::room::RoomSizing::OrdinaryTab,
     )?;
-    let pane = rimz::mux::PaneCmd {
-        argv: rimz::harness::launch::exec_argv(
-            &rimz::proc::rimz_exe(),
-            store.runtime_paths(),
-            &request,
-        )?,
-        name: child.name.clone(),
-    };
     let env = rimz::room::pane_identity_env(
         &parent_workspace,
         child.lane_path().map(Path::new).unwrap_or(&cwd),
@@ -193,49 +208,81 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     );
     let _guard = supervised::pane::lock_subagent_zone(store)?;
     let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id) {
-        return Ok(());
+    if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
+        || current
+            .agents
+            .iter()
+            .any(|agent| agent.ended_at.is_none() && child.card_ref().matches(agent.card_ref()))
+    {
+        return Ok(ResumeChildOutcome::AlreadyBound);
     }
-    let sidebar = room.sidebar_options(&cwd);
-    let open_started = std::time::Instant::now();
-    match supervised::pane::split_into_subagent_zone(
-        room.backend(),
-        store,
-        &parent_workspace,
-        &cwd,
-        env,
-        sidebar,
-        &pane,
-        child.name.as_deref().unwrap_or(child.agent_id.as_str()),
-        child.channel.as_deref(),
-        Some(parent_pane.pane_id.clone()),
-        &run.run_id,
-    ) {
-        supervised::pane::SubagentZoneOpen::Opened => {}
-        supervised::pane::SubagentZoneOpen::Failed(err) => return Err(err.into()),
+    let in_flight = dispatch::resume_in_flight(store, child, &current.agents, None)?;
+    dispatch_request.resuming_recipient = Some(child.clone());
+    let result = match dispatch::dispatch(&parent_workspace, store, dispatch_request) {
+        Ok(result) => result,
+        Err(DispatchErr::RecipientBecameLive) => return Ok(ResumeChildOutcome::AlreadyBound),
+        Err(error) => return Ok(ResumeChildOutcome::DispatchFailed(error)),
+    };
+    let [DispatchOutcome::Queued { message_id, .. }] = result.outcomes.as_slice() else {
+        unreachable!("one resuming recipient always parks one record");
+    };
+    let opened = (|| -> Result<()> {
+        if in_flight {
+            let queued = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+            if dispatch::resume_in_flight(store, child, &queued.agents, Some(message_id))? {
+                return Ok(());
+            }
+        }
+        let pane = rimz::mux::PaneCmd {
+            argv: rimz::harness::launch::exec_argv(
+                &rimz::proc::rimz_exe(),
+                store.runtime_paths(),
+                &request,
+            )?,
+            name: child.name.clone(),
+        };
+        let sidebar = room.sidebar_options(&cwd);
+        let open_started = std::time::Instant::now();
+        match supervised::pane::split_into_subagent_zone(
+            room.backend(),
+            store,
+            &parent_workspace,
+            &cwd,
+            env,
+            sidebar,
+            &pane,
+            child.name.as_deref().unwrap_or(child.agent_id.as_str()),
+            child.channel.as_deref(),
+            Some(parent_pane.pane_id.clone()),
+            &run.run_id,
+        ) {
+            supervised::pane::SubagentZoneOpen::Opened => {}
+            supervised::pane::SubagentZoneOpen::Failed(error) => return Err(error.into()),
+        }
+        let open = open_started.elapsed();
+        supervised::pane::wait_for_subagent_pane_bind(
+            store,
+            &parent_workspace,
+            supervised::pane::PaneBindWait {
+                run_id: &run.run_id,
+                launch_id,
+                kind: &child.kind,
+                caller: rimz::diag::record::SubagentPaneBindCaller::Resume,
+                open,
+            },
+        );
+        Ok(())
+    })();
+    if let Err(error) = opened {
+        store.record_unheld_delivery_miss(
+            message_id,
+            rimz::store::writer::DeliveryFailureDisposition::Terminal,
+            &format!("{error:#}"),
+            &parent_workspace.session_name,
+        )?;
+        return Ok(ResumeChildOutcome::DeliveryFailed(error));
     }
-    let open = open_started.elapsed();
-    if !supervised::pane::wait_for_subagent_pane_bind(
-        store,
-        &parent_workspace,
-        supervised::pane::PaneBindWait {
-            run_id: &run.run_id,
-            launch_id,
-            kind: &child.kind,
-            caller: rimz::diag::record::SubagentPaneBindCaller::Resume,
-            open,
-        },
-    ) {
-        return Err(resume_bind_timeout(child));
-    }
-    Ok(())
-}
-
-fn resume_bind_timeout(child: &AgentState) -> anyhow::Error {
-    anyhow::anyhow!(
-        "resumed @{} but its pane did not bind in time; check its pane, or launch a new child",
-        child.name.as_deref().unwrap_or(child.agent_id.as_str())
-    )
+    Ok(ResumeChildOutcome::Dispatched(result))
 }
 
 fn resume_request(
