@@ -3,6 +3,26 @@
 use crate::lsp::registry::{Lease, State, StopReason};
 use serde_json::Value;
 
+pub(super) fn recycle_ceiling(ready_footprint: u64, factor: u64, minimum: u64) -> u64 {
+    ready_footprint.saturating_mul(factor).max(minimum)
+}
+
+pub(super) fn recycle_due(
+    footprint: u64,
+    ready_footprint: Option<u64>,
+    factor: u64,
+    minimum: u64,
+    in_flight: usize,
+    forwarding: usize,
+    outstanding: bool,
+) -> bool {
+    factor != 0
+        && in_flight == 0
+        && forwarding == 0
+        && !outstanding
+        && ready_footprint.is_some_and(|ready| footprint > recycle_ceiling(ready, factor, minimum))
+}
+
 pub(super) fn idle_expired(
     now: u64,
     ready_at: Option<u64>,
@@ -106,6 +126,21 @@ impl Readiness {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recycling_requires_growth_past_the_ceiling_and_no_requests() {
+        assert!(recycle_due(201, Some(100), 2, 0, 0, 0, false));
+        assert!(!recycle_due(200, Some(100), 2, 0, 0, 0, false));
+        assert!(!recycle_due(201, Some(100), 2, 300, 0, 0, false));
+        assert!(recycle_due(301, Some(100), 2, 300, 0, 0, false));
+        assert!(!recycle_due(301, Some(100), 0, 0, 0, 0, false));
+        assert!(!recycle_due(301, None, 2, 0, 0, 0, false));
+        assert!(!recycle_due(201, Some(100), 2, 0, 1, 0, false));
+        assert!(!recycle_due(201, Some(100), 2, 0, 0, 0, true));
+        assert!(recycle_due(101, Some(100), 1, 0, 0, 0, false));
+        assert!(!recycle_due(u64::MAX, Some(u64::MAX), 2, 0, 0, 0, false));
+        assert!(!recycle_due(201, Some(100), 2, 0, 0, 1, false));
+    }
 
     #[test]
     fn readiness_deadline_is_the_next_time_only_transition() {

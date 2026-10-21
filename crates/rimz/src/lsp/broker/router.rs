@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 
 pub(super) enum RouterEvent {
@@ -53,6 +54,7 @@ pub(super) fn run(shared: Arc<Shared>, events: mpsc::Receiver<RouterEvent>) {
         connections: BTreeMap::new(),
         transport: None,
         pending: Vec::new(),
+        held: Vec::new(),
         epoch: 0,
         next_client: 0,
     };
@@ -87,8 +89,17 @@ struct Router {
     connections: BTreeMap<ClientId, Connection>,
     transport: Option<Arc<Transport>>,
     pending: Vec<(ClientId, Value, u64)>,
+    held: Vec<(ClientId, Value)>,
     epoch: u64,
     next_client: u64,
+}
+
+struct EditorForward<'a>(&'a AtomicUsize);
+
+impl Drop for EditorForward<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Router {
@@ -108,19 +119,7 @@ impl Router {
                 Event::Detach(id)
             }
             RouterEvent::Client(Event::ClientFrame(id, frame)) => {
-                if !self.connections.contains_key(&id) {
-                    return Ok(());
-                }
-                let actions = self.clients.event(Event::ClientFrame(id, frame));
-                if actions.iter().any(|action| {
-                    matches!(action, Action::RequestStart)
-                        || matches!(action, Action::ToServer(_, frame) if frame.get("id").is_some())
-                }) {
-                    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-                    model.entry.request_count = model.entry.request_count.saturating_add(1);
-                    model.entry.last_request_at_ms = Some(crate::utils::time::unix_now_ms());
-                }
-                return self.actions(shared, actions);
+                return self.client_frame(shared, id, frame);
             }
             RouterEvent::Client(event) => event,
             RouterEvent::Message(epoch, frame) => {
@@ -173,12 +172,53 @@ impl Router {
                 self.epoch += 1;
                 self.transport = None;
                 self.pending.clear();
-                Event::LifetimeEnded(reason)
+                let actions = self.clients.event(Event::LifetimeEnded(reason));
+                self.actions(shared, actions)?;
+                for (id, frame) in std::mem::take(&mut self.held) {
+                    self.client_frame(shared, id, frame)?;
+                }
+                return Ok(());
             }
             RouterEvent::Refused(shortfall) => Event::Refused(shortfall),
             RouterEvent::Close(_) => return Ok(()),
         };
         let actions = self.clients.event(event);
+        self.actions(shared, actions)
+    }
+
+    fn client_frame(&mut self, shared: &Shared, id: ClientId, frame: Value) -> Result<()> {
+        if !self.connections.contains_key(&id) {
+            return Ok(());
+        }
+        let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+        if !matches!(model.entry.state, State::Stopped { .. })
+            && self.transport.as_ref().is_some_and(|transport| {
+                !model.entry.state.is_running()
+                    || model
+                        .transport
+                        .as_ref()
+                        .is_none_or(|current| !Arc::ptr_eq(current, transport))
+            })
+        {
+            self.held.push((id, frame));
+            return Ok(());
+        }
+        let actions = self.clients.event(Event::ClientFrame(id, frame));
+        if actions.iter().any(|action| {
+            matches!(action, Action::RequestStart)
+                || matches!(action, Action::ToServer(_, frame) if frame.get("id").is_some())
+        }) {
+            model.entry.request_count = model.entry.request_count.saturating_add(1);
+            model.entry.last_request_at_ms = Some(crate::utils::time::unix_now_ms());
+        }
+        let _forward = actions
+            .iter()
+            .any(|action| matches!(action, Action::ToServer(..)))
+            .then(|| {
+                shared.editor_forwarding.fetch_add(1, Ordering::SeqCst);
+                EditorForward(&shared.editor_forwarding)
+            });
+        drop(model);
         self.actions(shared, actions)
     }
 
@@ -252,6 +292,7 @@ impl Router {
     }
 
     fn detach(&mut self, shared: &Shared, id: ClientId) {
+        self.held.retain(|(client, _)| *client != id);
         if let Some(connection) = self.connections.remove(&id) {
             let _ = connection.stream.shutdown(Shutdown::Both);
             if !self
@@ -374,14 +415,13 @@ impl Router {
 mod tests {
     use super::*;
     use crate::lsp::broker::{Lifecycle, Model, Readiness};
-    use std::io::BufReader;
+    use std::io::{BufReader, Read};
     use std::sync::{Condvar, Mutex};
 
-    #[test]
-    fn close_sends_every_editor_the_stop_reason_before_closing() {
+    fn shared(router: mpsc::Sender<RouterEvent>) -> Arc<Shared> {
         let entry = serde_json::from_value(serde_json::json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "ready", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
-        let (router, events) = mpsc::channel();
-        let shared = Arc::new(Shared {
+        Arc::new(Shared {
+            policy: Default::default(),
             settings: Arc::new(Mutex::new(crate::lsp::broker::Settings {
                 kind: crate::config::LspServerKind::Generic,
                 options: Value::Null,
@@ -399,16 +439,150 @@ mod tests {
                 stop_epoch: 0,
                 refusal: None,
                 lifetime_peak_kb: 0,
+                ready_footprint_kb: None,
                 dormant_ms: None,
                 watch_due: None,
             }),
             changed: Condvar::new(),
             started: std::time::Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
+            editor_forwarding: AtomicUsize::new(0),
             requests: Default::default(),
             #[cfg(feature = "testkit")]
             ticks: Mutex::new(None),
-        });
+        })
+    }
+
+    #[test]
+    fn stopped_lifetimes_hold_editor_frames_until_ended() {
+        for reason in [StopReason::Recycled, StopReason::Idle] {
+            for restarting in [false, true] {
+                for detached in [false, true] {
+                    let shared = shared(mpsc::channel().0);
+                    let (mut server, wire) = UnixStream::pair().unwrap();
+                    server.set_nonblocking(true).unwrap();
+                    let transport = Transport::start(
+                        wire.try_clone().unwrap(),
+                        wire,
+                        shared.settings.clone(),
+                        Value::Null,
+                        mpsc::channel().0,
+                    );
+                    shared.model.lock().unwrap().transport = Some(transport.clone());
+                    let mut router = Router {
+                        clients: Clients::new("rust".into()),
+                        connections: BTreeMap::new(),
+                        transport: None,
+                        pending: Vec::new(),
+                        held: Vec::new(),
+                        epoch: 0,
+                        next_client: 0,
+                    };
+                    let id = ClientId(1);
+                    let (_editor, stream) = UnixStream::pair().unwrap();
+                    let (outbound, replies) = mpsc::sync_channel(1024);
+                    router.connections.insert(
+                        id,
+                        Connection {
+                            stream,
+                            outbound,
+                            writer: std::thread::spawn(|| {}),
+                            pid: 1,
+                        },
+                    );
+                    router.clients.event(Event::Attach {
+                        id,
+                        pid: 1,
+                        name: None,
+                        since_ms: 0,
+                    });
+                    router.clients.event(Event::ClientFrame(
+                        id,
+                        serde_json::json!({"method": "initialized"}),
+                    ));
+                    router
+                        .event(
+                            &shared,
+                            RouterEvent::Started(
+                                transport.clone(),
+                                serde_json::json!({"capabilities": {}}),
+                                mpsc::channel().0,
+                                None,
+                            ),
+                        )
+                        .unwrap();
+                    shared.stop(reason);
+                    router.event(&shared, RouterEvent::Client(Event::ClientFrame(id, serde_json::json!({"method": "textDocument/didOpen", "params": {"textDocument": {"uri": "file:///u", "languageId": "rust", "version": 1, "text": "old"}}})))).unwrap();
+                    if restarting {
+                        let mut model = shared.model.lock().unwrap();
+                        model.entry.state = State::Starting;
+                        model.transport = None;
+                    }
+                    router.event(&shared, RouterEvent::Client(Event::ClientFrame(id, serde_json::json!({"id": 7, "method": "textDocument/hover", "params": {"textDocument": {"uri": "file:///u"}}})))).unwrap();
+                    router.event(&shared, RouterEvent::Client(Event::ClientFrame(id, serde_json::json!({"method": "textDocument/didChange", "params": {"textDocument": {"uri": "file:///u", "version": 2}, "contentChanges": [{"text": "new"}]}})))).unwrap();
+                    assert_eq!(
+                        server.read(&mut [0]).unwrap_err().kind(),
+                        std::io::ErrorKind::WouldBlock,
+                        "stopped transport must receive no editor frames"
+                    );
+                    assert!(replies.try_recv().is_err(), "held requests must not fail");
+                    assert!(
+                        router.clients.attached()[0].open.is_empty(),
+                        "frames must wait until Clients is inactive"
+                    );
+                    if detached {
+                        router
+                            .event(&shared, RouterEvent::Client(Event::Detach(id)))
+                            .unwrap();
+                    }
+                    router.event(&shared, RouterEvent::Ended(reason)).unwrap();
+                    assert_eq!(
+                        shared.model.lock().unwrap().start_requested,
+                        !restarting && !detached
+                    );
+                    assert_eq!(router.clients.attached().len(), usize::from(!detached));
+                    for frame in replies.try_iter() {
+                        assert!(frame.get("error").is_none(), "{frame}");
+                        assert_ne!(frame["method"], "window/showMessage", "{frame}");
+                    }
+                    shared.model.lock().unwrap().transport = Some(transport.clone());
+                    router
+                        .event(
+                            &shared,
+                            RouterEvent::Started(
+                                transport,
+                                serde_json::json!({"capabilities": {}}),
+                                mpsc::channel().0,
+                                None,
+                            ),
+                        )
+                        .unwrap();
+                    if detached {
+                        assert_eq!(
+                            server.read(&mut [0]).unwrap_err().kind(),
+                            std::io::ErrorKind::WouldBlock
+                        );
+                    } else {
+                        server.set_nonblocking(false).unwrap();
+                        server
+                            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                            .unwrap();
+                        let mut server = BufReader::new(server);
+                        let open = protocol::read_frame(&mut server).unwrap();
+                        let request = protocol::read_frame(&mut server).unwrap();
+                        assert_eq!(open["method"], "textDocument/didOpen");
+                        assert_eq!(open["params"]["textDocument"]["text"], "new");
+                        assert_eq!(request["method"], "textDocument/hover");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn close_sends_every_editor_the_stop_reason_before_closing() {
+        let (router, events) = mpsc::channel();
+        let shared = shared(router.clone());
         let running = std::thread::spawn({
             let shared = shared.clone();
             move || run(shared, events)

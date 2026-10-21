@@ -10,6 +10,8 @@ pub fn decimal_bytes(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
+const UNITS: &str = "use B/KB/KiB/MB/MiB/GB/GiB";
+
 pub fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -18,7 +20,7 @@ pub fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
     let (digits, suffix) = split_suffix(trimmed);
     let n: u64 = digits
         .parse()
-        .map_err(|err| format!("size `{raw}` is not an integer: {err}"))?;
+        .map_err(|err| format!("size `{raw}` is not an integer: {err}; {UNITS}"))?;
     let factor: u64 = match suffix {
         "" | "B" => 1,
         "K" | "KB" => 1_000,
@@ -28,9 +30,7 @@ pub fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
         "G" | "GB" => 1_000_000_000,
         "GiB" => 1_024 * 1_024 * 1_024,
         other => {
-            return Err(format!(
-                "unknown size unit `{other}`; use B/KB/KiB/MB/MiB/GB/GiB"
-            ));
+            return Err(format!("unknown size unit `{other}`; {UNITS}"));
         }
     };
     n.checked_mul(factor)

@@ -514,6 +514,8 @@ fn project_lsp_policy_is_machine_only() {
         "reserve-percent = 20",
         "reserve-min = '2G'",
         "idle-timeout = '1m'",
+        "recycle-factor = 1",
+        "recycle-min = '0'",
     ] {
         let value = toml::from_str(&format!("[lsp]\n{field}")).unwrap();
         let error = repo_config_from_value(&value)

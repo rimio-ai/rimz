@@ -74,6 +74,9 @@ pub enum StopReason {
     #[serde(rename = "idle")]
     #[error("idle")]
     Idle,
+    #[serde(rename = "recycled")]
+    #[error("recycled")]
+    Recycled,
     #[serde(rename = "evicted")]
     #[error("evicted")]
     Evicted,
@@ -509,6 +512,7 @@ mod tests {
             StopReason::MemoryPressure,
             StopReason::Crashed,
             StopReason::StoppedByHand,
+            StopReason::Recycled,
         ] {
             assert!(!reason.is_terminal(), "{reason} permits restart");
         }
@@ -516,9 +520,10 @@ mod tests {
 
     #[test]
     fn stop_reasons_preserve_wire_strings() {
-        for text in ["idle", "evicted", "team done"] {
+        for text in ["idle", "evicted", "team done", "recycled"] {
             let reason = serde_json::from_value::<StopReason>(serde_json::json!(text));
             assert!(reason.is_ok(), "{text} must be a stop reason");
+            assert_eq!(reason.as_ref().unwrap().to_string(), text);
             assert_eq!(serde_json::to_value(reason.unwrap()).unwrap(), text);
         }
         for (reason, text) in [

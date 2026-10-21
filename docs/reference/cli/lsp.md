@@ -153,7 +153,7 @@ rimz lsp stop --all
 
 `list` covers the current room: entries whose recorded repository is the room's repository, or the repository of the current checkout. The room is the pane's pinned room, else the one resolved from cwd, and the global `--root` overrides both. Every worktree of the room's repository counts. `--all` covers the whole machine, including entries registered without a repository. Text columns are STATE, CHECKOUT, SERVER, RSS, SWAP, TOTAL, PEAK, REQUESTS, LAST, RESTARTS, and LEASES; RSS through LEASES are right-aligned. CHECKOUT uses `~/` for paths under your home. Running servers sort first, then servers needing attention, then the rest; ties sort by checkout and server name. Dead entries are swept before listing. An entry whose broker died while a lease holder lives is kept on disk but not listed; the next query in its checkout brings it back. An entry this build cannot read, such as one a newer RimZ wrote, is not listed.
 
-STATE pairs a glyph with a word, preserved without color: `✓ ready`, `▸ starting`, `▸ indexing`, `· not started`, `· dormant: idle`, `✗ dormant: crashed`, `· dormant: memory pressure`, or `· stopped: released`. A never-started server shows `not started`; other dormant entries show `dormant: <reason>`, and terminal shutdown shows `stopped: <reason>`.
+STATE pairs a glyph with a word, preserved without color: `✓ ready`, `▸ starting`, `▸ indexing`, `· not started`, `· dormant: idle`, `· dormant: recycled`, `✗ dormant: crashed`, `· dormant: memory pressure`, or `· stopped: released`. A never-started server shows `not started`; other dormant entries show `dormant: <reason>`, and terminal shutdown shows `stopped: <reason>`.
 
 RSS is current resident process-tree memory; SWAP is the tree's swapped-out memory (zero off Linux); TOTAL is RSS + SWAP from the same reading. PEAK is the larger of the recorded peak and the live resident tree peak, including current RSS. All four use decimal byte units and show `-` when not running. The recorded peak sums the kernel's per-process resident high-water marks over the tree, with the five-second RSS sample as a floor; swap is not included, so TOTAL can exceed PEAK. A running entry whose server process is gone or whose pid has been reused reads zero in RSS, SWAP, and TOTAL. LAST is compact time since the last query (`45s ago`, `11m ago`, `1h ago`, `3d ago`), or `-` with no query. RESTARTS counts starts after a stop, excluding the first lazy start.
 
@@ -209,6 +209,8 @@ No servers are configured by default. Put server entries in `~/.rimz/config.toml
 reserve-percent = 10
 reserve-min = "8G"
 idle-timeout = "10m"
+recycle-factor = 2
+recycle-min = "2G"
 
 [lsp.servers.rust]
 command = ["rust-analyzer"]
@@ -227,6 +229,10 @@ The Rust options disable checking that would contend with agent builds, include 
 | `reserve-percent` | `10` | Percentage of total RAM reserved at admission and maintained by the watchdog; free swap counts toward the free figure it is compared with. |
 | `reserve-min` | `"8G"` | Minimum reserve; the larger of this and the percentage wins. |
 | `idle-timeout` | `"10m"` | Stop a ready server after this long since readiness or the last query, whichever is later, with no query in flight. Units: `s`, `m`, `h`; checked every five seconds. |
+| `recycle-factor` | `2` | Non-negative integer multiplier of the first-ready RSS + swap footprint. `0` disables recycling; `1` is accepted. |
+| `recycle-min` | `"2G"` | Minimum recycle ceiling; the larger of this and factor times the first-ready footprint wins. `"0"` lets the factor alone set the ceiling. |
+
+A ready server whose RSS + swap strictly exceeds that ceiling becomes `dormant: recycled` once no agent query or editor request is waiting on the server. The check runs every five seconds and also applies with editors attached. The next query or editor request restarts it through memory admission and can wait for re-indexing. Without a non-zero first-ready footprint, that lifetime does not recycle. Off Linux, swap reads zero.
 
 | `[lsp.servers.<name>]` field | Default | Meaning |
 | --- | --- | --- |
@@ -246,7 +252,7 @@ Configuration requests walk the requested dotted section from this object; only 
 
 With `editor-check-on-save` enabled, status also shows `check on save` as `on (editor attached)` or `off (no editor attached)`. JSON includes `editor_check_on_save`, the live override state, or `null` when the option is disabled or the entry predates it. Attachment counts from the successful handshake, not from opening a file. Dormant servers apply the current override on their next initialization.
 
-Server names use ASCII letters, digits, `-`, or `_`; `reserve-percent` ranges from 0 to 100. Sizes use decimal units (`8G` is 8 GB); `8GiB` is binary. Invalid machine-wide policy (`idle-timeout`, `reserve-percent`, or `reserve-min`) refuses launch only when a required server's root markers match the checkout; otherwise it warns once and skips all servers. Memory admission requires available memory plus free swap to cover the server estimate plus the reserve, with each capped by cgroup headroom, but not running servers' future memory use. Query-time admission can evict older idle servers ([admission rules](../../internals/lsp.md#admission)). Required waits print position and remaining time in the launcher's terminal, not the sidebar. Joining an existing broker, even dormant, skips eager admission; later stops and restarts treat required and optional alike.
+Server names use ASCII letters, digits, `-`, or `_`; `reserve-percent` ranges from 0 to 100. Sizes use decimal units (`8G` is 8 GB); `8GiB` is binary. Invalid machine-wide policy (`idle-timeout`, `reserve-percent`, `reserve-min`, or `recycle-min`) refuses launch only when a required server's root markers match the checkout; otherwise it warns once and skips all servers. Memory admission requires available memory plus free swap to cover the server estimate plus the reserve, with each capped by cgroup headroom, but not running servers' future memory use. Query-time admission can evict older idle servers ([admission rules](../../internals/lsp.md#admission)). Required waits print position and remaining time in the launcher's terminal, not the sidebar. Joining an existing broker, even dormant, skips eager admission; later stops and restarts treat required and optional alike.
 
 Project server names, commands, and initialization options join the [trust hash](../../internals/harness/trust.md). Untrusted project declarations warn and stay inert regardless of policy; same-named machine entries stay in effect. An optional server's configuration error, including a missing executable, warns with the fix and skips that server; a required server's configuration error refuses launch. Each warning prints and appends a diagnostic refusal once per launch. Editor attach still refuses on an optional server's configuration error, with exit 3. `rimz doctor` shows servers and the last refusal or queue timeout.
 
