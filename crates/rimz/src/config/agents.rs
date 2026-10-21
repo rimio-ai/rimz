@@ -557,8 +557,7 @@ pub struct Team {
     pub leader: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,
-    /// Memory-file patterns; unset means the default for the team's shape
-    /// (see [`Team::scratch_patterns`]), `[]` means none.
+    /// Extra checkout-local Git excludes; unset and `[]` both mean none.
     #[serde(
         default,
         rename = "scratch-files",
@@ -585,9 +584,6 @@ pub struct Team {
 }
 
 pub const DONE_STAGE: &str = "Done";
-
-/// Notes files a staged team keeps beside its board when it declares no `scratch-files`.
-const DEFAULT_NOTES_PATTERN: &str = "/*-notes.md";
 
 impl Team {
     /// Resolve each keep-warm field from role over team; explicit `off` cancels it.
@@ -654,17 +650,9 @@ impl Team {
         !self.stages.is_empty() || self.owned_stages().next().is_some()
     }
 
-    /// The effective memory-file patterns: the declared list, else the defaults
-    /// for a staged team, else none.
+    /// Extra git excludes, independent of a staged team's archive-memory listing.
     pub fn scratch_patterns(&self) -> Vec<String> {
-        match &self.scratch_files {
-            Some(patterns) => patterns.clone(),
-            None if self.staged() => vec![
-                format!("/{}", crate::harness::board::BOARD_FILE),
-                DEFAULT_NOTES_PATTERN.to_owned(),
-            ],
-            None => Vec::new(),
-        }
+        self.scratch_files.clone().unwrap_or_default()
     }
 }
 

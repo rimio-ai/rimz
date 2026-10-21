@@ -32,6 +32,170 @@ roles:
 "#;
 
 #[test]
+fn unlinked_board_commands_refuse_instead_of_creating_a_run() {
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    let link = fixture.env.project_root.join(".rimz/team");
+    if link.is_symlink() {
+        std::fs::remove_file(&link).unwrap();
+    }
+    for output in [
+        fixture.flip("Build", None, Some("start")),
+        fixture
+            .command()
+            .args(["teams", "record", "Goal", "goal"])
+            .output()
+            .unwrap(),
+    ] {
+        assert!(
+            !output.status.success(),
+            "unlinked board command succeeded: {output:?}"
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(link.to_str().unwrap()) && error.contains("resume"),
+            "{error}"
+        );
+    }
+    assert!(!fixture.board().exists());
+    assert!(fixture.signals().is_empty());
+}
+
+#[test]
+fn foreign_or_unowned_board_commands_refuse_without_writing() {
+    for owner in [Some("mill"), None] {
+        let fixture = Fixture::new();
+        fixture.running("coder", None);
+        let board = fixture.board();
+        std::fs::write(&board, BOARD).unwrap();
+        let manifest = board.parent().unwrap().join("run.json");
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({"team": owner})).unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&board).unwrap();
+        let saved_manifest = std::fs::read(&manifest).unwrap();
+        for output in [
+            fixture.flip("Review", Some("coder"), Some("handoff")),
+            fixture
+                .command()
+                .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
+                .args(["teams", "record", "Goal", "goal"])
+                .output()
+                .unwrap(),
+        ] {
+            assert!(
+                !output.status.success(),
+                "a foreign or unowned run must refuse: {output:?}"
+            );
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains(".rimz/team")
+                    && error.contains(owner.unwrap_or("none"))
+                    && error.contains("rimz teams stop forge")
+                    && error.contains("rimz teams resume forge"),
+                "{error}"
+            );
+        }
+        if owner.is_none() {
+            let output = fixture
+                .command()
+                .args(["teams", "record", "Goal", "goal"])
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{output:?}");
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(!error.contains("<team>"), "{error}");
+            assert!(
+                error.contains(
+                    "relaunch or resume the team that should own this checkout to link its own run"
+                ),
+                "{error}"
+            );
+        }
+        assert_eq!(std::fs::read(&board).unwrap(), before);
+        assert_eq!(std::fs::read(&manifest).unwrap(), saved_manifest);
+        assert!(fixture.signals().is_empty());
+    }
+}
+
+#[test]
+fn board_commands_and_stage_payload_use_the_run_directory() {
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    let run = fixture.env.store().paths().root.join("team-notes/manual");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+    let link = fixture.env.project_root.join(".rimz/team");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    if link.is_symlink() {
+        std::fs::remove_file(&link).unwrap();
+    }
+    std::os::unix::fs::symlink(&run, &link).unwrap();
+    success(
+        fixture
+            .command()
+            .args(["teams", "record", "Goal", "archive this goal"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        run.join("blackboard.md").exists(),
+        "record must write inside the run"
+    );
+    success(fixture.flip("Done", None, Some("finished")));
+    assert_eq!(
+        fixture.signals()[0].payload["board"],
+        run.join("blackboard.md").display().to_string()
+    );
+    assert!(
+        std::fs::read_to_string(run.join("blackboard.md"))
+            .unwrap()
+            .contains("Stage: Done")
+    );
+    assert!(!fixture.env.project_root.join("blackboard.md").exists());
+}
+
+#[test]
+fn done_stops_the_checkout_language_server_not_the_archive() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixListener;
+
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    let checkout = fixture.env.project_root.canonicalize().unwrap();
+    let key = rimz::lsp::registry::key(&checkout, "fake").unwrap();
+    let directory = fixture.env.runtime_root.join("rimz/lsp").join(key);
+    std::fs::create_dir_all(&directory).unwrap();
+    let entry = json!({
+        "root": checkout, "server": "fake", "nonce": "test",
+        "broker_pid": std::process::id(), "broker_start_token": "test",
+        "state": "ready", "started_at_ms": 0, "estimate_bytes": 0,
+        "settings_hash": "test", "request_count": 0, "peak_rss_kb": 0, "leases": []
+    });
+    serde_json::from_value::<rimz::lsp::registry::Entry>(entry.clone()).unwrap();
+    std::fs::write(
+        directory.join("entry.json"),
+        serde_json::to_vec(&entry).unwrap(),
+    )
+    .unwrap();
+    let listener = UnixListener::bind(directory.join("sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    success(fixture.flip("Done", None, Some("finished")));
+    let (stream, _) = listener
+        .accept()
+        .expect("Done must reach the checkout's language server");
+    let mut request = String::new();
+    BufReader::new(stream).read_line(&mut request).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&request).unwrap(),
+        json!({"op": "stop", "reason": "team done"})
+    );
+}
+
+#[test]
 fn stage_wake_crosses_an_ended_molt_intermediate() {
     let fixture = Fixture::new();
     let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
@@ -534,11 +698,25 @@ impl Fixture {
         crate::common::write_definition(&env, "teams", "forge", CONFIG, "Complete the work.");
         let panes = env.write_pane_fixture(&[]);
         let trace = env.project_root.join("stage-mux.log");
-        Self { env, panes, trace }
+        let fixture = Self { env, panes, trace };
+        fixture.register(&fixture.env.project_root);
+        fixture
     }
 
     fn board(&self) -> PathBuf {
-        self.env.project_root.join("blackboard.md")
+        let link = self.env.project_root.join(".rimz/team");
+        link.canonicalize().unwrap_or(link).join("blackboard.md")
+    }
+
+    fn register(&self, checkout: &Path) {
+        rimz::harness::team_notes::register(
+            &self.env.store(),
+            checkout,
+            "forge",
+            &toml::from_str("stages = ['Build', 'Review']").unwrap(),
+            rimz::harness::team_notes::Launch::Resume,
+        )
+        .unwrap();
     }
 
     fn command(&self) -> Command {
@@ -577,6 +755,7 @@ impl Fixture {
         channel: &str,
         worktree: &Path,
     ) {
+        self.register(worktree);
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
             .store()
@@ -1075,7 +1254,7 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     assert_eq!(
         messages[0].text,
         format!(
-            "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: {note}\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
+            "@user flipped the stage Build -> Review. Review is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: {note}\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
         )
     );
     assert!(!messages[0].text.lines().any(|line| line.starts_with('{')));
@@ -1128,7 +1307,11 @@ fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
     let fixture = Fixture::new();
     fixture.seed("coder", None);
     fixture.hook("coder", "SessionStart", None);
-    std::fs::write(fixture.env.project_root.join("plan-notes.md"), "plan\n").unwrap();
+    std::fs::write(
+        fixture.env.project_root.join(".rimz/team/plan-notes.md"),
+        "plan\n",
+    )
+    .unwrap();
     assert_eq!(
         fixture.feed("coder", "UserPromptSubmit", None, None),
         "",
@@ -1157,7 +1340,7 @@ fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
     let context = reply["additionalContext"].as_str().unwrap();
     assert!(
         context.starts_with(
-            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls blackboard.md *-notes.md\nplan-notes.md\n```"
+            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n.rimz/team/plan-notes.md\n```"
         ),
         "{context}"
     );
@@ -1327,7 +1510,7 @@ fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
         assert_eq!(messages.len(), 1);
         assert_eq!(
             messages[0].text,
-            "@user opened the stage Review. Review is yours: pick it up from blackboard.md.\n\nNote: Start the review.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
+            "@user opened the stage Review. Review is yours: pick it up from .rimz/team/blackboard.md.\n\nNote: Start the review.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
         );
     }
 }
@@ -1367,7 +1550,8 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
     fixture.running("coder", None);
     let other = fixture.env.home_root.join("other-worktree");
     std::fs::create_dir_all(&other).unwrap();
-    std::fs::write(other.join("blackboard.md"), BOARD).unwrap();
+    fixture.register(&other);
+    std::fs::write(other.join(".rimz/team/blackboard.md"), BOARD).unwrap();
     std::fs::write(fixture.board(), BOARD).unwrap();
     fixture.seed_member(
         "claude",
@@ -1387,7 +1571,7 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
     );
     assert!(output.contains("forge#feature-team"), "{output}");
     assert_eq!(
-        std::fs::read_to_string(other.join("blackboard.md")).unwrap(),
+        std::fs::read_to_string(other.join(".rimz/team/blackboard.md")).unwrap(),
         BOARD
     );
     assert!(
@@ -1462,7 +1646,8 @@ fn foreign_team_member_cannot_flip_the_selected_worktree_as_a_user() {
     fixture.running("coder", None);
     let other = fixture.env.home_root.join("other-worktree");
     std::fs::create_dir_all(&other).unwrap();
-    std::fs::write(other.join("blackboard.md"), BOARD).unwrap();
+    fixture.register(&other);
+    std::fs::write(other.join(".rimz/team/blackboard.md"), BOARD).unwrap();
     std::fs::write(fixture.board(), BOARD).unwrap();
     fixture.seed_member(
         "claude",
@@ -1478,7 +1663,7 @@ fn foreign_team_member_cannot_flip_the_selected_worktree_as_a_user() {
     assert!(error.contains("different team cohort"), "{error}");
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
     assert_eq!(
-        std::fs::read_to_string(other.join("blackboard.md")).unwrap(),
+        std::fs::read_to_string(other.join(".rimz/team/blackboard.md")).unwrap(),
         BOARD
     );
     assert!(fixture.signals().is_empty());
@@ -1792,6 +1977,7 @@ fn member_hand_off_is_refused_on_an_uncommitted_worktree() {
     success(fixture.flip("Build", Some("coder"), Some("still building")));
     success(fixture.flip("Review", None, Some("user forces the hand-off")));
     std::fs::remove_file(root.join("half-done.rs")).unwrap();
+    std::fs::write(root.join(".git/info/exclude"), "/stage-mux.log\n").unwrap();
     std::fs::write(fixture.board(), BOARD).unwrap();
     success(fixture.flip("Review", Some("coder"), Some("committed")));
     assert_eq!(fixture.signals().len(), 3);
@@ -1869,7 +2055,7 @@ fn failed_owner_delivery_reports_partial_flip_and_same_stage_repairs_it() {
     assert_eq!(messages.len(), 1);
     assert_eq!(
         messages[0].text,
-        "@user re-opened Review. It is still yours: pick it up from blackboard.md.\n\nNote: review ready\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
+        "@user re-opened Review. It is still yours: pick it up from .rimz/team/blackboard.md.\n\nNote: review ready\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
     );
 }
 

@@ -95,7 +95,7 @@ pub(super) fn settle_ended_teams(
     let runs = run::list(store.paths())?;
     for record in rimz::harness::fleet::ended_team_runs(&projection.agents, &runs, launcher) {
         let stage = rimz::harness::scratch::board_stage(&record.worktree_path);
-        let board = record.worktree_path.join(rimz::harness::board::BOARD_FILE);
+        let board = rimz::harness::scratch::durable_board_path(&record.worktree_path);
         if let Err(error) = report_team(
             workspace,
             store,

@@ -4,7 +4,7 @@
 
 A coordinator has selected one batch of failed Dependabot PRs in the JSON plan appended after this prompt. You lead the `spot` team in one fresh RimZ worktree on `branch`, at its published tip. Land the selected updates on that branch and leave one replacement PR against `default_base`. The machine's sweep loop merges it once the board reaches `Done` with green CI, without a human merge review: nothing ships on this PR that the batch does not need.
 
-Follow the team's consensus and crafts. Reflect must not reopen Implement to carry more in this PR; follow-ups go to `reflect-notes.md`. A heads marker for a revision you never read, a `Closes #N` on a partly covered source, or an audit entry without evidence would be carried forward by later fires and merged automatically on your word.
+Follow the team's consensus and crafts. Reflect must not reopen Implement to carry more in this PR; follow-ups go to `.rimz/team/reflect-notes.md`. A heads marker for a revision you never read, a `Closes #N` on a partly covered source, or an audit entry without evidence would be carried forward by later fires and merged automatically on your word.
 
 ## The plan
 

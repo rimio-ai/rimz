@@ -96,8 +96,8 @@ forge#feat-x · idle 48s
 
   worktree:  /repo-worktrees/feat-x
   isolation: host · shared ~/.rimz/ws/repo-3f2a/shared
-  memory:    blackboard.md   41 lines · 2m ago
-             plan-notes.md  120 lines · 18m ago
+  memory:    .rimz/team/blackboard.md   41 lines · 2m ago
+             .rimz/team/plan-notes.md  120 lines · 18m ago
 
 forge
   source: ~/.rimz/teams/forge.md
@@ -144,7 +144,7 @@ A lane block reads top to bottom:
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `fired <age> ago` when the last fire delivered, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the fire count once it has fired more than once. A subscription that has not fired reads `heard <signal> <age> ago` when it has heard another signal of its family, otherwise `never fired`. Heard signals are never counted as fires. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · shared <dir>`, `scoped · shared <dir>`, or `sandbox · shared <dir>`: the room's shared directory (`$RIMZ_SHARED`, the same host path in all isolation levels), and where each member ran: the isolation its launch enforced, else the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. The enforced isolation already folds in a profile `isolation` default. Members that disagree show the machine setting. |
-| `memory` | Files matching the team's effective scratch patterns (defaults or explicit `scratch-files`), relative to the worktree, with line counts and modification ages. Omitted when none exist. |
+| `memory` | A staged team's `.rimz/team/blackboard.md` and `.rimz/team/*-notes.md`, relative to the checkout, with line counts and modification ages. Extra `scratch-files` excludes are not listed. Omitted when none exist. |
 
 When the stage owner is absent, its stage label reads `Implement (@coder, not live) for <age>`.
 
@@ -171,7 +171,7 @@ With no projected rows, the same ownerless rule uses the live members' display s
 
 ### Board stage
 
-The stage comes from the first line starting `Stage:` in `<worktree>/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.
+The stage comes from the first line starting `Stage:` in `<worktree>/.rimz/team/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.
 
 PR and CI facts come from the room's sidebar cache. `rimz teams list` and `show` never contact the forge, so `pr none` means no pull request is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
 
@@ -245,7 +245,7 @@ A launch that opens new panes prints a receipt:
 ```text
 launched forge in worktree #feat-rate-limits
   path      /repo-worktrees/feat-rate-limits
-  board     blackboard.md
+  board     .rimz/team/blackboard.md
   prompt    → @planner  "add rate limiting"
 
   @planner (stable-haven)   claude  fable        <- leader
@@ -254,7 +254,7 @@ launched forge in worktree #feat-rate-limits
   signals   ci.failed → @coder
 ```
 
-The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show the handle `rimz agents list` gives the member, its pet name beside it when the two differ, then provider and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form; an agent's prompted launch adds the [team report](#team-reports) lines.
+The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `.rimz/team/blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show the handle `rimz agents list` gives the member, its pet name beside it when the two differ, then provider and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form; an agent's prompted launch adds the [team report](#team-reports) lines.
 
 The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns. To be told when the cohort next goes idle instead, arm a one-shot [signal subscription](./loop.md#signals):
 
@@ -332,7 +332,7 @@ In both human and `--json` modes, stderr reports each cohort's stage, owner, and
 `--json` prints one object for a single name, and an object keyed by `<team>#<lane>` for several once the wait ends:
 
 ```json
-{"status": "completed", "exit": 0, "stage": "Done", "board": "/repo-worktrees/feat-rate-limits/blackboard.md", "result": "PR: https://github.com/acme/api/pull/42"}
+{"status": "completed", "exit": 0, "stage": "Done", "board": "/repo-worktrees/feat-rate-limits/.rimz/team/blackboard.md", "result": "PR: https://github.com/acme/api/pull/42"}
 ```
 
 `status` is `completed`, `failed`, or `timed_out`; `stage` is the board's stage when the wait ended (`null` without a board); `result` is the `## Result` section, `null` unless completed with one; a failed entry adds `error`.
@@ -347,7 +347,7 @@ From: @rimz
 Content:
 Team forge#feat-rate-limits reached Done; its leader reports:
 - @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /home/me/.rimz/ws/myrepo-f89e/out/boss/planner.<run_id>.output (~1.2k tokens, 31 lines)
-Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
+Memory: /home/me/.rimz/ws/myrepo-f89e/team-notes/<run>/blackboard.md
 ```
 
 | Part | Meaning |
@@ -355,7 +355,7 @@ Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 | Elapsed | From the launch, or from the flip that last left `Done`, to this `Done` |
 | Task | The launch `--description`, falling back to the first line of the launch prompt |
 | Response | The leader's last final message, as a file the launcher can read, with its size; `no response` when the leader never finished a turn |
-| Memory | The absolute path of the team's board, as seen by the launcher |
+| Memory | The archived run's absolute board path; the checkout's `.rimz/team/blackboard.md` spelling if the link no longer resolves |
 
 The launching agent's receipt names the leader's response file and `rimz teams wait <team>#<lane>`, and, unless the launch is detached, `rimz teams stop <team>#<lane>` for once the report arrives. The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
 
@@ -365,9 +365,9 @@ The seats do not report their own turns, including turns the launcher opens with
 
 ## Record an entry on the board
 
-`rimz teams record [TEAM#LANE] <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md`. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines. TEXT may start with `-`; only a value that is itself one of the command's flags (`--file`, `--stdin`, `-h`, `--help`) needs `--` before it, as in `rimz teams record Decisions -- --stdin`.
+`rimz teams record [TEAM#LANE] <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `.rimz/team/blackboard.md`. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines. TEXT may start with `-`; only a value that is itself one of the command's flags (`--file`, `--stdin`, `-h`, `--help`) needs `--` before it, as in `rimz teams record Decisions -- --stdin`.
 
-An address such as `forge#feat-rate-limits` selects the live cohort, or the stopped team holding that lane, just as `flip` does. Without it, the command uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel; this form can still create a board before any cohort exists. No live cohort is required and there is no `--team` flag. A member of the selected cohort records under its role; other callers record as `user`. A member of another cohort is refused.
+An address such as `forge#feat-rate-limits` selects the live cohort, or the stopped team holding that lane, just as `flip` does. Without it, the command uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel. No live cohort is required and there is no `--team` flag, but `.rimz/team` must already link a run: relaunch or resume the team to repair a missing or dangling link. `record` and `flip` never create a run. A member of the selected cohort records under its role; other callers record as `user`. A member of another cohort is refused. The linked manifest must name the writing team (or, for an unscoped human entry, an owning team). A foreign or unowned run refuses with its owner and link: stop the writing team, then resume it to relink its own run.
 
 Entries have the following shape (stamp in the configured machine time zone):
 
@@ -407,9 +407,9 @@ There is no Stage line until a flip. Success exits 0 and prints one line naming 
 
 ```sh
 rimz teams flip Explore "board opened; sweep aimed at rate-limit handling"
-rimz teams flip Implement "plan ready in plan-notes.md; three advisories carried in"
-rimz teams flip Review "implementation committed; report in implement-notes.md" --team forge
-rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
+rimz teams flip Implement "plan ready in .rimz/team/plan-notes.md; three advisories carried in"
+rimz teams flip Review "implementation committed; report in .rimz/team/implement-notes.md" --team forge
+rimz teams flip Done "reflection recorded in .rimz/team/reflect-notes.md; run complete"
 ```
 
 `rimz teams flip [TEAM#LANE] <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner. `NOTE` may start with `-`, as in `rimz teams flip Review "--no-tests: docs only"`; only a note that is itself one of the command's flags (`--team`, `--team=…`, `-h`, `--help`) needs `--` before it.
@@ -430,11 +430,11 @@ With no live members, a user can still flip the held board. The receipt says `no
 
 Stages come from the team definition ([configuration → teams](../../guide/configuration.md#teams)). `STAGE` must match a declared stage exactly and case-sensitively: a name in `stages`, or in the roles' `owns` lists when `stages` is empty. It must have an owning role. `Done` is always accepted, is implicit and last, and cannot be declared or owned. Put qualifiers such as "delta round" in the note. The command does not enforce pipeline order, and flipping out of `Done` reopens the work.
 
-A member handing off needs a clean worktree. A hand-off is a member leaving a stage its role owns for one it does not own, `Done` included. When `git status --untracked-files=all` lists any path under the worktree, the flip is refused before the board changes and names the paths. The root `blackboard.md` never counts, and ignored files (including the patterns the team's `scratch-files` registers) never appear; other memory files count. User flips, same-stage re-fires, moves between stages the member owns, and flips made while another role owns the current stage skip the check, so a human can always force a hand-off.
+A member handing off needs a clean worktree. A hand-off is a member leaving a stage its role owns for one it does not own, `Done` included. When `git status --untracked-files=all` lists any path under the worktree, the flip is refused before the board changes and names the paths. The `.rimz/team` archive link never counts, even without its Git exclude line. Ignored extras never appear; other modified or untracked files still count. User flips, same-stage re-fires, moves between stages the member owns, and flips made while another role owns the current stage skip the check, so a human can always force a hand-off.
 
 ### What a flip writes
 
-The first flip creates `<worktree>/blackboard.md` when absent. Each flip, under a per-worktree lock:
+Within an existing linked run, the first flip creates `<worktree>/.rimz/team/blackboard.md` when absent. Each flip, under a per-worktree lock:
 
 1. Replaces the first line starting `Stage:` with `Stage: <stage> (@<owner>)`, or `Stage: Done`. With no such line, it inserts one after a leading `# ` heading, else at the top.
 2. Appends a ledger line to the `## Progress` section (an existing `## Progress log` is used too), creating the section when absent: `- YYYY-MM-DDTHH:MM:SS±HH:MM @by: from -> to — note`, or `opened <to>` instead of the transition when there was no stage. The time is RFC 3339 with its UTC offset, written in the configured time zone, and a multiline note is joined onto one line. The sidebar's [run clock](../../interface/sidebar.md#worktree-headers) reads this ledger and still accepts older stamps without an offset (seconds or minute form), read in the configured zone.
@@ -445,7 +445,7 @@ Other board text is left as it is; the leader writes the rest of the board.
 
 ```text
 - 2026-09-12T14:02:11+02:00 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
-- 2026-09-12T14:20:36+02:00 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
+- 2026-09-12T14:20:36+02:00 @planner: Plan -> Implement — plan ready in .rimz/team/plan-notes.md; three advisories carried in
 ```
 
 To undo a mistaken flip, flip back to the intended stage; both entries stay in the ledger. A flip to the current stage repeats the ledger line, signal, and delivery. The board and ledger mechanics are in [team memory and stages](../../internals/harness/teams.md).
@@ -476,12 +476,12 @@ The `compact` row appears only when [flip compaction](#flip-compaction) acted: `
 The owner receives a message with `Type: STAGE` and `From: @rimz`, delivered at its next `done` turn boundary; `flip` has no interrupt option. The body is prose:
 
 ```text
-@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.
+@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from .rimz/team/blackboard.md.
 
-Note: plan ready in plan-notes.md; three advisories carried in
+Note: plan ready in .rimz/team/plan-notes.md; three advisories carried in
 ```
 
-A board with no prior stage reads `@<by> opened the stage <stage>.`, and a same-stage flip reads `@<by> re-opened <stage>. It is still yours: pick it up from blackboard.md.` When the team declares a `leader` and the owner is another role, the body ends with that seat's channel rule:
+A board with no prior stage reads `@<by> opened the stage <stage>.`, and a same-stage flip reads `@<by> re-opened <stage>. It is still yours: pick it up from .rimz/team/blackboard.md.` When the team declares a `leader` and the owner is another role, the body ends with that seat's channel rule:
 
 ```text
 Your report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text.
@@ -490,7 +490,7 @@ Your report goes in your stage file and anything for the user to @planner; end t
 When the current stage's owner is resumed (by a team resume, a restart, a single-member restart, or room rebirth), RimZ re-wakes it without waiting for a prompt and without touching the board or ledger. An owner launched fresh into an open stage is re-woken when it registers instead ([resume re-wake](../../internals/harness/teams.md#resume-re-wake)). A re-wake is a `team.stage` signal with `from` equal to `to` and `by` set to `rimz`, and this notice:
 
 ```text
-The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.
+The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread .rimz/team/blackboard.md and continue from where it stops.
 ```
 
 Explicit `team.stage` subscriptions receive the loop's signal message independently of the notice. `rimz transcript` shows each flip in the lane's conversation ([transcript](./transcript.md)); re-wakes are not shown.
@@ -506,7 +506,7 @@ Explicit `team.stage` subscriptions receive the loop's signal message independen
 | `owner` | Owner role; absent for `Done`. |
 | `by` | Flipping role name, `user`, or `rimz` for a re-wake. |
 | `note` | The flip's note; absent on a re-wake. |
-| `board` | Absolute path of `blackboard.md`. |
+| `board` | Canonical run-directory path of `blackboard.md`, retained after checkout removal. |
 | `at` | RFC 3339 time. |
 
 The signal's source is `team`, and `rimz events emit` cannot produce it.

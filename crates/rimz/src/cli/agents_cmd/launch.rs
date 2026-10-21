@@ -715,8 +715,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
             launch.cwd.clone_from(&prepared.cwd);
             launch.repo_root = None;
         }
-        if let Some(team) = team {
-            rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
+        if let (Some(name), Some(team)) = (team_name.as_deref(), team) {
+            rimz::harness::team_notes::register(
+                store,
+                &launch.cwd,
+                name,
+                team,
+                rimz::harness::team_notes::Launch::Fresh,
+            )?;
         }
         crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
         if let Some(channel) = args.launch.cohort.channel.as_deref() {
@@ -1361,8 +1367,14 @@ fn launch_resume_layout(
         }
     }
     crate::cli::lsp_admission::admit(&cwd, machine_config)?;
-    if let Some(team) = team {
-        rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
+    if let (Some(name), Some(team)) = (team_name.as_deref(), team) {
+        rimz::harness::team_notes::register(
+            store,
+            &cwd,
+            name,
+            team,
+            rimz::harness::team_notes::Launch::Resume,
+        )?;
     }
     let lane_path = plan
         .seeds
@@ -1707,7 +1719,11 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     if team.is_some() {
         writeln!(w, "launched {subject}{lane}")?;
         writeln!(w, "  path      {}", cwd.display())?;
-        writeln!(w, "  board     {}", rimz::harness::board::BOARD_FILE)?;
+        writeln!(
+            w,
+            "  board     {}",
+            rimz::harness::scratch::board_relative_path()
+        )?;
     } else {
         writeln!(w, "launched {subject}{lane} ({})", cwd.display())?;
     }

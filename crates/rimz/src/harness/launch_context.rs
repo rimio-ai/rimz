@@ -88,7 +88,7 @@ pub(super) fn team_launch_context(
         .clone()
         .or_else(|| team.roles.first().map(|seat| seat.role.clone()))
         .unwrap_or_else(|| role.clone());
-    let scratch_patterns = team.scratch_patterns();
+    let scratch_patterns = scratch::memory_patterns(team);
     let scratch = scratch::scan(cwd, &scratch_patterns);
     let board = if team.staged() {
         match scratch::board_stage(cwd) {
@@ -375,7 +375,10 @@ mod tests {
             pipeline: Vec::new(),
             worktree: PathBuf::from("/tmp/project-feature"),
             session: LaunchSession::Fresh,
-            scratch_patterns: vec!["/blackboard.md".to_owned(), "/*-notes.md".to_owned()],
+            scratch_patterns: vec![
+                ".rimz/team/blackboard.md".to_owned(),
+                ".rimz/team/*-notes.md".to_owned(),
+            ],
             scratch: ScratchScan::default(),
         }
     }
@@ -391,7 +394,7 @@ mod tests {
         "###);
         assert_eq!(
             files_block(&context).unwrap(),
-            "```\n$ ls blackboard.md *-notes.md\n(no such files)\n```"
+            "```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n(no such files)\n```"
         );
         context.scratch_patterns.clear();
         assert_eq!(files_block(&context), None);
@@ -443,7 +446,11 @@ mod tests {
 
         Pipeline: [Plan] (you) → Done
         "###);
-        for name in ["blackboard.md", "explore-notes.md", "plan-notes.md"] {
+        for name in [
+            ".rimz/team/blackboard.md",
+            ".rimz/team/explore-notes.md",
+            ".rimz/team/plan-notes.md",
+        ] {
             context.scratch.files.push(ScratchFile {
                 path: context.worktree.join(name),
                 lines: 42,
@@ -453,12 +460,18 @@ mod tests {
                 .scratch
                 .files
                 .iter()
-                .map(|file| file.path.file_name().unwrap().to_str().unwrap())
+                .map(|file| {
+                    file.path
+                        .strip_prefix(&context.worktree)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                })
                 .collect::<Vec<_>>()
                 .join("  ");
             assert_eq!(
                 files_block(&context).unwrap(),
-                format!("```\n$ ls blackboard.md *-notes.md\n{names}\n```")
+                format!("```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{names}\n```")
             );
         }
         context.session = LaunchSession::Forked;
@@ -466,14 +479,20 @@ mod tests {
     }
 
     #[test]
-    fn renders_probe_failures_without_claiming_no_run_state() {
+    fn extra_excludes_do_not_change_the_memory_listing() {
         let worktree = tempfile::tempdir().expect("worktree");
         for present in [false, true] {
             if present {
-                std::fs::write(worktree.path().join("blackboard.md"), "one\ntwo\n").unwrap();
+                std::fs::create_dir_all(worktree.path().join(".rimz/team")).unwrap();
+                std::fs::write(
+                    worktree.path().join(".rimz/team/blackboard.md"),
+                    "one\ntwo\n",
+                )
+                .unwrap();
             }
             let team = Team {
                 roles: vec![role("planner"), role("coder")],
+                stages: vec!["Plan".to_owned()],
                 scratch_files: Some(vec!["/blackboard.md".to_owned(), "[abc.md".to_owned()]),
                 ..Team::default()
             };
@@ -481,15 +500,13 @@ mod tests {
                 team_launch_context(&params(), &launch(), &team_reminder(team), worktree.path())
                     .unwrap();
             let listing = if present {
-                "blackboard.md"
+                ".rimz/team/blackboard.md"
             } else {
                 "(no such files)"
             };
             assert_eq!(
                 files_block(&context).unwrap(),
-                format!(
-                    "```\n$ ls blackboard.md [abc.md\n{listing}\n```\nRimZ could not inspect every pattern."
-                )
+                format!("```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{listing}\n```")
             );
         }
     }
@@ -524,7 +541,7 @@ mod tests {
         assert!(!reminder(&context).contains("user"));
         assert_eq!(
             files_block(&context).unwrap(),
-            "```\n$ ls blackboard.md *-notes.md\n(no such files)\n```"
+            "```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n(no such files)\n```"
         );
     }
 

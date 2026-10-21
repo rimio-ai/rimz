@@ -86,7 +86,7 @@ You run inside a RimZ room: `rimz` is on your `PATH`, and every teammate is reac
 `rimz agents list` shows who is live and their handles.
 
 ```bash
-rimz message @coder 'plan-notes.md is ready, read and implement'
+rimz message @coder '.rimz/team/plan-notes.md is ready, read and implement'
 ```
 
 Single quotes deliver the text literally, as one argument. The receipt is stamped with your name as sender, so never sign the text yourself.

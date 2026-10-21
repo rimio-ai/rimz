@@ -285,7 +285,7 @@ def finished_repair_lanes(trees, open_heads):
         if not branch.startswith(PREFIX) or branch in open_heads:
             continue
         try:
-            board = (Path(path) / "blackboard.md").read_text()
+            board = (Path(path) / ".rimz" / "team" / "blackboard.md").read_text()
         except (OSError, UnicodeError):
             continue
         stage = next((line.removeprefix("Stage:").strip() for line in board.splitlines()

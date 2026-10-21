@@ -1944,7 +1944,9 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
             "{case}"
         );
         assert_eq!(
-            process.reminder.contains("$ ls blackboard.md *-notes.md"),
+            process
+                .reminder
+                .contains("$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md"),
             configured && !runtime_env,
             "{case}: the listing is in the reminder or at prompt submit, never both"
         );

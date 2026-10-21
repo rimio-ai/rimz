@@ -916,7 +916,7 @@ fn team_scratch_files_parse_default_and_round_trip() {
     );
 
     let staged: Team = toml::from_str("stages = [\"Build\"]").expect("parse staged team");
-    assert_eq!(staged.scratch_patterns(), ["/blackboard.md", "/*-notes.md"]);
+    assert!(staged.scratch_patterns().is_empty());
 
     let none: Team =
         toml::from_str("stages = [\"Build\"]\nscratch-files = []").expect("parse empty list");

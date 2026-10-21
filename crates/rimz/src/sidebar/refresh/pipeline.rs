@@ -121,7 +121,8 @@ mod tests {
     }
 
     fn board(path: &Path) {
-        std::fs::write(path.join("blackboard.md"), "Stage: Build (@coder)\n\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan — start\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n").unwrap();
+        std::fs::create_dir_all(path.join(".rimz/team")).unwrap();
+        std::fs::write(path.join(".rimz/team/blackboard.md"), "Stage: Build (@coder)\n\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan — start\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n").unwrap();
     }
 
     #[test]
@@ -148,7 +149,9 @@ mod tests {
             Some("2026-09-19T12:01:02Z".parse().unwrap())
         );
 
-        std::fs::write(dir.path().join("blackboard.md"), "Stage: Build (@coder)\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n- 2026-09-19 12:02:02 @coder: Build -> Review\n- 2026-09-19 12:03:02 @reviewer: Review -> Build\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+
+        std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Build (@coder)\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n- 2026-09-19 12:02:02 @coder: Build -> Review\n- 2026-09-19 12:03:02 @reviewer: Review -> Build\n").unwrap();
         let flipped = compute(group.clone(), &teams);
         let pipeline = &flipped[&group.key];
         assert_eq!(pipeline.stage_prior_secs, 60);
@@ -182,7 +185,7 @@ mod tests {
         let mut empty = group.clone();
         std::sync::Arc::make_mut(&mut empty.rows)[0].worktree_path = Some(String::new());
         assert!(compute(empty, &teams).is_empty());
-        std::fs::remove_file(dir.path().join("blackboard.md")).unwrap();
+        std::fs::remove_file(dir.path().join(".rimz/team/blackboard.md")).unwrap();
         assert!(compute(group, &teams).is_empty());
     }
 

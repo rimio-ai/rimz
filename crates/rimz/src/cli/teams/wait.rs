@@ -109,7 +109,7 @@ impl Target {
     }
 
     fn board(&self) -> PathBuf {
-        self.worktree.join(rimz::harness::board::BOARD_FILE)
+        rimz::harness::scratch::board_path(&self.worktree)
     }
 
     fn status(&self) -> RunStatus {

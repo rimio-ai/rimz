@@ -538,7 +538,8 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
                 .unwrap_or_default()
         ),
     );
-    std::fs::write(checkout.join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     let since = Timestamp::now();
     let evidence = json!({"when":"team.stage=Done", "hold":null, "since":since, "held_ms":0, "readings":{"team.stage":"Done"}});
     for _ in 0..2 {
@@ -649,13 +650,15 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
         1,
         "planner must suppress held helpers"
     );
-    std::fs::write(checkout.join("blackboard.md"), "Stage: Review\n").unwrap();
+    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Review\n").unwrap();
     tick();
     assert!(
         clocks().get(&key).is_none(),
         "false must retire even a declined clock"
     );
-    std::fs::write(checkout.join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+    std::fs::write(checkout.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     tick();
     assert_ne!(
         clocks()[&key]["since"],
@@ -1056,8 +1059,10 @@ fn condition_tick_observes_board_and_records_evidence() {
             scope.to_str().unwrap()
         ]
     ));
-    let root_board = env.project_root.join("blackboard.md");
-    let board = scope.join("blackboard.md");
+    let root_board = env.project_root.join(".rimz/team/blackboard.md");
+    let board = scope.join(".rimz/team/blackboard.md");
+    std::fs::create_dir_all(root_board.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
     std::fs::write(&root_board, "Stage: Done\n").unwrap();
     std::fs::write(&board, "Stage: Review\n").unwrap();
     let receipt = loop_ok(
@@ -1228,7 +1233,12 @@ fn paused_fanout_keeps_hold_and_fired_state() {
     loop_ok(&env, &["worktree", "new", "lane"]);
     let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
     assert_eq!(owned.len(), 1);
-    std::fs::write(owned[0].path.join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(owned[0].path.join(".rimz/team")).unwrap();
+    std::fs::write(
+        owned[0].path.join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
     write_loop_config(
         &env,
         &format!(
@@ -1642,7 +1652,19 @@ fn named_resident_case(case: NamedResident) {
             "forge"
         };
         seed("old-leader", &destination, "51", Some(team));
-        std::fs::write(destination.join("blackboard.md"), "Stage: Build\n").unwrap();
+        rimz::harness::team_notes::register(
+            &store,
+            &destination,
+            team,
+            &toml::from_str("stages = ['Build']").unwrap(),
+            rimz::harness::team_notes::Launch::Resume,
+        )
+        .unwrap();
+        std::fs::write(
+            destination.join(".rimz/team/blackboard.md"),
+            "Stage: Build\n",
+        )
+        .unwrap();
         if matches!(case, NamedResident::Closed | NamedResident::OtherTeamClosed) {
             stamp_session_ended(&env, "old-leader");
         }
@@ -2152,8 +2174,9 @@ fn resident_inspector_reads_the_planners_checkout_clocks_without_writes() {
     }
     let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
     for worktree in &owned {
+        std::fs::create_dir_all(worktree.path.join(".rimz/team")).unwrap();
         std::fs::write(
-            worktree.path.join("blackboard.md"),
+            worktree.path.join(".rimz/team/blackboard.md"),
             if worktree.marker.name == "waiting" {
                 "Stage: Review\n"
             } else {
@@ -11863,7 +11886,8 @@ fn explain_root_and_account_select_the_same_readings_as_tasks() {
     let other = env.project_root.join("checkout");
     std::fs::create_dir(&other).unwrap();
     assert!(init_git_repo(&other));
-    std::fs::write(other.join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(other.join(".rimz/team")).unwrap();
+    std::fs::write(other.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     let text = loop_ok(
         &env,
         &[

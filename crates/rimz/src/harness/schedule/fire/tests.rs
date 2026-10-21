@@ -276,12 +276,19 @@ fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
 fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
     let (_root, tasks, owned) = worktree_tasks(None);
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    std::fs::write(owned[0].join("blackboard.md"), "Stage: Done\n").unwrap();
-    std::fs::write(owned[1].join("blackboard.md"), "Stage: Review\n").unwrap();
+    for checkout in &owned {
+        std::fs::create_dir_all(checkout.join(".rimz/team")).unwrap();
+    }
+    std::fs::write(owned[0].join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::write(owned[1].join(".rimz/team/blackboard.md"), "Stage: Review\n").unwrap();
     let mut ledger = super::super::launch_ledger::Ledger::new();
     for stage in [None, Some("Review"), Some("Done")] {
         if let Some(stage) = stage {
-            std::fs::write(owned[0].join("blackboard.md"), format!("Stage: {stage}\n")).unwrap();
+            std::fs::write(
+                owned[0].join(".rimz/team/blackboard.md"),
+                format!("Stage: {stage}\n"),
+            )
+            .unwrap();
         }
         let scoped = scoped_tasks(
             &tasks,
@@ -853,7 +860,12 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         .unwrap();
         write_temp_then_rename_cache(&state_path(&runtime), &stamps).unwrap();
         write_temp_then_rename_cache(&when_state_path(&runtime), &states).unwrap();
-        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+        std::fs::write(
+            root.path().join(".rimz/team/blackboard.md"),
+            "Stage: Done\n",
+        )
+        .unwrap();
         for hour in [9, 10] {
             assert!(
                 fire_tasks(

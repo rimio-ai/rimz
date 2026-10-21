@@ -37,6 +37,7 @@ pub mod spec;
 pub mod spend_ladder;
 pub mod stall_notice;
 pub mod subagent_policy;
+pub mod team_notes;
 pub mod team_prompt;
 pub mod team_stage;
 pub mod tmp_floor;

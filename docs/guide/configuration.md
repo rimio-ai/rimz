@@ -689,7 +689,7 @@ A team lives in `teams/<name>.md`. Its frontmatter declares the roles, the stage
 
 Launch every seat with `rimz teams <name>`, or one seat with `rimz agents <team>.<role>`. The optional layout uses the same grammar as an [inline spec](#inline-specs-and-cell-resolution) and must place every role once. The built-in roleless `peer` team stays available unless a definition of that name replaces it. Designing a team is the [teams guide](./teams.md#define-your-own-team); every key and rule is the [definition reference](../reference/definitions.md#teams-and-seats).
 
-A team's seats coordinate through files in the repository: a shared board and per-seat notes. Markdown teams default those patterns to `/blackboard.md` and `/*-notes.md`, and every launch or resume registers them in the repository's Git exclude file so the board never reaches a commit.
+A staged team's seats coordinate through the board and stage notes in `.rimz/team/`, a link to an archived run in room state. Every launch or resume excludes the link from Git. `scratch-files` declares extra checkout-local excludes only; it does not change the memory listing or archive. The [teams guide](./teams.md#hand-off-with-one-command) owns the run lifecycle.
 
 #### Inline specs and cell resolution
 

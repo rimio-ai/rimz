@@ -59,6 +59,9 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
     board::record(RecordRequest {
         store: &ctx.store,
         worktree: &worktree,
+        team: member
+            .and_then(|member| member.team.as_deref())
+            .or_else(|| selected.as_ref().map(|(target, _)| target.team.as_str())),
         section,
         by,
         text: &text,

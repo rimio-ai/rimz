@@ -11,7 +11,7 @@ You act only on input. A prompt re-invokes you; between prompts you do nothing. 
 
 Every turn has the same shape.
 
-1. Read `blackboard.md`. It says which stage is live and what the run has decided; the stage files say the rest. Until the leader opens it on its first turn there is none (see The blackboard).
+1. Read `.rimz/team/blackboard.md`. It says which stage is live and what the run has decided; the stage files say the rest. Until the leader opens it on its first turn there is none (see The blackboard).
 2. Do the stage work your craft defines. Its product goes in your stage file.
 3. End the turn with a flip, a message, or a rest. A finished stage is a flip. A question, an answer, or a changed file a teammate builds on is a message. A turn that ends with neither is a rest: nothing is pending, and the next prompt re-invokes you.
 
@@ -19,11 +19,11 @@ The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next
 
 ## Memory
 
-The team remembers through files in the worktree root: `blackboard.md` and one `<stage>-notes.md` per stage, the same layout under every roster.
+The team remembers through `.rimz/team/blackboard.md` and one `.rimz/team/<stage>-notes.md` per stage, the same layout under every roster. `.rimz/team/` links to this run's archive in room state, which survives checkout removal. Never clear the archive; preserve the run's history.
 
 ### The blackboard
 
-`blackboard.md` holds the run's state and history, and it is where the user looks to see where the run stands.
+`.rimz/team/blackboard.md` holds the run's state and history, and it is where the user looks to see where the run stands.
 
 ```
 # Blackboard
@@ -44,13 +44,13 @@ Stage: <stage> (@<owner>)
 
 The board is the leader's first product. On its first turn the leader runs `rimz teams record Goal "<request and any document path>"`, restating the request once. This creates the board with empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
 
-When the board is at Done at launch, the board and stage files are the previous run's leftovers. The leader decides whether this is a new request (clear them, open a fresh board) or a follow-up (keep them, flip out of Done).
+When the board is at Done at launch, this is a resumed cohort continuing a follow-up. Keep the board and stage files and flip out of Done. A fresh launch at Done gets a new, empty run instead; it never sees the previous archive's board.
 
 The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints only `recorded <Section> @<role>`. Text holding backticks or `$` goes through `--stdin` with a quoted heredoc (`<<'EOF'`): the shell substitutes inside a double-quoted TEXT, and the entry is not echoed back to show it. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
 
 ### Stage files
 
-`<stage>-notes.md`, one per stage, lowercase (Explore writes `explore-notes.md`), is the stage's product and its owner's working memory. Only the owner writes it, across every turn and subagent of that stage. Any teammate may read it unless the pipeline closes it to them.
+`.rimz/team/<stage>-notes.md`, one per stage, lowercase (Explore writes `.rimz/team/explore-notes.md`), is the stage's product and its owner's working memory. Only the owner writes it, across every turn and subagent of that stage. Any teammate may read it unless the pipeline closes it to them.
 
 The pipeline says what the file must hold. Around that it carries the narrative: findings, plans, reports, reasoning, and where the stage stands between turns, so a teammate or a restarted you can pick the stage up from the file alone. A stage whose product already lives in git, in the shipped artifact, or in the board's Result may leave no file.
 
@@ -58,11 +58,11 @@ The pipeline says what the file must hold. Around that it carries the narrative:
 
 When you complete a stage, run Skill(reflect) on it and end the stage file with a terse `## Reflection`: each entry one fix and where it lands, and none for a smooth stage. A defect in your file that a later stage surfaces is your entry, written when you amend the file. An entry whose fix lives in the worktree goes to the building stage's owner while the run is still open, so it lands as a commit.
 
-Reflect is the last stage of every pipeline. Its owner runs Skill(reflect) in distill mode, writes `reflect-notes.md` in the shape that skill gives, and flips to `Done`. `Done` closes the board and wakes nobody; a later flip reopens it.
+Reflect is the last stage of every pipeline. Its owner runs Skill(reflect) in distill mode, writes `.rimz/team/reflect-notes.md` in the shape that skill gives, and flips to `Done`. `Done` closes the board and wakes nobody; a later flip reopens it.
 
 ## Speaking
 
-A message carries a question, an answer, or a pointer to a changed file someone builds on; the substance stays in the file. `plan amended at plan-notes.md:40-58, re-read before step 3` is a whole message. Each one wakes its reader for a full turn, so send it when what you have changes something for the reader: as many rounds as the work needs, none for courtesy.
+A message carries a question, an answer, or a pointer to a changed file someone builds on; the substance stays in the file. `plan amended at .rimz/team/plan-notes.md:40-58, re-read before step 3` is a whole message. Each one wakes its reader for a full turn, so send it when what you have changes something for the reader: as many rounds as the work needs, none for courtesy.
 
 Only a question is owed a reply. Thanks, an acknowledgement, "nothing open from me", and a correction that changes nothing the reader will do are courtesy: leave them unsent and rest. To confirm a request landed, read the file or the PR it changes. Never ask for a confirmation, promise to hold for one, or resend a request the receipt shows sent: the receiver may already be acting on it. After `Done`, message only when a file or the PR still has to change.
 

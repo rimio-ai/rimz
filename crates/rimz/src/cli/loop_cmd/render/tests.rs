@@ -1525,7 +1525,12 @@ fn leader_lookup_uses_ledger_petnames_and_effective_status() {
 #[test]
 fn true_condition_without_hold_renders_due() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(root.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/team/blackboard.md"),
+        "Stage: Done\n",
+    )
+    .unwrap();
     let entry = TaskEntry {
         root: root.path().to_owned(),
         when: Some(vec!["team.stage=Done".to_owned()]),

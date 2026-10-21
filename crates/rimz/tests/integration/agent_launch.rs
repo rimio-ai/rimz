@@ -1206,8 +1206,16 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                     | "hold-channel-done"
             ) {
                 std::fs::create_dir_all(&path).unwrap();
+                rimz::harness::team_notes::register(
+                    &env.store(),
+                    &path,
+                    "duo",
+                    &toml::from_str("stages = ['Build']").unwrap(),
+                    rimz::harness::team_notes::Launch::Resume,
+                )
+                .unwrap();
                 std::fs::write(
-                    path.join("blackboard.md"),
+                    path.join(".rimz/team/blackboard.md"),
                     if matches!(action, "hold-done" | "hold-channel-done") {
                         "Stage: Done\n"
                     } else {

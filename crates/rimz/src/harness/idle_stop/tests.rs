@@ -808,12 +808,18 @@ fn a_team_seat_waits_for_its_board_to_read_done() {
         Verdict::Hold(Hold::Board),
         "no board file"
     );
-    std::fs::write(dir.path().join("blackboard.md"), "Stage: Review (@judge)\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+    std::fs::write(
+        dir.path().join(".rimz/team/blackboard.md"),
+        "Stage: Review (@judge)\n",
+    )
+    .unwrap();
     assert_eq!(
         verdict(&store, &agent, &stop, DUE),
         Verdict::Hold(Hold::Board)
     );
-    std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".rimz/team")).unwrap();
+    std::fs::write(dir.path().join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
     assert_eq!(
         verdict(&store, &agent, &stop, DUE),
         Verdict::Stop { idle_secs: 180 }

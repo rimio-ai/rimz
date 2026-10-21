@@ -6,11 +6,54 @@ use std::time::SystemTime;
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 
+use super::board::BOARD_FILE;
 use crate::config::DONE_STAGE;
 
 pub(super) const PROGRESS_STAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%:z";
 const LEGACY_SECONDS_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 const LEGACY_MINUTES_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M";
+pub(super) const TEAM_LINK: &str = ".rimz/team";
+
+/// The checkout-relative board spelling for agents and memory listings.
+pub fn board_relative_path() -> String {
+    format!("{TEAM_LINK}/{BOARD_FILE}")
+}
+
+/// The agent-facing board path through a checkout's archive link.
+pub fn board_path(checkout: &Path) -> PathBuf {
+    checkout.join(board_relative_path())
+}
+
+/// Resolve the archive directory even without a board, retaining an unresolved link path.
+pub fn durable_board_path(checkout: &Path) -> PathBuf {
+    checkout
+        .join(TEAM_LINK)
+        .canonicalize()
+        .map(|run| run.join(BOARD_FILE))
+        .unwrap_or_else(|_| board_path(checkout))
+}
+
+/// Resolve only a link to an existing run directly inside this room's archive.
+pub(super) fn run_dir(state: &crate::StatePaths, checkout: &Path) -> Option<PathBuf> {
+    let link = checkout.join(TEAM_LINK);
+    if !std::fs::symlink_metadata(&link).ok()?.is_symlink() {
+        return None;
+    }
+    let run = link.canonicalize().ok()?;
+    let archive = state.team_notes_dir.canonicalize().ok()?;
+    (run.is_dir() && run.parent() == Some(archive.as_path())).then_some(run)
+}
+
+pub(super) fn run_team(run: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Owner {
+        team: String,
+    }
+    let bytes = std::fs::read(run.join("run.json")).ok()?;
+    serde_json::from_slice::<Owner>(&bytes)
+        .ok()
+        .map(|owner| owner.team)
+}
 
 /// Reads an offset stamp by its own offset, and a legacy offset-less stamp in `zone`.
 fn parse_progress_stamp(stamp: &str, zone: &TimeZone) -> Option<Timestamp> {
@@ -100,6 +143,13 @@ pub fn scan(root: &Path, patterns: &[String]) -> ScratchScan {
     scan
 }
 
+pub fn memory_patterns(team: &crate::config::Team) -> Vec<String> {
+    if !team.staged() {
+        return Vec::new();
+    }
+    vec![board_relative_path(), format!("{TEAM_LINK}/*-notes.md")]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoardStage {
     pub name: String,
@@ -121,7 +171,7 @@ pub(crate) struct BoardRun {
 
 /// Read the current stage and run times from one blackboard snapshot.
 pub(crate) fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
-    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
+    let board = std::fs::read_to_string(board_path(root)).ok()?;
     parse_board_run(&board, zone)
 }
 
@@ -198,7 +248,7 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
 
 /// Read the first `Stage:` line, separating only a terminal ` (@owner)` suffix.
 pub fn board_stage(root: &Path) -> Option<BoardStage> {
-    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
+    let board = std::fs::read_to_string(board_path(root)).ok()?;
     parse_board_stage(&board)
 }
 
@@ -226,7 +276,7 @@ pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
 /// outside a fenced code block; `None` when the heading is absent or the
 /// section is blank.
 pub fn board_section(root: &Path, heading: &str) -> Option<String> {
-    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
+    let board = std::fs::read_to_string(board_path(root)).ok()?;
     parse_board_section(&board, heading)
 }
 
@@ -280,11 +330,8 @@ mod tests {
         ] {
             assert_eq!(parse_board_run(board, &TimeZone::UTC), None);
         }
-        std::fs::write(
-            worktree.path().join("blackboard.md"),
-            "Stage: Plan (@planner)",
-        )
-        .unwrap();
+        std::fs::create_dir_all(worktree.path().join(TEAM_LINK)).unwrap();
+        std::fs::write(board_path(worktree.path()), "Stage: Plan (@planner)").unwrap();
         let run = board_run(worktree.path(), &TimeZone::UTC).unwrap();
         assert_eq!(run.stage.name, "Plan");
         assert_eq!(run.stage.owner.as_deref(), Some("planner"));
@@ -501,9 +548,46 @@ mod tests {
     }
 
     #[test]
+    fn team_memory_follows_the_archive_link_not_extra_excludes() {
+        let checkout = tempfile::tempdir().unwrap();
+        let archive = tempfile::tempdir().unwrap();
+        std::fs::create_dir(checkout.path().join(".rimz")).unwrap();
+        std::os::unix::fs::symlink(archive.path(), checkout.path().join(".rimz/team")).unwrap();
+        std::fs::write(archive.path().join("blackboard.md"), "Stage: Plan\n").unwrap();
+        std::fs::write(archive.path().join("plan-notes.md"), "notes\n").unwrap();
+        std::fs::write(archive.path().join("run.json"), "{}").unwrap();
+        std::fs::write(checkout.path().join("extra.tmp"), "extra").unwrap();
+        let team: crate::config::Team =
+            toml::from_str("stages = ['Plan']\nscratch-files = ['/extra.tmp']").unwrap();
+        let patterns = memory_patterns(&team);
+        assert_eq!(
+            patterns,
+            [".rimz/team/blackboard.md", ".rimz/team/*-notes.md"]
+        );
+        let scan = scan(checkout.path(), &patterns);
+        assert!(!scan.probe_failed);
+        assert_eq!(
+            scan.files
+                .iter()
+                .map(|file| file
+                    .path
+                    .strip_prefix(checkout.path())
+                    .unwrap()
+                    .to_str()
+                    .unwrap())
+                .collect::<Vec<_>>(),
+            [".rimz/team/blackboard.md", ".rimz/team/plan-notes.md"]
+        );
+        assert_eq!(board_stage(checkout.path()).unwrap().name, "Plan");
+        let plain: crate::config::Team = toml::from_str("scratch-files = ['/extra.tmp']").unwrap();
+        assert!(memory_patterns(&plain).is_empty());
+    }
+
+    #[test]
     fn board_stage_keeps_compound_names_and_optional_owner() {
         let worktree = tempfile::tempdir().expect("worktree");
-        let board = worktree.path().join("blackboard.md");
+        std::fs::create_dir_all(worktree.path().join(TEAM_LINK)).unwrap();
+        let board = board_path(worktree.path());
         assert_eq!(board_stage(worktree.path()), None);
         for (text, name, owner) in [
             (
@@ -567,7 +651,8 @@ mod tests {
             .as_deref(),
             Some("- real")
         );
-        std::fs::write(worktree.path().join("blackboard.md"), text).expect("board");
+        std::fs::create_dir_all(worktree.path().join(TEAM_LINK)).unwrap();
+        std::fs::write(board_path(worktree.path()), text).expect("board");
         assert_eq!(
             board_section(worktree.path(), "Tail").as_deref(),
             Some("last")

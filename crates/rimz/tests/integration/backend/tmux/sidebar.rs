@@ -988,7 +988,8 @@ fn fixture_room_starts_no_codex_process_and_no_broker_pane() {
             .args(args)
             .assert_success_within_timeout("rimz loop");
     };
-    let board = env.project_root.join("blackboard.md");
+    let board = env.project_root.join(".rimz/team/blackboard.md");
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
     std::fs::write(&board, "Stage: Review\n").expect("write board");
     rimz(&[
         "loop",
