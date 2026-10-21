@@ -38,8 +38,11 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
         &snapshot,
         None,
         &UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         64,
         30,
@@ -265,8 +268,11 @@ fn pending_waits_line_counts_armed_waits() {
             &snapshot,
             None,
             &UiState {
-                selected_index: Some(usize::MAX),
-                ..Default::default()
+                view: ViewState {
+                    selected_index: Some(usize::MAX),
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             54,
             23,

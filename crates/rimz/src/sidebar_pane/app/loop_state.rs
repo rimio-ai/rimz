@@ -138,6 +138,7 @@ pub(super) struct ViewportPublication {
 #[derive(Clone, PartialEq, Eq)]
 struct ViewportState {
     rows: Vec<(String, isize)>,
+    banner_shown: bool,
     scroll_offset: usize,
     held_expansions: BTreeSet<String>,
     drawn_selection: Option<String>,
@@ -424,8 +425,11 @@ impl LoopState {
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
             ui: UiState {
-                make_up_filter,
-                baseline_pane: baseline_pane.clone(),
+                view: render::ViewState {
+                    make_up_filter,
+                    baseline_pane: baseline_pane.clone(),
+                    ..Default::default()
+                },
                 ..UiState::default()
             },
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
@@ -2581,14 +2585,14 @@ impl LoopState {
         // folded state on its next frame boundary; this path never draws.
         if let Some((usd, epoch)) = render::cockpit_spend_target(&self.current) {
             let shown = self.ui.spend_ratchet.observe(epoch, usd);
-            self.ui.tally.observe(shown, self.ui.animation_phase);
+            self.ui.view.tally.observe(shown, self.ui.animation_phase);
         }
         // The per-card cost rolls fold beside it: live cards observe session cost,
         // while a finished cohort observes each durable seat's lifetime cost.
         // Both use the same resolved target the renderer paints, keyed by durable
         // row id, so finishing a group rolls each card up to the receipt figures.
         // A row without cost enrichment is not observed; its first cost snaps.
-        self.ui.cost_rolls.observe(
+        self.ui.view.cost_rolls.observe(
             self.current.worktree_groups.iter().flat_map(|group| {
                 group.rows.iter().filter_map(|row| {
                     render::agent_card_cost_usd(group, row).map(|usd| (row.id.clone(), usd))
@@ -2913,12 +2917,8 @@ impl LoopState {
             return;
         }
         let view = ViewportState {
-            rows: self
-                .ui
-                .anchored_rows
-                .iter()
-                .map(|(id, row)| (id.clone(), row - self.ui.scroll_zone_top as isize))
-                .collect(),
+            rows: self.ui.anchored_rows.clone(),
+            banner_shown: self.ui.anchor_banner_shown,
             scroll_offset: self.ui.scroll_offset,
             held_expansions: self.ui.held_expansions.clone(),
             drawn_selection: self.ui.drawn_selection.clone(),
@@ -3021,11 +3021,8 @@ impl LoopState {
             )
             .top_height;
         }
-        self.ui.anchored_rows = view
-            .rows
-            .into_iter()
-            .map(|(id, row)| (id, row + self.ui.scroll_zone_top as isize))
-            .collect();
+        self.ui.anchored_rows = view.rows;
+        self.ui.anchor_banner_shown = view.banner_shown;
         self.viewport_seen = publication.sequence;
         self.viewport_pending = self.watched() || self.ui.drawn_scroll_max.is_none();
         self.dirty = true;

@@ -155,10 +155,13 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     let other = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
     let mut ui = UiState {
-        selected_pane: Some(other.clone()),
-        selected_index: Some(1),
-        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
-        ..Default::default()
+        view: render::ViewState {
+            selected_pane: Some(other.clone()),
+            selected_index: Some(1),
+            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -241,9 +244,12 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     own_card.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
     rows.push(own_card);
     let mut ui = UiState {
-        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-        delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
-        ..Default::default()
+        view: render::ViewState {
+            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+            delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     assert!(
         ui.visible_roster(&snapshot)
@@ -603,9 +609,12 @@ fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
 fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals() {
     let (snapshot, selected) = landed_click_snapshot(6);
     let mut ui = UiState {
-        scroll_offset: usize::MAX,
-        offset_authoritative: true,
-        ..Default::default()
+        view: render::ViewState {
+            scroll_offset: usize::MAX,
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     paint(&mut ui, &snapshot, 24);
@@ -703,8 +712,11 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
     let mut results = Vec::new();
     for line_offset in 0..3 {
         let mut ui = UiState {
-            landed_open: true,
-            ..Default::default()
+            view: render::ViewState {
+                landed_open: true,
+                ..Default::default()
+            },
+            ..UiState::default()
         };
         reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
         assert!(ui.visible_roster(&snapshot).ordinal_of_id("done").is_none());
@@ -722,7 +734,7 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
         results.push((
             outcome,
             ui.selected_pane.clone(),
-            ui.browse.map(|browse| browse.pane),
+            ui.view.browse.map(|browse| browse.pane),
         ));
     }
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_done");
@@ -753,8 +765,11 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
     )[0]
     .pane = None;
     let mut ui = UiState {
-        landed_open: true,
-        ..Default::default()
+        view: render::ViewState {
+            landed_open: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
     ui.interactions = render::FrameInteractions::from_parts(
@@ -780,7 +795,10 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
 fn stale_folded_target_keeps_an_already_expanded_group_open() {
     let (snapshot, _) = finished_click_snapshot(0);
     let mut ui = UiState {
-        expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
+        view: render::ViewState {
+            expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
+            ..Default::default()
+        },
         interactions: render::FrameInteractions::from_parts(
             Vec::new(),
             vec![render::HitRegion::whole_line(
@@ -810,9 +828,12 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let (snapshot, selected) = finished_click_snapshot(6);
     let mut ui = UiState {
-        landed_open: true,
-        offset_authoritative: true,
-        ..Default::default()
+        view: render::ViewState {
+            landed_open: true,
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     let theme = ui.theme(&snapshot.theme);
@@ -839,8 +860,11 @@ fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
     let (mut snapshot, _) = landed_click_snapshot(0);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
     let mut ui = UiState {
-        offset_authoritative: true,
-        ..Default::default()
+        view: render::ViewState {
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     paint(&mut ui, &snapshot, 24);
     assert_eq!(ui.scroll_offset, 0);
@@ -862,9 +886,12 @@ fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
 fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
     let (snapshot, selected) = landed_click_snapshot(6);
     let mut ui = UiState {
-        scroll_offset: usize::MAX,
-        offset_authoritative: true,
-        ..Default::default()
+        view: render::ViewState {
+            scroll_offset: usize::MAX,
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     let theme = ui.theme(&snapshot.theme);
@@ -1021,10 +1048,13 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
     let mut ui = UiState {
-        baseline_pane: Some(selected.clone()),
-        browse: Some(browse(&selected, Some(&selected))),
-        expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
-        ..Default::default()
+        view: render::ViewState {
+            baseline_pane: Some(selected.clone()),
+            browse: Some(browse(&selected, Some(&selected))),
+            expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
     assert_eq!(ui.selected_pane, Some(selected.clone()));
@@ -1064,9 +1094,12 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
     );
 
     let mut ui = UiState {
-        selected_index: Some(0),
-        help_visible: false,
-        animation_phase: 0,
+        view: render::ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
+        },
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
@@ -1105,11 +1138,14 @@ fn focus_keys_fire_without_mutating_selection() {
 
     // Enter focuses the selected pane and reads, never writes, the selection.
     let mut ui = UiState {
-        selected_index: Some(1),
-        selected_pane: Some(target.clone()),
-        help_visible: false,
-        animation_phase: 0,
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(1),
+            selected_pane: Some(target.clone()),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
@@ -1178,10 +1214,13 @@ fn arrow_key_reports_immediate_ui_change() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(0),
-        help_visible: false,
-        animation_phase: 0,
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
@@ -1197,10 +1236,13 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
     let feature = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let main = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut ui = UiState {
-        selected_index: Some(0),
-        selected_pane: Some(main.clone()),
-        baseline_pane: Some(main.clone()),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            selected_pane: Some(main.clone()),
+            baseline_pane: Some(main.clone()),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
@@ -1278,12 +1320,15 @@ fn banner_without_a_lead_falls_back_to_top_without_focusing() {
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
-        scroll_offset: 42,
+        view: render::ViewState {
+            scroll_offset: 42,
+            selected_pane: Some(target),
+            ..Default::default()
+        },
         interactions: render::FrameInteractions::from_parts(
             vec![None; 3],
             vec![render::HitRegion::whole_line(2, HitTarget::UnreadBanner)],
         ),
-        selected_pane: Some(target),
         ..Default::default()
     };
 
@@ -1315,11 +1360,14 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     rows[18].unread = true;
     let selected = pane_of(&snapshot, 0);
     let mut ui = UiState {
-        freeze: Some(render::LayoutFreeze {
-            frozen: Default::default(),
-            armed_ms: 1,
-        }),
-        ..Default::default()
+        view: render::ViewState {
+            freeze: Some(render::LayoutFreeze {
+                frozen: Default::default(),
+                armed_ms: 1,
+            }),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     ui.expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
@@ -1431,9 +1479,12 @@ fn help_key_opens_without_touching_the_viewport() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
-        scroll_offset: 6,
-        offset_authoritative: true,
-        ..Default::default()
+        view: render::ViewState {
+            scroll_offset: 6,
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     handle_key(KeyAction::Help, &mut ui, &snapshot);
@@ -1447,9 +1498,12 @@ fn other_key_is_noop_when_help_is_closed() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
-        selected_index: Some(1),
-        scroll_offset: 6,
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(1),
+            scroll_offset: 6,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let outcome = handle_key(KeyAction::Other, &mut ui, &snapshot);
@@ -1503,7 +1557,10 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(2),
+        view: render::ViewState {
+            selected_index: Some(2),
+            ..Default::default()
+        },
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -1544,7 +1601,10 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(1),
+        view: render::ViewState {
+            selected_index: Some(1),
+            ..Default::default()
+        },
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -1600,8 +1660,11 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
         KeyAction::ScreenBottom,
     ] {
         let mut ui = UiState {
-            selected_index: Some(0),
-            ..Default::default()
+            view: render::ViewState {
+                selected_index: Some(0),
+                ..Default::default()
+            },
+            ..UiState::default()
         };
         let outcome = handle_key(action, &mut ui, &snapshot);
         assert_eq!(outcome, InputOutcome::default(), "{action:?}");
@@ -1619,8 +1682,11 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
     let mut snapshot = filterable_snapshot(&ws);
     // Index 0 is the running `claude` agent row (the inbox participant).
     let mut ui = UiState {
-        selected_index: Some(0),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
 
@@ -1667,8 +1733,11 @@ fn mark_keys_ignore_process_rows() {
         "fixture index 1 is the statusless process row",
     );
     let mut ui = UiState {
-        selected_index: Some(1),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(1),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
@@ -1733,9 +1802,12 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     // Selecting the last row keeps it visible in the short viewport while the
     // fresh unread lead stays reachable through the jump banner.
     let mut ui = UiState {
-        selected_index: Some(9),
-        own_input_reveal: true,
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(9),
+            own_input_reveal: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let theme = ui.theme(&snapshot.theme);
     let following =

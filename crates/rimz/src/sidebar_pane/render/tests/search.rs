@@ -3,12 +3,15 @@ use crate::ids::LinkTier;
 
 fn search_ui(query: &str) -> UiState {
     UiState {
-        selected_index: Some(0),
-        make_up_filter: BodyLens {
-            query: Some(query.to_owned()),
+        view: ViewState {
+            selected_index: Some(0),
+            make_up_filter: BodyLens {
+                query: Some(query.to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
+        ..UiState::default()
     }
 }
 

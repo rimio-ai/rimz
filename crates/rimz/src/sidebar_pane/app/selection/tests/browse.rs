@@ -16,10 +16,13 @@ fn browse_roams_other_tabs_rows() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(0),
-        selected_pane: Some(here.clone()),
-        baseline_pane: Some(here.clone()),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(0),
+            selected_pane: Some(here.clone()),
+            baseline_pane: Some(here.clone()),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     select_row(&mut ui, &snapshot, 1);
@@ -47,8 +50,11 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
         ],
     );
     let mut ui = UiState {
-        baseline_pane: Some(anchor.clone()),
-        ..Default::default()
+        view: render::ViewState {
+            baseline_pane: Some(anchor.clone()),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     select_row(&mut ui, &snapshot, 1);
@@ -79,9 +85,12 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(0),
-        selected_pane: Some(from.clone()),
-        baseline_pane: Some(from.clone()),
+        view: render::ViewState {
+            selected_index: Some(0),
+            selected_pane: Some(from.clone()),
+            baseline_pane: Some(from.clone()),
+            ..Default::default()
+        },
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
@@ -119,8 +128,11 @@ fn continued_browse_keeps_the_first_anchor() {
         ],
     );
     let mut ui = UiState {
-        baseline_pane: Some(anchor.clone()),
-        ..Default::default()
+        view: render::ViewState {
+            baseline_pane: Some(anchor.clone()),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     select_row(&mut ui, &snapshot, 1);
@@ -152,11 +164,14 @@ fn browse_drops_when_its_pane_leaves_the_room() {
         ],
     );
     let mut ui = UiState {
-        selected_index: Some(1),
-        selected_pane: Some(gone.clone()),
-        baseline_pane: Some(real.clone()),
-        browse: Some(browse(&gone, Some(&real))),
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(1),
+            selected_pane: Some(gone.clone()),
+            baseline_pane: Some(real.clone()),
+            browse: Some(browse(&gone, Some(&real))),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, None);

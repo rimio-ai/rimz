@@ -97,8 +97,11 @@ fn open_landed_line_lists_collapsed_receipts_with_group_gaps() {
     let block = body(
         &snapshot,
         &UiState {
-            landed_open: true,
-            ..Default::default()
+            view: ViewState {
+                landed_open: true,
+                ..Default::default()
+            },
+            ..UiState::default()
         },
         54,
     );
@@ -120,8 +123,11 @@ fn open_landed_line_lists_collapsed_receipts_with_group_gaps() {
             &snapshot,
             None,
             &UiState {
-                landed_open: true,
-                ..Default::default()
+                view: ViewState {
+                    landed_open: true,
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             54,
             42,
@@ -151,8 +157,11 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
         &body(
             &snapshot,
             &UiState {
-                expanded_groups: BTreeSet::from([key.clone()]),
-                ..Default::default()
+                view: ViewState {
+                    expanded_groups: BTreeSet::from([key.clone()]),
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             54,
         )
@@ -202,8 +211,11 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
             &body(
                 &snapshot,
                 &UiState {
-                    make_up_filter: lens,
-                    ..Default::default()
+                    view: ViewState {
+                        make_up_filter: lens,
+                        ..Default::default()
+                    },
+                    ..UiState::default()
                 },
                 54,
             )
@@ -217,9 +229,12 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
         &body(
             &snapshot,
             &UiState {
-                make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
-                landed_open: true,
-                ..Default::default()
+                view: ViewState {
+                    make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
+                    landed_open: true,
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             54,
         )
@@ -231,8 +246,11 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
         &body(
             &snapshot,
             &UiState {
-                search_draft: Some("landed-a".to_owned()),
-                ..Default::default()
+                view: ViewState {
+                    search_draft: Some("landed-a".to_owned()),
+                    ..Default::default()
+                },
+                ..UiState::default()
             },
             54,
         )

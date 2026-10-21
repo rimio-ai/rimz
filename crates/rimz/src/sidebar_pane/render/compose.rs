@@ -172,7 +172,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         bottom_height,
     });
     let scroll_len = scroll.lines.len();
-    let placements = |offset| {
+    let placements = |offset, top: usize| {
         scroll
             .card_starts
             .iter()
@@ -189,14 +189,14 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
                 roster.row(ordinal).map(|row| {
                     (
                         row.id.clone(),
-                        layout.top_shown as isize + first as isize - offset as isize,
+                        top as isize + first as isize - offset as isize,
                     )
                 })
             })
             .collect()
     };
-    let painted_rows = placements(layout.offset);
-    let anchored_rows = placements(layout.resolution.offset);
+    let painted_rows = placements(layout.offset, layout.top_shown);
+    let anchored_rows = placements(layout.resolution.offset, 0);
     let marker = ui
         .selected_index
         .filter(|_| ui.focus_marker_ready && layout.viewport > 0)
@@ -356,8 +356,7 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
     let after_bottom = input.height.saturating_sub(input.bottom_height);
     let top_without_banner = input.top_len.min(after_bottom);
     let viewport_without_banner = after_bottom - top_without_banner;
-    let offset_without_banner =
-        resolve_scroll_offset(&input, top_without_banner, viewport_without_banner);
+    let offset_without_banner = resolve_scroll_offset(&input, viewport_without_banner, false);
     let show_banner = lead_unread_row(&input.snapshot.worktree_groups).is_some_and(|lead| {
         viewport_without_banner > 0
             && !lead_unread_visible(
@@ -374,7 +373,7 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
         .min(after_bottom);
     let viewport = after_bottom - top_shown;
     let resolution = if show_banner {
-        resolve_scroll_offset(&input, top_shown, viewport)
+        resolve_scroll_offset(&input, viewport, true)
     } else {
         offset_without_banner
     };
@@ -704,8 +703,8 @@ fn card_visible(
 
 fn resolve_scroll_offset(
     input: &ZoneInputs<'_, '_>,
-    zone_top: usize,
     viewport: usize,
+    show_banner: bool,
 ) -> ScrollResolution {
     let ui = input.ui;
     let max_offset = input.scroll_len.saturating_sub(viewport);
@@ -765,9 +764,8 @@ fn resolve_scroll_offset(
     let target = shared.or_else(|| {
         let (id, y) = anchor?;
         first_line(id).map(|first| {
-            (zone_top as isize)
-                .saturating_add(first as isize)
-                .saturating_sub(*y)
+            (first as isize).saturating_sub(*y) + isize::from(show_banner)
+                - isize::from(ui.anchor_banner_shown)
         })
     });
     if let Some(target) = target {

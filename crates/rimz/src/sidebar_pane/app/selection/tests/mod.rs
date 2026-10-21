@@ -251,10 +251,13 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 /// the live draw stores on `UiState`.
 fn interactions_for(snapshot: &SidebarSnapshot, selected: usize) -> render::FrameInteractions {
     let mut ui = UiState {
-        selected_index: Some(selected),
-        help_visible: false,
-        animation_phase: 0,
-        ..Default::default()
+        view: render::ViewState {
+            selected_index: Some(selected),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let theme = ui.theme(&snapshot.theme);
     render::compose_lines(snapshot, None, &ui, theme.as_ref(), 54, 64).interactions

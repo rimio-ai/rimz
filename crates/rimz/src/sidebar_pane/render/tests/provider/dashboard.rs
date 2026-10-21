@@ -404,12 +404,15 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     // A manual tab pick over a selected Claude row swaps to the Codex block.
     let snapshot = tabbed_provider_snapshot();
     let ui = UiState {
-        selected_index: Some(0),
-        dashboard_tab: Some(DashboardTab {
-            login: "codex@default".parse().unwrap(),
-            derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
-        }),
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            dashboard_tab: Some(DashboardTab {
+                login: "codex@default".parse().unwrap(),
+                derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
+            }),
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 34);
 
@@ -658,7 +661,10 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     let mut snapshot = tabbed_provider_snapshot();
     snapshot.theme.pets.enabled = true;
     let ui = UiState {
-        selected_index: Some(0),
+        view: ViewState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
         pet: Some(pixel_pet()),
         ..Default::default()
     };
@@ -957,10 +963,13 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let theme = Theme::for_sidebar(&snapshot.theme);
     let ui = UiState {
-        selected_index: Some(0),
-        scroll_offset: 6,
-        offset_authoritative: true,
-        ..Default::default()
+        view: ViewState {
+            selected_index: Some(0),
+            scroll_offset: 6,
+            offset_authoritative: true,
+            ..Default::default()
+        },
+        ..UiState::default()
     };
     let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 23);
     let lines = line_texts(&frame.lines);
