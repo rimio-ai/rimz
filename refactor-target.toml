@@ -475,7 +475,8 @@ path = "crates/rimz/src/agents/spending"
 # ModelTally carries the producing provider identity across the publication/stats seam.
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
-surface-budget = 105
+# EffortWindow::merge sums effort for the stats rows that fold several roles (+1).
+surface-budget = 106
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1835,7 +1836,13 @@ upward-dependencies = ["agents"]
 # `Palette::pace_tone` shares the burn-rate bands across the sidebar and CLI (+1).
 # `fmt::dollars_left` gives provider credit rows one floored money vocabulary (+1).
 # fmt::dollars_estimate gives selected cache lines a two-significant-figure money vocabulary (+1).
-surface-budget = 35
+# fmt::active_duration shares agent-time formatting between attribution and stats (+1).
+surface-budget = 36
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::active_duration"
+reason = "Attribution and stats share one seconds-based active-time formatter, distinct from minute window labels."
 
 [[verdict]]
 kind = "item"

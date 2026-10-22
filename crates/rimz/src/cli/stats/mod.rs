@@ -1,5 +1,5 @@
 //! `rimz stats` — account-global spend, local-day activity, and model,
-//! provider, agent-profile, and subagent-profile breakdowns, readable in or out
+//! provider, solo-profile, team, and subagent-profile breakdowns, readable in or out
 //! of a room or project.
 //! The wordmark and activity insights remain in the held dashboard.
 //! Internals: `docs/internals/stats.md`.
@@ -36,8 +36,9 @@ use crate::cli::render;
 use crate::cli::spinner::Spinner;
 use rimz::RuntimePaths;
 use rimz::agents::spending::{
-    DaySpend, ModelTally, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
-    read_provider_spending_cache, refresh_global_spending_direct, unix_secs_now, utc_date,
+    DaySpend, EffortWindow, ModelTally, ProviderSpendingCache, RoleTally, SpendProgress,
+    SpendTally, SpendWindow, Spending, read_provider_spending_cache,
+    refresh_global_spending_direct, unix_secs_now, utc_date,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
 use rimz::disk::paths::logs_dir;
@@ -92,10 +93,13 @@ pub struct StatsArgs {
     /// Print effective system assists, newest first.
     #[arg(long, conflicts_with_all = ["subagents", "refresh"])]
     pub assists: bool,
-    /// Show every agent profile's spend in the selected window.
+    /// Show every solo agent profile's spend and recorded effort in the selected window.
     #[arg(long, conflicts_with_all = ["subagents", "refresh", "assists"])]
     agents: bool,
-    /// Show every subagent profile's spend in the selected window.
+    /// Show every team's spend and recorded effort in the selected window.
+    #[arg(long, conflicts_with_all = ["agents", "subagents", "refresh", "assists"])]
+    teams: bool,
+    /// Show every subagent profile's spend and recorded effort in the selected window.
     #[arg(long, conflicts_with = "refresh")]
     pub subagents: bool,
     /// Number of assists to show; 0 shows all retained events.
@@ -116,6 +120,7 @@ pub struct StatsArgs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RoleView {
     Agents,
+    Teams,
     Subagents,
 }
 
@@ -123,6 +128,7 @@ impl RoleView {
     fn label(self) -> &'static str {
         match self {
             Self::Agents => "Agents",
+            Self::Teams => "Teams",
             Self::Subagents => "Subagents",
         }
     }
@@ -130,6 +136,7 @@ impl RoleView {
     fn key(self) -> &'static str {
         match self {
             Self::Agents => "agents",
+            Self::Teams => "teams",
             Self::Subagents => "subagents",
         }
     }
@@ -137,22 +144,67 @@ impl RoleView {
     fn noun(self) -> &'static str {
         match self {
             Self::Agents => "agent",
+            Self::Teams => "team",
             Self::Subagents => "subagent",
         }
     }
 
     fn count_header(self) -> &'static str {
         match self {
-            Self::Agents => "SESSIONS",
+            Self::Agents | Self::Teams => "SESSIONS",
             Self::Subagents => "RUNS",
         }
     }
 
-    fn tallies(self, stats: &Stats) -> &BTreeMap<String, SpendTally> {
-        match self {
+    fn rows(self, stats: &Stats, active: Window) -> BTreeMap<String, RoleWindow> {
+        let tallies = match self {
             Self::Agents => &stats.agents,
             Self::Subagents => &stats.subagents,
-        }
+            Self::Teams => {
+                return stats
+                    .teams
+                    .iter()
+                    .map(|(team, roles)| {
+                        let mut total = RoleWindow::default();
+                        for tally in roles.values() {
+                            total.merge(&active.select_role(tally));
+                        }
+                        (team.clone(), total)
+                    })
+                    .collect();
+            }
+        };
+        tallies
+            .iter()
+            .map(|(profile, tally)| (profile.clone(), active.select_role(tally)))
+            .collect()
+    }
+}
+
+#[derive(Default)]
+struct RoleWindow {
+    spend: SpendWindow,
+    effort: EffortWindow,
+}
+
+impl RoleWindow {
+    fn merge(&mut self, other: &Self) {
+        self.spend.merge(&other.spend);
+        self.effort.merge(other.effort);
+    }
+
+    fn has_effort(&self) -> bool {
+        self.effort != EffortWindow::default()
+    }
+
+    fn has_usage(&self) -> bool {
+        self.spend.usd > 0.0 || self.spend.tokens > 0 || self.has_effort()
+    }
+
+    fn messages(&self) -> u64 {
+        self.effort
+            .from_user
+            .saturating_add(self.effort.from_teammates)
     }
 }
 
@@ -210,6 +262,18 @@ impl Window {
             Self::Year => 365,
         }
     }
+
+    fn select_role(self, tally: &RoleTally) -> RoleWindow {
+        RoleWindow {
+            spend: self.select(&tally.tally),
+            effort: match self {
+                Self::Today => tally.effort.day,
+                Self::Week => tally.effort.week,
+                Self::Month => tally.effort.month,
+                Self::Year => tally.effort.year,
+            },
+        }
+    }
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -227,6 +291,8 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     let today_day = stats.today_day(unix_secs_now());
     let role = if args.agents {
         Some(RoleView::Agents)
+    } else if args.teams {
+        Some(RoleView::Teams)
     } else if args.subagents {
         Some(RoleView::Subagents)
     } else {
@@ -268,9 +334,11 @@ struct Stats {
     timezone: String,
     refreshed_at_ms: u64,
     day_cutoff_secs: u64,
-    agents: BTreeMap<String, SpendTally>,
-    subagents: BTreeMap<String, SpendTally>,
+    agents: BTreeMap<String, RoleTally>,
+    teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
+    subagents: BTreeMap<String, RoleTally>,
     recorded_since_secs: Option<u64>,
+    effort_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, ModelTally>,
     by_provider: BTreeMap<String, SpendTally>,
@@ -296,17 +364,11 @@ impl Stats {
             timezone,
             refreshed_at_ms,
             day_cutoff_secs,
-            agents: roles
-                .agents
-                .into_iter()
-                .map(|(profile, entry)| (profile, entry.tally))
-                .collect(),
-            subagents: roles
-                .subagents
-                .into_iter()
-                .map(|(profile, entry)| (profile, entry.tally))
-                .collect(),
+            agents: roles.agents,
+            teams: roles.teams,
+            subagents: roles.subagents,
             recorded_since_secs: roles.recorded_since_secs,
+            effort_since_secs: roles.effort_since_secs,
             by_day: days,
             by_model: models,
             by_provider,
@@ -329,8 +391,16 @@ impl Stats {
     }
 
     fn recorded_since(&self) -> Option<jiff::Zoned> {
+        self.local_time(self.recorded_since_secs)
+    }
+
+    fn effort_since(&self) -> Option<jiff::Zoned> {
+        self.local_time(self.effort_since_secs)
+    }
+
+    fn local_time(&self, secs: Option<u64>) -> Option<jiff::Zoned> {
         Some(
-            Timestamp::from_second(i64::try_from(self.recorded_since_secs?).ok()?)
+            Timestamp::from_second(i64::try_from(secs?).ok()?)
                 .ok()?
                 .to_zoned(
                     jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC),

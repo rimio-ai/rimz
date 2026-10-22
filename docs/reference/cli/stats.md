@@ -10,6 +10,7 @@ rimz stats --json | jq '.windows.week'  # the trailing week's tokens and dollars
 rimz stats --assists                    # latest 50 effective assists, newest first
 rimz stats --assists -n 0 --all          # all retained attempts, including held ones
 rimz stats --agents                     # every agent profile, unfolded
+rimz stats --teams                      # every team, without per-role rows
 rimz stats --subagents                  # every subagent profile, unfolded
 ```
 
@@ -19,9 +20,10 @@ rimz stats --subagents                  # every subagent profile, unfolded
 | `--json` | Print the [stats document](#json-output) instead of the panel. Conflicts with `--refresh`. |
 | `--window <WINDOW>` | Select `today` (default), `week`, `month`, or `year` for breakdowns, JSON sessions and assists, and the held dashboard's initial tab. The Spend row always shows all four. Conflicts with `--assists`. |
 | `--refresh` | Open the [held dashboard](#the-held-dashboard): a full-screen panel that refreshes every 60 seconds and re-centres on resize. Conflicts with `--json`. |
-| `--assists` | Print the [assist timeline](#the-assist-timeline). Conflicts with `--agents`, `--subagents`, and `--refresh`; supports `--json`. |
-| `--agents` | Show every agent profile with spend in the selected window, including provider-named rows, with spend, fleet dollar share, input, output, cached tokens, hit rate, and distinct sessions. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--subagents`, `--refresh`, and `--assists`. |
-| `--subagents` | Show every subagent profile with spend in the selected window, with spend, fleet dollar share, input, output, cached tokens, hit rate, and runs (distinct sessions). With `--json`, also include profiles with work tokens and no spend. Conflicts with `--agents`, `--refresh`, and `--assists`. |
+| `--assists` | Print the [assist timeline](#the-assist-timeline). Conflicts with `--agents`, `--teams`, `--subagents`, and `--refresh`; supports `--json`. |
+| `--agents` | Show every solo agent profile with spend or recorded effort in the selected window, including provider-named rows, with spend, fleet dollar share, input, output, cached tokens, hit rate, distinct sessions, and active time. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--teams`, `--subagents`, `--refresh`, and `--assists`. |
+| `--teams` | Show every team with spend or recorded effort in the selected window, with the agent columns plus messages. Team roles appear only in JSON. With `--json`, also include teams with work tokens and no spend. Conflicts with `--agents`, `--subagents`, `--refresh`, and `--assists`. |
+| `--subagents` | Show every subagent profile with spend or recorded effort in the selected window, with the agent columns and runs (distinct sessions) instead of sessions. With `--json`, also include profiles with work tokens and no spend. Conflicts with `--agents`, `--teams`, `--refresh`, and `--assists`. |
 | `-n N` | With `--assists`, show at most N events (default 50); 0 means all retained. |
 | `--all` | With `--assists`, include held and undelivered attempts. |
 
@@ -33,11 +35,20 @@ History days use the configured `timezone`, or the system's named timezone. An u
 
 The one-shot panel opens with dollars and tokens for Today, Week, Month, and Year. Today starts at local midnight; the other windows trail 7, 30, and 365 days.
 
-Models, Providers, Agents, then Subagents follow, each labelled with the selected window, `(today)` by default. Every share is the row's dollars divided by fleet dollars in that window. Each section ranks by dollars, shows the top three rows with spend, and folds the rest into a counted tail such as `N other providers`. Empty sections are omitted. Token units are uppercase. Models use provider identity colours; profile names stay muted. Providers and folded Agents show `SESSIONS TOKENS HIT TOK/S`; folded Subagents shows `RUNS TOKENS HIT TOK/S`.
+Models, Providers, Agents, Teams, then Subagents follow, each labelled with the selected window, `(today)` by default. Every share is the row's dollars divided by fleet dollars in that window. Each section ranks by dollars, shows the top three rows with spend or recorded effort, and folds the rest into a counted tail such as `N other teams`. Empty sections are omitted. Token units are uppercase. Models use provider identity colours; profile and team names stay muted. Providers shows `SESSIONS TOKENS HIT TOK/S`; compact Agents adds `ACTIVE` after `SESSIONS`, Teams adds `ACTIVE MESSAGES`, and Subagents adds `ACTIVE` after `RUNS`. Explicit views keep the input/output/cache columns and append effort after the session or run count.
 
-Providers includes all spend by provider kind, including historical and unobserved sessions. Agents groups observed agent sessions by profile, including team seats; Subagents groups sessions launched by `rimz subagents` by profile. Both are subsets of Providers. A bare-kind launch uses its provider kind as its profile key, merging with a profile of that name. Agents hides unless a profile not named for a provider has spend in the selected window; when visible, it includes the provider-named rows too. Subagents hides only when empty. Native provider children inherit their pane's role, not a separate subagent row.
+Providers includes all spend by provider kind, including historical and unobserved sessions. Agents groups solo sessions by profile; Teams sums each team's seats into one row; Subagents groups sessions launched by `rimz subagents` by profile, even when launched by a team. These are subsets of Providers. A bare-kind launch uses its provider kind as its profile key, merging with a profile of that name. Agents hides unless a profile not named for a provider has spend or recorded effort in the selected window; when visible, it includes the provider-named rows too. Teams and Subagents hide only when empty. Native provider children inherit their pane's role, not a separate subagent row.
 
-When the selected window begins before role recording did, a muted note below the last visible profile section gives the first recorded date: earlier spend appears under Providers only. This includes the partial oldest day of a trailing window. The note disappears when both profile sections hide. Explicit `--agents` and `--subagents` text views always show every row with spend, or a line saying no spend was recorded in the named window; they keep the date note even when empty.
+`ACTIVE` is estimated agent-time, summed across sessions and parallel seats: `45s`, `41m`, `6h12m`, or `1d03h`. `MESSAGES` counts incoming human prompts and agent messages once on the receiving side, for example `10 (1 you)`, or `10` without human prompts. Zero effort cells read `-`. A row with only active time or messages still appears. A team's sent-message split stays in `roles[]` in JSON, not in panel rows.
+
+For example, a compact Teams row:
+
+```text
+  Teams (today)             SPEND   SHARE  SESSIONS   ACTIVE     MESSAGES   TOKENS  HIT TOK/S
+  recon                      $576   55.6%        91      45m    2 (1 you)     1.1B  97%    91
+```
+
+When the selected window begins before role recording did, a muted note below the last visible profile or team section gives the first recorded date: earlier spend appears under Providers only. A separate note dates active-time and message recording, which has no pre-upgrade backfill. These include the partial oldest day of a trailing window and disappear when all three sections hide. Explicit `--agents`, `--teams`, and `--subagents` text views list every qualifying row, or say no spend was recorded in the named window; they keep applicable date notes even when empty.
 
 The local-day heatmap follows the breakdowns. The final `as of` time is the publication time in its published timezone, with a date when the publication is not from today. A cold one-shot run does not print the wordmark; the held dashboard keeps it when space permits.
 
@@ -47,8 +58,8 @@ The local-day heatmap follows the breakdowns. The final `as of` time is the publ
 
 | Run | Cache | What happens |
 | --- | --- | --- |
-| `rimz stats`, `--json`, `--agents`, `--subagents` | present and its figures cover today in its timezone | Prints the cache as it is. Nothing is walked or fetched. |
-| `rimz stats`, `--json`, `--agents`, `--subagents` | missing, its figures cover another local day, or written by an incompatible RimZ version | Reads every agent transcript on the machine, writes the cache, then prints. When the panel goes to a terminal, a `Reading session files [bar] n/total` spinner reports progress. |
+| `rimz stats`, `--json`, `--agents`, `--teams`, `--subagents` | present and its figures cover today in its timezone | Prints the cache as it is. Nothing is walked or fetched. |
+| `rimz stats`, `--json`, `--agents`, `--teams`, `--subagents` | missing, its figures cover another local day, or written by an incompatible RimZ version | Reads every agent transcript on the machine, writes the cache, then prints. When the panel goes to a terminal, a `Reading session files [bar] n/total` spinner reports progress. |
 | `--refresh` | any | Requests fresh figures every 60 seconds through the same spending service the sidebar uses, which rereads transcripts that changed. |
 | `--assists` | not read | Reads only the assist log. |
 
@@ -70,13 +81,13 @@ Every run except `--assists` creates RimZ's shared state directories when they a
 
 Other keys do nothing. In the daemon view both `q` and `Ctrl-C` are ignored; closing the pane ends the dashboard.
 
-The dashboard starts on Today, or the tab selected by `--window`. It uses the same section order and hiding rules as the one-shot panel, except that a profile with work tokens and no spend counts toward showing Agents. Providers adds a `tok/s` column when any row has response timing; profile sections omit it. Short panes drop the wordmark before shrinking each section to one row, then omit Subagents, then Agents. Models and Providers stay, and the recorded-since note stays while either profile section remains. Today scopes the breakdowns, sessions, cost per session, spend, and assists to the local calendar day in the published timezone. Its activity rows and daily average keep Year's history, so today's spend can be compared with a typical active day. Today and Year have no spend trend; Week and Month add a spend comparison with the preceding week or month when that period had spend. A refresh that fails leaves the last frame on screen with no marker. When the first refresh fails, the dashboard shows `Spending refresh unavailable - retrying.` with the cause and tries again after 5 seconds. Reload returns to the initial tab specified by the flags.
+The dashboard starts on Today, or the tab selected by `--window`. It uses the same section order and hiding rules as the one-shot panel, except that a profile with work tokens and no spend counts toward showing Agents. Providers adds a `tok/s` column when any row has response timing; profile and team sections omit it, `ACTIVE`, and `MESSAGES`. Short panes drop the wordmark before shrinking each section to one row, then omit Subagents, Agents, and Teams, in that order. Models and Providers stay, and the recorded-since notes stay while any profile or team section remains. Today scopes the breakdowns, sessions, cost per session, spend, and assists to the local calendar day in the published timezone. Its activity rows and daily average keep Year's history, so today's spend can be compared with a typical active day. Today and Year have no spend trend; Week and Month add a spend comparison with the preceding week or month when that period had spend. A refresh that fails leaves the last frame on screen with no marker. When the first refresh fails, the dashboard shows `Spending refresh unavailable - retrying.` with the cause and tries again after 5 seconds. Reload returns to the initial tab specified by the flags.
 
-All four held sections include rows with dollars or work tokens: input (including cache writes) plus output, excluding cache reads. Each section names a row when it accounts for at least 1% of that section's dollars or work tokens. Smaller rows combine as `Other`. If the pane's row limit requires more folding, rows rank by whichever of their dollar or token shares is greater, and the least significant fold first. Order, percentages, and bars still follow dollars, so a row kept for its tokens can have a near-empty bar.
+All five held sections include rows with dollars or work tokens: input (including cache writes) plus output, excluding cache reads. Profile and team rows also qualify with recorded effort alone. Each section names a row when it accounts for at least 1% of that section's dollars or work tokens. Smaller rows combine as `Other`, including effort-only rows without either share. If the pane's row limit requires more folding, rows rank by whichever of their dollar or token shares is greater, and the least significant fold first. Order, percentages, and bars still follow dollars, so a row kept for its tokens can have a near-empty bar.
 
 ## JSON output
 
-`rimz stats --json` prints one pretty-printed object describing the selected window (today by default). Breakdowns carry every model, provider, and profile with dollars or work tokens in that window, with no `Other` folding and no row cap. To inspect a timed model over the year:
+`rimz stats --json` prints one pretty-printed object describing the selected window (today by default). Breakdowns carry every model, provider, profile, and team with dollars or work tokens in that window, plus profile and team rows with recorded effort alone, with no `Other` folding and no row cap. To inspect a timed model over the year:
 
 ```sh
 rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del(.tools)'
@@ -87,7 +98,8 @@ rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_s
 | `as_of`, `timezone` | Publication time (RFC 3339 with offset) and the timezone used by the daily buckets. |
 | `unit` | `tokens`, or `usd` under `--dollars`. The token and dollar fields below are present either way. |
 | `window` | Selected window: `today`, `week`, `month`, or `year`. |
-| `roles_since` | First retained role-record date, `YYYY-MM-DD` in the published timezone, covering both profile sections. Omitted when no records exist. |
+| `roles_since` | First retained role-record date, `YYYY-MM-DD` in the published timezone, covering solo, team, and subagent sessions. Omitted when no records exist. |
+| `effort_since` | First retained active-time or message record date, independently of role history; omitted when none exists. |
 | `sessions` | Sessions in the selected window. |
 | `active_days_28` | Days with usage among the last 28. |
 | `longest_streak`, `current_streak` | Consecutive days with usage. |
@@ -95,16 +107,17 @@ rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_s
 | `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`, plus `tool_calls` and a `tools` map of calls by tool name, each omitted when empty. `today` is the local calendar day in the published timezone. |
 | `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
 | `providers` | One object per provider kind with selected-window dollars or work tokens, sorted by dollars: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, optional `tokens_per_sec`, and `share` of selected-window fleet dollars as a fraction. |
-| `agents` | Every agent profile with selected-window dollars or work tokens, sorted by dollars then profile: `profile`, `sessions`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. Provider-named rows are included even when the panel hides the section. |
+| `agents` | Every solo profile with selected-window dollars, work tokens, or effort, sorted by dollars then profile: `profile`, `sessions`, `active_secs`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. Provider-named rows are included even when the panel hides the section. |
+| `teams` | Every team with selected-window dollars, work tokens, or effort, sorted by dollars then team: `team`, `sessions`, `active_secs`, `messages: {total, from_user}`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, `share`, and `roles`. Each role has `role` (a roleless layout cell, as in the built-in `peer` team, uses its profile, else its provider kind), `sessions`, `active_secs`, `from_user`, `from_teammates`, `to_teammates`, and the same spend fields and fleet-dollar `share`. Team totals sum their roles; incoming messages count once, not again when sent. |
 | `days` | One object per local calendar day in the published timezone with usage, oldest first: `date`, `tokens`, `usd`. |
-| `subagents` | Every profile with selected-window dollars or work tokens: `profile`, `runs`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. |
+| `subagents` | Every profile with selected-window dollars, work tokens, or effort: `profile`, `runs`, `active_secs`, `input`, `output`, `cached`, `cache_hit_pct`, `tokens`, `usd`, and selected-window fleet dollar `share`. |
 | `assists` | The selected-window effective-assist rollup only, without events. |
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty.
 
 `tier_fallbacks` counts one per fresh tier move, whether it passed an unbuildable family, a spent account, or both. Replayed stamps, including a molt without `--agent`, are not counted again. Its benefit line names the first pass (`not buildable` or the usage reason); the event retains all usage `skipped` entries and optional `unbuildable` entries with their full build errors.
 
-`providers`, `agents`, and `subagents` are always arrays, including when empty. `cache_hit_pct` in profile rows is `null` when there is no input to measure; in model and provider rows it is omitted. `tokens_per_sec` is a rounded integer from the selected-window tally, omitted when the model or provider has no timed responses. Activity days, streaks, and the most-active day retain their full-history meaning regardless of `--window`.
+`providers`, `agents`, `teams`, and `subagents` are always arrays, including when empty. `cache_hit_pct` in profile and team rows is `null` when there is no input to measure; in model and provider rows it is omitted. `tokens_per_sec` is a rounded integer from the selected-window tally, omitted when the model or provider has no timed responses. Activity days, streaks, and the most-active day retain their full-history meaning regardless of `--window`.
 
 An `auto_gc` event carries `scope` (`room` or `machine`); records written before scopes existed read as `machine`. Totals cover the whole sweep's scope. The durable assist record additionally holds own-room `class_bytes` and `worktree_paths` (the first 50 removed paths in sweep order, `[]` for legacy records), which this JSON projection does not expose. `worktrees_removed` remains the full count, so a count above the path-list length indicates truncation on new records ([GC report](./maintenance.md#the-report)).
 
@@ -132,7 +145,7 @@ By default, `rimz stats --assists` prints the latest 50 events that took effect,
 
 The header counts each kind's attempts that did not take effect beside it, for example `Auto-compact: 2 (239 held)`. Delivery-based events count only when delivered, except a stall notice, which counts once queued for its parent and is held only on an error; stops, freezes and relaunches use their recorded success flags. Redemption counts require a window reset; GC requires no error. Molts, model aliases, tier fallbacks, resident launches, judge declines, compact commands and room resumes count as recorded.
 
-`rimz stats --assists --json` emits `{as_of, rollup, events, older}`, respecting `-n` and `--all`; its `as_of` is the read time, with the offset of the configured timezone. `rimz stats --agents --json` emits `{as_of, window, agents, roles_since?}`; `rimz stats --subagents --json` emits `{as_of, window, subagents, roles_since?}`. The default stats JSON carries the assist rollup without events; every breakdown's `share` is a dollar share.
+`rimz stats --assists --json` emits `{as_of, rollup, events, older}`, respecting `-n` and `--all`; its `as_of` is the read time, with the offset of the configured timezone. `--agents --json`, `--teams --json`, and `--subagents --json` emit `{as_of, window, agents|teams|subagents, roles_since?, effort_since?}` with only the selected array. The default stats JSON carries the assist rollup without events; every breakdown's `share` is a dollar share.
 
 | Mark | Assist |
 | --- | --- |

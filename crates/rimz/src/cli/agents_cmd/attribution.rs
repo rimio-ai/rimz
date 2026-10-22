@@ -423,7 +423,7 @@ fn effort_label(member: &AttributionMember) -> Option<String> {
     let mut parts = Vec::with_capacity(2);
     if let Some(active) = member
         .active_secs
-        .map(|seconds| format!("{} active", duration_label(seconds)))
+        .map(|seconds| format!("{} active", rimz::theme::fmt::active_duration(seconds)))
     {
         parts.push(active);
     }
@@ -528,7 +528,7 @@ fn subagent_row_label(stat: &SubagentStat) -> String {
     [
         Some(format!("{} ×", stat.count)),
         stat.active_secs
-            .map(|seconds| format!("{} active", duration_label(seconds))),
+            .map(|seconds| format!("{} active", rimz::theme::fmt::active_duration(seconds))),
         stat.cost_usd.map(rimz::theme::fmt::dollars2),
     ]
     .into_iter()
@@ -578,7 +578,7 @@ fn totals_label(totals: &EffortTotals) -> String {
     )];
     if let Some(active) = totals
         .active_secs
-        .map(|seconds| format!("{} active", duration_label(seconds)))
+        .map(|seconds| format!("{} active", rimz::theme::fmt::active_duration(seconds)))
     {
         parts.push(active);
     }
@@ -598,19 +598,6 @@ fn totals_label(totals: &EffortTotals) -> String {
         parts.push(format!("{messages} messages{from_you}"));
     }
     parts.join(" · ")
-}
-
-fn duration_label(seconds: u64) -> String {
-    if seconds < 60 {
-        return format!("{seconds}s");
-    }
-    if seconds < 3_600 {
-        return format!("{}m", seconds / 60);
-    }
-    if seconds < 86_400 {
-        return format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60);
-    }
-    format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
 }
 
 fn markdown_escape(value: &str) -> String {
