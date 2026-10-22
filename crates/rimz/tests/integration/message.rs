@@ -4954,9 +4954,18 @@ fn assert_parent_follow_up_case(
                 );
                 let receipt = String::from_utf8_lossy(&retry_output.as_ref().unwrap().stdout);
                 assert!(receipt.contains(&register_by.to_string()), "{receipt}");
-                let remaining = register_by.duration_since(jiff::Timestamp::now());
-                if remaining.is_positive() {
-                    std::thread::sleep(remaining.unsigned_abs());
+                // Lapse the shared deadline without waiting it out. Only `register_by` moves:
+                // an earlier `enqueued_at` would predate the child's end and drop the records
+                // from the join for another reason.
+                let lapsed = jiff::Timestamp::now() - Duration::from_secs(1);
+                for mut record in records {
+                    assert_eq!(
+                        record.register_by,
+                        Some(register_by),
+                        "every pending follow-up carries the shared deadline"
+                    );
+                    record.register_by = Some(lapsed);
+                    store.queue_message(&record, "rimz-test").unwrap();
                 }
                 run_success(&mut follow_up("third follow up"), "start a new resume");
                 let after = std::fs::read_to_string(&trace).unwrap();
