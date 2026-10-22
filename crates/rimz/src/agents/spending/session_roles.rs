@@ -13,15 +13,61 @@ use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSeat {
+    Solo,
+    #[serde(untagged)]
+    Team {
+        team: String,
+        role: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum SessionRole {
     Agent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seat: Option<AgentSeat>,
     },
     Subagent {
         profile: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum Placement<'a> {
+    Solo { profile: &'a str },
+    Team { team: &'a str, role: &'a str },
+    Subagent { profile: &'a str },
+}
+
+impl SessionRole {
+    pub(super) fn placement<'a>(&'a self, provider: &'a str) -> Placement<'a> {
+        match self {
+            Self::Agent {
+                seat: Some(AgentSeat::Team { team, role }),
+                ..
+            } => Placement::Team { team, role },
+            Self::Agent { profile, seat } => {
+                if seat.is_none()
+                    && let Some((team, role)) = profile
+                        .as_deref()
+                        .and_then(|profile| profile.split_once('.'))
+                    && !team.is_empty()
+                    && !role.is_empty()
+                {
+                    return Placement::Team { team, role };
+                }
+                Placement::Solo {
+                    profile: profile.as_deref().unwrap_or(provider),
+                }
+            }
+            Self::Subagent { profile } => Placement::Subagent { profile },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +253,97 @@ fn prune_segments(path: &Path, year: i16) -> Result<(), AtomicErr> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn placement_uses_recorded_seats_before_legacy_profile_splitting() {
+        use Placement::{Solo, Subagent, Team};
+        use serde_json::json;
+
+        for (row, expected) in [
+            (
+                json!({"role":"agent", "profile":"forge.coder"}),
+                Team {
+                    team: "forge",
+                    role: "coder",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"forge.sub.coder"}),
+                Team {
+                    team: "forge",
+                    role: "sub.coder",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"forge.coder", "seat":{"team":"forge", "role":"coder"}}),
+                Team {
+                    team: "forge",
+                    role: "coder",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"plain-profile", "seat":{"team":"forge", "role":"coder"}}),
+                Team {
+                    team: "forge",
+                    role: "coder",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"plain-profile"}),
+                Solo {
+                    profile: "plain-profile",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"solo.dotted", "seat":"solo"}),
+                Solo {
+                    profile: "solo.dotted",
+                },
+            ),
+            (
+                json!({"role":"agent", "profile":"solo.dotted"}),
+                Team {
+                    team: "solo",
+                    role: "dotted",
+                },
+            ),
+            (json!({"role":"agent"}), Solo { profile: "claude" }),
+            (
+                json!({"role":"agent", "seat":"solo"}),
+                Solo { profile: "claude" },
+            ),
+            (
+                json!({"role":"agent", "profile":".coder"}),
+                Solo { profile: ".coder" },
+            ),
+            (
+                json!({"role":"agent", "profile":"forge."}),
+                Solo { profile: "forge." },
+            ),
+            (
+                json!({"role":"subagent", "profile":"forge.coder"}),
+                Subagent {
+                    profile: "forge.coder",
+                },
+            ),
+        ] {
+            let role: SessionRole = serde_json::from_value(row.clone()).unwrap();
+            assert_eq!(role.placement("claude"), expected, "{row}");
+        }
+    }
+
+    #[test]
+    fn recorded_seats_round_trip_and_old_rows_remain_unrecorded() {
+        for row in [
+            serde_json::json!({"role":"agent", "profile":"solo.dotted", "seat":"solo"}),
+            serde_json::json!({"role":"agent", "profile":"plain-profile", "seat":{"team":"forge", "role":"coder"}}),
+            serde_json::json!({"role":"agent", "profile":"forge.coder"}),
+            serde_json::json!({"role":"subagent", "profile":"fast"}),
+        ] {
+            let role: SessionRole = serde_json::from_value(row.clone()).unwrap();
+            assert_eq!(serde_json::to_value(role).unwrap(), row);
+        }
+    }
+
     fn load(paths: &RuntimePaths, at: Timestamp) -> RoleMap {
         super::load(&paths.shared_spending_cursor_path(), at.as_second() as u64).roles
     }
@@ -228,7 +365,10 @@ mod tests {
     }
 
     fn agent() -> SessionRole {
-        SessionRole::Agent { profile: None }
+        SessionRole::Agent {
+            profile: None,
+            seat: None,
+        }
     }
 
     fn child() -> SessionRole {

@@ -140,8 +140,30 @@ pub struct SpendingWalkResult {
 pub struct RoleTallies {
     #[serde(default)]
     pub agents: BTreeMap<String, SpendTally>,
+    #[serde(default)]
+    pub teams: BTreeMap<String, BTreeMap<String, SpendTally>>,
+    #[serde(default)]
     pub subagents: BTreeMap<String, SpendTally>,
     pub recorded_since_secs: Option<u64>,
+}
+
+impl RoleTallies {
+    fn entry(&mut self, placement: session_roles::Placement<'_>) -> &mut SpendTally {
+        use session_roles::Placement;
+
+        match placement {
+            Placement::Solo { profile } => self.agents.entry(profile.to_owned()).or_default(),
+            Placement::Team { team, role } => self
+                .teams
+                .entry(team.to_owned())
+                .or_default()
+                .entry(role.to_owned())
+                .or_default(),
+            Placement::Subagent { profile } => {
+                self.subagents.entry(profile.to_owned()).or_default()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -540,7 +540,7 @@ fn record_session_roles(
     agent: &AgentDefinition,
     sessions: &[&rimz::ids::AgentSessionId],
 ) {
-    use rimz::agents::spending::session_roles::{self, SessionRole, SessionRoleRecord};
+    use rimz::agents::spending::session_roles::{self, AgentSeat, SessionRole, SessionRoleRecord};
     let subagent = env_run_id()
         .and_then(|run_id| rimz::harness::run::load(store.paths(), &run_id).ok())
         .is_some_and(|run| run.subagent);
@@ -554,7 +554,28 @@ fn record_session_roles(
             profile: profile.unwrap_or_else(|| agent.spec().kind.to_owned()),
         }
     } else {
-        SessionRole::Agent { profile }
+        let team = agent_identity_env(
+            None,
+            rimz::harness::launch::ENV_TEAM,
+            validate_non_empty_identity_env,
+        );
+        let seat = match team {
+            Some(team) => AgentSeat::Team {
+                team,
+                role: agent_identity_env(
+                    None,
+                    rimz::harness::launch::ENV_AGENT_ROLE,
+                    validate_non_empty_identity_env,
+                )
+                .or_else(|| profile.clone())
+                .unwrap_or_else(|| agent.spec().kind.to_owned()),
+            },
+            None => AgentSeat::Solo,
+        };
+        SessionRole::Agent {
+            profile,
+            seat: Some(seat),
+        }
     };
     for session in sessions {
         let record = SessionRoleRecord {

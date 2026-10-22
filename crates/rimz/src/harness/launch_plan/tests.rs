@@ -2612,10 +2612,11 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .unset
                 .iter()
                 .map(String::as_str)
-                // Runtime and workflow identity pins have their own rules, not temp-root policy.
+                // Identity pins have their own rules, not temp-root policy.
                 .filter(|key| {
                     !matches!(*key, "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR")
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
+                        && *key != crate::harness::launch::ENV_TEAM
                 })
                 .collect::<Vec<_>>(),
             unset,

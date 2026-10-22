@@ -39,7 +39,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v18: calendar-day windows on every tally, independent of the headline.
 // v19: per-model producing kind, subagent-only role tallies, and the ledger's first record time.
 // v20: profile-attributed agent tallies alongside subagents.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 20;
+// v21: team-role tallies split from solo agent profiles.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 21;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -90,7 +91,7 @@ pub struct ProviderSpendingCache {
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
     pub models: BTreeMap<String, super::ModelTally>,
-    /// Profile-attributed agent and subagent spend and the first retained provenance time.
+    /// Solo-profile, team-role, and subagent spend and the first retained provenance time.
     #[serde(default)]
     pub roles: super::RoleTallies,
     #[serde(flatten)]

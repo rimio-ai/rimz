@@ -1244,6 +1244,67 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
 }
 
 #[test]
+fn a_launch_without_a_team_does_not_inherit_its_callers_team() {
+    let inherited = env(&[(ENV_TEAM, "caller-team")]);
+    for (team, role) in [
+        (None, None),
+        (None, Some("inline")),
+        (Some("forge"), Some("coder")),
+    ] {
+        let mut invocation = request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        invocation.identity.params.team = team.map(str::to_owned);
+        invocation.identity.params.role = role.map(str::to_owned);
+        for shell in ["/bin/sh", "/bin/zsh"]
+            .into_iter()
+            .filter(|shell| Path::new(shell).is_file())
+        {
+            let process = compile_agent_process_with_extra_env(
+                None,
+                Path::new("/checkout"),
+                &invocation,
+                Path::new("/checkout"),
+                &inherited,
+                &LaunchReminders {
+                    agent_shell: Some(shell.into()),
+                    ..LaunchReminders::default()
+                },
+            )
+            .expect("process");
+            let command = process.login_shell_argv(&argv(&[
+                "/bin/sh",
+                "-c",
+                "printf '%s' \"${RIMZ_TEAM-unset}\"",
+            ]));
+            let output = Command::new(&command[0])
+                .args(&command[1..])
+                .envs(&inherited)
+                .envs(&process.env)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                team.unwrap_or("unset"),
+                "{shell}"
+            );
+            if let Some(role) = role {
+                assert_eq!(process.env[ENV_AGENT_ROLE], role);
+            }
+        }
+    }
+}
+
+#[test]
 fn an_unstamped_launch_never_carries_the_runtime_switch() {
     let switch = BTreeMap::from([(ENV_RUNTIME_ENV.to_owned(), "1".to_owned())]);
     for stamped in [false, true] {

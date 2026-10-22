@@ -245,7 +245,8 @@ upward-dependencies = ["address"]
 # InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
 # LaunchCapability::allow_team_notes_args shares the archive run grant with the process compiler (+1).
 # TierUnbuildable, TierPass, TierStamp::moved and TierStamp::passes share move evidence with launch and CLI consumers (+4).
-surface-budget = 1114
+# AgentSeat preserves solo/team provenance across the lifecycle hook and spending ledger (+1).
+surface-budget = 1115
 
 [[verdict]]
 kind = "item"
@@ -792,6 +793,11 @@ reason = "Published model spend carries the producing agent kind for stats ident
 kind = "item"
 key = "agents::spending::session_roles::SessionRole"
 reason = "Typed durable role enforces a required subagent profile at the hook-to-ledger boundary."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::AgentSeat"
+reason = "The hook records explicit solo or team/role provenance; profile dots alone cannot identify TOML seats or dotted solo profiles."
 
 [[verdict]]
 kind = "item"

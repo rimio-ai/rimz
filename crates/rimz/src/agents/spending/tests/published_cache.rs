@@ -34,7 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 20);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 21);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
@@ -168,6 +168,20 @@ fn v19_publication_preserves_spending_without_agent_roles() {
     assert_eq!(cache.roles.recorded_since_secs, Some(123));
     let roles = serde_json::to_value(cache.roles).unwrap();
     assert_eq!(roles["agents"], serde_json::json!({}));
+    assert_eq!(roles["teams"], serde_json::json!({}));
+}
+
+#[test]
+fn absent_role_maps_default_to_empty() {
+    let roles = serde_json::from_value::<RoleTallies>(serde_json::json!({}));
+    assert!(
+        roles.is_ok(),
+        "all missing role maps must default: {roles:?}"
+    );
+    let roles = serde_json::to_value(roles.unwrap()).unwrap();
+    for map in ["agents", "teams", "subagents"] {
+        assert_eq!(roles[map], serde_json::json!({}));
+    }
 }
 
 #[test]

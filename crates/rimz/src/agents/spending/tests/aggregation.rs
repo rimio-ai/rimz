@@ -125,11 +125,12 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
         let roles = serde_json::to_value(&result.roles).unwrap();
         assert_eq!(
             roles.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["agents", "recorded_since_secs", "subagents"]
+            ["agents", "recorded_since_secs", "subagents", "teams"]
         );
         assert!(roles["agents"].as_object().unwrap().is_empty());
         assert!(roles["recorded_since_secs"].is_null());
         assert!(roles["subagents"].as_object().unwrap().is_empty());
+        assert!(roles["teams"].as_object().unwrap().is_empty());
     }
 }
 
@@ -198,11 +199,19 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         (
             crate::ids::AgentKind::new_unchecked("claude"),
             BTreeMap::from([
-                (parent.into(), SessionRole::Agent { profile: None }),
+                (
+                    parent.into(),
+                    serde_json::from_value(serde_json::json!({
+                        "role":"agent", "profile":"plain-profile",
+                        "seat":{"team":"forge", "role":"coder"}
+                    }))
+                    .unwrap(),
+                ),
                 (
                     named.into(),
                     SessionRole::Agent {
-                        profile: Some("claude".into()),
+                        profile: Some("forge.coder".into()),
+                        seat: None,
                     },
                 ),
             ]),
@@ -222,6 +231,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 "peer".into(),
                 SessionRole::Agent {
                     profile: Some("peer-profile".into()),
+                    seat: None,
                 },
             )]),
         ),
@@ -272,16 +282,21 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     assert_eq!(published_roles["recorded_since_secs"], first);
     assert_eq!(
         published_roles["agents"].as_object().map(|rows| rows.len()),
-        Some(2)
+        Some(1)
+    );
+    assert_eq!(published_roles["teams"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        published_roles["teams"]["forge"].as_object().unwrap().len(),
+        1
     );
     for window in ["today", "day", "week", "month", "year"] {
         let recent = matches!(window, "today" | "day");
         assert_eq!(
-            published_roles["agents"]["claude"][window]["usd"],
+            published_roles["teams"]["forge"]["coder"][window]["usd"],
             if recent { 3.0 } else { 9.0 }
         );
         assert_eq!(
-            published_roles["agents"]["claude"][window]["sessions"],
+            published_roles["teams"]["forge"]["coder"][window]["sessions"],
             if recent { 1 } else { 2 }
         );
         let peer_in_window = matches!(window, "month" | "year");
@@ -308,9 +323,17 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     ];
     for window in windows {
         let mut sum = SpendWindow::default();
-        for role in ["agents", "subagents"] {
-            for profile in published_roles[role].as_object().unwrap().values() {
-                let tally = serde_json::from_value::<SpendTally>(profile.clone()).unwrap();
+        for tally in result
+            .roles
+            .agents
+            .values()
+            .chain(result.roles.subagents.values())
+        {
+            sum.merge(window(tally));
+        }
+        for team in published_roles["teams"].as_object().unwrap().values() {
+            for role in team.as_object().unwrap().values() {
+                let tally: SpendTally = serde_json::from_value(role.clone()).unwrap();
                 sum.merge(window(&tally));
             }
         }
@@ -336,6 +359,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     let empty = serde_json::to_value(&empty.roles).unwrap();
     assert!(empty["agents"].as_object().unwrap().is_empty());
     assert!(empty["subagents"].as_object().unwrap().is_empty());
+    assert!(empty["teams"].as_object().unwrap().is_empty());
     assert!(empty["recorded_since_secs"].is_null());
 }
 
