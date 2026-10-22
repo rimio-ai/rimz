@@ -21,15 +21,11 @@ use crate::harness::resume::{
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
-use crate::store::runtime::{AgentLiveness, agent_liveness, audit_projection};
+use crate::store::runtime::{
+    AgentLiveness, OWNER_EXIT_BOUND, agent_liveness, audit_projection, await_owner_exits,
+};
 use crate::store::snapshot::find_agent;
 use crate::store::{live_roster, pending_recovery};
-
-/// How long a boundary inspection waits for the dead room's agent processes:
-/// an exec wrapper holds its provider through two signal graces after the
-/// pane's hangup, and the margin covers a loaded host.
-const OWNER_EXIT_BOUND: Duration = Duration::from_secs(3);
-const OWNER_EXIT_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RebirthErr {
@@ -655,9 +651,17 @@ fn inspect_at(
     let recovery_off = disabled || !machine.resume.on_rebirth;
     // A provider that dies inside the wait may record its own end meanwhile,
     // so a wait that slept plans from a fresh read of the log.
-    let waited = audit
-        .as_ref()
-        .is_some_and(|projection| await_owner_exits(&projection.agents, &scope, owners_exited_by));
+    let waited = audit.as_ref().is_some_and(|projection| {
+        let agents = projection
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.ended_at.is_none()
+                    && scope.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+            })
+            .collect::<Vec<_>>();
+        await_owner_exits(&agents, owners_exited_by)
+    });
     let refreshed = audit
         .as_ref()
         .filter(|_| waited)
@@ -693,28 +697,6 @@ fn inspect_at(
         planned,
         recovery_off,
     })
-}
-
-/// Blocks until no agent a settlement could offer (in `scope`, not ended) has a
-/// live owner, or `deadline` passes, and reports whether it slept. The room
-/// these owners ran in is gone, so a live one is on its wrapper's exit ladder;
-/// the wrapper owns the kill.
-fn await_owner_exits(
-    agents: &[AgentState],
-    scope: &BTreeSet<(AgentKind, AgentSessionId)>,
-    deadline: Instant,
-) -> bool {
-    let exiting = |agent: &AgentState| {
-        agent.ended_at.is_none()
-            && scope.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-            && matches!(agent_liveness(agent), AgentLiveness::Live { .. })
-    };
-    let mut slept = false;
-    while agents.iter().any(exiting) && Instant::now() < deadline {
-        std::thread::sleep(OWNER_EXIT_POLL);
-        slept = true;
-    }
-    slept
 }
 
 fn inspect_live_at(
