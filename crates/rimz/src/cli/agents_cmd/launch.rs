@@ -253,9 +253,17 @@ pub(in crate::cli) fn launch_resolved<'a>(
     } else {
         None
     };
-    let mut matching_overrides = args.launch.overrides.clone();
-    matching_overrides.agent = None;
-    matching_overrides.tier = None;
+    // An exact id applies every override against its session in the planner.
+    let exact_resume = args.launch.resume.as_ref().is_some_and(Option::is_some);
+    let matching_overrides = if exact_resume {
+        LaunchOverrideArgs::default()
+    } else {
+        LaunchOverrideArgs {
+            agent: None,
+            tier: None,
+            ..args.launch.overrides.clone()
+        }
+    };
     let print_warning = |warning: &rimz::harness::plan::LaunchFinalizeWarning| {
         if !fresh_launch
             && matches!(
@@ -283,7 +291,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
             .prompt
             .as_deref()
             .filter(|_| !args.launch.cohort.continue_cohort),
-        if args.launch.cohort.continue_cohort {
+        if args.launch.cohort.continue_cohort || exact_resume {
             &matching_overrides
         } else {
             &args.launch.overrides
@@ -1337,26 +1345,9 @@ fn launch_resume_layout(
         jiff::Timestamp::now(),
     );
     let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
-    rimz::harness::resume::restore_routed_cells(
-        &mut layout,
-        &plan.seeds,
-        profiles,
-        &rimz::harness::resume::ResumeOverrides {
-            team,
-            permission_mode: interactive_permission_mode_from_flags(
-                args.launch.overrides.ask,
-                args.launch.overrides.yolo,
-            )?,
-            preset: launch_override_preset(&args.launch.overrides)?,
-            agent: args.launch.overrides.agent.as_deref(),
-            tier: args
-                .launch
-                .overrides
-                .tier
-                .map(|tier| (tier, &machine_config.tiers)),
-            unavailable: Some(&unavailable),
-        },
-    )?;
+    let mut overrides = resume_overrides(&args.launch.overrides, machine_config, &unavailable)?;
+    overrides.team = team;
+    rimz::harness::resume::restore_routed_cells(&mut layout, &plan.seeds, profiles, &overrides)?;
     let cwd = plan
         .cwd
         .clone()

@@ -57,7 +57,6 @@ fn provider_resume_rejects_launch_inputs() {
         vec!["prompt"],
         vec!["-w", "topic"],
         vec!["--continue"],
-        vec!["--model", "opus"],
         vec!["--fresh"],
         vec!["--detach"],
         vec!["--cwd", "/repo"],
@@ -67,14 +66,6 @@ fn provider_resume_rejects_launch_inputs() {
         vec!["--from-pr", "12"],
         vec!["--description", "note"],
         vec!["--budget", "5"],
-        vec!["--tier", "senior"],
-        vec!["--agent", "codex"],
-        vec!["--effort", "high"],
-        vec!["--fast"],
-        vec!["--no-fast"],
-        vec!["--isolation", "host"],
-        vec!["--ask"],
-        vec!["--yolo"],
         vec!["--system-prompt-file", "/prompt"],
         vec!["--append-system-prompt-file", "/prompt"],
         vec!["--", "extra"],
@@ -87,6 +78,111 @@ fn provider_resume_rejects_launch_inputs() {
             "{argv:?}: {error}"
         );
     }
+}
+
+#[test]
+fn provider_resume_accepts_launch_overrides_with_or_without_an_id() {
+    for resume in ["--resume=id", "--resume"] {
+        for suffix in [
+            vec!["--model", "opus"],
+            vec!["--tier", "senior"],
+            vec!["--agent", "claude"],
+            vec!["--effort", "high"],
+            vec!["--fast"],
+            vec!["--no-fast"],
+            vec!["--isolation", "host"],
+            vec!["--ask"],
+            vec!["--yolo"],
+        ] {
+            let argv = [vec!["agents", "claude", resume], suffix].concat();
+            let parsed = AgentsHarness::try_parse_from(&argv);
+            assert!(parsed.is_ok(), "{argv:?}: {parsed:?}");
+        }
+    }
+}
+
+#[test]
+fn session_resume_accepts_launch_overrides() {
+    for suffix in [
+        vec![
+            "--isolation",
+            "host",
+            "--model",
+            "opus",
+            "--effort",
+            "low",
+            "--fast",
+            "--yolo",
+        ],
+        vec![
+            "--agent",
+            "claude",
+            "--tier",
+            "senior",
+            "--no-fast",
+            "--ask",
+        ],
+    ] {
+        let argv = [vec!["agents", "resume", "@bright-otter"], suffix].concat();
+        let parsed = AgentsHarness::try_parse_from(&argv);
+        assert!(parsed.is_ok(), "{argv:?}: {parsed:?}");
+    }
+}
+
+#[test]
+fn session_resume_retains_override_conflicts_and_rejects_prompt_files_and_passthrough() {
+    for suffix in [
+        vec!["--ask", "--yolo"],
+        vec!["--model", "opus", "--tier", "senior"],
+        vec!["--fast", "--no-fast"],
+    ] {
+        let argv = [vec!["agents", "resume", "@bright-otter"], suffix].concat();
+        let error = AgentsHarness::try_parse_from(&argv).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{error}"
+        );
+    }
+    for suffix in [
+        vec!["--system-prompt-file", "/prompt"],
+        vec!["--append-system-prompt-file", "/prompt"],
+        vec!["--", "extra"],
+    ] {
+        let argv = [vec!["agents", "resume", "@bright-otter"], suffix].concat();
+        assert!(AgentsHarness::try_parse_from(&argv).is_err(), "{argv:?}");
+    }
+}
+
+#[test]
+fn session_resume_help_limits_each_launch_override_to_a_handle() {
+    let mut command = AgentsHarness::command();
+    let resume = command.find_subcommand_mut("resume").unwrap();
+    for flag in [
+        "ask",
+        "yolo",
+        "model",
+        "tier",
+        "agent",
+        "effort",
+        "fast",
+        "no_fast",
+        "isolation",
+    ] {
+        assert!(
+            resume.get_arguments().any(|arg| arg.get_id() == flag
+                && arg
+                    .get_help()
+                    .is_some_and(|help| help.to_string().contains("@handle only"))),
+            "{flag}"
+        );
+    }
+    assert!(
+        resume
+            .render_long_help()
+            .to_string()
+            .contains("@handle only")
+    );
 }
 
 #[test]
@@ -1017,8 +1113,9 @@ mod parse {
                 from_pr: None,
                 bg: false,
                 fresh: false,
+                overrides,
             })
-                if scope == "#docs"
+                if scope == "#docs" && overrides == SessionResumeOverrides::default()
         ));
         assert!(matches!(
             pr.command,
@@ -1028,7 +1125,9 @@ mod parse {
                 from_pr: Some(rimz::forge::PrTarget { number: 69, .. }),
                 bg: true,
                 fresh: false,
+                overrides,
             })
+                if overrides == SessionResumeOverrides::default()
         ));
         assert_clap_error(
             &["rimz", "resume", "#docs", "--from-pr", "69"],

@@ -391,6 +391,467 @@ mod agent_ref {
         fn trace(&self) -> String {
             std::fs::read_to_string(&self.trace).unwrap_or_default()
         }
+
+        fn request(&self) -> ExecRequest {
+            let trace = self.trace();
+            let layout: String = serde_json::from_str(
+                trace
+                    .lines()
+                    .rev()
+                    .find_map(|line| line.strip_prefix("layout-json\t"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let layout = layout.parse().unwrap();
+            let (_, argv) = resumed_pane(&layout).unwrap();
+            let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
+            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap()
+        }
+
+        fn attach_and_end(
+            &self,
+            params: &LaunchParams,
+            effective: Option<rimz::config::Isolation>,
+        ) {
+            let store = self.env.store();
+            let workspace = self.env.resolve_workspace(&self.env.project_root);
+            let kind = AgentKind::new_unchecked("claude");
+            store
+                .attach_agent_pane(
+                    &kind,
+                    &SESSION.into(),
+                    Some(&"saved-launch".into()),
+                    &rimz::ids::LoginName::default(),
+                    &workspace.session_name,
+                    &PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+                    rimz::pane::RuntimeOwner::new(
+                        rimz::pane::RuntimeOwnerKind::Agent,
+                        SESSION,
+                        u32::MAX,
+                        None,
+                    ),
+                    params.isolation,
+                    effective,
+                    Some(params),
+                )
+                .unwrap();
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    kind.as_str(),
+                    "SessionEnd",
+                    &AgentLifecycleObservation::new(Some(SESSION.into()), LifecycleSignal::Ended),
+                ))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn single_session_overrides_are_saved_and_replayed_when_omitted() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command_args(&[
+                "resume",
+                "@bright-otter",
+                "--isolation",
+                "host",
+                "--yolo",
+                "--model",
+                "opus",
+                "--effort",
+                "low",
+                "--fast",
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request = fixture.request();
+        let params = &request.identity.params;
+        assert_eq!(params.isolation, Some(rimz::config::Isolation::Host));
+        assert_eq!(params.mode, Some(PermissionMode::Yolo));
+        let record = params.record.as_ref().unwrap();
+        assert_eq!(record.model.as_deref(), Some("opus"));
+        assert_eq!(record.effort.as_deref(), Some("low"));
+        assert!(record.fast);
+        fixture.attach_and_end(params, Some(rimz::config::Isolation::Host));
+        let output = fixture.output("@bright-otter");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let replayed = fixture.request();
+        assert_eq!(replayed.identity.params.record, params.record);
+        assert_eq!(replayed.identity.params.isolation, params.isolation);
+        assert_eq!(replayed.identity.params.mode, params.mode);
+    }
+
+    #[test]
+    fn single_session_omission_keeps_the_saved_record() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let params = LaunchParams {
+            record: Some(rimz::agents::LaunchRecord::replay_or_new(
+                None,
+                Some("opus"),
+                Some("low"),
+                true,
+            )),
+            ..Default::default()
+        };
+        fixture.attach_and_end(&params, None);
+        let output = fixture.output("@bright-otter");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fixture.request().identity.params.record, params.record);
+    }
+
+    #[test]
+    fn exact_recorded_id_applies_agent_and_tier_overrides_against_the_session() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        write_definition(
+            &fixture.env,
+            "agents",
+            "reviewer",
+            "description: Reviewer\nagent: claude\nmodel: opus\ntools: []",
+            "Review.",
+        );
+        let output = fixture
+            .command_args(&[
+                "worker",
+                "--resume=saved-session",
+                "--agent",
+                "reviewer",
+                "--tier",
+                "junior",
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request = fixture.request();
+        assert_eq!(
+            request.identity.params.tier.as_ref().unwrap().tier,
+            rimz::config::tiers::ModelTier::Junior
+        );
+        let record = request.identity.params.record.unwrap();
+        assert_eq!(record.model.as_deref(), Some("sonnet"));
+        assert_eq!(record.agent.as_deref(), Some("reviewer"));
+    }
+
+    #[test]
+    fn single_session_tier_fallback_records_an_assist_only_after_placement() {
+        for argv in [
+            ["resume", "@bright-otter"],
+            ["worker", "--resume=saved-session"],
+        ] {
+            for failed_tab in [false, true] {
+                let fixture = Fixture::new(LaunchParams::default(), false, None);
+                std::fs::write(
+                    fixture.env.rimz_home().join("config.toml"),
+                    "[agents]\nisolation = 'host'\n[tiers]\njunior = ['sol']\nsenior = ['opus', 'sonnet']\n",
+                )
+                .unwrap();
+                fixture
+                    .env
+                    .publish_rate_limits(&rimz::agents::RateLimitsCache {
+                        entries: [(
+                            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                            rimz::agents::RateLimitCacheEntry {
+                                limits: rimz::agents::AgentRateLimits {
+                                    windows: vec![rimz::agents::RateLimitWindow {
+                                        scope: Some(rimz::agents::RateLimitWindowScope {
+                                            id: "model:opus".into(),
+                                            label: "opus".into(),
+                                        }),
+                                        used_percentage: Some(100),
+                                        resets_at: Some(
+                                            jiff::Timestamp::now()
+                                                + jiff::SignedDuration::from_secs(3600),
+                                        ),
+                                        duration_mins: Some(10080),
+                                        ..Default::default()
+                                    }],
+                                },
+                                ..Default::default()
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    });
+                let mut command = fixture.command_args(&argv);
+                command.args(["--tier", "senior"]).env(
+                    "RIMZ_TEST_ZELLIJ_ASSIST_LOG",
+                    fixture.env.rimz_home().join("logs/assists.log.jsonl"),
+                );
+                if failed_tab {
+                    command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+                }
+                let output = command.bounded_output().unwrap();
+                assert_eq!(
+                    output.status.success(),
+                    !failed_tab,
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let request = fixture.request();
+                let tier = request.identity.params.tier.as_ref().unwrap();
+                assert_eq!(tier.model, "sonnet");
+                assert_eq!(tier.skipped[0].model, "opus");
+                let assists =
+                    rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None);
+                assert_eq!(assists.len(), usize::from(!failed_tab));
+                assert!(fixture.trace().contains("assists-before-new-tab\t0"));
+                if failed_tab {
+                    continue;
+                }
+                let assist = serde_json::to_value(&assists[0]).unwrap();
+                assert_eq!(assist["assist"], "tier_fallback");
+                assert_eq!(assist["agent_id"], SESSION);
+                assert_eq!(assist["label"], NAME);
+                assert_eq!(assist["profile"], "worker");
+                assert_eq!(assist["model"], "sonnet");
+                fixture.attach_and_end(
+                    &request.identity.params,
+                    Some(rimz::config::Isolation::Host),
+                );
+                let output = fixture.command("@bright-otter").bounded_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None,)
+                        .len(),
+                    1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_recorded_id_reports_an_unsupported_override_as_a_session_refusal() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let store = fixture.env.store();
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let mut saved = store
+            .read_events()
+            .unwrap()
+            .into_iter()
+            .find_map(|event| match event.kind() {
+                rimz::store::event::EventKind::AgentLaunch(payload) => Some(payload),
+                _ => None,
+            })
+            .unwrap();
+        saved.agent_id = "kimi-session".into();
+        saved.launch_id = Some("kimi-launch".into());
+        saved.agent_name = "bright-hawk".into();
+        saved.launch.profile = None;
+        saved.launch.record = None;
+        saved.launch.mode = None;
+        let kind = AgentKind::new_unchecked("kimi");
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &kind,
+                saved,
+            ))
+            .unwrap();
+        let mut ended =
+            AgentLifecycleObservation::new(Some("kimi-session".into()), LifecycleSignal::Ended);
+        ended.transcript_path = Some(fixture.transcript.display().to_string());
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id,
+                &workspace.session_name,
+                kind.as_str(),
+                "SessionEnd",
+                &ended,
+            ))
+            .unwrap();
+        let output = fixture
+            .command_args(&["kimi", "--resume=kimi-session", "--effort", "high"])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .find_map(|line| line.split_once("cannot resume @bright-hawk: "))
+            .map(|(_, reason)| reason);
+        assert_eq!(
+            reason,
+            Some(
+                "kimi does not support --effort; remove it or put provider-specific flags in `args`"
+            ),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("no longer resolves"), "{stderr}");
+        assert!(!fixture.trace().contains("action\tnew-tab"));
+    }
+
+    #[test]
+    fn exact_adopted_id_applies_launch_overrides() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let projects = fixture.env.home_root.join(".claude/projects/native");
+        std::fs::create_dir_all(&projects).unwrap();
+        let native_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        std::fs::write(projects.join(format!("{native_id}.jsonl")), format!("{}\n", serde_json::json!({"type":"user", "sessionId":native_id, "cwd":fixture.cwd, "timestamp":"2025-01-01T00:00:00Z", "message":{"role":"user", "content":"hello"}}))).unwrap();
+        let output = fixture
+            .command_args(&[
+                "claude",
+                "--resume=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                "--model",
+                "opus",
+                "--yolo",
+                "--isolation",
+                "host",
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request = fixture.request();
+        assert_eq!(
+            request.identity.params.record.unwrap().model.as_deref(),
+            Some("opus")
+        );
+        assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
+        assert_eq!(
+            request.identity.params.isolation,
+            Some(rimz::config::Isolation::Host)
+        );
+    }
+
+    #[test]
+    fn lane_resume_refuses_launch_overrides_as_usage_without_placing_a_pane() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        for scope in [
+            vec![],
+            vec!["#saved"],
+            vec!["-w", "saved"],
+            vec!["--from-pr", "12"],
+        ] {
+            let args = [vec!["resume"], scope, vec!["--yolo"]].concat();
+            let output = fixture.command_args(&args).bounded_output().unwrap();
+            assert_eq!(output.status.code(), Some(2));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("@handle")
+                    && stderr.contains("--continue")
+                    && stderr.contains("rimz teams resume"),
+                "{stderr}"
+            );
+            assert!(!fixture.trace().contains("action\tnew-tab"));
+        }
+    }
+
+    #[test]
+    fn session_resume_warns_once_only_when_effective_isolation_changes() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        for (stamp, warns) in [
+            (rimz::config::Isolation::Scoped, true),
+            (rimz::config::Isolation::Host, false),
+        ] {
+            fixture.attach_and_end(&LaunchParams::default(), Some(stamp));
+            let output = fixture
+                .command_args(&["resume", "@bright-otter", "--isolation", "host"])
+                .bounded_output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                stderr
+                    .lines()
+                    .filter(|line| *line == "rimz: @bright-otter ran scoped; resuming under host")
+                    .count(),
+                usize::from(warns),
+                "{stderr}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn single_session_resume_preflights_flag_and_saved_scoped_isolation_before_placement() {
+        use rimz::config::Isolation;
+        for (stored, flag, succeeds) in [
+            (Some(Isolation::Scoped), None, false),
+            (Some(Isolation::Host), Some("scoped"), false),
+            (Some(Isolation::Scoped), Some("host"), true),
+        ] {
+            let fixture = Fixture::new(LaunchParams::default(), false, None);
+            fixture.attach_and_end(
+                &LaunchParams {
+                    isolation: stored,
+                    ..Default::default()
+                },
+                None,
+            );
+            let bwrap = fixture.shim.join("bwrap");
+            std::fs::write(&bwrap, "#!/bin/sh\necho fake-bwrap-refuses >&2\nexit 1\n").unwrap();
+            std::fs::set_permissions(&bwrap, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let mut command = fixture.command("@bright-otter");
+            if let Some(flag) = flag {
+                command.args(["--isolation", flag]);
+            }
+            let output = command.bounded_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.success(), succeeds, "{stderr}");
+            assert_eq!(fixture.trace().contains("action\tnew-tab"), succeeds);
+            if !succeeds {
+                assert!(stderr.contains("fake-bwrap-refuses"), "{stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn provider_picker_applies_launch_overrides() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command_args(&[
+                "claude",
+                "--resume",
+                "--model",
+                "opus",
+                "--yolo",
+                "--new-tab",
+            ])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request = fixture.request();
+        assert!(matches!(request.action, ExecAction::Pick { .. }));
+        assert_eq!(
+            request.identity.params.record.unwrap().model.as_deref(),
+            Some("opus")
+        );
+        assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
     }
 
     #[test]
