@@ -162,6 +162,7 @@ pub struct Entry {
     pub ready_at_ms: Option<u64>,
     pub estimate_bytes: u64,
     pub settings_hash: String,
+    /// Editor LSP requests since this broker started.
     pub request_count: u64,
     pub last_request_at_ms: Option<u64>,
     pub peak_rss_kb: u64,

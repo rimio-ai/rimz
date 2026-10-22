@@ -904,7 +904,10 @@ fn write_status(
             },
         )),
     );
-    facts.push("requests", render::cell(entry.request_count.to_string()));
+    facts.push(
+        "editor requests",
+        render::cell(entry.request_count.to_string()),
+    );
     facts.push("restarts", render::cell(entry.restarts.to_string()));
     facts.push("leases", render::cell(entry.leases.len().to_string()));
     if let Some(enabled) = entry.editor_check_on_save {
