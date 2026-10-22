@@ -57,6 +57,8 @@ pub use shim::{
 pub use skip::{AF_UNIX_SANDBOXED, skip};
 pub use zellij::ZellijNamespace;
 
+pub(crate) const ENV_PROBE_TIMEOUT_MS_ENV: &str = "RIMZ_TEST_ENV_PROBE_TIMEOUT_MS";
+
 pub(crate) fn append_frame(
     env: &Env,
     frame: rimz::store::ingress::HookIngress,

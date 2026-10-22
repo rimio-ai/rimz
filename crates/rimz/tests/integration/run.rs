@@ -120,6 +120,39 @@ fn run_record_json_shape_is_pinned() {
 
 #[cfg(unix)]
 #[test]
+fn supervised_probe_timeout_honors_the_test_override() {
+    use crate::common::{
+        ENV_PROBE_TIMEOUT_MS_ENV, hermetic_providers, provider_bin, write_path_shim,
+    };
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let shell = write_path_shim(
+        &env.home_root.join("shell-bin"),
+        "slow-login-sh",
+        "exec /bin/sleep 60",
+    );
+    write_path_shim(&provider_bin(&env), "claude", "exit 0");
+    let output = hermetic_providers(&env, &mut env.rimz())
+        .args(["agents", "claude", "hello", "-p", "--isolation", "host"])
+        .env("SHELL", &shell)
+        .env(ENV_PROBE_TIMEOUT_MS_ENV, "200")
+        .bounded_output()
+        .expect("refuse a timed-out launch environment probe");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.trim_end().ends_with(&format!(
+            "launch environment probe `{}` timed out after 200ms",
+            shell.display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn default_print_run_ignores_a_named_account_panes_exported_home() {
     use crate::common::{hermetic_providers as hermetic, provider_bin, write_path_shim};
 
