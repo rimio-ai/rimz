@@ -620,7 +620,8 @@ upward-dependencies = [
     "sidebar::frame",
     "sidebar::timing",
 ]
-surface-budget = 10
+# DaemonShape, DaemonShapeFault, and inspect_daemon_shape share the read-only judge with doctor (+3).
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/diag"
@@ -3523,6 +3524,21 @@ reason = "Birth and binary CLI reset admit a listed session only by its own hear
 kind = "item"
 key = "room::session::session_is_live"
 reason = "Nested start needs a retrying presence probe without the health refusal that room preflight applies. The binary CLI requires a public library entry."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::DaemonShape"
+reason = "Doctor and runtime repair share one read-only daemon-column shape verdict."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::DaemonShapeFault"
+reason = "Doctor renders and serializes the ordered faults from the shared daemon shape judge."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::inspect_daemon_shape"
+reason = "The binary doctor reads authoritative daemon shape without waking or changing panes."
 
 [[verdict]]
 kind = "item"

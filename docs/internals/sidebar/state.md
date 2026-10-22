@@ -511,7 +511,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 | Team pipeline | Every refresher pass, no TTL; content-identical writes suppressed | Board stage, owner, open-visit stamp, prior visit seconds, visited stages, and run start/stop |
 | Codex daemon reap | `CODEX_DAEMON_REAP_TTL` (30 s), stale after `CODEX_DAEMON_REAP_STALE` (90 s) | Codex daemon session reaping |
 | Remote link stats | Stale after `LINK_STATS_STALE` (10 s), expired after `LINK_STATS_EXPIRE` (120 s) | Footer link badge for `rimz remote connect` rooms |
-| Daemon-view repair | 30 s; a fresh frame with unchanged inputs skips the authoritative check ([rimzd.md](../rimzd.md#who-repairs-and-when)) | Managed `rimzd` pane recovery and configuration changes |
+| Daemon-view repair | 30 s; a fresh, marker-satisfied frame with unchanged inputs and the same `rimzd` pane-id set as the last pass skips the authoritative check ([rimzd.md](../rimzd.md#who-repairs-and-when)) | Managed `rimzd` pane recovery, loop-watch shape repair, and configuration changes |
 | Renderer heartbeat | Written every `HEARTBEAT_WRITE_INTERVAL` (2 s), trusted for `SIDEBAR_HEARTBEAT_TTL` (5 s) | Launch freshness, wakeup fanout, and runtime cleanup |
 
 ### The paint clock
