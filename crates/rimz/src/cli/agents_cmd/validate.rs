@@ -538,6 +538,7 @@ mod tests {
             ("claude", ""),
             ("routed", "tier: junior\ntools: []\n"),
             ("exact", "agent: claude\nmodel: claude-custom\ntools: []\n"),
+            ("blocked", "model: astra\ntools: []\n"),
         ] {
             std::fs::write(
                 root.path().join(format!("agents/{name}.md")),
@@ -546,7 +547,10 @@ mod tests {
             .unwrap();
         }
         let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
-        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+        assert!(loaded.errors[0].path.ends_with("blocked.md"));
+        assert!(loaded.errors[0].message.contains("codex.md"));
+        assert!(loaded.errors[0].message.contains("tier: senior"));
         let warnings = warnings(&loaded, Isolation::Host, &Default::default());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].path.ends_with("routed.md"));

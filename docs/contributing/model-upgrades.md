@@ -23,7 +23,7 @@ Definitions and tier cells retain the requested alias. With a durable launch rec
 
 ## Model tier bindings
 
-For definitions naming `tier:` or a model listed in a tier, edit the ordered model list in machine config; see [model tiers](../guide/configuration.md#model-tiers). Each configured entry belongs to only one tier; aliases remain distinct from full model IDs until launch. Effort belongs to the definition or the model's default, not the list; relative effort is not supported. To change RimZ's shipped lists, update the defaults in `config/tiers.rs`, the commented template, and that guide together.
+For definitions naming `tier:`, edit the ordered model list in machine config; see [model tiers](../guide/configuration.md#model-tiers). A concrete `model:` runs exactly and must be changed in its definition, even when listed in a tier. Each configured entry belongs to only one tier; aliases remain distinct from full model IDs until launch. Effort belongs to the definition or the model's default, not the list; relative effort is not supported. To change RimZ's shipped lists, update the defaults in `config/tiers.rs`, the commented template, and that guide together.
 
 ## Pricing, for either provider
 

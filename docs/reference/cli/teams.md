@@ -52,6 +52,8 @@ The catalogue merges machine [Markdown definitions](../definitions.md) under `<a
 
 Tiered role listings and `show` rosters display the tier beside the concrete model and mark a fallback. JSON adds `tier` and `tier_fallback` only for tiered roles; `model` remains the resolved provider model.
 
+On a fresh launch, `--model M` runs that exact model for every Markdown role, on M's family's render, without tier routing or a stamp. If that family cannot build a role, the launch refuses with the role, model, family and build error. A conflicting `--agent` family refuses too. Use `--tier` to allow routing, even when a role declares a concrete `model:`.
+
 ```sh
 rimz teams profiles
 rimz teams profiles --path          # add each profile's defining file

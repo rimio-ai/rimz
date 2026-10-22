@@ -783,6 +783,18 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             human.contains("opus: not buildable: ") && human.contains("user-only"),
             "{human}"
         );
+        let exact = env
+            .rimz()
+            .args(["agents", "explain", "preview", "--model", "opus"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .bounded_output()
+            .unwrap();
+        assert!(!exact.status.success());
+        let error = String::from_utf8_lossy(&exact.stderr);
+        for fragment in ["preview", "opus", "claude", "user-only"] {
+            assert!(error.contains(fragment), "{error}");
+        }
     } else if routing == "fallback" {
         assert_eq!(preview["tier_skipped"][0]["reason"], "exhausted");
     }
