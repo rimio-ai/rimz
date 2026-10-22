@@ -76,7 +76,7 @@ rimz teams show forge --json
 | Target | Reports |
 | --- | --- |
 | `<team>` | The definition, then a table of the team's live cohorts. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
-| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort launched without `--channel` has lane `<dir>/<team>`; `main`, the project directory's name, and the root path select none, and a miss under any of them prints as `#main`. |
+| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort launched without `--channel` has lane `<dir>/<team>`; `main`, the project directory's name, and the root path select none, and a miss under any of them prints as `#main`, with a resume command that names `<team>#<dir>/<team>`. |
 | `'#<lane>'`, or `-w <lane>` alone | For every team live in that lane, defined or not, its lane block then its definition. With none it prints `no live team in #<lane>` and exits 0. |
 
 Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
