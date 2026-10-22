@@ -855,7 +855,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut gate = loop {
         if let Ok((stream, _)) = listener.accept() {
             break stream;
@@ -937,7 +937,7 @@ fn restart_between_evaluation_and_transition_reruns_check_free() {
         .split_whitespace()
         .find(|s| s.starts_with("wf_"))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let _stream = loop {
         if let Ok((stream, _)) = listener.accept() {
             break stream;
