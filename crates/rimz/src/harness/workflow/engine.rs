@@ -446,7 +446,7 @@ fn prepare(
         }
     } else if spec.checks.contains_key(&t.record.node) {
         let check = &spec.checks[&t.record.node];
-        if let (Some(raw), Some(profile)) = (&check.window, &check.agent)
+        if let (Some(raw), Some(spec::CheckKind::Agent(profile))) = (&check.window, check.kind())
             && let Some(detail) = window_wait_for_profile(&t.record, profile, raw, windows)?
         {
             t.step_wait("window", Some(detail));
@@ -473,10 +473,11 @@ fn prepare(
     let step = spec.steps.get(&t.record.node);
     let kind = if step.is_some() {
         AttemptKind::Agent
-    } else if spec.checks[&t.record.node].agent.is_some() {
-        AttemptKind::Judge
     } else {
-        AttemptKind::Script
+        match spec.checks[&t.record.node].kind() {
+            Some(spec::CheckKind::Agent(_)) => AttemptKind::Judge,
+            _ => AttemptKind::Script,
+        }
     };
     let mut digests = BTreeMap::new();
     let prompt = step.map(|step| {

@@ -8035,6 +8035,21 @@ reason = "The workflow CLI and subsequent engine share the strict spec model, de
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::spec::CheckKind"
+reason = "Workflow validation and execution share one check-kind decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Check::kind"
+reason = "Workflow validation and execution share one check-kind decision."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Check::edges"
+reason = "Routing, admission, and cycle checks use the same explicit and default edges."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::Step"
 reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
 
