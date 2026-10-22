@@ -76,7 +76,7 @@ rimz teams show forge --json
 | Target | Reports |
 | --- | --- |
 | `<team>` | The definition, then a table of the team's live cohorts. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
-| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. Root aliases print as `#main`. |
+| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort's lane is `<dir>/<team>`; `main`, the project directory's name, and the root path select none, and a miss under any of them prints as `#main`. |
 | `'#<lane>'`, or `-w <lane>` alone | For every team live in that lane, defined or not, its lane block then its definition. With none it prints `no live team in #<lane>` and exits 0. |
 
 Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
@@ -307,7 +307,7 @@ rimz teams stop forge -w feat-rate-limits
 
 After a successful stop, a pending board keeps an existing checkout held. The receipt names its stage and prints the addressed resume and `flip ... Done` release commands. Stopping does not finish the board: until it reaches `Done`, agent-exit cleanup, `worktree sweep`, and `gc` keep a RimZ-owned checkout ([worktree sweep](./worktree.md#sweep-landed-worktrees)), while an explicit `worktree remove` still removes it.
 
-Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name; branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. With no live cohort, the error suggests `rimz teams resume <team>`.
+Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name and for a root-checkout cohort is `<dir>/<team>`, where `<dir>` is the project directory's name (`forge#api/forge`); `main` does not select a root-checkout cohort. Branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. With no live cohort, the error suggests `rimz teams resume <team>`.
 
 ## Wait for a cohort to finish
 
@@ -423,7 +423,7 @@ rimz teams flip Done "reflection recorded in .rimz/team/reflect-notes.md; run co
 `flip` has no worktree flag. Give `TEAM#LANE` to select a cohort from elsewhere in the room, or run it inside the team's worktree. The `#` distinguishes an address from a stage.
 
 1. With `TEAM#LANE`, the cohort supplies its recorded worktree. Without it, the worktree is `RIMZ_WORKTREE_PATH` when set, else the nearest directory from the current one up to the Git toplevel whose `.rimz/team` link resolves, so a `--cwd` team's subdirectory finds its own board, else the Git toplevel. Outside Git with neither an address nor `RIMZ_WORKTREE_PATH`, the flip is refused.
-2. Select the live cohort in that lane or checkout, otherwise the team holding it under the launch hold rules. `LANE` matches as it does for `stop`, `focus`, and `restart`: the lane, its worktree name, or `main` for the root checkout. `--team NAME` filters the current checkout and cannot be combined with `TEAM#LANE`. With several live cohorts, the error lists the choices.
+2. Select the live cohort in that lane or checkout, otherwise the team holding it under the launch hold rules. `LANE` matches as it does for `stop`, `focus`, and `restart`: the lane or its worktree name, and `<dir>/<team>` for a root-checkout cohort. `--team NAME` filters the current checkout and cannot be combined with `TEAM#LANE`. With several live cohorts, the error lists the choices.
 3. A caller in the selected cohort flips as its role. A caller outside any cohort flips as `@user`. An agent in a different cohort is refused.
 
 A project team that is not trusted is refused, as for any command that reads an untrusted project config.
