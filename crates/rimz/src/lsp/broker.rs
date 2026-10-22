@@ -156,14 +156,14 @@ impl Model {
         // lifetime's end (it clears the transport under the lock it reads the
         // reason with): only the reason changes, and nothing waiting on a stop
         // is woken. During teardown it is a no-op, as for any dormant entry.
-        if let State::Dormant {
-            reason: Some(dormant @ (StopReason::Crashed | StopReason::MemoryPressure)),
-            ..
-        } = &mut self.entry.state
+        if self.entry.state.is_alarm()
             && reason == StopReason::StoppedByHand
             && self.transport.is_none()
+            && let State::Dormant {
+                reason: dormant, ..
+            } = &mut self.entry.state
         {
-            *dormant = reason;
+            *dormant = Some(reason);
             return;
         }
         if matches!(self.entry.state, State::Stopped { .. })

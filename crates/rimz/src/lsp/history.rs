@@ -39,11 +39,44 @@ fn estimate_records(
 }
 
 pub(super) fn estimate(project: &Path, server: &str, settings: &str, fallback: u64) -> u64 {
-    let mut records = Vec::new();
-    crate::disk::rotating::visit_records(&crate::disk::paths::lsp_history_path(), |record| {
-        records.push(record)
-    });
-    estimate_records(&records, project, server, settings, fallback)
+    Needs::read().estimate(project, server, settings, fallback)
+}
+
+/// Learned start needs, read once and reused across a command's registry rows.
+pub struct Needs(Vec<Record>);
+
+impl Needs {
+    /// Snapshot the history log, skipping missing or malformed records.
+    pub fn read() -> Self {
+        Self::read_at(&crate::disk::paths::lsp_history_path())
+    }
+
+    fn read_at(path: &Path) -> Self {
+        let mut records = Vec::new();
+        crate::disk::rotating::visit_records(path, |record| records.push(record));
+        Self(records)
+    }
+
+    /// Largest of the last five matching peaks, or the caller's fallback.
+    fn estimate(&self, project: &Path, server: &str, settings: &str, fallback: u64) -> u64 {
+        estimate_records(&self.0, project, server, settings, fallback)
+    }
+
+    /// What the row's next start needs: its project's learned peak, else the
+    /// estimate it was last admitted on.
+    pub fn for_entry(&self, entry: &super::registry::Entry) -> u64 {
+        entry
+            .project
+            .as_deref()
+            .map_or(entry.estimate_bytes, |project| {
+                self.estimate(
+                    project,
+                    &entry.server,
+                    &entry.settings_hash,
+                    entry.estimate_bytes,
+                )
+            })
+    }
 }
 
 pub(super) fn append(record: &Record) {
@@ -68,6 +101,81 @@ pub fn settings_hash(config: &crate::config::LspServerConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn needs_reads_once_and_keeps_keys_and_the_last_five_peaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        let mut log = String::from("not a record\n");
+        let record = |project, server, settings, peak_rss_kb| Record {
+            at_ms: 0,
+            root: "/checkout".into(),
+            project,
+            server,
+            settings_hash: settings,
+            peak_rss_kb,
+            ready_ms: None,
+            dormant_ms: None,
+            reason: super::super::registry::StopReason::Idle,
+        };
+        for peak in [100, 2, 5, 3, 4, 1] {
+            log += &serde_json::to_string(&record(
+                Some("/project".into()),
+                "rust".into(),
+                "a".into(),
+                peak,
+            ))
+            .unwrap();
+            log.push('\n');
+        }
+        for (project, server, settings) in [
+            (Some("/elsewhere".into()), "rust", "a"),
+            (Some("/project".into()), "python", "a"),
+            (Some("/project".into()), "rust", "b"),
+            (None, "rust", "a"),
+        ] {
+            log += &serde_json::to_string(&record(project, server.into(), settings.into(), 200))
+                .unwrap();
+            log.push('\n');
+        }
+        std::fs::write(&path, &log).unwrap();
+        let needs = Needs::read_at(&path);
+        assert_eq!(
+            needs.estimate(Path::new("/project"), "rust", "a", 99),
+            5 * 1024
+        );
+        assert_eq!(
+            needs.estimate(Path::new("/project"), "python", "a", 99),
+            200 * 1024
+        );
+        assert_eq!(needs.estimate(Path::new("/unknown"), "rust", "a", 99), 99);
+        assert_eq!(
+            Needs::read_at(&dir.path().join("missing")).estimate(
+                Path::new("/project"),
+                "rust",
+                "a",
+                99
+            ),
+            99
+        );
+        log += &serde_json::to_string(&record(
+            Some("/project".into()),
+            "rust".into(),
+            "a".into(),
+            300,
+        ))
+        .unwrap();
+        log.push('\n');
+        std::fs::write(&path, log).unwrap();
+        assert_eq!(
+            needs.estimate(Path::new("/project"), "rust", "a", 99),
+            5 * 1024
+        );
+        assert_eq!(
+            Needs::read_at(&path).estimate(Path::new("/project"), "rust", "a", 99),
+            300 * 1024
+        );
+    }
 
     #[test]
     fn editor_checks_have_separate_history_without_changing_default_hash() {

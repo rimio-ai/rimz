@@ -596,7 +596,7 @@ fn render_lsp_servers(
         note(
             w,
             Health::Neutral,
-            &format!("{hidden} more dormant or not started — rimz lsp list --all"),
+            &format!("{hidden} more dormant or not started — rimz doctor --audit"),
         )?;
     }
     Ok(())

@@ -484,7 +484,7 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
                 "{text}"
             );
             assert!(
-                text.contains("1 more dormant or not started — rimz lsp list --all"),
+                text.contains("1 more dormant or not started — rimz doctor --audit"),
                 "{text}"
             );
         }

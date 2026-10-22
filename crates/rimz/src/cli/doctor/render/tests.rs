@@ -217,7 +217,7 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
     });
     let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
     assert!(
-        rendered.contains("1 more dormant or not started — rimz lsp list --all"),
+        rendered.contains("1 more dormant or not started — rimz doctor --audit"),
         "{rendered}"
     );
     assert!(!rendered.contains("dormant: memory pressure"), "{rendered}");
