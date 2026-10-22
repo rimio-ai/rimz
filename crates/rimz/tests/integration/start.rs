@@ -1267,6 +1267,15 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
 fn reconnect_marker_keeps_pty_start_unattended() {
     let env = Env::new();
     let bin_dir = seed_actionable_agent(&env);
+    std::fs::copy(bin_dir.join("agy"), bin_dir.join("codex")).unwrap();
+    env.install_agent_hooks("codex");
+    let config = env.agent_config_path("codex");
+    let original = format!(
+        "{}\n[projects.{}]\ntrust_level = \"untrusted\"\n",
+        std::fs::read_to_string(&config).unwrap(),
+        toml::Value::String(env.project_root.display().to_string()),
+    );
+    std::fs::write(&config, &original).unwrap();
     let zellij_log = env.project_root.join("zellij-reconnect.log");
     let _room = ShimRoom::watch(&env, &zellij_log);
     let pty = native_pty_system();
@@ -1331,9 +1340,23 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     });
     assert!(status.success(), "reconnect start failed: {output}");
     assert!(
-        output.contains("No terminal input — nothing installed or refreshed."),
-        "the hooks gate must use its unattended fallback: {output}"
+        output.contains("Not asked on a reconnect — nothing installed or refreshed."),
+        "the hooks gate must explain the reconnect posture: {output}"
     );
+    for lasting_notice in [
+        "No terminal input",
+        "hooks are installed but untrusted",
+        "saved untrusted",
+        "has no trust decision",
+        "directory workspace rooted at",
+        "marker-rooted workspace at",
+    ] {
+        assert!(
+            !output.contains(lasting_notice),
+            "{lasting_notice}: {output}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(config).unwrap(), original);
     assert!(
         !output.contains("Install or refresh reporting hooks? [Y/n]"),
         "the reconnect must not prompt: {output}"
@@ -1342,6 +1365,32 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         !output.contains("Trust this project's config on this machine?"),
         "the reconnect must not prompt for trust: {output}"
     );
+}
+
+#[test]
+fn reconnect_marker_silences_undecided_folder_trust_without_a_terminal() {
+    let env = Env::new();
+    std::fs::create_dir(env.project_root.join(".git")).unwrap();
+    std::fs::write(env.project_root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let bin = seed_actionable_agent(&env);
+    std::fs::copy(bin.join("agy"), bin.join("codex")).unwrap();
+    let config = env.home_root.join("codex.toml");
+    std::fs::write(&config, "").unwrap();
+    let trace = env.project_root.join("zellij-reconnect-no-tty.log");
+    let _room = ShimRoom::watch(&env, &trace);
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
+    let output = command
+        .env("RIMZ_CODEX_CONFIG", &config)
+        .env("RIMZ_REMOTE_RECONNECT", "1")
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("codex has no trust decision"), "{stderr}");
+    assert!(stderr.contains("Not asked on a reconnect"), "{stderr}");
+    assert!(!stderr.contains("No terminal input"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(config).unwrap(), "");
 }
 
 fn room_logins(env: &Env) -> Option<serde_json::Value> {

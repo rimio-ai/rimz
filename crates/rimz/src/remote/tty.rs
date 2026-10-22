@@ -2,6 +2,9 @@
 
 use nix::sys::termios::{InputFlags, LocalFlags, OutputFlags};
 
+/// Marks the host's handoff to its multiplexer client on a supervised attach.
+pub const ROOM_OPEN_SENTINEL: &str = "\x1b]7717;rimz-room-open\x07";
+
 /// Device Status Report query used to fence replies from an earlier client.
 pub const STATUS_QUERY: &str = "\x1b[5n";
 
@@ -103,6 +106,11 @@ pub fn sanitize_flags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_open_sentinel_uses_private_osc() {
+        assert_eq!(ROOM_OPEN_SENTINEL, "\x1b]7717;rimz-room-open\x07");
+    }
 
     const SANE_INPUT: InputFlags = InputFlags::ICRNL;
     const SANE_OUTPUT: OutputFlags = OutputFlags::OPOST.union(OutputFlags::ONLCR);

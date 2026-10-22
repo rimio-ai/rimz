@@ -12,6 +12,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::cli::{first_run, render};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::cli) enum HookInstallMode {
+    Attended,
+    NoTerminal,
+    Reconnect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InstallDisposition {
     Installed,
     Refreshed,
@@ -74,7 +81,7 @@ pub(super) fn detected_installable_adapters(
     detected
 }
 
-pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
+pub(in crate::cli) fn ensure_detected_agent_hooks(mode: HookInstallMode) -> Result<bool> {
     let login_env = rimz::agents::ambient_env();
     let options = crate::cli::hook_install_options();
     let mut actionable = Vec::new();
@@ -90,18 +97,20 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
             continue;
         }
 
-        warn_untrusted_hooks(
-            definition.kind,
-            &agent.untrusted_installed_hooks(&login_env),
-        )?;
+        if mode != HookInstallMode::Reconnect {
+            warn_untrusted_hooks(
+                definition.kind,
+                &agent.untrusted_installed_hooks(&login_env),
+            )?;
+        }
     }
 
     if actionable.is_empty() {
         return Ok(false);
     }
 
-    if !attended {
-        print_noninteractive_notice(&actionable)?;
+    if mode != HookInstallMode::Attended {
+        print_noninteractive_notice(&actionable, mode)?;
         return Ok(true);
     }
 
@@ -418,12 +427,19 @@ pub(super) fn write_uninstall_result(
     Ok(())
 }
 
-fn print_noninteractive_notice(previews: &[HookInstallPreview]) -> Result<()> {
+fn print_noninteractive_notice(
+    previews: &[HookInstallPreview],
+    mode: HookInstallMode,
+) -> Result<()> {
     let mut out = render::err();
-    write_noninteractive_notice(&mut out, previews)
+    write_noninteractive_notice(&mut out, previews, mode)
 }
 
-fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+fn write_noninteractive_notice(
+    out: &mut dyn Write,
+    previews: &[HookInstallPreview],
+    mode: HookInstallMode,
+) -> Result<()> {
     write_intro_context(out, previews)?;
     writeln!(out)?;
     write_agent_table(out, previews)?;
@@ -431,7 +447,12 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
     write_consent_footer(out)?;
     writeln!(
         out,
-        "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install.",
+        "{}",
+        if mode == HookInstallMode::Reconnect {
+            "Not asked on a reconnect — nothing installed or refreshed. Run `rimz hooks install` in a room pane to install. `rimz doctor` lists missing hooks."
+        } else {
+            "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install."
+        },
     )?;
     Ok(())
 }
@@ -634,7 +655,9 @@ mod tests {
             });
             let previews = [codex];
             let (_, consent) = drive(&previews, b"n\n");
-            let notice = strip(|out| write_noninteractive_notice(out, &previews));
+            let notice = strip(|out| {
+                write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal)
+            });
             for rendered in [&consent, &notice] {
                 assert!(rendered.contains(if removed {
                     "Removing Codex's RimZ permission rules file ends its prompt and sandbox bypass for routine `rimz` commands"
@@ -668,9 +691,12 @@ mod tests {
         let previews = [additive, created];
 
         let (_, interactive) = drive(&previews, b"n\n");
-        let noninteractive = strip(|out| write_noninteractive_notice(out, &previews));
+        let noninteractive =
+            strip(|out| write_noninteractive_notice(out, &previews, HookInstallMode::NoTerminal));
+        let reconnect =
+            strip(|out| write_noninteractive_notice(out, &previews, HookInstallMode::Reconnect));
 
-        for rendered in [&interactive, &noninteractive] {
+        for rendered in [&interactive, &noninteractive, &reconnect] {
             assert!(rendered.contains("RimZ found 2 coding agents: claude, codex."));
             assert!(rendered.contains("~/.claude/settings.json"));
             assert!(rendered.contains("~/.codex/settings.json"));
@@ -689,6 +715,10 @@ mod tests {
         assert!(noninteractive.contains(
             "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install."
         ));
+        assert!(!reconnect.contains("Install or refresh reporting hooks? [Y/n]"));
+        assert!(!reconnect.contains("No terminal input"));
+        assert!(reconnect.contains("Not asked on a reconnect — nothing installed or refreshed. Run `rimz hooks install` in a room pane to install."));
+        assert!(reconnect.contains("rimz doctor"));
     }
 
     #[test]

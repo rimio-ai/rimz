@@ -1024,8 +1024,9 @@ fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
 
     let copy = run_exec_with_term(Some("truecolor"), InfocmpFixture::Copy);
     assert!(
-        snippet(&copy)
-            .contains("printf '%s\\n' 'CANNED,' | tic -x - 2>/dev/null && export TERM='alacritty'"),
+        snippet(&copy).contains(
+            "printf '%s\\n' 'CANNED,' | tic -x - >/dev/null 2>&1 && export TERM='alacritty'"
+        ),
         "{}",
         snippet(&copy)
     );
@@ -1034,6 +1035,63 @@ fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
         "{}",
         snippet(&copy)
     );
+}
+
+#[test]
+fn reconnect_snippet_silences_terminfo_setup_in_login_shells() {
+    let env = Env::new();
+    let bin = env.home_root.join(".cargo/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for (name, script) in [
+        (
+            "tic",
+            "#!/bin/sh\nprintf 'tic stdout'\nprintf 'tic stderr' >&2\nexit \"$RIMZ_TEST_TIC_STATUS\"\n",
+        ),
+        (
+            "rimz",
+            "#!/bin/sh\nprintf '%s:%s:%s' \"$TERM\" \"$RIMZ_REMOTE_SUPERVISED\" \"$RIMZ_REMOTE_RECONNECT\"\n",
+        ),
+    ] {
+        let path = bin.join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let plan = rimz::remote::SshAttachPlan::new(rimz::remote::SshAttachOptions {
+        target: rimz::remote::RemoteTarget::parse("dev-box:session:query-engine").unwrap(),
+        lineage: "test-lineage".into(),
+        supervised: true,
+        force_version: false,
+        resume: true,
+        mux: None,
+        term: rimz::remote::TermPlan::Copy {
+            name: "alacritty".into(),
+            source: "CANNED,".into(),
+        },
+        truecolor: false,
+        client_size: None,
+    });
+    let spec = plan.retry().plain();
+    for shell in ["sh", "zsh"] {
+        let Ok(shell) = which::which(shell) else {
+            continue;
+        };
+        for (tic_status, term) in [("0", "alacritty"), ("1", "xterm-256color")] {
+            let out = env
+                .rimz_at(&shell)
+                .args(["-c", snippet(&spec.args)])
+                .env("PATH", "/usr/bin:/bin")
+                .env("RIMZ_TEST_TIC_STATUS", tic_status)
+                .bounded_output()
+                .unwrap();
+            assert!(out.status.success(), "{shell:?}: {out:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                format!("{term}:1:1"),
+                "{shell:?}: tic output must not precede the host"
+            );
+            assert!(out.stderr.is_empty(), "{shell:?}: {out:?}");
+        }
+    }
 }
 
 #[test]

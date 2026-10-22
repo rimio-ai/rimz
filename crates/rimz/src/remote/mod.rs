@@ -29,7 +29,7 @@ use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
 use crate::proc::REMOTE_LINEAGE_ENV;
 
 pub use crate::mux::{
-    ATTACH_MARK_ENV, OUTER_SCROLL_BRACKET_ENV, REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV,
+    OUTER_SCROLL_BRACKET_ENV, REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV,
     REMOTE_RECONNECT_ENV, REMOTE_SUPERVISED_ENV,
 };
 
@@ -369,7 +369,6 @@ enum ControlMode<'a> {
 pub struct SshAttachAttempt<'a> {
     plan: &'a SshAttachPlan,
     phase: AttemptPhase,
-    mark: bool,
     outer_scroll_bracket: bool,
 }
 
@@ -386,7 +385,6 @@ impl SshAttachPlan {
         SshAttachAttempt {
             plan: self,
             phase: AttemptPhase::Initial,
-            mark: false,
             outer_scroll_bracket: false,
         }
     }
@@ -395,7 +393,6 @@ impl SshAttachPlan {
         SshAttachAttempt {
             plan: self,
             phase: AttemptPhase::Retry,
-            mark: false,
             outer_scroll_bracket: false,
         }
     }
@@ -447,11 +444,6 @@ impl SshAttachPlan {
 }
 
 impl SshAttachAttempt<'_> {
-    pub fn with_mark(mut self, mark: bool) -> Self {
-        self.mark = mark;
-        self
-    }
-
     pub fn with_outer_scroll_bracket(mut self, outer_scroll_bracket: bool) -> Self {
         self.outer_scroll_bracket = outer_scroll_bracket;
         self
@@ -491,7 +483,6 @@ impl SshAttachAttempt<'_> {
             .arg(guarded_snippet(
                 options,
                 self.phase,
-                self.mark,
                 self.outer_scroll_bracket,
             ))
     }
@@ -533,7 +524,7 @@ impl TermPlan {
             TermPlan::Downgrade => "export TERM=xterm-256color; ".to_owned(),
             TermPlan::Copy { name, source } => format!(
                 "export TERM=xterm-256color; \
-                 printf '%s\\n' {source} | tic -x - 2>/dev/null && export TERM={name}; ",
+                 printf '%s\\n' {source} | tic -x - >/dev/null 2>&1 && export TERM={name}; ",
                 source = sh_quote(source),
                 name = sh_quote(name),
             ),
@@ -590,7 +581,6 @@ pub fn term_plan_from(
 fn guarded_snippet(
     options: &SshAttachOptions,
     phase: AttemptPhase,
-    mark: bool,
     outer_scroll_bracket: bool,
 ) -> String {
     let mut flags = String::from("--attach");
@@ -616,10 +606,7 @@ fn guarded_snippet(
         env_setup.push_str(&format!("export {REMOTE_FORCE_VERSION_ENV}=1; "));
     }
     if matches!(phase, AttemptPhase::Retry) {
-        env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
-    }
-    if mark {
-        env_setup.push_str(&format!("export {ATTACH_MARK_ENV}=1; "));
+        env_setup.push_str(&format!("export {REMOTE_RECONNECT_ENV}=1; "));
     }
     if outer_scroll_bracket {
         env_setup.push_str(&format!("export {OUTER_SCROLL_BRACKET_ENV}=1; "));

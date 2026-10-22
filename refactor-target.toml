@@ -2824,6 +2824,11 @@ key = "remote::link::link_tier"
 reason = "Classifier and thresholds are remote policy over a store-owned tier; stays at L5 with the protocol."
 
 [[verdict]]
+kind = "item"
+key = "remote::tty::ROOM_OPEN_SENTINEL"
+reason = "Shared host/local attach protocol: the CLI host writes it before the mux client and the local stdout relay consumes it."
+
+[[verdict]]
 kind = "pass-through"
 key = "cli::remote::supervisor::LinkSupervisor::drop"
 reason = "Pass 29d: LinkSupervisor releases the held screen before fields drop the SSH master; explicit teardown order belongs here, not in field ordering."
@@ -6591,11 +6596,6 @@ reason = "Shared remote channel list for mux server birth, tmux global environme
 [[verdict]]
 kind = "item"
 key = "mux::REMOTE_RECONNECT_ENV"
-reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
-
-[[verdict]]
-kind = "item"
-key = "mux::ATTACH_MARK_ENV"
 reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
 
 [[verdict]]

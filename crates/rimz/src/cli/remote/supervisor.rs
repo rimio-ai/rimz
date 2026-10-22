@@ -292,8 +292,7 @@ pub(super) fn supervise_remote(
         } else {
             guard.settle_terminal_replies();
             supervisor.plan.retry()
-        }
-        .with_mark(supervisor.held_screen.is_some() && !rimz::tui::no_color());
+        };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
         let outcome = run_ssh_session(

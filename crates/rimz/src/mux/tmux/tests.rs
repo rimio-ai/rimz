@@ -131,7 +131,6 @@ fn new_session_birth_removes_outer_mux_context() {
         "RIMZ_REMOTE_RECONNECT",
         "RIMZ_REMOTE_SUPERVISED",
         "RIMZ_REMOTE_FORCE_VERSION",
-        "RIMZ_ATTACH_MARK",
         "RIMZ_CLIENT_SIZE",
         "RIMZ_OUTER_SCROLL_BRACKET",
     ]) {
@@ -166,7 +165,6 @@ fn global_mux_context_removal_marks_mux_and_remote_client_names() {
         "RIMZ_REMOTE_RECONNECT",
         "RIMZ_REMOTE_SUPERVISED",
         "RIMZ_REMOTE_FORCE_VERSION",
-        "RIMZ_ATTACH_MARK",
         "RIMZ_CLIENT_SIZE",
         "RIMZ_OUTER_SCROLL_BRACKET",
     ];

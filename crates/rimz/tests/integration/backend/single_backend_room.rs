@@ -1004,7 +1004,6 @@ fn a_remote_room_keeps_client_context_out_of_panes() {
         ("RIMZ_REMOTE_RECONNECT", "1"),
         ("RIMZ_REMOTE_SUPERVISED", "1"),
         ("RIMZ_REMOTE_FORCE_VERSION", "1"),
-        ("RIMZ_ATTACH_MARK", "1"),
         ("RIMZ_CLIENT_SIZE", "120x40"),
         ("RIMZ_OUTER_SCROLL_BRACKET", "1"),
     ];

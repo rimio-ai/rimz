@@ -39,7 +39,9 @@ mod proctree;
 mod tests;
 
 use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
-pub(in crate::cli) use hook_install::{ensure_detected_agent_hooks, install_hooks_into};
+pub(in crate::cli) use hook_install::{
+    HookInstallMode, ensure_detected_agent_hooks, install_hooks_into,
+};
 pub(crate) use install::{provider_home_logins, uninstall_managed_hooks};
 use install::{run_install, run_uninstall};
 use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};

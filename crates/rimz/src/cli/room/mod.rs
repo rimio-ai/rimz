@@ -22,7 +22,7 @@ use rimz::room::{
 };
 use rimz::{RuntimePaths, workspace::record::WorkspaceRecord};
 
-use crate::cli::hooks::ensure_detected_agent_hooks;
+use crate::cli::hooks::{HookInstallMode, ensure_detected_agent_hooks};
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config, render,
     setup,
@@ -61,6 +61,32 @@ pub(crate) enum PrintCause {
 enum ResumePromptMode {
     Interactive,
     Silent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartPosture {
+    Attended,
+    NoTerminal,
+    Reconnect,
+}
+
+impl StartPosture {
+    fn detect() -> Self {
+        if std::env::var_os(rimz::remote::REMOTE_RECONNECT_ENV)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Self::Reconnect;
+        }
+        if std::io::stdin().is_terminal() {
+            Self::Attended
+        } else {
+            Self::NoTerminal
+        }
+    }
+
+    fn is_attended(self) -> bool {
+        self == Self::Attended
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,13 +158,13 @@ impl RoomEntry<'_> {
         }
     }
 
-    fn resume_prompt_mode(&self) -> ResumePromptMode {
+    fn resume_prompt_mode(&self, posture: StartPosture) -> ResumePromptMode {
         let confirm_resume = match self {
             Self::StartDetached { confirm_resume, .. }
             | Self::WebSession { confirm_resume, .. } => *confirm_resume,
             Self::Start { .. } | Self::AttachCwd { .. } | Self::AttachSession { .. } => false,
         };
-        resume_prompt_mode(confirm_resume, start_attended())
+        resume_prompt_mode(confirm_resume, posture.is_attended())
     }
 
     fn refresh_ms(&self) -> Option<u16> {
@@ -185,15 +211,8 @@ fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePr
     }
 }
 
-/// A start driven by the remote link supervisor's retry loop is unattended:
-/// consent gates fall back to their non-interactive behavior.
-fn start_attended() -> bool {
-    std::io::stdin().is_terminal()
-        && !std::env::var_os(rimz::remote::REMOTE_RECONNECT_ENV)
-            .is_some_and(|value| !value.is_empty())
-}
-
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
+    let posture = StartPosture::detect();
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
         Err(err) => {
@@ -233,8 +252,10 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         report_already_inside(mux, &workspace.session_name, situation)?;
         return Ok(());
     }
-    report_start_notices(&workspace)?;
-    let first_run = ensure_default_config_for_start()?;
+    if posture != StartPosture::Reconnect {
+        report_start_notices(&workspace)?;
+    }
+    let first_run = ensure_default_config_for_start(posture)?;
     enter_room(
         RoomEntry::Start {
             workspace,
@@ -243,6 +264,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
             first_run,
         },
         globals,
+        posture,
     )
 }
 
@@ -262,11 +284,12 @@ pub(crate) fn ensure_workspace_room_detached(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
+    let posture = StartPosture::detect();
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux =
         render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
-    ensure_default_config_for_start()?;
+    ensure_default_config_for_start(posture)?;
     let ready = prepare_room(
         RoomEntry::StartDetached {
             workspace,
@@ -275,6 +298,7 @@ pub(crate) fn ensure_workspace_room_detached(
             confirm_resume,
         },
         globals,
+        posture,
     )?;
     managed_context_from_ready(ready)
 }
@@ -285,6 +309,7 @@ pub(crate) fn ensure_session_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
+    let posture = StartPosture::detect();
     let record = workspace_record_for_web_session(session)?;
     preflight_web_engine()?;
     let ready = prepare_room(
@@ -294,6 +319,7 @@ pub(crate) fn ensure_session_room_for_web(
             confirm_resume,
         },
         globals,
+        posture,
     )?;
     managed_context_from_ready(ready)
 }
@@ -349,7 +375,7 @@ fn preflight_web_engine() -> Result<()> {
     Ok(())
 }
 
-fn ensure_default_config_for_start() -> Result<bool> {
+fn ensure_default_config_for_start(posture: StartPosture) -> Result<bool> {
     let config_was_missing =
         !rimz::disk::entry_exists(&rimz::config::MachineConfig::config_path()).unwrap_or(true);
     if config_was_missing && !rimz::disk::paths::legacy_config_roots().is_empty() {
@@ -357,7 +383,7 @@ fn ensure_default_config_for_start() -> Result<bool> {
     }
     let initialized_config = setup::ensure_default_config()?;
     let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
-    if initialized_config && !(first_run && start_attended()) {
+    if initialized_config && !(first_run && posture.is_attended()) {
         report_initialized_config()?;
     }
     Ok(first_run)
@@ -376,6 +402,7 @@ fn report_initialized_config() -> Result<()> {
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
+    let posture = StartPosture::detect();
     let mode = args.attach.mode();
     match args.workspace {
         Some(session) => enter_room(
@@ -387,6 +414,7 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
                 refresh_ms: args.refresh_ms,
             },
             globals,
+            posture,
         ),
         None => {
             let workspace = rimz::WorkspaceResolver::resolve(".", globals.root.clone())?;
@@ -398,14 +426,15 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
                     refresh_ms: args.refresh_ms,
                 },
                 globals,
+                posture,
             )
         }
     }
 }
 
-fn enter_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<()> {
+fn enter_room(entry: RoomEntry<'_>, globals: &GlobalFlags, posture: StartPosture) -> Result<()> {
     let mode = entry.mode();
-    let ready = prepare_room(entry, globals)?;
+    let ready = prepare_room(entry, globals, posture)?;
     finish_attach(ready, mode)
 }
 
@@ -418,7 +447,11 @@ enum ReadyRoom {
     },
 }
 
-fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
+fn prepare_room(
+    entry: RoomEntry<'_>,
+    globals: &GlobalFlags,
+    posture: StartPosture,
+) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
 
     let mux = match &entry {
@@ -450,6 +483,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         mux,
         entry.session_name(),
         was_live,
+        posture,
     )?;
 
     // Every entry that births a room resolves its accounts; only
@@ -514,7 +548,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         .transpose()?;
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
-        match ensure_detected_agent_hooks(start_attended()) {
+        let hook_mode = match posture {
+            StartPosture::Attended => HookInstallMode::Attended,
+            StartPosture::NoTerminal => HookInstallMode::NoTerminal,
+            StartPosture::Reconnect => HookInstallMode::Reconnect,
+        };
+        match ensure_detected_agent_hooks(hook_mode) {
             Ok(rendered) => rendered,
             Err(error) => {
                 writeln!(render::err(), "rimz: warning: {error:#}")?;
@@ -527,7 +566,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     if let RoomEntry::Start {
         first_run: true, ..
     } = &entry
-        && start_attended()
+        && posture.is_attended()
     {
         first_run::run(&machine_config, hook_intro_rendered)?;
         let mut out = render::err();
@@ -551,7 +590,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     if let RoomEntry::Start { workspace, .. } = &entry
         && !was_live
-        && start_attended()
+        && posture.is_attended()
     {
         prompt_project_trust(&workspace.project_root);
     }
@@ -577,11 +616,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             Some(rimz::agents::LoginCatalog::room_view(&machine_config.accounts).0),
             rimz::agents::ambient_env(),
         );
-        if let Err(error) = prompt_folder_trust(workspace, &logins) {
+        if let Err(error) = prompt_folder_trust(workspace, &logins, posture) {
             writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
         }
     } else if let RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } =
         &entry
+        && posture != StartPosture::Reconnect
         && let Err(error) = crate::cli::folder_trust::collect(workspace)
             .and_then(|rows| warn_restricted_folder_trust(&rows))
     {
@@ -606,13 +646,13 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             &mut context,
             preflight_health,
             entry.no_resume(),
-            entry.resume_prompt_mode(),
+            entry.resume_prompt_mode(posture),
             entry.refresh_ms(),
             background_view,
             cwd,
         )?;
         if was_live {
-            recover_parked_agents(&context, entry.no_resume(), start_attended())?;
+            recover_parked_agents(&context, entry.no_resume(), posture.is_attended())?;
         }
         ReadyRoom::Managed(Box::new(context))
     } else {
@@ -851,8 +891,12 @@ fn warn_restricted_folder_trust(rows: &[rimz::agents::FolderTrustRow]) -> Result
 fn prompt_folder_trust(
     workspace: &rimz::ResolvedWorkspace,
     logins: &rimz::agents::RoomLoginSet,
+    posture: StartPosture,
 ) -> Result<()> {
     use rimz::agents::FolderTrust;
+    if posture == StartPosture::Reconnect {
+        return Ok(());
+    }
     let dismissed = rimz::trust::dismissed_folder_trust_kinds(&workspace.project_root);
     let rows = rimz::agents::folder_trust_rows(
         logins,
@@ -868,7 +912,7 @@ fn prompt_folder_trust(
     if rows.is_empty() {
         return Ok(());
     }
-    if !start_attended() {
+    if !posture.is_attended() {
         for row in rows {
             if let FolderTrust::Undecided(gap) = &row.trust {
                 writeln!(

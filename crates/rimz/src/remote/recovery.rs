@@ -328,10 +328,14 @@ impl RecoveryPanel {
             (StageStatus::Ok, "connected".to_owned())
         } else {
             let detail = match phase {
-                FooterPhase::Connecting => match self.connect_stage {
-                    ConnectStage::Initial => "connecting…".to_owned(),
-                    ConnectStage::Recovery => "reconnecting…".to_owned(),
-                },
+                FooterPhase::Connecting => {
+                    self.last_error
+                        .clone()
+                        .unwrap_or_else(|| match self.connect_stage {
+                            ConnectStage::Initial => "connecting…".to_owned(),
+                            ConnectStage::Recovery => "reconnecting…".to_owned(),
+                        })
+                }
                 FooterPhase::NextAttemptIn(remaining) => {
                     let retry = format!("retry in {}s", countdown_seconds(remaining));
                     match &self.last_error {
@@ -638,10 +642,20 @@ mod tests {
 
         let connecting = panel.frame(Duration::from_secs(133), FooterPhase::Connecting);
         assert_eq!(
+            row(&connecting, RecoveryStage::Session).detail,
+            "Permission denied (publickey)."
+        );
+        assert_eq!(
             row(&connecting, RecoveryStage::Session).status,
             StageStatus::Active
         );
         assert_eq!(panel.last_error(), Some("Permission denied (publickey)."));
+        panel.note_ssh_error(None);
+        let connecting = panel.frame(Duration::from_secs(134), FooterPhase::Connecting);
+        assert_eq!(
+            row(&connecting, RecoveryStage::Session).detail,
+            "reconnecting…"
+        );
     }
 
     #[test]
