@@ -668,8 +668,14 @@ impl IdleCycleFixture {
         }
     }
 
-    /// Route a room event through every consumer before the next cycle.
+    /// Route an identity-free nudge through every consumer before the next cycle. The fixture
+    /// has no plane to record events, so an overlay or a focus change would reach the
+    /// consumers unrecorded.
     pub fn deliver_event(&mut self, event: SidebarEvent) {
+        assert!(
+            !event.is_overlay() && !matches!(event, SidebarEvent::FocusChanged { .. }),
+            "the fixture records nothing: deliver only nudges"
+        );
         let backend = super::backend::PaneBackend::ambient(
             std::fs::File::options()
                 .write(true)

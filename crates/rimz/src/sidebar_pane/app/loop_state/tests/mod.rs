@@ -268,13 +268,25 @@ impl Rig {
         rig
     }
 
+    fn record_event(&self, envelope: &SidebarEventEnvelope) {
+        super::super::plane::RoomEvents::new(
+            &self.runtime,
+            self.views.clone(),
+            self.state.events.clone(),
+            super::super::fetch::Subscribers::default(),
+        )
+        .record(envelope, self.state.clock.now_ms());
+    }
+
     fn event(&mut self, event: SidebarEvent) {
+        // An external sender's wall clock is independent of the receiver's virtual time.
         let envelope = SidebarEventEnvelope::new(
             self.ws.clone(),
             Some("rimz-test".to_owned()),
             crate::utils::time::unix_now_ms(),
             event,
         );
+        self.record_event(&envelope);
         self.state
             .on_event(&mut self.fetch, &mut self.terminal, envelope);
     }

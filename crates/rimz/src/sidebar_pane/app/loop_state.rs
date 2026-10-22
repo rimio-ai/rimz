@@ -184,6 +184,7 @@ pub(super) struct LoopState {
     paint_reports: Vec<(FocusPush, PushVerdict)>,
     optimistic_watch_until: Option<Instant>,
     pub(super) events: Arc<Mutex<EventStore>>,
+    pub(super) room_events: Option<super::plane::RoomEvents>,
     pending_focus_repair: Option<PendingFocusRepair>,
     observer: observe::OwnObserver,
     clicked_row: Option<ClickedRowWatch>,
@@ -535,6 +536,7 @@ impl LoopState {
             paint_reports: Vec::new(),
             optimistic_watch_until: None,
             events: Arc::default(),
+            room_events: None,
             pending_focus_repair: None,
             observer: observe::OwnObserver::default(),
             clicked_row: None,
@@ -920,6 +922,7 @@ impl LoopState {
             observe_tx: _,
             wake: _,
             room_caps: _,
+            room_events: _,
             request_reload: _,
             baseline_changed: _,
             // Focus-anchor bookkeeping: a live intent or fence holds
@@ -1386,12 +1389,6 @@ impl LoopState {
     ) {
         let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
-        if let SidebarEvent::FocusChanged { focused, unfocused } = &envelope.event {
-            self.views
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .note_focus_event(focused, unfocused, sent_at_ms);
-        }
         let fold = self.event_needs_fold(&envelope.event);
         if matches!(
             &envelope.event,
@@ -1494,7 +1491,7 @@ impl LoopState {
                 if fold {
                     self.prepare_action(fetch);
                 }
-                self.handle_overlay_event(fetch, event, sent_at_ms, fold);
+                self.handle_overlay_event(fetch, event, fold);
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
             _ => {
@@ -1719,7 +1716,6 @@ impl LoopState {
         &mut self,
         fetch: &mut FetchDispatcher,
         event: SidebarEvent,
-        sent_at_ms: u64,
         fold: bool,
     ) {
         // A relevant overlay fuses into the in-memory state and paints this
@@ -1735,8 +1731,6 @@ impl LoopState {
                 || (self.view.current.client_views.len() == 1
                     && matches!(focused.as_slice(), [pane] if pane != own))));
         let requests_verification = event.requests_producer_verification();
-        let now_ms = self.clock.now_ms();
-        self.events().append(event, sent_at_ms, now_ms);
         if fold {
             self.fold_fused_now();
         }
@@ -1960,13 +1954,14 @@ impl LoopState {
             return;
         }
         if self.clock.effects_enabled()
-            && let Err(err) = crate::wakeup::broadcast(
-                &self.runtime,
-                Some(&self.config.session_name),
-                SidebarEvent::BodyFilterChanged,
-            )
+            && let Some(room_events) = &self.room_events
         {
-            debug!(error = %err, "sidebar body filter broadcast failed");
+            room_events.dispatch(SidebarEventEnvelope::new(
+                self.config.workspace_id.clone(),
+                Some(self.config.session_name.clone()),
+                self.clock.now_ms(),
+                SidebarEvent::BodyFilterChanged,
+            ));
         }
     }
 

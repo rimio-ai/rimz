@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::produce::{HostInputs, PaneProducer};
+use crate::utils::time::unix_now_ms;
+use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 
 #[cfg(test)]
@@ -37,7 +39,57 @@ pub(in crate::sidebar_pane) struct DataPlane {
 
 type Lanes = Box<dyn FnOnce() + Send>;
 
+#[derive(Clone)]
+pub(in crate::sidebar_pane) struct RoomEvents {
+    runtime: RuntimePaths,
+    views: Arc<Mutex<super::views::Views>>,
+    events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
+    subscribers: Subscribers,
+}
+
+impl RoomEvents {
+    pub(super) fn new(
+        runtime: &RuntimePaths,
+        views: Arc<Mutex<super::views::Views>>,
+        events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
+        subscribers: Subscribers,
+    ) -> Self {
+        Self {
+            runtime: runtime.clone(),
+            views,
+            events,
+            subscribers,
+        }
+    }
+
+    pub(super) fn record(&self, envelope: &SidebarEventEnvelope, received_at_ms: u64) {
+        if let SidebarEvent::FocusChanged { focused, unfocused } = &envelope.event {
+            lock(&self.views).note_focus_event(focused, unfocused, envelope.sent_at_ms);
+        }
+        if envelope.event.is_overlay() {
+            lock(&self.events).append(envelope.event.clone(), envelope.sent_at_ms, received_at_ms);
+        }
+    }
+
+    pub(in crate::sidebar_pane) fn dispatch(&self, envelope: SidebarEventEnvelope) {
+        self.record(&envelope, unix_now_ms());
+        for subscriber in lock(&self.subscribers).values() {
+            let _ = subscriber.wake.try_send(Wakeup::Event(envelope.clone()));
+        }
+        crate::harness::hibernate::wake_focused(&self.runtime, &envelope.event);
+    }
+}
+
 impl DataPlane {
+    pub(in crate::sidebar_pane) fn room_events(&self, runtime: &RuntimePaths) -> RoomEvents {
+        RoomEvents::new(
+            runtime,
+            self.views.clone(),
+            self.events.clone(),
+            self.subscribers.clone(),
+        )
+    }
+
     pub(in crate::sidebar_pane) fn focus_peers(
         &self,
         source: SidebarInstanceId,
@@ -66,6 +118,7 @@ impl DataPlane {
         let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
         let host_data = plane.host_data.clone();
+        let room_events = plane.room_events(&runtime);
         let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
         if let Some((sweep, _)) = &hidden {
             let sweep = sweep.clone();
@@ -110,10 +163,17 @@ impl DataPlane {
                         .map(|pane| Stand::of(Some(pane), &template))
                 },
             );
-            // tmux fast path: the host streams control-mode topology nudges so a pane open/close publishes a fresh pane frame in tens of milliseconds instead of waiting out the poll. Latency only: the poll stays the presence backstop, and Zellij reaches the same publication path through its presence plugin.
+            // tmux fast path: record control-mode events once and fan out in memory. Panes ask
+            // the producer to verify structural changes; the poll stays the presence backstop.
+            // Zellij reaches the room socket through its presence plugin.
             if let Some((sweep, rx)) = hidden {
                 hidden_views::spawn(rx, config.session_name.clone(), diag, runtime.clone());
-                tmux_watch::spawn(runtime.clone(), config.session_name.clone(), sweep);
+                tmux_watch::spawn(
+                    runtime.clone(),
+                    config.session_name.clone(),
+                    sweep,
+                    room_events,
+                );
             }
             // The host watches every session whose adapter declares transcript-tail context, so mid-turn token and cost updates repaint without waiting for the next hook or tick. Latency only: the tick backstop stays truth.
             transcript_watch::spawn(runtime);
@@ -149,6 +209,11 @@ impl DataPlane {
     #[cfg(test)]
     pub(in crate::sidebar_pane) fn detached() -> Self {
         Self::idle().0
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn event_store(&self) -> crate::sidebar::event_store::EventStore {
+        lock(&self.events).clone()
     }
 
     pub(in crate::sidebar_pane) fn hard_refresh(&self) {
@@ -269,7 +334,7 @@ impl Drop for Membership {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // The subscriber set is only inserted into and removed from, the fold is only replaced, and the lanes are only taken, so a panic elsewhere while a lock was held leaves it whole.
+    // Room state is memory-only; a poisoned peer does not invalidate the last committed values.
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
