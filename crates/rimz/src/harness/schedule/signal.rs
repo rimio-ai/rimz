@@ -19,6 +19,7 @@ use super::runner::{
 };
 use crate::RuntimePaths;
 use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
+use crate::disk::lease;
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
@@ -747,16 +748,6 @@ fn wake_workflows(project_root: &Path, signal: &Signal) {
     }
 }
 
-pub(super) struct WatchLockGuard {
-    file: File,
-}
-
-impl Drop for WatchLockGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
-}
-
 fn watch_lock_path(runtime: &RuntimePaths, name: &str) -> std::path::PathBuf {
     runtime.lock_path(format!("loop-watch-{name}.lock"))
 }
@@ -764,52 +755,28 @@ fn watch_lock_path(runtime: &RuntimePaths, name: &str) -> std::path::PathBuf {
 pub(super) fn acquire_watch_lock(
     runtime: &RuntimePaths,
     name: &str,
-) -> std::io::Result<Option<WatchLockGuard>> {
+) -> std::io::Result<Option<lease::Lease>> {
     let path = watch_lock_path(runtime, name);
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)?;
-    match crate::disk::lock::try_lock_file(&mut file, &path) {
-        Ok(()) => {
-            file.set_len(0)?;
-            file.rewind()?;
-            serde_json::to_writer(
-                &mut file,
-                &RunLockInfo {
-                    pid: std::process::id(),
-                    started_at: jiff::Timestamp::now(),
-                },
-            )
-            .map_err(std::io::Error::other)?;
-            file.flush()?;
-            Ok(Some(WatchLockGuard { file }))
-        }
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(err) => Err(std::io::Error::from(err)),
+    match lease::claim(&path, |file| {
+        serde_json::to_writer(
+            file,
+            &RunLockInfo {
+                pid: std::process::id(),
+                started_at: jiff::Timestamp::now(),
+            },
+        )
+        .map_err(std::io::Error::other)
+    })? {
+        lease::LeaseAttempt::Acquired(guard) => Ok(Some(guard)),
+        lease::LeaseAttempt::Held(_) => Ok(None),
     }
 }
 
 pub fn watcher_info(runtime: &RuntimePaths, name: &str) -> std::io::Result<Option<RunLockInfo>> {
     let path = watch_lock_path(runtime, name);
-    let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
-    };
-    match crate::disk::lock::try_lock_file(&mut file, &path) {
-        Ok(()) => {
-            file.unlock()?;
-            Ok(None)
-        }
-        Err(std::fs::TryLockError::WouldBlock) => {
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok(serde_json::from_slice(&bytes).ok())
-        }
-        Err(err) => Err(std::io::Error::from(err)),
+    match lease::probe(&path)? {
+        lease::LeaseState::Free => Ok(None),
+        lease::LeaseState::Held(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
     }
 }
 
@@ -849,6 +816,30 @@ mod tests {
         AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition, TurnPhase,
     };
     use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
+
+    #[test]
+    fn watcher_probes_never_defeat_a_starting_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        std::fs::create_dir_all(&runtime.locks_dir).unwrap();
+        drop(acquire_watch_lock(&runtime, "race").unwrap().unwrap());
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..10_000 {
+                    watcher_info(&runtime, "race").unwrap();
+                }
+            });
+            start.wait();
+            for _ in 0..10_000 {
+                let claim = acquire_watch_lock(&runtime, "race").unwrap();
+                assert!(claim.is_some(), "a probe must not defeat a watcher claim");
+                drop(claim);
+            }
+        });
+    }
 
     #[test]
     fn workflow_wakes_exclude_only_lifecycle_signals() {
