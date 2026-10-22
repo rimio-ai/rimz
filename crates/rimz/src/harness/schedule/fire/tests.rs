@@ -1032,6 +1032,22 @@ fn workflow_tick_advances_leave_the_timer_service_like_loop_runs() {
 }
 
 #[test]
+fn encoded_signal_carries_its_firing_time_and_unchanged_payload() {
+    let signal: Signal = serde_json::from_value(serde_json::json!({
+        "name": "build.moved", "source": "cli", "payload": {"from": "a", "to": "b"}
+    }))
+    .unwrap();
+    let fired_at = Timestamp::from_second(1).unwrap();
+    let encoded: serde_json::Value =
+        serde_json::from_str(&encode_signal(Some((&signal, fired_at))).unwrap().unwrap()).unwrap();
+    assert_eq!(encoded["arrived_at"], serde_json::json!(fired_at));
+    let decoded: Signal = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.name, signal.name);
+    assert_eq!(decoded.payload, signal.payload);
+    assert!(encode_signal(None).unwrap().is_none());
+}
+
+#[test]
 fn loop_run_hosts_render_precise_argv() {
     let exe = Path::new("/opt/RimZ build/rimz");
     let args = loop_run_args(
@@ -1140,6 +1156,81 @@ fn all_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
 
 fn one<T>(value: T) -> BTreeMap<String, T> {
     BTreeMap::from([(NAME.to_owned(), value)])
+}
+
+#[test]
+fn backlog_backstop_paces_failed_spawns_and_does_not_silence_other_tasks() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    let at = Timestamp::from_second(100).unwrap();
+    let trigger = serde_json::json!({"triggers":[{"arrived_at":at,"signal":null,"absorbed":0}]});
+    crate::disk::atomic::write_temp_then_rename(
+        &super::super::backlog::path(&paths),
+        &serde_json::json!({"version":1,"tasks":{"first":trigger,"second":trigger}}),
+    )
+    .unwrap();
+    let mut calls = Vec::new();
+    for seconds in [100, 159, 160] {
+        tick_backlog_with(
+            &runtime,
+            root.path(),
+            Timestamp::from_second(seconds).unwrap(),
+            |name| {
+                calls.push(name.to_owned());
+                if name == "first" {
+                    Err(std::io::Error::other("spawn failed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+    }
+    assert_eq!(calls, ["first", "second", "first", "second"]);
+}
+
+#[test]
+fn backlog_backstop_read_failure_without_prior_state_is_also_paced() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    crate::disk::atomic::write_bytes_atomically(&super::super::backlog::path(&paths), b"invalid")
+        .unwrap();
+    let mut calls = 0;
+    tick_backlog_with(
+        &runtime,
+        root.path(),
+        Timestamp::from_second(100).unwrap(),
+        |_| {
+            calls += 1;
+            Ok(())
+        },
+    );
+    let at = Timestamp::from_second(100).unwrap();
+    crate::disk::atomic::write_temp_then_rename(&super::super::backlog::path(&paths), &serde_json::json!({"version":1,"tasks":{"busy":{"triggers":[{"arrived_at":at,"signal":null,"absorbed":0}]}}})).unwrap();
+    tick_backlog_with(
+        &runtime,
+        root.path(),
+        Timestamp::from_second(159).unwrap(),
+        |_| {
+            calls += 1;
+            Ok(())
+        },
+    );
+    assert_eq!(calls, 0);
+    tick_backlog_with(
+        &runtime,
+        root.path(),
+        Timestamp::from_second(160).unwrap(),
+        |_| {
+            calls += 1;
+            Ok(())
+        },
+    );
+    assert_eq!(
+        calls, 1,
+        "retry a failed room read after the pace, not on every tick"
+    );
 }
 
 fn loaded(entry: TaskEntry) -> LoadedTask {

@@ -9,6 +9,14 @@ use std::ops::ControlFlow;
 
 // ---- run --------------------------------------------------------------------
 
+#[derive(serde::Deserialize)]
+struct FiredSignal {
+    #[serde(flatten)]
+    signal: schedule::signal::Signal,
+    #[serde(default)]
+    arrived_at: Option<Timestamp>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectTrustDecision {
     Proceed,
@@ -47,26 +55,56 @@ fn write_condition_notice(
 }
 
 pub(super) fn run_one(
-    name: &str,
+    args: RunArgs,
     mode: LoopRunMode,
     keep: bool,
-    signal: Option<rimz::harness::schedule::signal::Signal>,
-    condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
-    checkout: Option<PathBuf>,
     globals: &GlobalFlags,
 ) -> Result<()> {
+    let name = args.name.as_str();
+    let signal = args
+        .signal_json
+        .as_deref()
+        .map(serde_json::from_str::<FiredSignal>)
+        .transpose()
+        .context("decoding loop trigger signal")?;
+    let arrived_at = signal.as_ref().and_then(|signal| signal.arrived_at);
+    let signal = signal.map(|signal| signal.signal);
+    let condition = args
+        .condition_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .context("decoding loop condition evidence")?;
     let catalog = task_catalog(globals)?;
-    let loaded = catalog
-        .for_run(name)
-        .cloned()
+    let loaded = catalog.for_run(name).cloned();
+    if args.drain
+        && loaded.as_ref().is_none_or(|task| {
+            task.action().is_err()
+                || task.entry().each_worktree
+                || matches!(
+                    task.entry().overlap,
+                    None | Some(rimz::config::OverlapPolicy::Skip)
+                )
+        })
+    {
+        if let Some(root) = project_root_for_globals(globals)
+            .or_else(|| loaded.as_ref().map(|task| task.entry().resolved_root()))
+        {
+            rimz::harness::schedule::runner::discard_backlog(name, &root)?;
+        }
+        return Ok(());
+    }
+    let loaded = loaded
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
-    let checkout = resident_checkout(&entry, mode, checkout)?;
+    let checkout = resident_checkout(&entry, mode, args.cwd)?;
     let source = loaded.source();
-    gate_project_trust(name, &entry, source, mode)?;
+    if !args.drain {
+        gate_project_trust(name, &entry, source, mode)?;
+    }
     let key = loaded.key(name);
     let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
-    if mode == LoopRunMode::Scheduled && arm_state != ArmState::Live {
+    if !args.drain && mode == LoopRunMode::Scheduled && arm_state != ArmState::Live {
         return Ok(());
     }
     let action = loaded.action().cloned().map_err(Clone::clone)?;
@@ -130,6 +168,7 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?
+    .with_arrived_at(arrived_at)
     .with_condition(condition)
     .with_checkout(checkout)
     .with_hold_notice(move |reason| {
@@ -137,6 +176,17 @@ pub(super) fn run_one(
             let _ = writeln!(ui::out(), "held: {reason}");
         }
     });
+    if args.drain {
+        if !fire.take_backlog()? {
+            return Ok(());
+        }
+        if ArmState::resolve(arming::load().get(&key), source, Timestamp::now()) != ArmState::Live {
+            return Ok(());
+        }
+        if let Err(error) = gate_project_trust(name, &entry, source, mode) {
+            return record_task_error(&mut fire, name, &entry, error).map(|_| ());
+        }
+    }
     let mut plan = fire.prepare(&mut |root| {
         if !entry.stay
             && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
@@ -285,6 +335,7 @@ pub(super) fn run_one(
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
     };
+    fire.release_run_lock()?;
     present_finished(name, &entry, &action, mode, keep, &finished)?;
     if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);

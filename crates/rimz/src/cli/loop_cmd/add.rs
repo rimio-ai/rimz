@@ -302,6 +302,37 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
+    if let Some(limit) = args.overlap_limit {
+        anyhow::ensure!(
+            args.overlap.as_deref() == Some("queue"),
+            "--overlap-limit requires --overlap queue"
+        );
+        anyhow::ensure!(limit > 0, "--overlap-limit must be at least 1");
+    }
+    if args.overlap.is_some() {
+        if args.stay {
+            bail!("--stay cannot use --overlap; a resident task launches once per checkout");
+        }
+        for (used, reason) in [
+            (
+                !args.when.is_empty(),
+                "overlap supports repeating clock and signal triggers only",
+            ),
+            (args.wait.is_some(), "a wait delivery has no run to overlap"),
+            (
+                args.once
+                    || args.until.is_some()
+                    || args.in_after.is_some()
+                    || args.after_reset.is_some()
+                    || (args.every.is_none() && args.cron.is_none() && args.signal.is_none()),
+                "a one-shot has no task left to drain",
+            ),
+        ] {
+            if used {
+                bail!("--overlap cannot be used here; {reason}");
+            }
+        }
+    }
     if args.check_timeout.is_some() && args.check.is_none() {
         bail!("--check-timeout requires --check");
     }
@@ -828,6 +859,13 @@ fn build_task_entry(
         prompt: args.prompt.clone(),
         prompt_file: args.prompt_file.clone(),
         max_strikes: args.max_strikes,
+        overlap: args.overlap.as_deref().map(|value| match value {
+            "coalesce" => rimz::config::OverlapPolicy::Coalesce,
+            "queue" => rimz::config::OverlapPolicy::Queue,
+            "replace" => rimz::config::OverlapPolicy::Replace,
+            _ => rimz::config::OverlapPolicy::Skip,
+        }),
+        overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
         dir: (!args.project && workspace.worktree_root != workspace.project_root)
             .then(|| workspace.worktree_root.clone()),

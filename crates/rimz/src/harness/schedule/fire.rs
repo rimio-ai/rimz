@@ -36,6 +36,42 @@ enum Action {
 const WATCH_LOST_GRACE_SECS: i64 = 30;
 const RESIDENT_RETRY_SECS: i64 = 5 * 60;
 const WORKFLOW_TICK_SECS: i64 = 60;
+const BACKLOG_TICK_SECS: i64 = 60;
+
+fn tick_backlog_with(
+    runtime: &RuntimePaths,
+    project_root: &Path,
+    now: Timestamp,
+    mut spawn: impl FnMut(&str) -> std::io::Result<()>,
+) {
+    let path = runtime.lane_path("loop-backlog-tick.json");
+    let previous: Option<Timestamp> = crate::disk::atomic::read_json_cache(&path);
+    if previous.is_some_and(|last| now.duration_since(last).as_secs() < BACKLOG_TICK_SECS) {
+        return;
+    }
+    // Pace failed reads and failed spawns too, including the first attempt.
+    if let Err(error) = write_temp_then_rename_cache(&path, &Some(now)) {
+        tracing::warn!(%error, "loop backlog tick could not publish pace cache");
+        return;
+    }
+    let record = match StatePaths::for_project_root(project_root)
+        .map_err(|error| error.to_string())
+        .and_then(|paths| super::backlog::load(&paths).map_err(|error| error.to_string()))
+    {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(%error, "loop backlog tick could not read waiting triggers");
+            return;
+        }
+    };
+    for (name, waiting) in record.tasks {
+        if !waiting.triggers.is_empty()
+            && let Err(error) = spawn(&name)
+        {
+            tracing::warn!(task = name, %error, "loop backlog tick could not start a drain");
+        }
+    }
+}
 
 struct ScopedTask {
     name: String,
@@ -159,6 +195,9 @@ pub fn fire_due_tasks(
     );
     if let Some(root) = project_root.as_deref() {
         tick_workflows(runtime, root, now.timestamp(), host);
+        tick_backlog_with(runtime, root, now.timestamp(), |name| {
+            spawn_loop_drain(runtime, root, name, host)
+        });
     }
 }
 
@@ -470,7 +509,7 @@ fn fire_tasks(
                     &tasks[&name],
                     project_root,
                     &name,
-                    Some(&signal),
+                    Some((&signal, Timestamp::now())),
                     None,
                     None,
                     host,
@@ -738,12 +777,14 @@ pub(super) fn spawn_loop_run(
     task: &LoadedTask,
     project_root: Option<&Path>,
     name: &str,
-    signal: Option<&Signal>,
+    signal: Option<(&Signal, Timestamp)>,
     condition: Option<&ConditionEvidence>,
     checkout: Option<&Path>,
     host: LoopRunHost,
 ) -> LaunchOutcome {
-    let encoded = match encode_signal(signal) {
+    let encoded = encode_signal(signal);
+    let signal = signal.map(|(signal, _)| signal);
+    let encoded = match encoded {
         Ok(encoded) => encoded,
         Err(reason) => return record_start_failed(task, name, signal, condition, checkout, reason),
     };
@@ -816,6 +857,27 @@ pub(super) fn spawn_loop_run(
     LaunchOutcome::Started
 }
 
+pub(super) fn spawn_loop_drain(
+    runtime: &RuntimePaths,
+    project_root: &Path,
+    name: &str,
+    host: LoopRunHost,
+) -> std::io::Result<()> {
+    let mut args = loop_run_args(Some(project_root), name, None, None, None);
+    args.push("--drain".into());
+    if host == LoopRunHost::Detached {
+        return crate::child_process::spawn_detached_rimz(runtime, &args, "loop-drain");
+    }
+    let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, name);
+    if let Some(pid) =
+        crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-drain")?
+        && host == LoopRunHost::TransientScope
+    {
+        wait_for_scope(pid, name);
+    }
+    Ok(())
+}
+
 fn record_start_failed(
     task: &LoadedTask,
     name: &str,
@@ -846,9 +908,19 @@ fn record_start_failed(
 
 /// Encode the signal the runner is handed. Each launch encodes its own, so a
 /// launch holds the `Signal` itself and a failed start can record it.
-fn encode_signal(signal: Option<&Signal>) -> Result<Option<String>, String> {
+fn encode_signal(signal: Option<(&Signal, Timestamp)>) -> Result<Option<String>, String> {
+    #[derive(serde::Serialize)]
+    struct FiredSignal<'a> {
+        #[serde(flatten)]
+        signal: &'a Signal,
+        arrived_at: Timestamp,
+    }
+
     signal
-        .map(|signal| serde_json::to_string(signal).map_err(|err| err.to_string()))
+        .map(|(signal, arrived_at)| {
+            serde_json::to_string(&FiredSignal { signal, arrived_at })
+                .map_err(|err| err.to_string())
+        })
         .transpose()
 }
 
@@ -939,8 +1011,9 @@ pub(super) fn wait_loop_run(
     project_root: Option<&Path>,
     name: &str,
     signal: &Signal,
+    arrived_at: Timestamp,
 ) -> LaunchOutcome {
-    let encoded = match encode_signal(Some(signal)) {
+    let encoded = match encode_signal(Some((signal, arrived_at))) {
         Ok(encoded) => encoded,
         Err(reason) => return record_start_failed(task, name, Some(signal), None, None, reason),
     };

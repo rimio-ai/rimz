@@ -1,7 +1,7 @@
 //! User-global loop task run history.
 //!
 //! Loop config is per-machine, so task outcomes append to one user-global JSONL
-//! log. Each loaded `rimz loop run`/`fire` appends one best-effort record with
+//! log. Each admitted `rimz loop run`/`fire` appends one best-effort record with
 //! the terminal result, mode, duration, and capped forensics. `rimz loop list`
 //! folds the current and rotated files for summary columns; `rimz loop watch`
 //! retains that fold across repaints, rebuilding on rotation or a local date or
@@ -104,6 +104,8 @@ pub struct LoopRunRecord {
     pub root: Option<PathBuf>,
     pub at: Timestamp,
     pub result: LoopRunResult,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub absorbed: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<LoopRunMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +188,7 @@ impl LoopRunRecord {
             root: None,
             at: Timestamp::now(),
             result,
+            absorbed: 0,
             mode: Some(mode),
             duration_ms: Some(duration_ms),
             throttle_wait_ms: None,
@@ -316,6 +319,8 @@ pub enum LoopRunResult {
     Errored,
     StartFailed,
     Overlapped,
+    Deferred,
+    Replaced,
     TakeoverBlocked,
 }
 
@@ -327,7 +332,7 @@ impl LoopRunResult {
             Self::VerifyFailed => Some(RunStatus::VerifyFailed.exit_code()),
             Self::TimedOut => Some(RunStatus::TimedOut.exit_code()),
             Self::BudgetExceeded => Some(RunStatus::BudgetExceeded.exit_code()),
-            Self::Canceled => Some(RunStatus::Canceled.exit_code()),
+            Self::Canceled | Self::Replaced => Some(RunStatus::Canceled.exit_code()),
             _ => None,
         }
     }
@@ -345,6 +350,8 @@ impl LoopRunResult {
             Self::AccountSkipped => "account skipped",
             Self::ThrottleSkipped => "throttle skipped",
             Self::Canceled => "canceled",
+            Self::Deferred => "deferred",
+            Self::Replaced => "replaced",
             Self::Delivered => "delivered",
             Self::TargetGone => "target gone",
             Self::CheckSkipped | Self::SignalSkipped | Self::WorkflowSkipped => "skipped",
@@ -392,10 +399,15 @@ impl LoopRunRecord {
             | LoopRunResult::Failed
             | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
+            | LoopRunResult::Replaced
             | LoopRunResult::BudgetExceeded => Some(RunPolarity::Failure),
             _ => None,
         }
     }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// The newest acting record of a task, in log order, with the streak of acting records of its polarity that ends at it.

@@ -97,8 +97,8 @@ use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
-    CheckOn, FileMark, Guard, Judge, LoopConfig, TaskCheck, TaskEntry, TaskTarget, Tasks,
-    ThrottleConfig, ThrottleSwitch, WatchSpec,
+    CheckOn, FileMark, Guard, Judge, LoopConfig, OverlapPolicy, TaskCheck, TaskEntry, TaskTarget,
+    Tasks, ThrottleConfig, ThrottleSwitch, WatchSpec,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;

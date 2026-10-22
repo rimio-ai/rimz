@@ -888,6 +888,7 @@ Judges run without a pane and return a verdict and reason before the action. For
 
 The rest tune what one fire is allowed to do:
 
+- `overlap` chooses what a busy repeating clock or signal task keeps: `skip` (default), `coalesce`, `queue`, or `replace` (currently coalesces). `overlap-limit` bounds a queue, defaults to `10`, and must be at least `1`. Both are refused for resident layouts, conditions, one-shots, deliveries, and workflows. See [overlapping triggers](../reference/cli/loop.md#overlapping-triggers).
 - `verify` runs a shell command after an agent turn and re-prompts that same session when it fails. `max-attempts` caps the agent turns one fire may take, and defaults to `3`.
 - `max-strikes` disables the task after that many consecutive failed or no-progress fires. It defaults to `3`, and `0` turns the strike gate off. `rimz loop enable` clears the counter, which is machine-local.
 - `account` holds an `agent` task on one named [provider account](./accounts.md) instead of the room's current one, and `"default"` pins the provider's own home. It is refused beside `wait` and on a check-only task. In a project task it stays out of the trust hash, since it names an account and runs no command.

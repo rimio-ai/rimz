@@ -301,6 +301,12 @@ struct AddArgs {
     /// Whether the task's agent starts take their turn in the loop throttle; unset is on.
     #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
     throttle: Option<String>,
+    /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (currently coalesces).
+    #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
+    overlap: Option<String>,
+    /// Maximum waiting triggers with --overlap queue; default 10, at least 1.
+    #[arg(long, value_name = "N")]
+    overlap_limit: Option<usize>,
     /// Dollar cap for each spawned agent run.
     #[arg(long, value_name = "AMOUNT[/day]")]
     budget: Option<String>,
@@ -346,6 +352,8 @@ struct RunArgs {
     signal_json: Option<String>,
     #[arg(long, hide = true, conflicts_with = "signal_json")]
     condition_json: Option<String>,
+    #[arg(long, hide = true, conflicts_with_all = ["signal_json", "condition_json", "cwd"])]
+    drain: bool,
 }
 
 #[derive(Debug, Args)]
@@ -486,37 +494,18 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Explain(args) => explain::run(args),
         LoopSubcmd::Logs(args) => render::logs(args, globals),
         LoopSubcmd::Fire(args) => run_tasks::run_one(
-            &args.name,
+            RunArgs {
+                name: args.name,
+                cwd: None,
+                signal_json: None,
+                condition_json: None,
+                drain: false,
+            },
             LoopRunMode::Manual,
             args.keep,
-            None,
-            None,
-            None,
             globals,
         ),
-        LoopSubcmd::Run(args) => {
-            let signal = args
-                .signal_json
-                .as_deref()
-                .map(serde_json::from_str)
-                .transpose()
-                .context("decoding loop trigger signal")?;
-            let condition = args
-                .condition_json
-                .as_deref()
-                .map(serde_json::from_str)
-                .transpose()
-                .context("decoding loop condition evidence")?;
-            run_tasks::run_one(
-                &args.name,
-                LoopRunMode::Scheduled,
-                false,
-                signal,
-                condition,
-                args.cwd,
-                globals,
-            )
-        }
+        LoopSubcmd::Run(args) => run_tasks::run_one(args, LoopRunMode::Scheduled, false, globals),
         LoopSubcmd::Tick => timer::tick(),
         LoopSubcmd::Timer(args) => timer::run(args.command),
     }

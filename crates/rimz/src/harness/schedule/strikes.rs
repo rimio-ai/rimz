@@ -41,6 +41,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
+        | LoopRunResult::Replaced
         | LoopRunResult::Errored
         | LoopRunResult::BudgetExceeded => Signal::Strike,
         LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
@@ -59,6 +60,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::AccountSkipped
         | LoopRunResult::ThrottleSkipped
         | LoopRunResult::Overlapped
+        | LoopRunResult::Deferred
         | LoopRunResult::TakeoverBlocked
         | LoopRunResult::StartFailed
         | LoopRunResult::Canceled
@@ -162,6 +164,7 @@ mod tests {
             mode: Some(LoopRunMode::Scheduled),
             duration_ms: Some(1),
             throttle_wait_ms: None,
+            absorbed: 0,
             error: None,
             check,
             watch: None,
@@ -187,6 +190,15 @@ mod tests {
             timed_out,
             output: String::new(),
         })
+    }
+
+    #[test]
+    fn overlap_results_are_neutral_or_striking() {
+        for (name, expected) in [("deferred", Signal::Neutral), ("replaced", Signal::Strike)] {
+            let result = serde_json::from_value::<LoopRunResult>(serde_json::json!(name));
+            assert!(result.is_ok(), "{name} must be a history result");
+            assert_eq!(classify(&record(result.unwrap(), None)), expected);
+        }
     }
 
     #[test]

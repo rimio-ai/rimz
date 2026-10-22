@@ -187,7 +187,9 @@ A CI job's last step, a git hook, a deploy script, a cron line, another agent: e
 
 Your own families observe and skip like the built-in ones, so it pays to name them by outcome. An agent waiting with `rimz loop add deploy-red --signal deploy.failed --wait --once` is woken by `deploy.failed`, left armed and quiet by `deploy.finished`, and untouched by anything outside the `deploy` family.
 
-The emitting process fires the subscribers itself, so this works with no daemon or running agent, but needs an existing room. Nothing is queued or replayed either: a signal reaches the subscriptions armed at that instant, which is why an agent arms its wait before starting the work that will emit it.
+The emitting process fires the subscribers itself, so this works with no daemon or running agent, but needs an existing room. A signal reaches only the subscriptions armed at that instant, which is why an agent arms its wait before starting the work that will emit it. A busy repeating task can keep its own trigger with an overlap policy; later subscribers still miss the signal.
+
+If an install or check is still running when the next signal arrives, the default is to skip that trigger rather than run two copies. Use `--overlap coalesce` when only the newest state matters, or `--overlap queue --overlap-limit 10` when each trigger needs its own run. RimZ keeps those triggers on disk and runs them one at a time after the active run ends, rerunning the task's gates. `rimz loop show <name>` shows what waits and which triggers a run absorbed. Pause or disable prevents waiting work from running; removing or redefining the task clears it. These policies apply only to repeating clock or signal tasks that run a check or a nonresident agent, not waits, one-shots, conditions, workflows, or resident layouts. The [reference](../reference/cli/loop.md#overlapping-triggers) gives the merge rule and all policy values.
 
 ## Wait for Done and green
 

@@ -37,6 +37,8 @@ Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `
 
 The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar host. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its host to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait --run` watcher is a detached subprocess holding a state-tier lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
 
+Loop tasks can retain busy triggers in a per-room durable backlog. For these retaining tasks, run-lock acquisition and release share its lock; a finishing runner spawns a fresh drainer before releasing, and a paced read-only scheduler backstop covers runner crashes ([the backlog protocol](./docs/internals/harness/loops.md#waiting-trigger-backlog)).
+
 ```text
 terminal emulator
   mux session (Zellij or tmux)

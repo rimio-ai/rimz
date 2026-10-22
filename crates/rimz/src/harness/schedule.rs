@@ -22,6 +22,8 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arm;
 pub mod arming;
+pub mod backlog;
+mod backlog_store;
 pub mod catalog;
 mod config_edit;
 pub mod fanout;
@@ -80,6 +82,12 @@ impl TaskActionKind {
 /// Invalid combinations of loop task action fields.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TaskActionErr {
+    #[error("loop task `{name}` sets `{field}`; {hint}")]
+    OverlapField {
+        name: String,
+        field: &'static str,
+        hint: &'static str,
+    },
     #[error(
         "loop task `{name}` sets `verify` without `agent`; verification needs a supervised agent run"
     )]
@@ -116,6 +124,48 @@ pub enum TaskActionErr {
 
 impl TaskAction {
     fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
+        if entry.overlap_limit.is_some() {
+            let hint = if entry.overlap != Some(crate::config::OverlapPolicy::Queue) {
+                Some("overlap-limit requires overlap = 'queue'")
+            } else if entry.overlap_limit == Some(0) {
+                Some("overlap-limit must be at least 1")
+            } else {
+                None
+            };
+            if let Some(hint) = hint {
+                return Err(TaskActionErr::OverlapField {
+                    name: name.to_owned(),
+                    field: "overlap-limit",
+                    hint,
+                });
+            }
+        }
+        if entry.overlap.is_some() {
+            for (set, hint) in [
+                (entry.stay, "a resident task launches once per checkout"),
+                (
+                    entry.when.is_some(),
+                    "overlap supports repeating clock and signal triggers only",
+                ),
+                (
+                    entry.wait.is_some(),
+                    "a wait delivery has no run to overlap",
+                ),
+                (entry.workflow.is_some(), "workflow admission owns its runs"),
+                (
+                    ephemeral_lifetime(entry),
+                    "a one-shot has no task left to drain",
+                ),
+            ] {
+                if set {
+                    return Err(TaskActionErr::OverlapField {
+                        name: name.to_owned(),
+                        field: "overlap",
+                        hint,
+                    });
+                }
+            }
+        }
         let guard = entry.guard();
         if entry.workflow.is_some() {
             if entry.agent.is_some() || entry.wait.is_some() {

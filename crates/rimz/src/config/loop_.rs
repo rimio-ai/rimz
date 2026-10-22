@@ -231,6 +231,17 @@ pub enum ThrottleSwitch {
     Off,
 }
 
+/// What a scheduled trigger does when its task already holds the run lock.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlapPolicy {
+    #[default]
+    Skip,
+    Coalesce,
+    Queue,
+    Replace,
+}
+
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`
 /// addressing one task by a stable name.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -482,6 +493,10 @@ pub struct TaskEntry {
     /// `off` exempts every fire of the task from the start throttle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub throttle: Option<ThrottleSwitch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlap: Option<OverlapPolicy>,
+    #[serde(rename = "overlap-limit", skip_serializing_if = "Option::is_none")]
+    pub overlap_limit: Option<usize>,
 }
 
 /// The ordered guard chain, including a judge from a legacy `check` table.

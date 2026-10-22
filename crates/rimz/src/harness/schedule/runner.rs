@@ -28,7 +28,13 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use super::super::assist_log::{self, Assist, AssistRecord};
-use super::{LOOP_TASK_ENV, fire::deadline_expired_at, throttle};
+use super::{
+    LOOP_TASK_ENV,
+    backlog::{self, WaitingTrigger},
+    backlog_store::{self, LockedBacklog},
+    fire::deadline_expired_at,
+    throttle,
+};
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
 use crate::agents::login::LoginErr;
@@ -39,7 +45,9 @@ use crate::agents::{
 };
 #[cfg(test)]
 use crate::config::TaskCheck;
-use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec};
+use crate::config::{
+    CheckOn, MachineConfig, OverlapPolicy, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec,
+};
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
@@ -398,9 +406,15 @@ impl FireContext {
     }
 }
 
+/// Discard waiting triggers and stop marks when a drain cannot compile its task.
+pub fn discard_backlog(name: &str, root: &Path) -> Result<()> {
+    super::backlog_store::remove(&StatePaths::for_project_root(root)?, name)?;
+    Ok(())
+}
+
 type HoldNotice<'a> = Box<dyn FnMut(&str) + 'a>;
 
-/// One loop fire from ordered gates through exactly one history transition.
+/// One loop fire from ordered gates through one history transition, unless a drain finds no work.
 pub struct TaskFire<'a> {
     name: String,
     task: LoadedTask,
@@ -416,10 +430,15 @@ pub struct TaskFire<'a> {
     check_echo: Option<CheckEcho>,
     check_trip: Option<CheckTrip>,
     signal: Option<TriggerSignal>,
+    arrived_at: Option<Timestamp>,
+    from_arrived_at: Option<Timestamp>,
     condition: Option<super::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
     started: Instant,
     run_lock: Option<Lease>,
+    backlog_paths: Option<StatePaths>,
+    absorbed: u64,
+    needs_room: bool,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
     throttle_host: Arc<dyn throttle::Host>,
     /// Ctrl-C heard from before the check on, for the hold to inherit.
@@ -469,10 +488,15 @@ impl<'a> TaskFire<'a> {
             check_echo: Some(check_echo),
             check_trip: None,
             signal,
+            arrived_at: None,
+            from_arrived_at: None,
             condition: None,
             checkout: None,
             started,
             run_lock: None,
+            backlog_paths: None,
+            absorbed: 0,
+            needs_room: false,
             run_lock_path,
             throttle_host: Arc::new(throttle::SystemHost),
             check_interrupts: None,
@@ -488,6 +512,132 @@ impl<'a> TaskFire<'a> {
 
     pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
         self.check_trip.take()
+    }
+
+    /// Claim one waiting trigger before the CLI rechecks arming and trust.
+    pub fn take_backlog(&mut self) -> Result<bool> {
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        let mut backlog = LockedBacklog::acquire(&paths)?;
+        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
+            return Ok(false);
+        };
+        if waiting.triggers.is_empty() {
+            return Ok(false);
+        }
+        let path = self
+            .fire_run_lock_path(true)?
+            .context("waiting trigger needs a run lock")?;
+        let RunLockAttempt::Acquired(guard) = acquire_run_lock_file(&path, Some(self.task.kind()))?
+        else {
+            return Ok(false);
+        };
+        // The queue was checked under this same lock; its head cannot disappear.
+        let trigger = waiting
+            .triggers
+            .pop_front()
+            .expect("nonempty locked backlog");
+        backlog.save()?;
+        self.run_lock = Some(guard);
+        self.backlog_paths = Some(paths.clone());
+        self.serve_trigger(trigger);
+        self.now = Timestamp::now();
+        Ok(true)
+    }
+
+    /// Spawn the next drain before releasing a protocol-managed run lock.
+    pub fn release_run_lock(&mut self) -> Result<()> {
+        self.release_run_lock_with(|runtime, root, name| {
+            super::fire::spawn_loop_drain(runtime, root, name, super::fire::LoopRunHost::Detached)
+        })
+    }
+
+    fn release_run_lock_with(
+        &mut self,
+        spawn: impl FnOnce(&RuntimePaths, &Path, &str) -> std::io::Result<()>,
+    ) -> Result<()> {
+        if self.run_lock.is_none() {
+            return Ok(());
+        }
+        let Some(paths) = self.backlog_paths.as_ref() else {
+            self.run_lock = None;
+            return Ok(());
+        };
+        let _guard = backlog_store::hold(paths)?;
+        let result = (|| -> Result<()> {
+            let backlog = backlog::load(paths)?;
+            if backlog
+                .tasks
+                .get(&self.name)
+                .is_some_and(|task| !task.triggers.is_empty())
+            {
+                spawn(
+                    &RuntimePaths::for_state(paths)?,
+                    &self.entry.resolved_root(),
+                    &self.name,
+                )?;
+            }
+            Ok(())
+        })();
+        // Even an unreadable backlog or a failed spawn releases under the protocol lock.
+        self.run_lock = None;
+        result
+    }
+
+    fn waiting_trigger(&self) -> WaitingTrigger {
+        WaitingTrigger {
+            arrived_at: self.arrived_at.unwrap_or(self.now),
+            signal: self.signal.as_ref().map(|signal| SignalRecord {
+                name: signal.name.clone(),
+                payload: signal.payload.clone(),
+            }),
+            absorbed: self.absorbed,
+            from_arrived_at: self.from_arrived_at,
+        }
+    }
+
+    fn serve_trigger(&mut self, trigger: WaitingTrigger) {
+        self.absorbed = trigger.absorbed;
+        self.arrived_at = Some(trigger.arrived_at);
+        self.from_arrived_at = trigger.from_arrived_at;
+        self.signal = trigger.signal.map(|signal| TriggerSignal {
+            name: signal.name,
+            payload: signal.payload,
+            source: crate::store::event::SignalSource::Cli,
+            watch: None,
+        });
+    }
+
+    fn reconcile_backlog(&mut self) -> Result<()> {
+        if self.mode != LoopRunMode::Scheduled
+            || !matches!(
+                self.entry.overlap,
+                Some(OverlapPolicy::Coalesce | OverlapPolicy::Replace)
+            )
+        {
+            return Ok(());
+        }
+        let Some(paths) = self.backlog_paths.clone() else {
+            return Ok(());
+        };
+        let mut backlog = LockedBacklog::acquire(&paths)?;
+        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
+            return Ok(());
+        };
+        let Some(mut newest) = waiting.triggers.pop_back() else {
+            return Ok(());
+        };
+        for older in waiting.triggers.drain(..).rev() {
+            newest.absorb(older);
+        }
+        newest.absorb(self.waiting_trigger());
+        backlog.save()?;
+        self.serve_trigger(newest);
+        Ok(())
+    }
+
+    pub fn with_arrived_at(mut self, arrived_at: Option<Timestamp>) -> Self {
+        self.arrived_at = arrived_at;
+        self
     }
 
     pub fn with_condition(mut self, condition: Option<super::when::ConditionEvidence>) -> Self {
@@ -618,11 +768,12 @@ impl<'a> TaskFire<'a> {
         if let ControlFlow::Break(done) = check {
             return Ok(TaskFirePlan::Done(done));
         }
-        if self.run_lock.is_none() {
+        if self.run_lock.is_none() || self.needs_room {
             if let Some(done) = self.prepare_throttle()? {
                 return Ok(TaskFirePlan::Done(done));
             }
             before_check(&self.context_root()?)?;
+            self.needs_room = false;
             if let Some(done) = self.prepare_run_lock(false)? {
                 return Ok(TaskFirePlan::Done(done));
             }
@@ -644,6 +795,7 @@ impl<'a> TaskFire<'a> {
                 if let Some(done) = self.prepare_throttle()? {
                     return Ok(TaskFirePlan::Done(done));
                 }
+                self.reconcile_backlog()?;
                 self.prepare_spawn(spec)
             }
             TaskAction::Deliver(target) => self.prepare_delivery(target),
@@ -945,6 +1097,81 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_run_lock(&mut self, may_birth: bool) -> Result<Option<TaskFireFinished>> {
+        if self.run_lock.is_some() {
+            return Ok(None);
+        }
+        let Some(path) = self.fire_run_lock_path(may_birth)? else {
+            return Ok(None);
+        };
+        let policy = self.entry.overlap.unwrap_or_default();
+        if policy != OverlapPolicy::Skip {
+            let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+            let mut backlog = LockedBacklog::acquire(&paths)?;
+            match acquire_run_lock_file(&path, Some(self.task.kind()))? {
+                RunLockAttempt::Acquired(guard) => {
+                    if self.mode == LoopRunMode::Scheduled {
+                        let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+                        waiting.enqueue(policy, usize::MAX, self.waiting_trigger());
+                        // The fresh arrival was just enqueued while the queue was locked.
+                        let trigger = waiting.triggers.pop_front().expect("arrival enqueued");
+                        backlog.save()?;
+                        self.serve_trigger(trigger);
+                    }
+                    self.run_lock = Some(guard);
+                    self.backlog_paths = Some(paths.clone());
+                    return Ok(None);
+                }
+                RunLockAttempt::Held(info) if self.mode == LoopRunMode::Scheduled => {
+                    let limit = self.entry.overlap_limit.unwrap_or(10);
+                    let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
+                    let enqueued = waiting.enqueue(policy, limit, self.waiting_trigger());
+                    let count = waiting.triggers.len();
+                    backlog.save()?;
+                    let suffix = if !enqueued {
+                        format!("queue full ({count}/{limit}), skipped")
+                    } else if policy == OverlapPolicy::Queue {
+                        format!("waiting (queue {count}/{limit})")
+                    } else {
+                        "waiting".to_owned()
+                    };
+                    let holder = info.map_or_else(
+                        || "previous run still active".to_owned(),
+                        |info| {
+                            format!(
+                                "previous run still active (pid {}, started {})",
+                                info.pid,
+                                relative_age(info.started_at, Timestamp::now())
+                            )
+                        },
+                    );
+                    let detail = Some(format!("{holder} — {suffix}"));
+                    return Ok(Some(self.record_terminal_with(
+                        if enqueued {
+                            LoopRunResult::Deferred
+                        } else {
+                            LoopRunResult::Overlapped
+                        },
+                        LoopRunPresentation::default(),
+                        TaskFireNotice::Overlap {
+                            detail: detail.clone(),
+                        },
+                        None,
+                        |record| record.error = detail,
+                    )));
+                }
+                RunLockAttempt::Held(info) => return Ok(Some(self.record_overlap(info))),
+            }
+        }
+        match acquire_run_lock_file(&path, Some(self.task.kind()))? {
+            RunLockAttempt::Acquired(guard) => {
+                self.run_lock = Some(guard);
+                Ok(None)
+            }
+            RunLockAttempt::Held(info) => Ok(Some(self.record_overlap(info))),
+        }
+    }
+
+    fn fire_run_lock_path(&mut self, may_birth: bool) -> Result<Option<PathBuf>> {
         let checkout = self
             .entry
             .each_worktree
@@ -959,34 +1186,39 @@ impl<'a> TaskFire<'a> {
                         Some(crate::workspace::WorkspaceErr::NoRoom { .. })
                     ) =>
             {
-                return Ok(None);
+                let guard = self.entry.guard();
+                if (self.entry.stay || self.entry.workflow.is_some())
+                    && guard.shell.is_none()
+                    && guard.judges.is_empty()
+                {
+                    return Ok(None);
+                }
+                self.needs_room = true;
+                let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+                RuntimePaths::for_state(&paths)?.lock_path(&file)
             }
             Err(err) => return Err(err),
         };
-        match acquire_run_lock_file(&path, Some(self.task.kind()))? {
-            RunLockAttempt::Acquired(guard) => {
-                self.run_lock = Some(guard);
-                Ok(None)
-            }
-            RunLockAttempt::Held(info) => {
-                let detail = info.map(|info| {
-                    format!(
-                        "previous run still active (pid {}, started {}) — skipped",
-                        info.pid,
-                        relative_age(info.started_at, Timestamp::now())
-                    )
-                });
-                Ok(Some(self.record_terminal_with(
-                    LoopRunResult::Overlapped,
-                    LoopRunPresentation::default(),
-                    TaskFireNotice::Overlap {
-                        detail: detail.clone(),
-                    },
-                    None,
-                    |record| record.error = detail.clone(),
-                )))
-            }
-        }
+        Ok(Some(path))
+    }
+
+    fn record_overlap(&mut self, info: Option<RunLockInfo>) -> TaskFireFinished {
+        let detail = info.map(|info| {
+            format!(
+                "previous run still active (pid {}, started {}) — skipped",
+                info.pid,
+                relative_age(info.started_at, Timestamp::now())
+            )
+        });
+        self.record_terminal_with(
+            LoopRunResult::Overlapped,
+            LoopRunPresentation::default(),
+            TaskFireNotice::Overlap {
+                detail: detail.clone(),
+            },
+            None,
+            |record| record.error = detail.clone(),
+        )
     }
 
     pub fn finish(&mut self, effect: TaskFireEffect) -> Result<TaskFireFinished> {
@@ -1259,7 +1491,7 @@ impl<'a> TaskFire<'a> {
             self.context_root()?
         };
         if !self.entry.stay
-            && (self.run_lock.is_some()
+            && ((self.run_lock.is_some() && !self.needs_room)
                 || !matches!(
                     self.context.as_ref().map(|context| &context.action),
                     Some(TaskAction::Spawn(_))
@@ -1613,6 +1845,7 @@ impl<'a> TaskFire<'a> {
             payload: signal.payload.clone(),
         });
         record.condition = self.condition.clone();
+        record.absorbed = self.absorbed;
         for stage in &self.fired_guard {
             match stage {
                 FiredCheck::Shell { record: shell, .. } => record.check = Some(shell.clone()),
@@ -1683,6 +1916,14 @@ impl<'a> TaskFire<'a> {
             presentation,
             transition,
             notice,
+        }
+    }
+}
+
+impl Drop for TaskFire<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.release_run_lock() {
+            tracing::warn!(task = %self.name, error = %format!("{error:#}"), "failed to release loop run and start its backlog drain");
         }
     }
 }

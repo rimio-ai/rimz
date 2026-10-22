@@ -382,7 +382,7 @@ A remote room is plain SSH under a supervisor that reconnects itself when the li
 
 ### A loop keeps reporting "previous run still active"
 
-The task's previous runner still owns its overlap lock, so later fires record `overlapped` instead of stacking another turn. Run `rimz loop show <name>` to see the linked run id, holder PID, and start age, then release the lock:
+The task's previous runner still owns its overlap lock. By default later fires record `overlapped` instead of stacking another turn; a non-skip [overlap policy](../reference/cli/loop.md#overlapping-triggers) retains triggers as `deferred` until that run ends, unless a queue is full. Run `rimz loop show <name>` to see the linked run id, holder PID, start age, and waiting triggers, then release the lock:
 
 ```sh
 rimz loop stop <name>

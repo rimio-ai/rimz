@@ -307,6 +307,7 @@ struct ShowView {
     heard: Option<run_log::HeardSummary>,
     launches: BTreeMap<PathBuf, schedule::launch_ledger::LaunchRecord>,
     in_flight: Option<InFlightRun>,
+    backlog: Option<schedule::backlog::TaskBacklog>,
     condition: String,
     subscriptions: Vec<SubscriptionView>,
     room_is_open: bool,
@@ -1028,6 +1029,28 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         &view.entry,
         view.kind,
     )?;
+    if let Some(backlog) = &view.backlog
+        && !backlog.triggers.is_empty()
+    {
+        let text = if view.entry.overlap == Some(rimz::config::OverlapPolicy::Queue) {
+            format!(
+                "queue {}/{} · next runs when the active run ends",
+                backlog.triggers.len(),
+                view.entry.overlap_limit.unwrap_or(10)
+            )
+        } else {
+            let absorbed = backlog
+                .triggers
+                .front()
+                .map_or(0, |trigger| trigger.absorbed);
+            let mut text = "1 trigger waiting · runs when the active run ends".to_owned();
+            if absorbed > 0 {
+                text.push_str(&format!(" · absorbed {absorbed}"));
+            }
+            text
+        };
+        writeln!(out, "  {}", ui::paint(ui::palette::muted(), &text))?;
+    }
     if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {
         write_watch_command(out, command)?;
     }
@@ -1402,6 +1425,16 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         BTreeMap::new()
     };
     let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
+    let backlog = if entry.overlap.unwrap_or_default() != rimz::config::OverlapPolicy::Skip {
+        Some(
+            schedule::backlog::load(&StatePaths::for_project_root(&root)?)?
+                .tasks
+                .remove(&args.name)
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
     let room_is_open = room_open(&root);
     let worktrees = if entry.each_worktree {
         runtime
@@ -1500,6 +1533,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         heard: history.heard,
         launches,
         in_flight,
+        backlog,
         condition: String::from_utf8(condition)?,
         subscriptions,
         leader_statuses,
@@ -1526,6 +1560,15 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 let (own, others) = split_held(in_flight.holder, &in_flight.held);
                 (own.map(held_json), others.map(held_json).collect())
             });
+        let backlog = view.backlog.as_ref().map(|backlog| {
+            serde_json::json!({
+                "policy": view.entry.overlap.unwrap_or_default(),
+                "limit": (view.entry.overlap == Some(rimz::config::OverlapPolicy::Queue))
+                    .then(|| view.entry.overlap_limit.unwrap_or(10)),
+                "triggers": backlog.triggers,
+                "stopping": backlog.stopping,
+            })
+        });
         #[derive(serde::Serialize)]
         struct ShowJson<'a> {
             #[serde(flatten)]
@@ -1533,7 +1576,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             worktrees: Vec<WorktreeJson<'a>>,
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs }),
+            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs, "backlog": backlog }),
             worktrees: worktrees_json(&view),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
@@ -1683,6 +1726,7 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
         LoopRunResult::Overlapped
+            | LoopRunResult::Deferred
             | LoopRunResult::WorkflowSkipped
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::AccountSkipped
@@ -1691,7 +1735,7 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
     )
 }
 
-/// A fire refused at the run lock is spent, and the run that refused it started
+/// A skipped fire refused at the run lock is spent, and the run that refused it started
 /// before it. So fires refused during or after the newest run, with no run
 /// since, are fires nothing has answered. A run in flight with no refusal
 /// after the newest run started after every one of them, and answers them.
@@ -2157,8 +2201,11 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     let mut kv = ui::KeyVals::new().indent(2);
     let shape = schedule::TaskShape::compile(&view.name, entry);
     let action = shape.action().ok();
-    let mut action_text = action.map_or_else(
-        || "<invalid>".to_owned(),
+    let mut action_text = shape.action().map_or_else(
+        |error| match error {
+            schedule::TaskActionErr::OverlapField { .. } => format!("<invalid> · {error}"),
+            _ => "<invalid>".to_owned(),
+        },
         |action| list::action(action.kind(), action.subject(), Some(entry), view.you),
     );
     let check = check_summary(entry, action);
@@ -2583,7 +2630,8 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::Errored
-            | LoopRunResult::StartFailed,
+            | LoopRunResult::StartFailed
+            | LoopRunResult::Replaced,
         ) => {
             format!("{} ({})", record.result.label(), verdict.label())
         }
@@ -2699,7 +2747,8 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
         | LoopRunResult::Errored
-        | LoopRunResult::StartFailed => ("✗", ui::palette::alarm()),
+        | LoopRunResult::StartFailed
+        | LoopRunResult::Replaced => ("✗", ui::palette::alarm()),
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
@@ -2709,6 +2758,7 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::AccountSkipped
         | LoopRunResult::ThrottleSkipped => ("○", ui::palette::warn()),
         LoopRunResult::CheckSkipped
+        | LoopRunResult::Deferred
         | LoopRunResult::SignalSkipped
         | LoopRunResult::WorkflowSkipped
         | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
