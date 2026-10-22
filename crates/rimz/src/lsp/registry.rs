@@ -49,6 +49,17 @@ impl State {
     pub fn is_running(&self) -> bool {
         matches!(self, State::Starting | State::Indexing | State::Ready)
     }
+
+    /// A crash or memory-pressure dormancy that a hand stop acknowledges.
+    pub fn is_alarm(&self) -> bool {
+        matches!(
+            self,
+            State::Dormant {
+                reason: Some(StopReason::Crashed | StopReason::MemoryPressure),
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, thiserror::Error)]

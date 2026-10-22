@@ -136,7 +136,7 @@ A spent account with a future reset is context, not another warning to clear. It
 
 `MESSAGES` keeps past delivery failures in one context line grouped by status. Follow `rimz message list --all --system` to inspect them; stuck deliveries still earn a finding and fix. `DIAGNOSTICS` separates incidents still needing investigation from ones RimZ handled and closed itself. Only investigative warnings and problems count; settled incidents are context, not a to-do list. `--audit` expands those settled incidents with their times and summaries, and lists each routine multiplexer-log group with its span.
 
-Plain output keeps loop tasks that need attention and running or crashed language servers visible, summarizing the rest. Memory-pressure dormancy is neutral: the next query can restart the server. When reporting a bug, widen those sections, include retained message-failure rows and observed agent sessions, and omit multiplexer log text:
+Plain doctor output keeps loop tasks that need attention and running or crashed machine-wide language servers visible, summarizing the rest. Memory-pressure dormancy is neutral: the next query can restart the server. For room memory and next-query behavior, use `rimz lsp list` and `rimz lsp status`; `list --all` expands only that room. When reporting a bug, widen doctor's sections, include retained message-failure rows and observed agent sessions, and omit multiplexer log text:
 
 ```sh
 rimz doctor --audit --no-log-text --output doctor.txt

@@ -102,9 +102,11 @@ path = "crates/rimz/src/lsp"
 # memory::Reading and for_entry share RSS, swap, and peak accounting (+2).
 # Headroom and its read/fits methods, Shortfall::headroom, QueryErr::server_error,
 # and missing_column share admission figures and query error behavior with the CLI (+6).
+# Needs and its read/for_entry methods share one history snapshot; State::is_alarm
+# shares acknowledgment and visibility across broker and CLI (+4).
 # NamedItem unifies column-less errors before and after outline enrichment (+1).
 # query::classification_outline bounds test-classification enrichment separately (+1).
-surface-budget = 92
+surface-budget = 96
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -7026,6 +7028,26 @@ reason = "The launch-plan boundary should not map registry entries itself (pass 
 kind = "item"
 key = "lsp::registry::stop_checkout"
 reason = "The reason is data: team completion and checkout removal supply different stop reasons (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::registry::State::is_alarm"
+reason = "Broker acknowledgment, list visibility and shared ordering use one alarm predicate."
+
+[[verdict]]
+kind = "item"
+key = "lsp::history::Needs"
+reason = "List and status snapshot learned needs once without a broker protocol change."
+
+[[verdict]]
+kind = "item"
+key = "lsp::history::Needs::read"
+reason = "Read-only inspection loads history once for every selected row."
+
+[[verdict]]
+kind = "item"
+key = "lsp::history::Needs::for_entry"
+reason = "List and status take a row's next-start needs from one rule: the learned peak, else its admitted estimate."
 
 [[verdict]]
 kind = "item"

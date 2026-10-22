@@ -443,6 +443,74 @@ fn lsp_idle_broker_blocks_when_dormant_and_ready() {
     );
 }
 
+fn assert_unregistered_server(env: &Env, checkout: &Path, server: &str) {
+    env.rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["lsp", "status"])
+        .arg(checkout)
+        .args(["--server", server])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains(format!(
+            "no language server for {} (not running); use grep",
+            checkout.display()
+        )));
+    env.rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["lsp", "stop"])
+        .arg(checkout)
+        .args(["--server", server])
+        .assert()
+        .success()
+        .stdout(format!(
+            "nothing to stop: no language server registered for {}\n",
+            checkout.display()
+        ));
+}
+
+#[test]
+fn lsp_status_and_stop_accept_configured_servers_without_registry_rows() {
+    let env = Env::new();
+    let checkout = env.home_root.join("other-project");
+    env.write_config(&checkout, "[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n");
+    env.rimz()
+        .current_dir(&checkout)
+        .args(["trust", "grant"])
+        .assert()
+        .success();
+    assert_unregistered_server(&env, &checkout, "rust");
+}
+
+#[test]
+fn lsp_status_and_stop_accept_untrusted_servers_without_registry_rows() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n");
+    assert_unregistered_server(&env, &env.project_root, "rust");
+}
+
+#[test]
+fn lsp_status_and_stop_skip_name_checks_when_configuration_is_unreadable() {
+    for failure in [
+        "malformed project",
+        "unreadable project",
+        "malformed machine",
+    ] {
+        let env = Env::new();
+        match failure {
+            "malformed project" => env.write_config(&env.project_root, "not valid = ["),
+            "unreadable project" => {
+                std::fs::create_dir_all(env.project_root.join(".rimz/config.toml")).unwrap();
+            }
+            _ => {
+                std::fs::write(env.rimz_home().join("config.toml"), "not valid = [").unwrap();
+            }
+        }
+        assert_unregistered_server(&env, &env.project_root, "rust");
+    }
+}
+
 #[test]
 fn lsp_status_and_stop_select_one_lazy_server() {
     let env = Env::new();
@@ -471,26 +539,64 @@ fn lsp_status_and_stop_select_one_lazy_server() {
         env.rimz()
             .args(["lsp", verb])
             .assert()
-            .failure()
-            .stderr(predicates::str::contains(
-                "multiple language servers; choose --server NAME",
-            ));
+            .code(1)
+            .stderr(predicates::str::contains(format!(
+                "multiple language servers for {}: python, rust; choose --server NAME",
+                root.display()
+            )));
     }
     env.rimz()
         .args(["lsp", "status", "--server", "python"])
         .assert()
         .success()
         .stdout(predicates::str::contains("not started"));
-    env.rimz()
-        .args(["lsp", "status", "--server", "go"])
-        .assert()
-        .code(3)
-        .stderr(predicates::str::contains("not running"));
+    for verb in ["status", "stop"] {
+        env.rimz()
+            .args(["lsp", verb, "--server", "go"])
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains(
+                "no language server named go; configured: python, rust",
+            ));
+        env.rimz()
+            .args(["lsp", verb, "missing-checkout"])
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains("missing-checkout"));
+    }
     env.rimz()
         .args(["lsp", "stop", "--server", "python"])
         .assert()
         .success()
-        .stdout(format!("stopped python ({})\n", root.display()));
+        .stdout(format!(
+            "nothing to stop: python for {} holds no memory (not started)\n",
+            root.display()
+        ));
+    // Inspection and stopping must not depend on project configuration parsing.
+    std::fs::create_dir_all(root.join(".rimz")).unwrap();
+    std::fs::write(root.join(".rimz/config.toml"), "not valid = [").unwrap();
+    for verb in ["status", "stop"] {
+        env.rimz()
+            .args(["lsp", verb, "--server", "python"])
+            .assert()
+            .success();
+    }
+    for (_, directory) in &brokers {
+        std::fs::rename(directory.join("sock"), directory.join("held-sock")).unwrap();
+    }
+    env.rimz()
+        .args(["lsp", "stop", "--all"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(
+            predicates::str::contains(format!("python ({})", root.display())).and(
+                predicates::str::contains(format!("rust ({})", root.display())),
+            ),
+        );
+    for (_, directory) in &brokers {
+        std::fs::rename(directory.join("held-sock"), directory.join("sock")).unwrap();
+    }
     for (mut broker, directory) in brokers {
         assert_eq!(
             editor_rpc(
@@ -501,6 +607,167 @@ fn lsp_status_and_stop_select_one_lazy_server() {
         );
         broker.wait().unwrap();
     }
+}
+
+#[test]
+fn lsp_list_and_stop_all_stay_in_the_room() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    let other = env.home_root.join("other-project");
+    std::fs::create_dir(&other).unwrap();
+    for repo in [&root, &other] {
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let (mut own_broker, own_dir, mut request) = start_stub_broker(&env, root.clone());
+    request.root = other.clone();
+    request.project = other.clone();
+    let (mut other_broker, other_dir) = spawn_test_broker(&env, &request);
+    for verb in ["status", "stop"] {
+        env.rimz()
+            .args(["lsp", verb, "--server", "go"])
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains(
+                "no language server named go; configured: rust",
+            ));
+    }
+    env.rimz().args(["lsp", "list"]).assert().success().stdout(
+        predicates::str::contains("0 running").and(predicates::str::contains(
+            "1 not running: 1 not started; add --all to list them",
+        )),
+    );
+    for args in [
+        vec!["lsp", "list", "--json"],
+        vec!["lsp", "list", "--all", "--json"],
+    ] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let rows: Vec<rimz::lsp::registry::Entry> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].root, root);
+    }
+    env.rimz()
+        .args(["lsp", "list", "--all"])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::contains("~/project")
+                .and(predicates::str::contains("other-project").not()),
+        );
+    env.rimz()
+        .args(["lsp", "stop", "--all"])
+        .assert()
+        .success()
+        .stdout("nothing to stop: no language server in this room holds memory\n");
+    for directory in [&own_dir, &other_dir] {
+        assert!(
+            !editor_query(directory, "work")
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    env.rimz()
+        .args(["lsp", "stop", "--all"])
+        .assert()
+        .success()
+        .stdout(format!("stopped rust ({})\n", root.display()));
+    let own = editor_rpc(&own_dir, json!({"op":"status"}));
+    let other_status = editor_rpc(&other_dir, json!({"op":"status"}));
+    assert_eq!(own["state"]["dormant"]["reason"], "stopped by hand");
+    assert_eq!(other_status["state"], "ready");
+    let output = env.rimz().args(["lsp", "list"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("other room:")
+            && text.contains("~/other-project (1 running); rimz --root ~/other-project lsp list"),
+        "{text}"
+    );
+    for directory in [&own_dir, &other_dir] {
+        editor_rpc(directory, json!({"op":"stop", "reason":"checkout removed"}));
+    }
+    own_broker.wait().unwrap();
+    other_broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_stop_acknowledges_alarms_and_explains_empty_selections() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    for args in [vec!["lsp", "stop"], vec!["lsp", "stop", "--all"]] {
+        let expected = if args.len() == 2 {
+            format!(
+                "nothing to stop: no language server registered for {}\n",
+                root.display()
+            )
+        } else {
+            "nothing to stop: no language server registered in this room\n".into()
+        };
+        env.rimz().args(args).assert().success().stdout(expected);
+    }
+    env.rimz()
+        .args(["lsp", "status"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains(format!(
+            "no language server for {} (not running); use grep",
+            root.display()
+        )));
+    let (mut broker, directory) = editor_broker(&env, "20m");
+    for reason in ["memory pressure", "crashed"] {
+        assert!(
+            !editor_query(&directory, "work")
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        editor_rpc(&directory, json!({"op":"stop", "reason":reason}));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            // Hand stops acknowledge alarms only after lifetime teardown.
+            let recorded = std::fs::read_to_string(env.rimz_home().join("lsp-history.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .any(|record| record["reason"] == reason);
+            let status = editor_rpc(&directory, json!({"op":"status"}));
+            if recorded && status["state"]["dormant"]["reason"] == reason {
+                let output = env.rimz().args(["lsp", "stop"]).output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let text = String::from_utf8(output.stdout).unwrap();
+                if text.starts_with("acknowledged ") {
+                    assert_eq!(
+                        text,
+                        format!(
+                            "acknowledged rust ({}), was dormant: {reason}\n",
+                            root.display()
+                        )
+                    );
+                    assert_eq!(
+                        editor_rpc(&directory, json!({"op":"status"}))["state"]["dormant"]["reason"],
+                        "stopped by hand"
+                    );
+                    break;
+                }
+                assert!(text.starts_with("nothing to stop:"), "{text}");
+            }
+            assert!(Instant::now() < deadline, "alarm acknowledgment deadline");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+    broker.wait().unwrap();
 }
 
 #[test]

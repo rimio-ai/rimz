@@ -88,6 +88,7 @@ Commands that report an outcome add their own codes, so a script branches withou
 | `subagents <PROFILE>`, `subagents fanout` | `125` a room or account cap, or a Qwen quota window, refused the launch; with `--wait`, the run's status | [Launch one child](./cli/subagents.md#launch-one-child) |
 | `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |
 | `lsp` queries and checks | `1` target or server-selection failure; `2` invalid query server name; `3` no server or stopped (except memory pressure); `4` not ready: indexing or memory; `5` name not found; `6` name ambiguous; `7` anchors failed | [Shared language servers](./cli/lsp.md#exit-codes) |
+| `lsp status`, `lsp stop` | `1` multiple servers or broker failure; `2` unknown server name or missing checkout path; `status` alone: `3` no matching server; `stop`: `0` on a no-op | [List and stop](./cli/lsp.md#list-and-stop) |
 | `lsp attach` | `3` admission timeout/refusal, broker refusal, or broker connection closing/failing | [Editor attachment](./cli/lsp.md#attach) |
 | `answer` | `2` the target is not asking, its ask is missing or replaced, or its pane cannot be reached; `3` the answer is invalid or must be given in the pane (the error gives a focus command); `4` the agent did not confirm before the deadline: check, do not resend | [Answer an ask](./cli/asks.md#answer-an-ask) |
 

@@ -4,11 +4,13 @@ use super::{GlobalFlags, render};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use rimz::lsp::{
+    admission::Headroom,
     attach::{self, Outcome, Target},
     check,
     query::{self, QueryErr, Verb},
     registry,
 };
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -444,30 +446,34 @@ impl QueryContext {
         let Some(server) = server else {
             return Ok(());
         };
-        let names: std::collections::BTreeSet<_> = self
-            .servers
-            .keys()
-            .map(String::as_str)
-            .chain(
-                self.entries
-                    .iter()
-                    .filter(|entry| entry.root == self.root)
-                    .map(|entry| entry.server.as_str()),
-            )
-            .collect();
-        if names.contains(server) {
-            return Ok(());
-        }
-        let configured = if names.is_empty() {
-            "none configured".to_owned()
-        } else {
-            names.into_iter().collect::<Vec<_>>().join(", ")
-        };
-        Err(super::usage::UsageError::new(format!(
-            "no language server named {server}; configured: {configured}"
-        ))
-        .into())
+        validate_server_name(
+            server,
+            self.servers.keys().map(String::as_str),
+            self.entries.iter().filter(|entry| entry.root == self.root),
+        )
     }
+}
+
+fn validate_server_name<'a>(
+    server: &str,
+    configured: impl Iterator<Item = &'a str>,
+    registered: impl Iterator<Item = &'a registry::Entry>,
+) -> Result<()> {
+    let names: std::collections::BTreeSet<_> = configured
+        .chain(registered.map(|entry| entry.server.as_str()))
+        .collect();
+    if names.contains(server) {
+        return Ok(());
+    }
+    let configured = if names.is_empty() {
+        "none configured".to_owned()
+    } else {
+        names.into_iter().collect::<Vec<_>>().join(", ")
+    };
+    Err(super::usage::UsageError::new(format!(
+        "no language server named {server}; configured: {configured}"
+    ))
+    .into())
 }
 
 fn query_exit(current: i32, next: i32) -> i32 {
@@ -599,6 +605,145 @@ fn query_error(error: QueryErr) -> Result<()> {
     std::process::exit(code)
 }
 
+struct ListView<'a> {
+    entries: &'a [registry::Entry],
+    others: &'a [registry::Entry],
+    all: bool,
+    now_ms: u64,
+    headroom: Option<Headroom>,
+}
+
+impl ListView<'_> {
+    fn render(
+        &self,
+        out: &mut impl Write,
+        memory: impl Fn(&registry::Entry) -> rimz::lsp::memory::Reading,
+        needs: impl Fn(&registry::Entry) -> u64,
+    ) -> std::io::Result<()> {
+        let readings: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                if entry.state.is_running() {
+                    memory(entry)
+                } else {
+                    rimz::lsp::memory::Reading::default()
+                }
+            })
+            .collect();
+        let running = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state.is_running())
+            .count();
+        write!(out, "{running} running")?;
+        if running > 0 {
+            let total = readings.iter().fold(0u64, |total, reading| {
+                total.saturating_add(tree_bytes(reading))
+            });
+            write!(out, ": {}", rimz::utils::size::decimal_bytes(total))?;
+        }
+        if let Some(headroom) = self.headroom {
+            write!(out, "; {headroom}")?;
+        }
+        let mut estimates = BTreeMap::<&str, u64>::new();
+        for entry in self.entries {
+            let estimate = needs(entry);
+            estimates
+                .entry(&entry.server)
+                .and_modify(|largest| *largest = (*largest).max(estimate))
+                .or_insert(estimate);
+        }
+        if !estimates.is_empty() {
+            let starts: Vec<_> = estimates
+                .into_iter()
+                .map(|(server, estimate)| {
+                    format!("{} ({server})", rimz::utils::size::decimal_bytes(estimate))
+                })
+                .collect();
+            write!(out, "; a start needs {}", starts.join(", "))?;
+        }
+        writeln!(out)?;
+
+        let mut others = BTreeMap::<&std::path::Path, (u64, usize)>::new();
+        for entry in self.others.iter().filter(|entry| entry.state.is_running()) {
+            let reading = memory(entry);
+            let (total, count) = others
+                .entry(entry.project.as_deref().unwrap_or(&entry.root))
+                .or_default();
+            *total = total.saturating_add(tree_bytes(&reading));
+            *count += 1;
+        }
+        let mut others: Vec<_> = others.into_iter().collect();
+        others.sort_by_key(|(project, (total, _))| (std::cmp::Reverse(*total), *project));
+        for (project, (total, count)) in others {
+            let project = render::home_relative_path(project);
+            let quoted = match project.strip_prefix("~/") {
+                Some(relative) => {
+                    format!(
+                        "~/{}",
+                        shlex::try_quote(relative).map_err(std::io::Error::other)?
+                    )
+                }
+                None if project == "~" => project.clone(),
+                None => shlex::try_quote(&project)
+                    .map_err(std::io::Error::other)?
+                    .into_owned(),
+            };
+            writeln!(
+                out,
+                "other room: {} in {project} ({count} running); rimz --root {quoted} lsp list",
+                rimz::utils::size::decimal_bytes(total)
+            )?;
+        }
+        if self.entries.is_empty() {
+            return writeln!(out, "no language server registered in this room");
+        }
+        let visible: Vec<_> = self
+            .entries
+            .iter()
+            .zip(&readings)
+            .filter(|(entry, _)| self.all || entry.state.is_running() || entry.state.is_alarm())
+            .collect();
+        if !visible.is_empty() {
+            list_table(visible.into_iter(), self.now_ms).render(out)?;
+        }
+        if self.all {
+            return Ok(());
+        }
+        let mut hidden = BTreeMap::<String, usize>::new();
+        for entry in self
+            .entries
+            .iter()
+            .filter(|entry| !entry.state.is_running() && !entry.state.is_alarm())
+        {
+            let reason = match &entry.state {
+                registry::State::Dormant { reason, .. } => {
+                    reason.map_or_else(|| "not started".into(), |reason| reason.to_string())
+                }
+                registry::State::Stopped { reason, .. } => reason.to_string(),
+                _ => continue,
+            };
+            *hidden.entry(reason).or_default() += 1;
+        }
+        if !hidden.is_empty() {
+            let count: usize = hidden.values().sum();
+            let mut reasons: Vec<_> = hidden.into_iter().collect();
+            reasons.sort_by_key(|(reason, count)| (std::cmp::Reverse(*count), reason.clone()));
+            let reasons: Vec<_> = reasons
+                .into_iter()
+                .map(|(reason, count)| format!("{count} {reason}"))
+                .collect();
+            writeln!(
+                out,
+                "{count} not running: {}; add --all to list them",
+                reasons.join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
 fn status(
     path: Option<PathBuf>,
     server: Option<String>,
@@ -622,9 +767,119 @@ fn status(
         writeln!(out, "{}", serde_json::to_string_pretty(&entry)?)?;
         return Ok(());
     }
+    Ok(write_status(
+        &mut out,
+        &entry,
+        rimz::utils::time::unix_now_ms(),
+        rimz::lsp::memory::for_entry(&entry),
+        host_headroom(),
+        rimz::lsp::history::Needs::read().for_entry(&entry),
+    )?)
+}
+
+/// Today's machine headroom, or `None` when the config or host memory cannot be read.
+fn host_headroom() -> Option<Headroom> {
+    let machine = rimz::config::MachineConfig::load().ok()?;
+    Headroom::read(&machine.lsp).ok()
+}
+
+fn tree_bytes(reading: &rimz::lsp::memory::Reading) -> u64 {
+    reading
+        .rss_kb
+        .saturating_add(reading.swap_kb)
+        .saturating_mul(1024)
+}
+
+fn write_status(
+    out: &mut impl Write,
+    entry: &registry::Entry,
+    now_ms: u64,
+    memory: rimz::lsp::memory::Reading,
+    headroom: Option<Headroom>,
+    estimate: u64,
+) -> std::io::Result<()> {
+    use registry::State;
     let mut facts = render::KeyVals::new();
     facts.push("checkout", render::cell(entry.root.display().to_string()));
     facts.push("server", render::cell(&entry.server));
+    facts.push(
+        "kind",
+        render::cell(
+            entry
+                .kind
+                .map_or_else(|| "unknown".into(), |kind| kind.to_string()),
+        ),
+    );
+    let since_ms = match &entry.state {
+        State::Dormant { since_ms, .. } => *since_ms,
+        State::Stopped { at_ms, .. } => *at_ms,
+        State::Ready => entry.ready_at_ms.unwrap_or(entry.started_at_ms),
+        State::Starting | State::Indexing => entry.started_at_ms,
+    };
+    facts.push(
+        "state",
+        render::cell(format!(
+            "{}, {} ago",
+            render::lsp_state_label(&entry.state),
+            render::age_label(now_ms.saturating_sub(since_ms) / 1000)
+        )),
+    );
+    let needs = rimz::utils::size::decimal_bytes(estimate);
+    let next = match (&entry.state, headroom) {
+        (State::Ready, _) => "answers at once".into(),
+        (State::Starting | State::Indexing, _) => {
+            "waits for indexing (up to 110 s), then exits 4".into()
+        }
+        (State::Stopped { reason, .. }, _) => format!("exits 3 (stopped: {reason})"),
+        (State::Dormant { .. }, Some(headroom)) if headroom.fits(estimate) => {
+            format!("starts it (needs {needs}, {headroom})")
+        }
+        (State::Dormant { .. }, Some(headroom)) => format!(
+            "needs {needs}, {headroom}; exits 4 unless idle servers can be stopped to make room"
+        ),
+        (State::Dormant { .. }, None) => {
+            format!("starts it if memory admits it (needs {needs}), otherwise exits 4")
+        }
+    };
+    facts.push("next query", render::cell(next));
+    if entry.state.is_running() {
+        facts.push(
+            "memory",
+            render::cell(format!(
+                "{} RSS + {} swap",
+                rimz::utils::size::decimal_bytes(memory.rss_kb.saturating_mul(1024)),
+                rimz::utils::size::decimal_bytes(memory.swap_kb.saturating_mul(1024))
+            )),
+        );
+    }
+    let peak = entry.peak_rss_kb.max(if entry.state.is_running() {
+        memory.peak_kb
+    } else {
+        0
+    });
+    facts.push(
+        "peak",
+        if peak == 0 {
+            render::cell("-").dash()
+        } else {
+            render::cell(rimz::utils::size::decimal_bytes(peak.saturating_mul(1024)))
+        },
+    );
+    facts.push(
+        "last query",
+        render::cell(entry.last_request_at_ms.map_or_else(
+            || "never".into(),
+            |at| {
+                format!(
+                    "{} ago",
+                    render::age_label(now_ms.saturating_sub(at) / 1000)
+                )
+            },
+        )),
+    );
+    facts.push("requests", render::cell(entry.request_count.to_string()));
+    facts.push("restarts", render::cell(entry.restarts.to_string()));
+    facts.push("leases", render::cell(entry.leases.len().to_string()));
     if let Some(enabled) = entry.editor_check_on_save {
         facts.push(
             "check on save",
@@ -635,29 +890,8 @@ fn status(
             }),
         );
     }
-    facts.push(
-        "kind",
-        render::cell(
-            entry
-                .kind
-                .map_or_else(|| "unknown".into(), |kind| kind.to_string()),
-        ),
-    );
-    facts.push("state", render::cell(render::lsp_state_label(&entry.state)));
-    facts.push("broker pid", render::cell(entry.broker_pid.to_string()));
-    facts.push(
-        "server pid",
-        render::cell(
-            entry
-                .server_pid
-                .map_or_else(|| "none".into(), |pid| pid.to_string()),
-        ),
-    );
-    facts.push("requests", render::cell(entry.request_count.to_string()));
-    facts.push("leases", render::cell(entry.leases.len().to_string()));
     if let Some(cause) = &entry.last_crash {
-        let age =
-            render::age_label(rimz::utils::time::unix_now_ms().saturating_sub(cause.at_ms) / 1000);
+        let age = render::age_label(now_ms.saturating_sub(cause.at_ms) / 1000);
         facts.push(
             "last crash",
             render::cell(format!("{}, {age} ago", cause.exit_summary())),
@@ -670,8 +904,17 @@ fn status(
             );
         }
     }
-    facts.render(&mut out)?;
-    for editor in entry.attached {
+    facts.push("broker pid", render::cell(entry.broker_pid.to_string()));
+    facts.push(
+        "server pid",
+        render::cell(
+            entry
+                .server_pid
+                .map_or_else(|| "none".into(), |pid| pid.to_string()),
+        ),
+    );
+    facts.render(out)?;
+    for editor in &entry.attached {
         let mut details = render::KeyVals::new();
         details.push(
             "editor",
@@ -679,12 +922,12 @@ fn status(
                 "{}  {}  attached {}s ago",
                 editor.pid,
                 editor.name.as_deref().unwrap_or("unnamed"),
-                rimz::utils::time::unix_now_ms().saturating_sub(editor.since_ms) / 1000
+                now_ms.saturating_sub(editor.since_ms) / 1000
             )),
         );
-        details.render(&mut out)?;
+        details.render(out)?;
         let mut buffers = render::KeyVals::new().indent(2);
-        for document in editor.open {
+        for document in &editor.open {
             let path = url::Url::parse(&document.uri)
                 .ok()
                 .and_then(|uri| uri.to_file_path().ok());
@@ -696,7 +939,7 @@ fn status(
                         .display()
                         .to_string()
                 })
-                .unwrap_or(document.uri);
+                .unwrap_or_else(|| document.uri.clone());
             buffers.push(
                 "buffer",
                 render::cell(format!(
@@ -710,39 +953,38 @@ fn status(
                 )),
             );
         }
-        buffers.render(&mut out)?;
+        buffers.render(out)?;
     }
     Ok(())
 }
 
-fn list_table(
-    entries: &[registry::Entry],
+fn list_table<'a>(
+    entries: impl Iterator<Item = (&'a registry::Entry, &'a rimz::lsp::memory::Reading)>,
     now_ms: u64,
-    memory: impl Fn(&registry::Entry) -> rimz::lsp::memory::Reading,
 ) -> render::Table {
     use render::status;
-    let mut entries: Vec<_> = entries.iter().collect();
-    entries.sort_by_key(|entry| status::lsp_order(entry));
+    let mut entries: Vec<_> = entries.collect();
+    entries.sort_by_key(|(entry, _)| status::lsp_order(entry));
     let mut table = render::Table::new([
-        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "REQUESTS", "LAST",
-        "RESTARTS", "LEASES",
+        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "LAST", "LEASES",
     ])
-    .right(&[3, 4, 5, 6, 7, 8, 9, 10]);
-    for entry in entries {
+    .right(&[3, 4, 5, 6, 7, 8]);
+    for (entry, reading) in entries {
         let running = entry.state.is_running();
         let (glyph, style) = render::verdict(status::lsp(&entry.state));
-        let [rss, swap, total, peak] = if running {
-            let reading = memory(entry);
+        let [rss, swap, total] = if running {
             [
                 reading.rss_kb,
                 reading.swap_kb,
                 reading.rss_kb.saturating_add(reading.swap_kb),
-                entry.peak_rss_kb.max(reading.peak_kb),
             ]
             .map(|kb| render::cell(rimz::utils::size::decimal_bytes(kb.saturating_mul(1024))))
         } else {
             std::array::from_fn(|_| render::cell("-").dash())
         };
+        let peak = entry
+            .peak_rss_kb
+            .max(if running { reading.peak_kb } else { 0 });
         table.row([
             render::cell(format!("{glyph} {}", render::lsp_state_label(&entry.state))).fg(style),
             render::cell(render::home_relative_path(&entry.root)),
@@ -750,8 +992,11 @@ fn list_table(
             rss,
             swap,
             total,
-            peak,
-            render::cell(entry.request_count.to_string()),
+            if peak == 0 {
+                render::cell("-").dash()
+            } else {
+                render::cell(rimz::utils::size::decimal_bytes(peak.saturating_mul(1024)))
+            },
             entry.last_request_at_ms.map_or_else(
                 || render::cell("-").dash(),
                 |at| {
@@ -761,47 +1006,48 @@ fn list_table(
                     ))
                 },
             ),
-            render::cell(entry.restarts.to_string()),
             render::cell(entry.leases.len().to_string()),
         ]);
     }
     table
 }
 
-/// Keeps the entries registered from the room's repository: attach records
+/// Partitions entries into this room and the rest: attach records
 /// the launch repo root, which is the room root unless a pinned room's cwd
 /// names another repository.
 fn room_entries(
-    mut entries: Vec<registry::Entry>,
+    entries: Vec<registry::Entry>,
     workspace: &rimz::workspace::ResolvedWorkspace,
-) -> Vec<registry::Entry> {
-    entries.retain(|entry| {
+) -> (Vec<registry::Entry>, Vec<registry::Entry>) {
+    entries.into_iter().partition(|entry| {
         entry.project.as_deref().is_some_and(|project| {
             project == workspace.project_root || project == workspace.launch_repo_root()
         })
-    });
-    entries
+    })
 }
 
 fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let mut entries = registry::sweep()?;
-    if !all {
-        let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
-        let workspace =
-            rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
-        entries = room_entries(entries, &workspace);
-    }
+    let entries = registry::sweep()?;
+    let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
+    let (entries, others) = room_entries(entries, &workspace);
     let mut out = render::out();
     if json {
         return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&entries)?));
     }
+    let needs = rimz::lsp::history::Needs::read();
     render::finish(
-        list_table(
-            &entries,
-            rimz::utils::time::unix_now_ms(),
-            rimz::lsp::memory::for_entry,
-        )
-        .render(&mut out),
+        ListView {
+            entries: &entries,
+            others: &others,
+            all,
+            now_ms: rimz::utils::time::unix_now_ms(),
+            headroom: host_headroom(),
+        }
+        .render(&mut out, rimz::lsp::memory::for_entry, |entry| {
+            needs.for_entry(entry)
+        }),
     )
 }
 
@@ -812,18 +1058,47 @@ fn checkout_entries(
     globals: &GlobalFlags,
 ) -> Result<(PathBuf, Vec<registry::Entry>)> {
     let mut entries = registry::sweep()?;
-    let cwd = std::fs::canonicalize(
-        path.or_else(|| globals.root.clone())
-            .unwrap_or(std::env::current_dir()?),
-    )?;
+    let path = path
+        .or_else(|| globals.root.clone())
+        .unwrap_or(std::env::current_dir()?);
+    let cwd = std::fs::canonicalize(&path).map_err(|error| {
+        super::usage::UsageError::new(format!("cannot open checkout {}: {error}", path.display()))
+    })?;
+    if let Some(server) = server.as_deref()
+        && let Ok(workspace) = rimz::workspace::WorkspaceResolver::resolve(&cwd, None)
+        && let Ok(machine) = rimz::config::MachineConfig::load()
+        && let Ok(config) = rimz::config::effective::load(&machine, workspace.launch_repo_root())
+    {
+        let registered = registry::read_entries()?;
+        validate_server_name(
+            server,
+            config
+                .lsp_servers
+                .keys()
+                .map(String::as_str)
+                .chain(config.untrusted_lsp_servers.iter().map(String::as_str)),
+            registered.iter(),
+        )?;
+    }
     let root = registry::enclosing_checkout(&cwd, &entries)
         .unwrap_or(&cwd)
         .to_owned();
+    if all {
+        let workspace =
+            rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
+        return Ok((root, room_entries(entries, &workspace).0));
+    }
     entries.retain(|entry| {
-        all || (entry.root == root && server.as_ref().is_none_or(|server| server == &entry.server))
+        entry.root == root && server.as_ref().is_none_or(|server| server == &entry.server)
     });
-    if !all && entries.len() > 1 {
-        anyhow::bail!("multiple language servers; choose --server NAME");
+    if entries.len() > 1 {
+        let mut names: Vec<_> = entries.iter().map(|entry| entry.server.as_str()).collect();
+        names.sort_unstable();
+        anyhow::bail!(
+            "multiple language servers for {}: {}; choose --server NAME",
+            root.display(),
+            names.join(", ")
+        );
     }
     Ok((root, entries))
 }
@@ -834,7 +1109,7 @@ fn stop(
     all: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (_, entries) = checkout_entries(path, server, all, globals)?;
+    let (root, entries) = checkout_entries(path, server, all, globals)?;
     let mut errors = Vec::new();
     let mut stopped = String::new();
     for entry in &entries {
@@ -858,7 +1133,41 @@ fn stop(
                 continue;
             }
         }
-        stopped += &format!("stopped {} ({})\n", entry.server, entry.root.display());
+        if entry.state.is_running() {
+            stopped += &format!("stopped {} ({})\n", entry.server, entry.root.display());
+        } else if entry.state.is_alarm() {
+            stopped += &format!(
+                "acknowledged {} ({}), was {}\n",
+                entry.server,
+                entry.root.display(),
+                render::lsp_state_label(&entry.state)
+            );
+        }
+    }
+    if stopped.is_empty() && errors.is_empty() {
+        let reason = if all {
+            if entries.is_empty() {
+                "no language server registered in this room".into()
+            } else {
+                "no language server in this room holds memory".into()
+            }
+        } else if entries.is_empty() {
+            format!("no language server registered for {}", root.display())
+        } else {
+            entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{} for {} holds no memory ({})",
+                        entry.server,
+                        entry.root.display(),
+                        render::lsp_state_label(&entry.state)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        stopped = format!("nothing to stop: {reason}\n");
     }
     let written = render::out().write_all(stopped.as_bytes());
     anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
@@ -866,398 +1175,5 @@ fn stop(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use registry::{State, StopReason};
-    use render::status::{self, StateRole};
-
-    #[test]
-    fn query_server_names_include_config_and_checkout_rows_only() {
-        let config = serde_json::from_value(
-            serde_json::json!({"command":["stub"],"extensions":["rs"],"root-markers":[]}),
-        )
-        .unwrap();
-        let mut context = QueryContext {
-            root: "/checkout".into(),
-            entries: vec![
-                entry("/checkout", "registered", State::Ready),
-                entry("/elsewhere", "elsewhere", State::Ready),
-            ],
-            servers: std::collections::BTreeMap::from([("configured".into(), config)]),
-        };
-        let error = context.validate_server(Some("nope")).unwrap_err();
-        assert!(error.is::<super::super::usage::UsageError>());
-        assert_eq!(
-            error.to_string(),
-            "no language server named nope; configured: configured, registered"
-        );
-        assert!(context.validate_server(None).is_ok());
-        assert!(context.validate_server(Some("configured")).is_ok());
-        assert!(context.validate_server(Some("registered")).is_ok());
-        assert!(context.validate_server(Some("elsewhere")).is_err());
-        context.servers.clear();
-        context.entries.clear();
-        assert_eq!(
-            context
-                .validate_server(Some("nope"))
-                .unwrap_err()
-                .to_string(),
-            "no language server named nope; configured: none configured"
-        );
-    }
-
-    #[test]
-    fn help_puts_queries_before_editor_bridges() {
-        use clap::CommandFactory;
-        let mut command = crate::cli::Cli::command();
-        command.build();
-        let lsp = command.find_subcommand("lsp").unwrap();
-        let names: Vec<_> = lsp
-            .get_subcommands()
-            .filter(|command| !command.is_hide_set() && command.get_name() != "help")
-            .map(clap::Command::get_name)
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "def", "refs", "hover", "impl", "callers", "callees", "symbols", "find", "show",
-                "check", "list", "status", "stop", "attach", "shim"
-            ]
-        );
-    }
-
-    #[test]
-    fn visible_lsp_arguments_explain_their_input() {
-        use clap::CommandFactory;
-        let mut command = crate::cli::Cli::command();
-        command.build();
-        let lsp = command.find_subcommand("lsp").unwrap();
-        for command in lsp
-            .get_subcommands()
-            .filter(|command| !command.is_hide_set() && command.get_name() != "help")
-        {
-            for argument in command
-                .get_arguments()
-                .filter(|argument| !argument.is_hide_set())
-            {
-                let help = argument
-                    .get_help()
-                    .expect("visible argument needs help")
-                    .to_string();
-                assert!(
-                    !help.is_empty(),
-                    "{} {}",
-                    command.get_name(),
-                    argument.get_id()
-                );
-                if argument.get_id() == "targets" {
-                    let expected = match command.get_name() {
-                        "symbols" => "File paths to outline",
-                        "find" => "Symbol-name search strings",
-                        _ => {
-                            "Targets: path:line:col (1-based, column required), path::Symbol, or a name"
-                        }
-                    };
-                    assert_eq!(
-                        help,
-                        expected,
-                        "{} TARGET help must match its accepted forms",
-                        command.get_name()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn no_tests_is_refs_and_callers_only_and_conflicts_with_json() {
-        use clap::Parser;
-        for verb in ["refs", "callers"] {
-            assert!(
-                crate::cli::Cli::try_parse_from([
-                    "rimz",
-                    "lsp",
-                    verb,
-                    "work",
-                    "--no-tests",
-                    "--all"
-                ])
-                .is_ok()
-            );
-            let error = crate::cli::Cli::try_parse_from([
-                "rimz",
-                "lsp",
-                verb,
-                "work",
-                "--no-tests",
-                "--json",
-            ])
-            .unwrap_err();
-            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-        }
-        for verb in ["impl", "callees", "find"] {
-            let error =
-                crate::cli::Cli::try_parse_from(["rimz", "lsp", verb, "work", "--no-tests"])
-                    .unwrap_err();
-            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-        }
-    }
-
-    #[test]
-    fn query_exit_uses_severity_not_argument_order() {
-        let codes = [0, 5, 6, 7, 1, 4, 3];
-        for (rank, code) in codes.iter().enumerate() {
-            for other in &codes[..=rank] {
-                assert_eq!(query_exit(*code, *other), *code);
-                assert_eq!(query_exit(*other, *code), *code);
-            }
-        }
-    }
-
-    #[test]
-    fn query_failures_reuse_server_conditions_only() {
-        for code in [1, 3, 4, 8, 9] {
-            let mut failures = QueryFailures::default();
-            let mut requests = 0;
-            for _ in 0..3 {
-                let result = failures.execute("rust", || {
-                    requests += 1;
-                    Err(match code {
-                        3 => QueryErr::Unavailable {
-                            root: "/repo".into(),
-                            reason: query::UnavailableReason::NotRunning,
-                        },
-                        4 => QueryErr::Indexing {
-                            server: "rust".into(),
-                            seconds: 30,
-                        },
-                        8 => QueryErr::MemoryShort {
-                            root: "/repo".into(),
-                            server: "rust".into(),
-                            shortfall: None,
-                        },
-                        9 => QueryErr::MemoryPressure {
-                            root: "/repo".into(),
-                            server: "rust".into(),
-                        },
-                        _ => rimz::lsp::LspErr::Protocol("bad request".into()).into(),
-                    })
-                });
-                assert_eq!(
-                    result.err().unwrap().exit_code(),
-                    if code >= 8 { 4 } else { code }
-                );
-            }
-            assert_eq!(requests, if code == 1 { 3 } else { 1 });
-            assert!(
-                failures
-                    .execute("python", || Ok(query::Output::Answer {
-                        result: serde_json::Value::Null,
-                        document_uri: None
-                    }))
-                    .is_ok()
-            );
-        }
-    }
-
-    fn entry(root: &str, server: &str, state: State) -> registry::Entry {
-        registry::Entry {
-            kind: None,
-            editor_check_on_save: None,
-            root: root.into(),
-            project: None,
-            server: server.into(),
-            nonce: String::new(),
-            broker_pid: 1,
-            broker_start_token: String::new(),
-            server_pid: Some(2),
-            server_start_token: None,
-            state,
-            started_at_ms: 0,
-            ready_at_ms: None,
-            estimate_bytes: 0,
-            settings_hash: String::new(),
-            request_count: 3,
-            last_request_at_ms: None,
-            peak_rss_kb: 4,
-            restarts: 2,
-            last_crash: None,
-            leases: vec![],
-            attached: vec![],
-        }
-    }
-
-    #[test]
-    fn room_entries_keep_the_room_repository() {
-        let registered = |root: &str, project: Option<&str>| registry::Entry {
-            project: project.map(Into::into),
-            ..entry(root, "rust", State::Ready)
-        };
-        let workspace = rimz::ResolvedWorkspace {
-            workspace_id: rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/room")),
-            project_root: "/room".into(),
-            cwd_project_root: Some("/other".into()),
-            root_class: rimz::workspace::RootClass::Repo,
-            worktree_root: "/other".into(),
-            worktree_branch: None,
-            session_name: "room".into(),
-            mux_hint: None,
-        };
-        let kept = room_entries(
-            vec![
-                registered("/room", Some("/room")),
-                registered("/worktrees/feat", Some("/room")),
-                registered("/other", Some("/other")),
-                registered("/elsewhere", Some("/elsewhere")),
-                registered("/room", None),
-            ],
-            &workspace,
-        );
-        let roots: Vec<_> = kept.iter().map(|entry| entry.root.as_path()).collect();
-        assert_eq!(
-            roots,
-            ["/room", "/worktrees/feat", "/other"].map(std::path::Path::new)
-        );
-    }
-
-    #[test]
-    fn list_table_orders_and_styles_server_states() {
-        let mut ready = entry("/z", "rust", State::Ready);
-        ready.last_request_at_ms = Some(11_000);
-        let entries = vec![
-            entry(
-                "/b",
-                "rust",
-                State::Dormant {
-                    since_ms: 0,
-                    reason: None,
-                },
-            ),
-            entry(
-                "/a",
-                "z",
-                State::Dormant {
-                    since_ms: 0,
-                    reason: Some(StopReason::Idle),
-                },
-            ),
-            entry(
-                "/a",
-                "m",
-                State::Dormant {
-                    since_ms: 0,
-                    reason: Some(StopReason::MemoryPressure),
-                },
-            ),
-            entry(
-                "/c",
-                "rust",
-                State::Dormant {
-                    since_ms: 0,
-                    reason: Some(StopReason::Crashed),
-                },
-            ),
-            ready,
-            entry(
-                "/a",
-                "a",
-                State::Dormant {
-                    since_ms: 0,
-                    reason: None,
-                },
-            ),
-            entry(
-                "/d",
-                "rust",
-                State::Stopped {
-                    at_ms: 0,
-                    reason: StopReason::Released,
-                },
-            ),
-        ];
-        let table = list_table(&entries, 56_000, |entry| {
-            assert_eq!(entry.server_pid, Some(2));
-            rimz::lsp::memory::Reading {
-                rss_kb: 2,
-                swap_kb: 10,
-                peak_kb: 8,
-            }
-        });
-        let mut stripped = anstream::StripStream::new(Vec::new());
-        table.render(&mut stripped).unwrap();
-        let text = String::from_utf8(stripped.into_inner()).unwrap();
-        let rows: Vec<Vec<&str>> = text
-            .lines()
-            .map(|line| line.split_whitespace().collect())
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                vec![
-                    "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "REQUESTS",
-                    "LAST", "RESTARTS", "LEASES"
-                ],
-                vec![
-                    "✓", "ready", "/z", "rust", "2", "KB", "10.2", "KB", "12.3", "KB", "8.2", "KB",
-                    "3", "45s", "ago", "2", "0"
-                ],
-                vec![
-                    "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "-", "-", "3", "-", "2",
-                    "0"
-                ],
-                vec![
-                    "·", "not", "started", "/a", "a", "-", "-", "-", "-", "3", "-", "2", "0"
-                ],
-                vec![
-                    "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "-", "-", "3", "-",
-                    "2", "0"
-                ],
-                vec![
-                    "·", "dormant:", "idle", "/a", "z", "-", "-", "-", "-", "3", "-", "2", "0"
-                ],
-                vec![
-                    "·", "not", "started", "/b", "rust", "-", "-", "-", "-", "3", "-", "2", "0"
-                ],
-                vec![
-                    "·", "stopped:", "released", "/d", "rust", "-", "-", "-", "-", "3", "-", "2",
-                    "0"
-                ],
-            ]
-        );
-        let mut lines = text.lines();
-        let header = lines.next().unwrap();
-        let ready = lines.next().unwrap();
-        let mut from = ready.find("rust").unwrap() + "rust".len();
-        for (column, value) in [
-            ("RSS", "2 KB"),
-            ("SWAP", "10.2 KB"),
-            ("TOTAL", "12.3 KB"),
-            ("PEAK", "8.2 KB"),
-            ("REQUESTS", "3"),
-            ("LAST", "45s ago"),
-            ("RESTARTS", "2"),
-            ("LEASES", "0"),
-        ] {
-            let end = from + ready[from..].find(value).unwrap() + value.len();
-            let header_end = header.find(column).unwrap() + column.len();
-            assert_eq!(
-                ready[..end].chars().count(),
-                header[..header_end].chars().count(),
-                "{column} must be right-aligned"
-            );
-            from = end;
-        }
-        let mut raw = Vec::new();
-        table.render(&mut raw).unwrap();
-        let raw = String::from_utf8(raw).unwrap();
-        assert!(raw.contains(&render::paint(status::role(StateRole::Success), "✓ ready")));
-        assert!(raw.contains(&render::paint(
-            status::role(StateRole::Failed),
-            "✗ dormant: crashed"
-        )));
-        assert!(raw.contains(&render::paint(
-            status::role(StateRole::Neutral),
-            "· dormant: memory pressure"
-        )));
-    }
-}
+#[path = "lsp_tests.rs"]
+mod tests;
