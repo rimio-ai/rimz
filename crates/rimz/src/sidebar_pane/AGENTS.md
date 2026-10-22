@@ -35,6 +35,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the sidebar renderer: the
 - Resolve every glyph through `theme.glyph(GlyphRole::…)`, which the shared core in [`theme/`](../theme/mod.rs) owns. The invariant carries the banned-literal list, which is what keeps the legend and the frame in step.
 - The carrier layer is exempt: [`render/theme.rs`](./render/theme.rs) and its component tokens turn a tone into a ratatui color, and [`render/ansi.rs`](./render/ansi.rs) quantizes that carrier down for a limited terminal. Add a color or glyph there and name it by role everywhere else.
 - Measure the painted width of text the renderer did not format itself (a product name, a theme override, an account label) with `text_width` in [`render/layout.rs`](./render/layout.rs), never `chars().count()`: such text may hold wide or zero-width characters, and a budget counted in chars misplaces every cell and click target after them.
+- On a card's identity line, a token (a badge, a mark) yields width before the handle does: the handle draws exactly as on a plain card, and the token drops when it does not fit beside it.
 
 ## Pets
 
