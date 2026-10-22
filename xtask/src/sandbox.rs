@@ -30,7 +30,6 @@ pub(crate) struct RoomRecord {
 
 #[derive(Deserialize)]
 struct Panes {
-    session: String,
     tabs: Vec<Tab>,
 }
 
