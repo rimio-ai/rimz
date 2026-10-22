@@ -410,6 +410,14 @@ Missing `pane_command` and `pane_cwd` keys are omitted, rather than emitted as `
 
 **Blocking panes.** `--blocking` waits for the command to exit and its pane to close; `--block-until-exit` waits for any exit; `--block-until-exit-success` and `--block-until-exit-failure` return on that status or when the pane closes. `new-pane` and `zellij run` take all four, and `new-tab` takes the three `--block-until-exit` forms. The exit code reaches the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` chains.
 
+### Targeted tiled splits and close growth (0.45.1)
+
+A directional split targeted by pane id routes to `Tab::vertical_split_of_pane_id` (right/left) or its horizontal counterpart. `Tab::split_of_pane_id` returns successfully without mounting when floating panes are visible or the target is not tiled, leaving the spawned PTY unplaced. It unsets fullscreen and dissolves stack lists when stack-list mode is enabled before splitting. Source: [`Tab` split methods](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/tab/mod.rs).
+
+A vertical split requires at least twice `MIN_TERMINAL_WIDTH` (10 columns). When the target is narrower, Zellij closes the newly spawned PTY rather than mounting it. Source: [`TiledPanes::can_split_pane_id_vertically`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/panes/tiled_panes/mod.rs).
+
+Closing a tiled pane grows aligned neighbours in this order: left, right, above, below. A pane split to the right of a full-height left sidebar is thus the first eligible neighbour when that sidebar closes; work panes farther right do not grow. Source: [`TiledPaneGrid::find_panes_to_grow`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/panes/tiled_panes/tiled_pane_grid.rs).
+
 ### `run`, `edit`, `plugin`
 
 `zellij run [flags] -- <cmd>...` opens a command pane: it stays open after the command exits and shows the exit status on its frame, `ENTER` re-runs it, and `Ctrl-c` closes it. Its flags match `new-pane` without the plugin flags: `-d/--direction` (right or down), `-f/--floating` with geometry and `--pinned` (geometry is ignored for tiled panes; a sized tiled pane needs a layout), `-i/--in-place` with `--close-replaced-pane`, `-c/--close-on-exit`, `-s/--start-suspended`, `-n/--name`, `--cwd`, `-b/--borderless <bool>`, `--near-current-pane`, `--no-focus`, `--stacked`, `--tab-id`, and the blocking flags.

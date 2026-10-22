@@ -1042,7 +1042,7 @@ impl MuxBackend for TmuxBackend {
             plan,
             &mut report,
             false,
-            |window| {
+            |window, _replacing| {
                 let pane = self.add_sidebar_to_window(opts, window)?;
                 if prove_sidebar_mount(opts, MuxName::Tmux, &pane, &build, || {
                     let _ = self.kill_pane(&pane);

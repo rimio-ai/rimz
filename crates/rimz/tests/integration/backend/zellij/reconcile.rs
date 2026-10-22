@@ -285,8 +285,8 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(&name, cwd.path(), stub, 120);
     write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
-    // Cache publication owns readiness for the freshly born working pane, so
-    // reconcile consumes that accepted snapshot once.
+    // The live pane list proves the working pane exists, but no client is
+    // attached to mount its missing sidebar.
     let report = room
         .backend()
         .reconcile_sidebars(&opts, &SidebarLiveness::default())
@@ -397,8 +397,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         stub,
         view_cols,
     );
-    let mut liveness = claimed_liveness(sidebar_id);
-    liveness.topology_floor_ms = Some(0);
+    let liveness = claimed_liveness(sidebar_id);
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
     let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);
@@ -807,6 +806,125 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
+}
+
+#[test]
+fn replacement_preserves_work_rectangles_across_a_midline_border() {
+    require_zellij!();
+    assert_replacement_preserves_work_rectangles(false);
+}
+
+#[test]
+fn replacement_preserves_work_rectangles_in_a_daemon_shaped_tab() {
+    require_zellij!();
+    assert_replacement_preserves_work_rectangles(true);
+}
+
+fn assert_replacement_preserves_work_rectangles(daemon: bool) {
+    let room = LiveZellijSession::new("replace-rectangles");
+    let version = room.backend().version().expect("version");
+    if version
+        .split('.')
+        .nth(1)
+        .and_then(|part| part.parse::<u32>().ok())
+        .is_none_or(|minor| minor < 45)
+    {
+        crate::common::skip("zellij below 0.45");
+        return;
+    }
+    let cwd = TempDir::new().expect("cwd");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(120);
+    let layout = write_kdl_layout(cwd.path(), &stub, "replace.kdl", |cwd_kdl, stub_kdl| {
+        let work = if daemon {
+            r#"pane name="content" focus=true { command "sleep"; args "600"; }
+        pane split_direction="horizontal" {
+            pane name="host-one" { command "sleep"; args "600"; }
+            pane name="host-two" { command "sleep"; args "600"; }
+        }"#
+        } else {
+            r#"pane split_direction="horizontal" {
+            pane name="upper-work" focus=true { command "sleep"; args "600"; }
+            pane name="lower-work" { command "sleep"; args "600"; }
+        }"#
+        };
+        format!(
+            r#"layout {{
+    pane split_direction="vertical" {{
+        pane size="25%" name="rimz-sidebar" borderless=true cwd={cwd_kdl} {{
+            command {stub_kdl}
+            close_on_exit true
+        }}
+        {work}
+    }}
+}}
+"#
+        )
+    });
+    birth_kdl_session(&room, cwd.path(), &layout, "replacement rectangles");
+    let mut client = AttachedClient::attach(&room, 240, 60);
+    let name = room.name();
+    let xdg = room.path();
+    wait_for_stable_terminal_state(xdg, name, Duration::from_millis(500));
+    let before = expect_list_panes(xdg, name);
+    let old = before.sidebar().expect("old sidebar");
+    let work = work_pane_geometry(xdg, name);
+    let focused = before
+        .panes
+        .iter()
+        .find(|pane| pane.title.as_deref() == Some(if daemon { "content" } else { "upper-work" }))
+        .expect("focused work pane");
+    client.wait_until_focused(
+        &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", focused.id)),
+        "working pane before replacement",
+    );
+    client.send_line("replacement-client-input");
+    let opts = reconcile_opts(
+        name,
+        "/tmp/rimz-replace-rectangles",
+        cwd.path(),
+        cwd.path(),
+        stub,
+        240,
+    );
+    write_topology_cache_from_list_panes(xdg, &opts.workspace_id, name);
+    let _mirror = topology_cache_mirror(xdg, &opts.workspace_id, name);
+    let report = room
+        .backend()
+        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .expect("replace");
+    assert_eq!(
+        work_pane_geometry(xdg, name),
+        work,
+        "replacement must not move any work rectangle"
+    );
+    assert_eq!(report.recovered, 1, "{report:?}");
+    assert_eq!(report.closed, 1, "{report:?}");
+    assert_eq!(
+        report.failed + report.misdocked + report.deferred,
+        0,
+        "{report:?}"
+    );
+    let after = expect_list_panes(xdg, name);
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar())
+        .collect();
+    assert_eq!(sidebars.len(), 1, "{after:?}");
+    assert_ne!(sidebars[0].id, old.id);
+    assert!(
+        !after
+            .panes
+            .iter()
+            .any(|pane| pane.id == old.id && !pane.is_plugin)
+    );
+    assert_eq!(sidebars[0].pane_x, 0);
+    assert_eq!(sidebars[0].pane_y, old.pane_y);
+    assert_eq!(sidebars[0].pane_rows, old.pane_rows);
+    assert_eq!(
+        sidebars[0].pane_columns,
+        u64::from(opts.target.cols(Some(240)).get())
+    );
 }
 
 fn write_kdl_layout(

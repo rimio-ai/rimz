@@ -29,8 +29,6 @@ pub struct SidebarLiveness {
     pub claimed_panes: HashSet<PaneId>,
     pub has_unlocated: bool,
     pub young_panes: HashSet<PaneId>,
-    /// Oldest topology observation this repair pass may treat as current.
-    pub topology_floor_ms: Option<u64>,
 }
 
 /// One view's sidebar panes in mux order and whether the view contains work or
@@ -185,7 +183,7 @@ pub(super) fn execute_reconcile_plan<Add, Close>(
     mut close: Close,
 ) -> Option<ReconcileFailure>
 where
-    Add: FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+    Add: FnMut(&str, &[PaneId]) -> crate::mux::Result<ReconcileAddOutcome>,
     Close: FnMut(&PaneId) -> crate::mux::Result<()>,
 {
     if defer_adds {
@@ -214,20 +212,20 @@ fn execute_reconcile_verdict<Add, Close>(
     close: &mut Close,
 ) -> crate::mux::Result<()>
 where
-    Add: FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+    Add: FnMut(&str, &[PaneId]) -> crate::mux::Result<ReconcileAddOutcome>,
     Close: FnMut(&PaneId) -> crate::mux::Result<()>,
 {
     match verdict {
         ViewVerdict::CloseDuplicates { close: panes, .. } => close_panes(panes, report, close),
         ViewVerdict::Add { view } => {
-            let outcome = run_add(view, defer_adds, add)?;
+            let outcome = run_add(view, &[], defer_adds, add)?;
             record_add(outcome, defer_adds, report);
             Ok(())
         }
         ViewVerdict::Replace {
             view, close: panes, ..
         } => {
-            let outcome = run_add(view, defer_adds, add)?;
+            let outcome = run_add(view, panes, defer_adds, add)?;
             if outcome != ReconcileAddOutcome::Deferred {
                 close_panes(panes, report, close)?;
             }
@@ -239,16 +237,17 @@ where
 
 fn run_add<Add>(
     view: &str,
+    replacing: &[PaneId],
     defer_adds: bool,
     add: &mut Add,
 ) -> crate::mux::Result<ReconcileAddOutcome>
 where
-    Add: FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+    Add: FnMut(&str, &[PaneId]) -> crate::mux::Result<ReconcileAddOutcome>,
 {
     if defer_adds {
         Ok(ReconcileAddOutcome::Deferred)
     } else {
-        add(view)
+        add(view, replacing)
     }
 }
 
@@ -406,7 +405,7 @@ mod tests {
     fn execute(
         verdicts: Vec<ViewVerdict>,
         defer_adds: bool,
-        add: impl FnMut(&str) -> crate::mux::Result<ReconcileAddOutcome>,
+        add: impl FnMut(&str, &[PaneId]) -> crate::mux::Result<ReconcileAddOutcome>,
         close: impl FnMut(&PaneId) -> crate::mux::Result<()>,
     ) -> (SidebarRecovery, Option<ReconcileFailure>) {
         let mut report = SidebarRecovery::default();
@@ -571,7 +570,8 @@ mod tests {
                 close: vec![pane("terminal_1"), pane("terminal_2")],
             }],
             false,
-            |view| {
+            |view, replacing| {
+                assert_eq!(replacing, [pane("terminal_1"), pane("terminal_2")]);
                 operations.borrow_mut().push(format!("add:{view}"));
                 Ok(ReconcileAddOutcome::Verified)
             },
@@ -603,7 +603,10 @@ mod tests {
                 close: vec![pane("terminal_1")],
             }],
             false,
-            |_| Err(failure("add failed")),
+            |_, replacing| {
+                assert_eq!(replacing, [pane("terminal_1")]);
+                Err(failure("add failed"))
+            },
             |pane| {
                 closes.borrow_mut().push(pane.clone());
                 Ok(())
@@ -619,7 +622,7 @@ mod tests {
                 close: vec![pane("terminal_2")],
             }],
             true,
-            |_| panic!("deferred add must not execute"),
+            |_, _| panic!("deferred add must not execute"),
             |_| panic!("deferred replacement must not close"),
         );
         assert!(failed.is_none());
@@ -637,7 +640,7 @@ mod tests {
                 close: vec![pane("terminal_1"), pane("terminal_2"), pane("terminal_3")],
             }],
             false,
-            |_| panic!("close-only plan must not add"),
+            |_, _| panic!("close-only plan must not add"),
             |pane| {
                 operations.borrow_mut().push(pane.clone());
                 if pane.raw() == "terminal_2" {
@@ -673,7 +676,8 @@ mod tests {
                 },
             ],
             false,
-            |view| {
+            |view, replacing| {
+                assert!(replacing.is_empty(), "Add has no panes to replace");
                 add_operations.borrow_mut().push(view.to_owned());
                 if view == "failed" {
                     Err(failure("add failed"))
@@ -707,7 +711,7 @@ mod tests {
                 },
             ],
             true,
-            |_| panic!("deferred add must not execute"),
+            |_, _| panic!("deferred add must not execute"),
             |_| Err(failure("close failed")),
         );
 
@@ -723,7 +727,7 @@ mod tests {
                 view: "view".to_owned(),
             }],
             false,
-            |_| Ok(ReconcileAddOutcome::VerifiedMisdocked),
+            |_, _| Ok(ReconcileAddOutcome::VerifiedMisdocked),
             |_| Ok(()),
         );
 
