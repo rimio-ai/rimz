@@ -5729,6 +5729,53 @@ fn resume_with_empty_store_refuses_before_mux_probe() {
 
 #[cfg(unix)]
 #[test]
+fn team_resume_doorways_refuse_in_the_teams_scene_before_mux_probe() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        "leader: coder\nstages: [Build]\nroles:\n  - {role: coder, agent: worker, owns: [Build]}",
+        "Complete the work.",
+    );
+    for args in [
+        vec!["teams", "resume", "forge#typo"],
+        vec!["teams", "forge#typo", "--continue"],
+        vec!["teams", "launch", "forge#typo", "--continue"],
+        vec!["teams", "resume", "forge", "-w", "typo"],
+        vec!["teams", "forge", "-w", "typo", "--continue"],
+    ] {
+        let output = env.rimz().args(args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains("nothing to resume for `forge#typo`; launch with `rimz teams forge`"),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("--continue") && !stderr.contains("rimz agents"),
+            "{stderr}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
     let env = Env::new();
     env.record(&env.project_root);

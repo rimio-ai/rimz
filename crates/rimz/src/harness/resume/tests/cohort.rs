@@ -1403,7 +1403,9 @@ fn cohort_resume_ignores_launched_children() {
             assert_eq!(resume_id(&plan.seeds[0]), Some("parent"));
             assert_eq!(
                 inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell], None, None),
-                CohortRelaunchState::Closed,
+                CohortRelaunchState::Closed {
+                    channel: Some("feature".into())
+                },
             );
         }
     }
@@ -2208,7 +2210,9 @@ fn cohort_matching_uses_one_occupant_per_launch_instance() {
             Some("forge"),
             None,
         ),
-        CohortRelaunchState::Closed
+        CohortRelaunchState::Closed {
+            channel: Some("feature".into())
+        }
     );
 }
 
@@ -2258,6 +2262,41 @@ fn cohort_relaunch_selects_the_leader_not_the_freshest_member() {
     assert!(
         matches!(state, CohortRelaunchState::Present { leader: Some(ref leader), .. } if leader.as_str() == "first")
     );
+}
+
+#[test]
+fn closed_team_relaunch_carries_the_newest_members_channel() {
+    let older = AgentState {
+        channel: Some("old-lane".into()),
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..team_agent("claude", "planner", "planner", "/code/review", 20)
+    };
+    let newest = AgentState {
+        channel: Some("triage".into()),
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..team_agent("codex", "coder", "coder", "/code/review", 1)
+    };
+    let foreign = AgentState {
+        team: Some("other".into()),
+        channel: Some("foreign".into()),
+        ..team_agent("codex", "foreign", "coder", "/code/review", 0)
+    };
+    let mut agents = vec![older, newest, foreign];
+    for _ in 0..2 {
+        assert_eq!(
+            inspect_cohort_relaunch(
+                &agents,
+                Path::new("/code/review"),
+                &[cohort_cell("codex", Some("coder"))],
+                Some("forge"),
+                None,
+            ),
+            CohortRelaunchState::Closed {
+                channel: Some("triage".into())
+            },
+        );
+        agents.reverse();
+    }
 }
 
 #[test]
@@ -2326,7 +2365,9 @@ fn cohort_relaunch_presence_table() {
             vec![closed(agent("codex", "ended", "/code/feature", 4))],
             &one_cell,
             None,
-            CohortRelaunchState::Closed,
+            CohortRelaunchState::Closed {
+                channel: Some("feature".into()),
+            },
         ),
         (
             "unknown with pane",
@@ -2344,7 +2385,9 @@ fn cohort_relaunch_presence_table() {
             vec![paneless(agent("codex", "paneless", "/code/feature", 2))],
             &one_cell,
             None,
-            CohortRelaunchState::Closed,
+            CohortRelaunchState::Closed {
+                channel: Some("feature".into()),
+            },
         ),
         (
             "live without pane",
@@ -2362,7 +2405,9 @@ fn cohort_relaunch_presence_table() {
             closed_newest_group,
             &two_cells,
             None,
-            CohortRelaunchState::Closed,
+            CohortRelaunchState::Closed {
+                channel: Some("feature".into()),
+            },
         ),
         (
             "focus lands on the freshest present pane",
@@ -2407,7 +2452,9 @@ fn cohort_relaunch_presence_table() {
             ],
             &two_cells,
             Some("forge"),
-            CohortRelaunchState::Closed,
+            CohortRelaunchState::Closed {
+                channel: Some("feature".into()),
+            },
         ),
     ] {
         assert_eq!(

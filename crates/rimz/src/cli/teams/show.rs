@@ -109,9 +109,9 @@ fn missing_cohort(report: &TeamReport, lane: &str) -> anyhow::Error {
         .collect::<Vec<_>>()
         .join(", ");
     if lanes.is_empty() {
-        anyhow::anyhow!(
-            "{team} has no live cohort in #{lane}; resume: rimz teams resume {team}#{lane}"
-        )
+        let target = format!("{team}#{lane}");
+        let resume = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
+        anyhow::anyhow!("{team} has no live cohort in #{lane}; resume: {resume}")
     } else {
         anyhow::anyhow!("{team} has no live cohort in #{lane}; live cohorts: {lanes}")
     }
@@ -851,7 +851,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "forge has no live cohort in #ended-lane; resume: rimz teams resume forge#ended-lane"
+            "forge has no live cohort in #ended-lane; resume: rimz teams resume 'forge#ended-lane'"
         );
     }
 

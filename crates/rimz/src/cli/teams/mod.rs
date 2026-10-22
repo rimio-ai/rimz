@@ -179,6 +179,7 @@ impl ResumeArgs {
         agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
             spec: Some(self.name),
             prompt: self.prompt,
+            teams_scene: true,
             cohort: agents_cmd::CohortLaunchArgs {
                 worktree: self.worktree,
                 continue_cohort: true,
@@ -459,6 +460,7 @@ fn launch_team(
         agents_cmd::AgentsArgs::launch_verb(agents_cmd::AgentLaunchArgs {
             spec: Some(name),
             prompt,
+            teams_scene: true,
             cohort: launch,
             overrides: agents_cmd::LaunchOverrideArgs {
                 isolation,

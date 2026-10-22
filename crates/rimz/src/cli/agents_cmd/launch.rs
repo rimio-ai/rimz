@@ -4,7 +4,7 @@ use super::*;
 use crate::cli::ctx::Ctx;
 use crate::cli::{machine_config, render, report_unknown_config_keys};
 use rimz::harness::ancestry::{self, LaunchFocus};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::placement::{PlacementErrors, PlacementRequest, resume_outside_launch_dir};
 
@@ -17,6 +17,12 @@ const LAUNCH_PLACEMENT_ERRORS: PlacementErrors = PlacementErrors {
 pub(super) enum ResumeEntrance {
     Flag,
     Reconcile,
+}
+
+enum ResumeScope {
+    Room,
+    Worktree(PathBuf),
+    Lane(String),
 }
 
 pub(super) fn validate_resume_inputs(
@@ -203,15 +209,18 @@ pub(in crate::cli) fn launch_resolved<'a>(
         launch,
         ..Default::default()
     };
-    let explicit_worktree_name = args
-        .launch
-        .cohort
-        .worktree
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
-        .transpose()?;
+    let explicit_worktree_name = if args.launch.cohort.continue_cohort {
+        None
+    } else {
+        args.launch
+            .cohort
+            .worktree
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
+            .transpose()?
+    };
     let worktree_launch =
         args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
     let workspace = &ctx.workspace;
@@ -397,11 +406,23 @@ pub(in crate::cli) fn launch_resolved<'a>(
         .sum::<usize>()
         == 1;
     if args.launch.cohort.continue_cohort {
-        let worktree_filter = resume_worktree_scope(
-            args.launch.cohort.worktree.as_deref(),
-            workspace,
-            &machine_config,
-        )?;
+        let scope = if args.launch.teams_scene
+            && let Some(lane) = args
+                .launch
+                .cohort
+                .worktree
+                .as_deref()
+                .filter(|lane| !lane.trim().is_empty())
+        {
+            ResumeScope::Lane(lane.to_owned())
+        } else {
+            resume_worktree_scope(
+                args.launch.cohort.worktree.as_deref(),
+                workspace,
+                &machine_config,
+            )?
+            .map_or(ResumeScope::Room, ResumeScope::Worktree)
+        };
         return Ok(Box::new(move || {
             launch_resume_layout(
                 args,
@@ -414,7 +435,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 layout,
                 team_name,
                 single_cell,
-                worktree_filter.as_deref(),
+                scope,
                 ancestry.as_ref(),
                 focus,
                 checked_folder_trust,
@@ -688,7 +709,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                         layout,
                         team_name,
                         single_cell,
-                        Some(&path),
+                        ResumeScope::Worktree(path),
                         ancestry.as_ref(),
                         focus,
                         checked_folder_trust,
@@ -1240,7 +1261,7 @@ fn launch_resume_layout(
     mut layout: LayoutSpec,
     team_name: Option<String>,
     single_cell: bool,
-    worktree_filter: Option<&Path>,
+    scope: ResumeScope,
     ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
     focus: LaunchFocus,
     mut checked_folder_trust: HashSet<(rimz::ids::LoginKey, PathBuf)>,
@@ -1249,20 +1270,30 @@ fn launch_resume_layout(
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let agents = match worktree_filter {
-        Some(target) => {
+    let agents = match &scope {
+        ResumeScope::Worktree(target) => {
             let target = rimz::utils::path::normalize_path_lexical(target);
             projection
                 .agents
-                .into_iter()
+                .iter()
                 .filter(|agent| agent_matches_worktree_filter(agent, &target))
+                .cloned()
                 .collect::<Vec<_>>()
         }
-        None => projection.agents,
+        ResumeScope::Lane(lane) => projection
+            .agents
+            .iter()
+            .filter(|agent| rimz::address::agent_in_worktree(agent, lane))
+            .cloned()
+            .collect(),
+        ResumeScope::Room => projection.agents.clone(),
     };
     let cells = cohort_cells(&layout);
     let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
-    let scope = worktree_filter.and_then(worktree_scope_label);
+    let scope_label = match &scope {
+        ResumeScope::Worktree(path) => worktree_scope_label(path),
+        _ => None,
+    };
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),
@@ -1279,7 +1310,26 @@ fn launch_resume_layout(
         |path| path.is_dir(),
         rimz::harness::resume::resume_session_present,
     )
-    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
+    .map_err(|err| {
+        if args.launch.teams_scene {
+            team_resume_error(
+                err,
+                spec,
+                args.launch
+                    .cohort
+                    .worktree
+                    .as_deref()
+                    .filter(|lane| !lane.trim().is_empty()),
+                &agents,
+                &projection.agents,
+                teams,
+                |path| path.is_dir(),
+                rimz::store::runtime::agent_liveness,
+            )
+        } else {
+            cohort_resume_error(err, spec, scope_label.as_deref(), &agents, teams)
+        }
+    })?;
     let availability = rimz::harness::plan::LaunchAvailability::read(
         store.runtime_paths(),
         store.paths(),
@@ -1685,6 +1735,122 @@ fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
     match scope {
         Some(scope) => format!("`{spec}` in worktree `{scope}`"),
         None => format!("`{spec}`"),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the hints need both rosters and injected checkout and liveness probes"
+)]
+fn team_resume_error(
+    err: rimz::harness::resume::CohortResumeErr,
+    spec: &str,
+    lane: Option<&str>,
+    agents: &[AgentState],
+    room_agents: &[AgentState],
+    teams: &rimz::config::TeamsConfig,
+    checkout_exists: impl Fn(&Path) -> bool,
+    liveness: impl Fn(&AgentState) -> rimz::store::runtime::AgentLiveness,
+) -> anyhow::Error {
+    use rimz::harness::resume::{CohortResumeErr, TeamHoldReason};
+    use rimz::store::runtime::AgentLiveness;
+
+    let address = lane.map_or_else(|| spec.to_owned(), |lane| format!("{spec}#{lane}"));
+    match err {
+        CohortResumeErr::NothingToResume { .. } => {
+            let mut seen = HashSet::new();
+            let resumable = rimz::harness::resume::closed_cohort_specs(agents, &liveness)
+                .into_iter()
+                .filter_map(|candidate| {
+                    if teams.0.contains_key(&candidate) {
+                        Some(candidate)
+                    } else {
+                        teams.role_spec(&candidate).map(|(team, _)| team.to_owned())
+                    }
+                })
+                .filter(|team| team != spec && seen.insert(team.clone()))
+                .collect::<Vec<_>>();
+            if let Some(first) = resumable.first() {
+                let target = lane.map_or_else(|| first.clone(), |lane| format!("{first}#{lane}"));
+                let retry = shell_command(["rimz", "teams", "resume", &target]);
+                return anyhow::anyhow!(
+                    "nothing to resume for `{address}`; resumable here: {} — retry with `{retry}`",
+                    resumable.join(", ")
+                );
+            }
+            let excluded_lanes = agents
+                .iter()
+                .filter_map(AgentState::channel)
+                .chain(
+                    room_agents
+                        .iter()
+                        .filter(|agent| {
+                            agent.parent_agent_id.is_none() && agent.team.as_deref() == Some(spec)
+                        })
+                        .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
+                        .filter_map(AgentState::channel),
+                )
+                .collect::<HashSet<_>>();
+            let board_held = |agent: &AgentState| {
+                let (Some(lane), Some(checkout)) = (agent.channel(), agent.lane_path()) else {
+                    return false;
+                };
+                let lane_rows = room_agents
+                    .iter()
+                    .filter(|row| rimz::address::agent_in_worktree(row, &lane))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                rimz::harness::resume::inspect_team_hold(&lane_rows, Path::new(checkout))
+                    .is_some_and(|hold| {
+                        hold.team == spec && matches!(hold.reason, TeamHoldReason::BoardStage(_))
+                    })
+            };
+            let lanes = room_agents
+                .iter()
+                .filter(|agent| {
+                    agent.parent_agent_id.is_none()
+                        && agent.team.as_deref() == Some(spec)
+                        && !agent.agent_id.is_empty()
+                        && (!agent.agent_id.is_provisional() || board_held(agent))
+                })
+                .filter(|agent| {
+                    agent
+                        .lane_path()
+                        .is_some_and(|path| checkout_exists(Path::new(path)))
+                })
+                .filter_map(AgentState::channel)
+                .filter(|lane| !excluded_lanes.contains(lane))
+                .collect::<BTreeSet<_>>();
+            if let Some(first) = lanes.first() {
+                let target = format!("{spec}#{first}");
+                let retry = shell_command(["rimz", "teams", "resume", &target]);
+                let lanes = lanes
+                    .iter()
+                    .map(|lane| format!("#{lane}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return anyhow::anyhow!(
+                    "nothing to resume for `{address}`; cohorts are in {lanes} — retry with `{retry}`"
+                );
+            }
+            let launch = shell_command(["rimz", "teams", spec]);
+            anyhow::anyhow!("nothing to resume for `{address}`; launch with `{launch}`")
+        }
+        CohortResumeErr::MembersStillLive { labels } => {
+            let focus = shell_command(["rimz", "teams", "focus", &address]);
+            let stop = shell_command(["rimz", "teams", "stop", &address]);
+            anyhow::anyhow!(
+                "cannot resume `{address}`; still live: {}; reach them with `{focus}` or stop them with `{stop}` before resuming",
+                labels.join(", ")
+            )
+        }
+        CohortResumeErr::SessionNotResumable { label } => {
+            let launch = shell_command(["rimz", "teams", spec]);
+            anyhow::anyhow!(
+                "cannot resume `{address}`; {label} has no resumable session; launch with `{launch}`"
+            )
+        }
+        CohortResumeErr::LoginMismatch(mismatch) => mismatch.into(),
     }
 }
 

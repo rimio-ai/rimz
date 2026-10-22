@@ -360,6 +360,10 @@ pub(crate) struct AgentLaunchArgs {
     /// Internal launch posture for the `rimz subagents` doorway.
     #[arg(skip)]
     pub(crate) subagent: bool,
+    /// Internal resume posture for the `rimz teams` doorways: a named lane
+    /// matches by recorded lane, and refusals name teams-scene commands.
+    #[arg(skip)]
+    pub(crate) teams_scene: bool,
     /// Read stdin to EOF as prompt content. With a positional prompt, the
     /// instruction goes first and stdin follows inside `<stdin>` tags.
     #[arg(long, requires = "print")]

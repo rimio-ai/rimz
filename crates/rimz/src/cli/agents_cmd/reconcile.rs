@@ -151,7 +151,7 @@ pub(super) fn reconcile_cohort_launch(
             writeln!(std::io::stderr().lock(), "{running}")?;
             Ok(Reconciled::Done)
         }
-        rimz::harness::resume::CohortRelaunchState::Closed => {
+        rimz::harness::resume::CohortRelaunchState::Closed { channel } => {
             let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
                 return Ok(Reconciled::Continue);
             };
@@ -159,7 +159,7 @@ pub(super) fn reconcile_cohort_launch(
                 return launch_fresh(name, &subject);
             }
             let (resume_command, fresh_command) =
-                relaunch_commands(name, spec_display, team, prompt);
+                relaunch_commands(name, spec_display, team, channel.as_deref(), prompt);
             // Cohort liveness was already decided above, so Git state alone
             // separates "recreate it" from "resume into it". A concurrent
             // cleanup may still remove the checkout after this decision.
@@ -342,12 +342,21 @@ fn relaunch_commands(
     name: &str,
     spec_display: &str,
     team: Option<&str>,
+    channel: Option<&str>,
     prompt: Option<&str>,
 ) -> (String, String) {
     let target = team.map(|team| format!("{team}#{name}"));
+    let resume_target = team
+        .zip(channel)
+        .map(|(team, channel)| format!("{team}#{channel}"));
     let (mut resume, mut fresh) = match target.as_deref() {
         Some(target) => (
-            vec!["rimz", "teams", "resume", target],
+            vec![
+                "rimz",
+                "teams",
+                "resume",
+                resume_target.as_deref().unwrap_or(target),
+            ],
             vec!["rimz", "teams", target, "--fresh"],
         ),
         None => (
@@ -441,17 +450,28 @@ mod tests {
     #[test]
     fn relaunch_commands_cover_teams_and_inline_specs() {
         assert_eq!(
-            relaunch_commands("topic", "forge", Some("forge"), None),
+            relaunch_commands("topic", "forge", Some("forge"), Some("topic"), None),
             (
                 "rimz teams resume 'forge#topic'".to_owned(),
                 "rimz teams 'forge#topic' --fresh".to_owned(),
             )
         );
         assert_eq!(
-            relaunch_commands("topic", "claude,codex", None, None),
+            relaunch_commands("topic", "claude,codex", None, None, None),
             (
                 "rimz agents 'claude,codex' -w topic --continue".to_owned(),
                 "rimz agents 'claude,codex' -w topic --fresh".to_owned(),
+            )
+        );
+    }
+
+    #[test]
+    fn team_relaunch_commands_resume_the_recorded_lane_and_fresh_worktree() {
+        assert_eq!(
+            relaunch_commands("review", "forge", Some("forge"), Some("triage"), None),
+            (
+                "rimz teams resume 'forge#triage'".to_owned(),
+                "rimz teams 'forge#review' --fresh".to_owned(),
             )
         );
     }
@@ -463,7 +483,8 @@ mod tests {
             (None, "review 'this' and $(that)"),
             (Some("forge"), "--fresh"),
         ] {
-            let (resume, fresh) = relaunch_commands("topic", "claude,codex", team, Some(prompt));
+            let (resume, fresh) =
+                relaunch_commands("topic", "claude,codex", team, Some("triage"), Some(prompt));
             for command in [resume, fresh] {
                 let words = shlex::split(&command).unwrap();
                 assert_eq!(words.last().map(String::as_str), Some(prompt));
