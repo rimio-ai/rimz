@@ -206,16 +206,19 @@ impl CardIdentityAllocator {
         pane_id: &PaneId,
         new_key: &(AgentKind, AgentSessionId),
     ) -> Option<(AgentKind, AgentSessionId)> {
-        map.iter().find_map(|(owner, state)| {
-            if owner == new_key || owner.0 != *kind || !owner.1.is_provisional() {
-                return None;
-            }
-            let pane = state.pane.as_ref()?;
-            if pane.pane_id.as_str() != pane_id.as_str() {
-                return None;
-            }
-            Some(owner.clone())
-        })
+        map.iter()
+            .filter_map(|(owner, state)| {
+                if owner == new_key || owner.0 != *kind || !owner.1.is_provisional() {
+                    return None;
+                }
+                let pane = state.pane.as_ref()?;
+                if pane.pane_id.as_str() != pane_id.as_str() {
+                    return None;
+                }
+                Some((owner, state))
+            })
+            .max_by_key(|(_, state)| (state.registered_at, state.kind_ordinal))
+            .map(|(owner, _)| owner.clone())
     }
 
     pub(super) fn release_key(&mut self, key: &(AgentKind, AgentSessionId)) {
