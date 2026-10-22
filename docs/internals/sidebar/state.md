@@ -275,13 +275,14 @@ These files are the multiplexer's side of the channel, written outside the sideb
 
 ### Enrichment lanes
 
-The fetch worker publishes process metrics and group roots alongside pane production. The cache refresher owns the rest, and asks the separately elected spending service to refresh spend.
+The fetch worker publishes process metrics and group roots in separate lanes alongside pane production. The cache refresher owns the rest, and asks the separately elected spending service to refresh spend.
 
 The project-root trunk lane publishes `lanes/trunk-state.json` separately from per-worktree diff stats and emits through a detached helper. Its baseline and single-flight contract live in [Trunk and worktree signals](../harness/loops.md#trunk-and-worktree-signals).
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
-| `lanes/diff-stats.json` | Room | Per-worktree git facts in two stamped halves: edit-sensitive (added and removed lines, dirty and untracked state, branch, merge or rebase in progress) and commit-shaped (ahead and behind, landed marker, did-work marker, `--from-pr` provenance), plus the head and merge-base the added and removed lines were measured at (a clean tree at the same pair skips the `git diff`), and the group-root set. The landed and did-work proofs are [worktrees.md → What the sidebar asks](../harness/worktrees.md#what-the-sidebar-asks). |
+| `lanes/group-roots.json` | Room | The fetch worker's enumerated checkout roots and each root's exact RimZ marker name, cached under `WORKTREE_ROOTS_TTL` with the session-boundary freshness floor. |
+| `lanes/diff-stats.json` | Room | Per-worktree git facts in two stamped halves: edit-sensitive (added and removed lines, dirty and untracked state, branch, merge or rebase in progress) and commit-shaped (ahead and behind, landed marker, did-work marker, `--from-pr` provenance), plus the head and merge-base the added and removed lines were measured at (a clean tree at the same pair skips the `git diff`). The landed and did-work proofs are [worktrees.md → What the sidebar asks](../harness/worktrees.md#what-the-sidebar-asks). |
 | `lanes/pr-state.json` | Room | Pull-request links and CI verdicts by worktree path and demanded branch ([PR state](#pr-state)). |
 | `lanes/metrics-sample.json` | Room | Per-pane resource samples and pane-to-root-pid bindings. The figures publish on the pane frame. |
 | `lanes/codex-daemon-reap.json` | Room | Codex daemon-mode reap inputs: live daemon PIDs and the app-server's loaded-thread list, stamped `produced_at_ms`. The producer re-probes every `CODEX_DAEMON_REAP_TTL` (30 seconds); readers accept a record for `CODEX_DAEMON_REAP_STALE` (90 seconds) so a replacement probe overlaps the previous evidence. An absent, unreadable, or stale record reaps nothing and reports Codex daemon health unknown. |

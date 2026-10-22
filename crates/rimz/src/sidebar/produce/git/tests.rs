@@ -4,7 +4,9 @@ use std::process::Command;
 use crate::RuntimePaths;
 use crate::disk::atomic;
 use crate::ids::WorkspaceId;
-use crate::sidebar::refresh::git_stats::{DiffStatsCache, WorktreeRootsCache};
+use crate::proc::testkit::spawn_count;
+use crate::sidebar::refresh::git_stats::WorktreeRootsCache;
+use crate::utils::time::unix_now_ms;
 use crate::workspace::RootClass;
 
 use super::{list_group_roots, list_worktree_roots, project_group_roots};
@@ -17,6 +19,17 @@ fn git(cwd: &Path, args: &[&str]) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+fn runtime_for(project: &Path) -> (tempfile::TempDir, RuntimePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(project), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    (dir, runtime)
+}
+
+fn read_lane(runtime: &RuntimePaths) -> Option<WorktreeRootsCache> {
+    atomic::read_json_cache(&runtime.group_roots_path())
 }
 
 #[test]
@@ -121,58 +134,139 @@ fn project_group_roots_publishes_exact_marker_names() {
         external.join(git_dir)
     };
     atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker).unwrap();
-    let runtime_dir = tempfile::tempdir().unwrap();
-    let runtime =
-        RuntimePaths::under(WorkspaceId::from_project_root(&main), runtime_dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
+    let (_runtime_dir, runtime) = runtime_for(&main);
 
-    let roots = project_group_roots(&main, RootClass::Repo, &runtime, None);
-    let cache: DiffStatsCache = atomic::read_json_cache(&runtime.diff_stats_path());
-    let classifications = cache
-        .worktrees
-        .expect("roots cache")
-        .marker_names
-        .expect("current classifications");
+    let floor = unix_now_ms();
+    let legacy = serde_json::json!({
+        "entries": { main.display().to_string(): { "refreshed_at_ms": floor, "added": 7 } },
+        "worktrees": {
+            "refreshed_at_ms": floor - 1,
+            "roots": [main.join("old-root")],
+            "marker_names": {}
+        }
+    });
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &legacy).unwrap();
+    let before = std::fs::read(runtime.diff_stats_path()).unwrap();
+
+    let roots = project_group_roots(&main, RootClass::Repo, &runtime, Some(floor));
+    assert_eq!(
+        std::fs::read(runtime.diff_stats_path()).unwrap(),
+        before,
+        "enumerating group roots must leave diff-stats.json byte-identical"
+    );
+    let cache = read_lane(&runtime).expect("the roots lane must hold the enumeration");
 
     assert!(roots.contains(&main));
     assert!(roots.contains(&external));
+    assert_eq!(cache.roots, roots);
     assert_eq!(
-        classifications.get(&external).map(String::as_str),
+        cache.marker_names.get(&external).map(String::as_str),
         Some("feature")
     );
-    assert!(!classifications.contains_key(&main));
+    assert!(!cache.marker_names.contains_key(&main));
 }
 
 #[test]
-fn project_group_roots_refreshes_a_legacy_unclassified_cache() {
+fn project_group_roots_serves_a_fresh_lane_without_forks_or_writes() {
     let room = tempfile::tempdir().unwrap();
-    let runtime_dir = tempfile::tempdir().unwrap();
-    let runtime = RuntimePaths::under(
-        WorkspaceId::from_project_root(room.path()),
-        runtime_dir.path(),
-    )
-    .unwrap();
-    runtime.ensure_dirs().unwrap();
-    let old_root = room.path().join("old-root");
+    let (_dir, runtime) = runtime_for(room.path());
+    let roots = vec![room.path().join("cached")];
+    let stamp = unix_now_ms();
     atomic::write_temp_then_rename_cache(
-        &runtime.diff_stats_path(),
-        &DiffStatsCache {
-            worktrees: Some(WorktreeRootsCache {
-                refreshed_at_ms: crate::utils::time::unix_now_ms(),
-                roots: vec![old_root],
-                marker_names: None,
-            }),
-            ..DiffStatsCache::default()
-        },
+        &runtime.group_roots_path(),
+        &serde_json::json!({ "refreshed_at_ms": stamp, "roots": roots, "marker_names": {} }),
     )
     .unwrap();
+    let before = std::fs::read(runtime.group_roots_path()).unwrap();
+    let forks = spawn_count();
 
-    assert!(project_group_roots(room.path(), RootClass::Directory, &runtime, None).is_empty());
-    let refreshed = atomic::read_json_cache::<DiffStatsCache>(&runtime.diff_stats_path())
-        .worktrees
-        .expect("refreshed roots");
-    assert!(refreshed.roots.is_empty());
-    assert_eq!(refreshed.marker_names, Some(Default::default()));
+    assert_eq!(
+        project_group_roots(room.path(), RootClass::Repo, &runtime, Some(stamp)),
+        roots
+    );
+    assert_eq!(spawn_count() - forks, 0);
+    assert_eq!(std::fs::read(runtime.group_roots_path()).unwrap(), before);
+    assert!(!runtime.diff_stats_path().exists());
+}
+
+#[test]
+fn project_group_roots_floor_refuses_a_fresh_lane() {
+    let room = tempfile::tempdir().unwrap();
+    assert!(git(room.path(), &["init", "-q"]));
+    let (_dir, runtime) = runtime_for(room.path());
+    let floor = unix_now_ms();
+    atomic::write_temp_then_rename_cache(
+        &runtime.group_roots_path(),
+        &serde_json::json!({
+            "refreshed_at_ms": floor - 1,
+            "roots": [room.path().join("old-root")],
+            "marker_names": {}
+        }),
+    )
+    .unwrap();
+    let forks = spawn_count();
+    let roots = project_group_roots(room.path(), RootClass::Repo, &runtime, Some(floor));
+    assert_eq!(spawn_count() - forks, 1);
+    assert_eq!(roots, vec![room.path().to_path_buf()]);
+    let cache = read_lane(&runtime).expect("the roots lane must hold the re-enumeration");
+    assert!(
+        cache.refreshed_at_ms >= floor,
+        "the floor forces a new publication"
+    );
+    assert_eq!(cache.roots, roots);
+}
+
+#[test]
+fn project_group_roots_backs_off_after_a_failed_probe() {
+    let room = tempfile::tempdir().unwrap();
+    let (_dir, runtime) = runtime_for(room.path());
+    let started_ms = unix_now_ms();
+    let forks = spawn_count();
+    assert!(project_group_roots(room.path(), RootClass::Repo, &runtime, None).is_empty());
+    assert_eq!(spawn_count() - forks, 1);
+    let cache = read_lane(&runtime).expect("a failed probe publishes its empty result for backoff");
+    assert!(cache.roots.is_empty());
+    assert!(cache.refreshed_at_ms >= started_ms);
+    let before = std::fs::read(runtime.group_roots_path()).unwrap();
+    let forks = spawn_count();
+
+    assert!(project_group_roots(room.path(), RootClass::Repo, &runtime, None).is_empty());
+    assert_eq!(spawn_count() - forks, 0);
+    assert_eq!(std::fs::read(runtime.group_roots_path()).unwrap(), before);
+}
+
+#[test]
+fn project_group_roots_replaces_an_unreadable_lane() {
+    let room = tempfile::tempdir().unwrap();
+    assert!(git(room.path(), &["init", "-q"]));
+    let (_dir, runtime) = runtime_for(room.path());
+    std::fs::write(runtime.group_roots_path(), b"garbage").unwrap();
+    let forks = spawn_count();
+
+    let roots = project_group_roots(room.path(), RootClass::Repo, &runtime, None);
+    assert_eq!(spawn_count() - forks, 1);
+    assert_eq!(roots, vec![room.path().to_path_buf()]);
+    let cache =
+        read_lane(&runtime).expect("an unreadable lane must be replaced with a valid record");
+    assert_eq!(cache.roots, roots);
+}
+
+#[test]
+fn project_group_roots_returns_the_enumeration_when_publication_fails() {
+    let room = tempfile::tempdir().unwrap();
+    assert!(git(room.path(), &["init", "-q"]));
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(room.path()), dir.path()).unwrap();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+    std::fs::write(&runtime.lanes_dir, b"blocker").unwrap();
+
+    assert_eq!(
+        project_group_roots(room.path(), RootClass::Repo, &runtime, None),
+        vec![room.path().to_path_buf()]
+    );
+    assert!(!runtime.group_roots_path().exists());
+    assert_eq!(std::fs::read(&runtime.lanes_dir).unwrap(), b"blocker");
 }
 
 #[test]

@@ -105,6 +105,7 @@ impl RuntimePaths {
             self.authoritative_pane_probe_path(),
             self.authoritative_pane_probe_lock(),
             self.diff_stats_path(),
+            self.group_roots_path(),
             self.cohort_spend_path(),
             self.pipeline_path(),
             self.pr_state_path(),

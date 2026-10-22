@@ -42,12 +42,6 @@ pub(in crate::sidebar) struct DiffStats {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCache {
     pub entries: BTreeMap<String, DiffStatsCacheEntry>,
-    /// The repo's worktree checkout roots, cached under `WORKTREE_ROOTS_TTL`
-    /// (with a session-boundary refresh floor). The set changes only on
-    /// `git worktree add/remove`, so grouping reuses it across ticks instead
-    /// of forking `git worktree list` every snapshot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktrees: Option<WorktreeRootsCache>,
 }
 
 /// Long-lived producer state for content-derived Git facts that do not belong
@@ -79,15 +73,17 @@ struct UntrackedLineMemoEntry {
     added: u32,
 }
 
+/// The `lanes/group-roots.json` record: the repo's worktree checkout roots,
+/// published whole by the producer's root enumeration, its one writer, and
+/// cached under `WORKTREE_ROOTS_TTL` with a session-boundary refresh floor. The
+/// set changes only on `git worktree add/remove`, so grouping reuses it across
+/// ticks instead of forking `git worktree list` every snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorktreeRootsCache {
+pub(in crate::sidebar) struct WorktreeRootsCache {
     pub refreshed_at_ms: u64,
     pub roots: Vec<PathBuf>,
-    /// Exact checkout-root to RimZ marker-name classifications. `None` marks a
-    /// cache written before classifications were published; `Some(empty)` is
-    /// a current enumeration with no marked roots.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub marker_names: Option<BTreeMap<PathBuf, String>>,
+    /// Exact checkout-root to RimZ marker-name classifications.
+    pub marker_names: BTreeMap<PathBuf, String>,
 }
 
 impl WorktreeRootsCache {

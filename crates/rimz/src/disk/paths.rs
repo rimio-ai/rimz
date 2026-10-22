@@ -1075,6 +1075,10 @@ impl RuntimePaths {
         self.lane_path("diff-stats.json")
     }
 
+    pub(crate) fn group_roots_path(&self) -> PathBuf {
+        self.lane_path("group-roots.json")
+    }
+
     pub(crate) fn cohort_spend_path(&self) -> PathBuf {
         self.lane_path("cohort-spend.json")
     }

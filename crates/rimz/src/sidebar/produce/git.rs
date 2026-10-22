@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::disk::atomic;
-use crate::sidebar::refresh::git_stats::{DiffStatsCache, WorktreeRootsCache};
+use crate::sidebar::refresh::git_stats::WorktreeRootsCache;
 use crate::utils::time::unix_now_ms;
 use crate::workspace::RootClass;
 
@@ -17,7 +17,7 @@ use crate::workspace::RootClass;
 /// `external`. Cached under
 /// `WORKTREE_ROOTS_TTL`: the set changes only on `git worktree add/remove` or
 /// on room re-record, so re-probing every tick would be pure overhead. The
-/// cache slot is shared across root classes, and that is sound:
+/// group-roots lane is shared across root classes, and that is sound:
 /// the persisted class flips only with a workspace re-record — a session
 /// boundary, whose freshness floor refuses the cached set — so a stale
 /// other-class enumeration never outlives the produce that learns the new
@@ -30,8 +30,8 @@ pub(in crate::sidebar::produce) fn project_group_roots(
     runtime: &crate::RuntimePaths,
     min_refreshed_at_ms: Option<u64>,
 ) -> Vec<PathBuf> {
-    let cache_path = runtime.diff_stats_path();
-    let mut cache: DiffStatsCache = atomic::read_json_cache(&cache_path);
+    let cache_path = runtime.group_roots_path();
+    let cache: Option<WorktreeRootsCache> = atomic::read_json_cache(&cache_path);
     let now_ms = unix_now_ms();
     // The freshness floor mirrors the pane cache's: a session boundary sends
     // its wakeup with `--min-pane-cache-ms`, and an enumeration older than
@@ -40,10 +40,8 @@ pub(in crate::sidebar::produce) fn project_group_roots(
     let floor_ok =
         |w: &&WorktreeRootsCache| min_refreshed_at_ms.is_none_or(|min| w.refreshed_at_ms >= min);
     if let Some(cached) = cache
-        .worktrees
         .as_ref()
         .filter(|w| w.is_fresh(now_ms))
-        .filter(|w| w.marker_names.is_some())
         .filter(floor_ok)
     {
         return cached.roots.clone();
@@ -58,11 +56,11 @@ pub(in crate::sidebar::produce) fn project_group_roots(
                 .map(|marker| (root.clone(), marker.name))
         })
         .collect::<BTreeMap<_, _>>();
-    cache.worktrees = Some(WorktreeRootsCache {
+    let cache = WorktreeRootsCache {
         refreshed_at_ms: now_ms,
         roots: roots.clone(),
-        marker_names: Some(marker_names),
-    });
+        marker_names,
+    };
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar worktree-roots cache write failed");
     }

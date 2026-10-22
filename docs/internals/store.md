@@ -210,7 +210,7 @@ lanes/{snapshot,agent-projection}.json projections
 lanes/{sidebar-width,sidebar-filter,unread}.json renderer state
 lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
 lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
-lanes/{diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
+lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
 lanes/workspace-spending.<prefix>.json room spend projection
