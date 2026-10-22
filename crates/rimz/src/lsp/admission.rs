@@ -415,7 +415,7 @@ pub(super) fn admit_query(
         if shortfall.fits() {
             return Ok(None);
         }
-        let Some(victim) = candidates.next() else {
+        let Some(victim) = candidates.next().filter(|_| super::installed::may_stop()) else {
             record_shortfall("refused", &shortfall)?;
             return Ok(Some(shortfall));
         };

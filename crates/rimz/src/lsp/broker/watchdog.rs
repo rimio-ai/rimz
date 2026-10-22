@@ -13,7 +13,7 @@ fn pressured(sample: Memory, floor: u64) -> bool {
 pub(super) fn check(policy: &crate::config::LspConfig) -> Result<()> {
     let sample = memory::sample()?;
     let floor = crate::lsp::admission::reserve_bytes(policy, sample.total_bytes)?;
-    if !pressured(sample, floor) {
+    if !pressured(sample, floor) || !crate::lsp::installed::may_stop() {
         return Ok(());
     }
     let Some(_lock) = crate::disk::lock::WorkspaceLock::try_acquire(
@@ -34,6 +34,9 @@ pub(super) fn check(policy: &crate::config::LspConfig) -> Result<()> {
             .server_pid
             .map_or_else(memory::Reading::default, memory::tree);
         entry.peak_rss_kb = entry.peak_rss_kb.max(reading.peak_kb);
+        if !crate::lsp::installed::may_stop() {
+            return Ok(());
+        }
         stop_victim(&entry, StopReason::MemoryPressure, true)?;
         crate::diag::lsp::append(&kill_record(
             &entry,
@@ -72,7 +75,10 @@ pub(in crate::lsp) fn stop_victim(
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    if kill_fallback && crate::proc::process_is_live(pid, Some(token)) {
+    if kill_fallback
+        && crate::proc::process_is_live(pid, Some(token))
+        && crate::lsp::installed::may_stop()
+    {
         match nix::sys::signal::killpg(
             nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGKILL,
