@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod attempts;
+mod conditions;
 mod judges;
 mod scope;
 mod ticks;

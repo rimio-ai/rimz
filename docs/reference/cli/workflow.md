@@ -50,12 +50,14 @@ waiting: sweep, takeover, since 09:10, ×3
 | --- | --- |
 | node | Where the run waits. |
 | `said <outcome>` | A check answered an outcome routed to `@wait`. |
+| `holding <outcome> <elapsed>/<for>` | A condition case keeps winning while its hold duration runs. |
+| `unknown: <keys and reasons>` | A condition cannot read enough data to choose its first matching case. |
 | `window <term>` | A step or judge whose provider `window` is closed, with the failing term and its reading. |
 | `takeover` | The checkout holds an agent mid-turn, so the step cannot evict it yet. |
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
 | `since` | First time the run waited here. |
 | `×N` | How many advances found it still waiting. |
-| `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal clears it. |
+| `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal clears it. For a `for` hold it is when the hold completes, and signals and the minute tick re-sample the case before then. |
 
 ## Cancel and resume
 
@@ -72,7 +74,7 @@ An active run accepts `--extend` alone; `--at` needs a parked run. A finished ru
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the script or agent profile), `BACKGROUND` (whether the step's agent reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the script, agent profile, or `condition`), `BACKGROUND` (whether the step's agent reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
@@ -119,6 +121,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 `list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line or park reason as printed. The human column remains `CHECKOUT` for both kinds.
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
+
+A condition's answer has `outcome`, `readings` (a map from term key to string or null), and the winning zero-based `case` (omitted for `else` and `unknown`). A case's fixed string or integer `key`, or the inherited run key, is included when present. `unknown` includes a `reason` naming each unread key. While a case's `for` hold runs, the outcome is `hold`; `record.wait` carries `case`, `detail` (the case's outcome), `first`, `last`, `count`, and `recheck_at`. Without a hold, `wait.case` is omitted. `unknown` defaults to `@wait`; `timeout` and `invalid` default to `@user`. Explicit `on` entries override those defaults. `hold`, `unknown`, `timeout`, `invalid`, `cap`, and `deadline` are reserved outcome words, and `on.hold` is refused.
 
 `rimz loop list --json` and `rimz loop show --json` carry `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, checkout, state, node, since}` plus `reason` and `text` on a parked run. `since` is when the run entered its node.
 

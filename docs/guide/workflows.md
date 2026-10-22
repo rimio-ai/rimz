@@ -2,7 +2,7 @@
 
 A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and `--verify` can re-prompt that turn until a command passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as loop tasks, that plan lives in prompts and in an agent's context, and a dead or compacted agent loses it.
 
-A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
 
 ## Write a workflow
 
@@ -76,7 +76,7 @@ warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attemp
 
 Every `(default)` edge to `@user` parks the run for you. The `tests` row says a broken script (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
 
-The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A check can wait for the reset instead, as [the PR example](#wait-on-the-outside-world) does.
+The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one.
 
 A step is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The agent's reporting hooks must be installed, and a Codex step needs folder trust for the checkout. `rimz doctor` reports both, and when it says an agent's folder trust is undecided, it names the `rimz trust grant` command that settles it.
 
@@ -121,7 +121,7 @@ An attempt can end as `died` when the agent fails to start or crashes. `show` re
 
 RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the `input`, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
 
-A check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads its stdout once it exits.
+A script check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads its stdout once it exits. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process.
 
 A step launches its agent in a new pane, with the same two variables set. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to it like any agent. When its turn ends, RimZ stops the agent and the subagents it launched, records the commit before and after, and follows `then`. A peer or a team the agent launched keeps running until you stop it.
 
@@ -142,9 +142,19 @@ scope = "worktree"
 start = "pr"
 
 [checks.pr]
-run = "uv run checks/pr.py"
-on = { merged = "@done", ci-pending = "@wait", needs-sweep = "sweep" }
+else = "pending"
+on = { merged = "@done", red = "sweep", pending = "@wait" }
 timeout = "2d"
+
+[[checks.pr.cases]]
+when = ["pr=merged"]
+outcome = "merged"
+
+[[checks.pr.cases]]
+when = ["ci=failed || pr.queue=dequeued"]
+outcome = "red"
+key = "ci"
+for = "2m"
 
 [steps.sweep]
 agent = "claude"
@@ -155,19 +165,19 @@ max-visits = 5
 timeout = "6h"
 ```
 
-`checks/pr.py` asks `gh` about the branch's PR and prints one of three answers:
+Cases are ordered. Each `when` array is ANDed, and its strings take the loop grammar (`!`, `&&`, `||`, parentheses, and branch selectors). The first true case wins; all false answers `else`. Every case outcome and `else` needs an `on` edge. Here a merged PR ends the run; a failing CI or dequeued PR held for two minutes launches `sweep`. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`.
 
-```json
-{"outcome": "merged"}
-{"outcome": "ci-pending", "recheck_at": "2026-10-18T14:40:00Z"}
-{"outcome": "needs-sweep"}
-```
+Unread is not false: an unread case before the first true case answers `unknown`, even for `!pr=open`. The default `unknown → @wait` keeps the run there; override `on.unknown` to route elsewhere. Do not write `pr=unknown` in a case: unread terms answer the `unknown` outcome instead. Forge readings must come from a successful probe at or after entry to this check (including after resume). Until then, `show` names the unread keys. Stage and usage-window readings have no freshness floor. Keep the room open for fresh forge data: an idle repository's next probe can take up to five minutes. Two consecutive forge checks each need a post-entry probe, so put related decisions in cases of one check. This floor does not eliminate forge propagation lag after a push, and closing the room leaves its last post-entry facts in force.
 
-While CI runs, `ci-pending` holds the run at `pr` until `recheck_at`, and then the check runs again. Without `recheck_at`, a waiting check runs again about once a minute. A signal in the room clears `recheck_at` and runs the check at once, so a merge is seen as soon as the room sees it. Every [signal](./loops.md#signals-the-rooms-event-bus) does this except the agent lifecycle signals such as `agent.idle`. When CI fails, `needs-sweep` launches the `sweep` agent in the worktree, with a prompt that tells it to fix the failures and push. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`, which reads the PR again.
+A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Signals and the minute tick re-sample; changes entirely between samples go unseen. `key` fixes the case's string or integer key; without it the answer inherits the run's key.
+
+A condition reading `window.*` requires `provider = "claude"` (an agent kind, not a profile) and accepts an optional `account = "work"`. Both are refused when inapplicable. `team.stage` values are checked against the project's effective teams plus `Done`; validation outside a workspace warns that stage names were not checked.
+
+A waiting check without `recheck_at` runs again about once a minute. A signal in the room clears `recheck_at` and runs it at once. Every [signal](./loops.md#signals-the-rooms-event-bus) does this except agent lifecycle signals such as `agent.idle`.
 
 A check that can wait must have a `timeout`. It starts each time the run enters the check and runs across every wait there. When it passes, the run parks. Here each return from `sweep` starts a new two days.
 
-A rate limit is another thing to wait for. When the last attempt ended as `limited`, `context.json` carries `prev_attempt.limited.reset_at`, and a check can answer `ci-pending` with that time as `recheck_at`. The [sample `pr.py` in the RimZ repository](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this, and waits ten minutes after an attempt that died.
+Keep `run` for custom, many-outcome answers. A rate limit is another thing to wait for: when the last attempt ended as `limited`, `context.json` carries `prev_attempt.limited.reset_at`, and a script can answer a waiting outcome with that time as `recheck_at`. The [sample `pr.py` in the RimZ repository](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this, and waits ten minutes after an attempt that died.
 
 ## Let a model decide
 
@@ -209,6 +219,8 @@ A run parks when it would otherwise have to guess:
 - a step's agent stopped on a question or a permission prompt, and no `on.asked` edge answers it,
 - the run's `deadline` passed,
 - a check routed an outcome to `@user`, with its `reason` as the text.
+
+A condition's unread data normally waits rather than parking; an explicit `on.unknown = "@user"` asks you instead.
 
 A question ends the attempt. RimZ notices it within about a minute, stops the agent, and parks the run with the question as its text, so an answer typed into the pane after that reaches nobody. Fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume. The step relaunches, and `prev_attempt.asked` in `context.json` holds the question.
 
@@ -283,6 +295,8 @@ A script prints, and a judge writes, exactly one JSON object. A script must also
 | `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later context files carry it. |
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
+
+A condition answer carries `outcome`, the zero-based winning `case` (absent for `else` and `unknown`), `readings` (null for unread), and its fixed or inherited `key` when present. `unknown` also carries a `reason` naming each unread key. During a hold, `outcome` is `hold` until the case's duration completes. `timeout`, `invalid`, `cap`, `deadline`, `unknown`, and `hold` are reserved: cases, `else`, scripts, and judges cannot choose them; a condition's `on.unknown` may override the default, but `on.hold` is never an edge.
 
 ### The context file
 

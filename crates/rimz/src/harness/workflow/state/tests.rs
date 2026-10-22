@@ -2,6 +2,8 @@ use super::*;
 use crate::store::workflow::RunState;
 use serde_json::json;
 
+mod conditions;
+
 #[test]
 fn child_start_mismatch_or_missing_token_never_kills_a_group() {
     use std::os::unix::process::CommandExt;

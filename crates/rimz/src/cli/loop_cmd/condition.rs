@@ -7,14 +7,7 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
         return Ok(());
     }
-    let effective = rimz::config::effective::load(&MachineConfig::load_lenient(), root)?;
-    let mut stages = effective
-        .teams
-        .0
-        .values()
-        .flat_map(|team| team.pipeline_stages())
-        .collect::<std::collections::BTreeSet<_>>();
-    stages.insert(rimz::config::DONE_STAGE.to_owned());
+    let stages = schedule::condition_stages(root)?;
     WhenExpr::parse_with_stages(clauses, Some(&stages))?;
     Ok(())
 }
@@ -181,25 +174,5 @@ pub(super) fn write_terms(
 }
 
 pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {
-    use when::UnreadReason;
-    match reason {
-        None | Some(UnreadReason::NotChecked) => "not checked yet".into(),
-        Some(UnreadReason::NoForge) => "no supported forge for this checkout".into(),
-        Some(UnreadReason::LookupFailing { last_tried }) => {
-            let age = i64::try_from(last_tried)
-                .ok()
-                .and_then(|at| Timestamp::from_millisecond(at).ok())
-                .map(|at| ui::rel_age(at, Timestamp::now()))
-                .unwrap_or_else(|| "unknown".into());
-            format!("forge lookup failing, last tried {age}")
-        }
-        Some(UnreadReason::NoPr { branch }) => branch.map_or_else(
-            || "no PR for this checkout".into(),
-            |branch| format!("no PR for branch {branch}"),
-        ),
-        Some(UnreadReason::NoCi { branch }) => branch.map_or_else(
-            || "no CI for this checkout".into(),
-            |branch| format!("no CI for branch {branch}"),
-        ),
-    }
+    schedule::unread_reason(reason, Timestamp::now())
 }

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, CheckKind, WorkflowSpec};
+use super::spec::{self, CheckKind, RESERVED_OUTCOMES, WorkflowSpec};
 use crate::config::definitions::LoadedDefinitions;
 use serde::Serialize;
 
@@ -38,7 +38,12 @@ pub struct Validation {
     pub errors: Vec<Issue>,
 }
 
-pub fn validate(dir: &Path, workflows_home: &Path, definitions: &LoadedDefinitions) -> Validation {
+pub fn validate(
+    dir: &Path,
+    workflows_home: &Path,
+    definitions: &LoadedDefinitions,
+    project_root: Option<&Path>,
+) -> Validation {
     let mut report = Validation::default();
     let canonical = dir.canonicalize();
     let Some(name) = canonical
@@ -79,7 +84,7 @@ pub fn validate(dir: &Path, workflows_home: &Path, definitions: &LoadedDefinitio
             return report;
         }
     };
-    validate_spec(dir, name, &spec, definitions)
+    validate_spec(dir, name, &spec, definitions, project_root)
 }
 
 pub(super) fn validate_spec(
@@ -87,6 +92,7 @@ pub(super) fn validate_spec(
     name: &str,
     spec: &WorkflowSpec,
     definitions: &LoadedDefinitions,
+    project_root: Option<&Path>,
 ) -> Validation {
     let mut report = Validation::default();
     if let Err(err) = crate::harness::schedule::validate_name(name) {
@@ -113,7 +119,10 @@ pub(super) fn validate_spec(
             report.error(&path, "name is also used by a step");
         }
         if check.kind().is_none() {
-            report.error(&path, "set exactly one of run or agent");
+            report.error(
+                &path,
+                "set exactly one of run, shell, agent, or cases (nonempty)",
+            );
         }
         if let Some(CheckKind::Run(run)) = check.kind()
             && let Err(err) = spec::resolve_argv(dir, run)
@@ -126,32 +135,61 @@ pub(super) fn validate_spec(
                 "an agent check requires prompt-file",
             );
         }
-        report.agent_fields(
-            dir,
-            &path,
-            check.agent.as_deref(),
-            check.prompt_file.as_deref(),
-            check.window.as_deref(),
-            definitions,
-        );
-        if let Some(agent) = &check.agent
-            && !definitions.failed.contains_key(agent)
-            && let Ok(profile) =
-                crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
-            && let Some(adapter) = crate::agents::find_definition(profile.kind.as_str())
-            && adapter.spec().launch.headless.is_none()
-        {
-            report.error(
-                &format!("{path}.agent"),
-                format!("{agent} has no headless launch for judge checks"),
+        let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        for (field, present) in [
+            ("else", check.else_outcome.is_some() && !condition),
+            ("provider", check.provider.is_some() && !condition),
+            ("account", check.account.is_some() && !condition),
+            (
+                "prompt-file",
+                check.prompt_file.is_some() && !matches!(check.kind(), Some(CheckKind::Agent(_))),
+            ),
+            (
+                "window",
+                check.window.is_some() && !matches!(check.kind(), Some(CheckKind::Agent(_))),
+            ),
+        ] {
+            if present {
+                report.error(
+                    &format!("{path}.{field}"),
+                    "field is not supported by this check kind",
+                );
+            }
+        }
+        if condition {
+            report.condition_fields(&path, check, project_root);
+        }
+        if let Some(CheckKind::Agent(agent)) = check.kind() {
+            report.agent_fields(
+                dir,
+                &path,
+                Some(agent),
+                check.prompt_file.as_deref(),
+                check.window.as_deref(),
+                definitions,
             );
+            if !definitions.failed.contains_key(agent)
+                && let Ok(profile) =
+                    crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
+                && let Some(adapter) = crate::agents::find_definition(profile.kind.as_str())
+                && adapter.spec().launch.headless.is_none()
+            {
+                report.error(
+                    &format!("{path}.agent"),
+                    format!("{agent} has no headless launch for judge checks"),
+                );
+            }
         }
         report.timeout(&path, check.timeout.as_deref());
         let edges = check.edges();
         if edges.values().any(|target| target == "@wait") && check.timeout.is_none() {
             report.error(
                 &format!("{path}.timeout"),
-                "a waiting check requires timeout",
+                if condition && edges.get("unknown").is_some_and(|target| target == "@wait") {
+                    "a waiting check requires timeout; set timeout or route on.unknown away from @wait (and any other waiting outcomes)"
+                } else {
+                    "a waiting check requires timeout"
+                },
             );
         }
         for (outcome, target) in &check.on {
@@ -162,17 +200,20 @@ pub(super) fn validate_spec(
                     "a timed-out check cannot wait on its expired timeout clock",
                 );
             }
-            if matches!(outcome.as_str(), "cap" | "deadline") {
+            if RESERVED_OUTCOMES.contains(&outcome.as_str())
+                && !matches!(outcome.as_str(), "timeout" | "invalid")
+                && !(outcome == "unknown" && condition)
+            {
                 report.error(
                     &format!("{path}.on.{outcome}"),
                     "reserved engine outcome; a check routes its own outcomes plus timeout and invalid",
                 );
             }
-            if let Some(agent) = &check.agent
+            if let Some(CheckKind::Agent(agent)) = check.kind()
                 && spec
                     .steps
                     .get(target)
-                    .is_some_and(|step| &step.agent == agent)
+                    .is_some_and(|step| step.agent == agent)
             {
                 report.warnings.push(issue(&path, format!("judge and step {target} use the same profile {agent}; independence relies on the prompt")));
             }
@@ -183,6 +224,7 @@ pub(super) fn validate_spec(
             kind: "check".into(),
             runner: match check.kind() {
                 Some(CheckKind::Run(_)) => "run",
+                Some(CheckKind::Condition) => "condition",
                 _ => "agent",
             }
             .into(),
@@ -316,6 +358,141 @@ impl Validation {
     fn node_name(&mut self, path: &str, node: &str) {
         if let Err(err) = crate::harness::schedule::validate_name(node) {
             self.error(path, err);
+        }
+    }
+
+    fn condition_fields(&mut self, path: &str, check: &spec::Check, project_root: Option<&Path>) {
+        use crate::harness::schedule::{condition_stages, when::WhenExpr};
+        use crate::utils::time::{DurationUnit, parse_duration_units};
+
+        let mut outcomes = BTreeSet::new();
+        if let Some(outcome) = &check.else_outcome {
+            if RESERVED_OUTCOMES.contains(&outcome.as_str()) {
+                self.error(&format!("{path}.else"), "choose a non-reserved outcome");
+            }
+            outcomes.insert(outcome.as_str());
+        } else {
+            self.error(&format!("{path}.else"), "a condition check requires else");
+        }
+        let mut expressions = Vec::new();
+        for (index, case) in check.cases.iter().enumerate() {
+            let case_path = format!("{path}.cases.{index}");
+            outcomes.insert(case.outcome.as_str());
+            if RESERVED_OUTCOMES.contains(&case.outcome.as_str()) {
+                self.error(
+                    &format!("{case_path}.outcome"),
+                    "choose a non-reserved outcome",
+                );
+            }
+            match WhenExpr::parse(&case.when) {
+                Ok(expression) => {
+                    if expression
+                        .terms()
+                        .any(|term| term.values.iter().any(|value| value == "unknown"))
+                    {
+                        self.error(&format!("{case_path}.when"), "unread terms answer the unknown outcome; route on.unknown instead of matching unknown");
+                    }
+                    expressions.push((index, expression));
+                }
+                Err(error) => self.error(&format!("{case_path}.when"), error),
+            }
+            if let Some(hold) = &case.hold {
+                if check
+                    .on
+                    .get(&case.outcome)
+                    .is_some_and(|target| target == "@wait")
+                {
+                    self.error(
+                        &format!("{case_path}.for"),
+                        "a held case must route away from @wait",
+                    );
+                }
+                match parse_duration_units(
+                    hold,
+                    &[
+                        DurationUnit::Second,
+                        DurationUnit::Minute,
+                        DurationUnit::Hour,
+                        DurationUnit::Day,
+                    ],
+                ) {
+                    Ok(duration) if duration.is_zero() => {
+                        self.error(&format!("{case_path}.for"), "for must be nonzero")
+                    }
+                    Err(error) => self.error(&format!("{case_path}.for"), error),
+                    _ => {}
+                }
+            }
+        }
+        for outcome in &outcomes {
+            if !check.on.contains_key(*outcome) {
+                self.error(
+                    &format!("{path}.on.{outcome}"),
+                    "route every case and else outcome in on",
+                );
+            }
+        }
+        for outcome in check.on.keys() {
+            if !outcomes.contains(outcome.as_str())
+                && !matches!(outcome.as_str(), "unknown" | "timeout" | "invalid")
+            {
+                self.error(
+                    &format!("{path}.on.{outcome}"),
+                    "dead route: name a case outcome, else, unknown, timeout, or invalid",
+                );
+            }
+        }
+        let window = expressions.iter().any(|(_, expression)| {
+            expression
+                .terms()
+                .any(|term| term.key.starts_with("window."))
+        });
+        match (&check.provider, window) {
+            (None, true) => {
+                self.error(&format!("{path}.provider"), "window terms require provider")
+            }
+            (Some(_), false) => self.error(
+                &format!("{path}.provider"),
+                "provider requires a window term",
+            ),
+            (Some(provider), true)
+                if crate::agents::find_definition(provider.as_str()).is_none() =>
+            {
+                self.error(
+                    &format!("{path}.provider"),
+                    format!("unknown provider {provider}"),
+                )
+            }
+            _ => {}
+        }
+        if check.account.is_some() && check.provider.is_none() {
+            self.error(&format!("{path}.account"), "account requires provider");
+        }
+        if !expressions
+            .iter()
+            .any(|(_, expression)| expression.terms().any(|term| term.key == "team.stage"))
+        {
+            return;
+        }
+        let Some(root) = project_root else {
+            self.warnings.push(issue(
+                path,
+                "stage names were not checked: validate from the project's workspace",
+            ));
+            return;
+        };
+        let stages = match condition_stages(root) {
+            Ok(stages) => stages,
+            Err(error) => {
+                self.error(path, error);
+                return;
+            }
+        };
+        for (index, _) in expressions {
+            if let Err(error) = WhenExpr::parse_with_stages(&check.cases[index].when, Some(&stages))
+            {
+                self.error(&format!("{path}.cases.{index}.when"), error);
+            }
         }
     }
 

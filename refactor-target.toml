@@ -1084,7 +1084,10 @@ path = "crates/rimz/src/harness"
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # runner::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
 # runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
-surface-budget = 962
+# Workflow Case and WhenExpr::truth share condition specifications and three-valued truth (+2).
+# condition_stages and unread_reason share admission and prose with the loop CLI (+2).
+# RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
+surface-budget = 967
 
 [[verdict]]
 kind = "item"
@@ -1827,7 +1830,8 @@ path = "crates/rimz/src/store"
 # message::read_status gives the parked resume monitor a fold-free single-record lookup (+1).
 # MessageRecord::awaiting_registration shares the card-aware registration wait across delivery, expiry and resume dispatch (+1).
 # ResumeAttempt carries the queue commit's join-or-start decision through dispatch to the doorway (+1).
-surface-budget = 494
+# workflow::Wait::is_hold shares hold recognition across workflow settlement and scheduling (+1).
+surface-budget = 495
 
 [[verdict]]
 kind = "item"
@@ -8035,6 +8039,26 @@ reason = "The workflow CLI and subsequent engine share the strict spec model, de
 
 [[verdict]]
 kind = "item"
+key = "harness::workflow::Case"
+reason = "Workflow condition cases share ordered predicates, hold durations, and fixed keys with their derived schema."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenExpr::truth"
+reason = "Workflow conditions project three-valued truth without changing loop evaluation."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::condition_stages"
+reason = "Loop and workflow admission share the effective team's stage names."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::unread_reason"
+reason = "Loop inspection and workflow condition answers share byte-identical unread-reason prose."
+
+[[verdict]]
+kind = "item"
 key = "harness::workflow::spec::CheckKind"
 reason = "Workflow validation and execution share one check-kind decision."
 
@@ -8047,6 +8071,11 @@ reason = "Workflow validation and execution share one check-kind decision."
 kind = "item"
 key = "harness::workflow::Check::edges"
 reason = "Routing, admission, and cycle checks use the same explicit and default edges."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::RESERVED_OUTCOMES"
+reason = "Workflow admission and answer normalization share one reserved-outcome vocabulary."
 
 [[verdict]]
 kind = "item"

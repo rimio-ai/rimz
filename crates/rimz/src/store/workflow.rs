@@ -128,7 +128,7 @@ impl Park {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Key {
     String(String),
@@ -284,12 +284,20 @@ pub struct PreviousAttempt {
 pub struct Wait {
     pub node: String,
     pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case: Option<u32>,
     #[serde(default)]
     pub detail: Option<String>,
     pub first: Timestamp,
     pub last: Timestamp,
     pub count: u64,
     pub recheck_at: Option<Timestamp>,
+}
+
+impl Wait {
+    pub(crate) fn is_hold(&self) -> bool {
+        self.outcome == "hold"
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

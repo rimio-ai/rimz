@@ -25,6 +25,7 @@ pub mod arming;
 pub mod backlog;
 mod backlog_store;
 pub mod catalog;
+mod condition;
 mod config_edit;
 pub mod fanout;
 #[doc(hidden)]
@@ -43,6 +44,7 @@ pub mod team;
 pub mod throttle;
 pub mod when;
 
+pub use condition::{condition_stages, unread_reason};
 pub use fire::last_stamps;
 
 pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";

@@ -47,21 +47,52 @@ pub struct Check {
     pub agent: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_cases")]
+    #[schemars(length(min = 1))]
+    pub cases: Vec<Case>,
+    #[serde(rename = "else")]
+    pub else_outcome: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub provider: Option<crate::ids::AgentKind>,
+    #[schemars(with = "Option<String>")]
+    pub account: Option<crate::ids::LoginName>,
     #[serde(default)]
     pub on: BTreeMap<String, String>,
     pub timeout: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Case {
+    pub when: Vec<String>,
+    pub outcome: String,
+    #[serde(rename = "for")]
+    pub hold: Option<String>,
+    pub key: Option<crate::store::workflow::Key>,
+}
+
+fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Case>, D::Error> {
+    let cases = Vec::<Case>::deserialize(deserializer)?;
+    if cases.is_empty() {
+        return Err(serde::de::Error::custom("cases must be nonempty"));
+    }
+    Ok(cases)
+}
+
 pub(super) enum CheckKind<'a> {
     Run(&'a str),
     Agent(&'a str),
+    Condition,
 }
 
 impl Check {
     pub(super) fn kind(&self) -> Option<CheckKind<'_>> {
-        match (&self.run, &self.agent) {
-            (Some(run), None) => Some(CheckKind::Run(run)),
-            (None, Some(agent)) => Some(CheckKind::Agent(agent)),
+        match (&self.run, &self.agent, self.cases.is_empty()) {
+            (Some(run), None, true) => Some(CheckKind::Run(run)),
+            (None, Some(agent), true) => Some(CheckKind::Agent(agent)),
+            (None, None, false) => Some(CheckKind::Condition),
             _ => None,
         }
     }
@@ -73,9 +104,17 @@ impl Check {
                 .entry(outcome.into())
                 .or_insert_with(|| "@user".into());
         }
+        if matches!(self.kind(), Some(CheckKind::Condition)) {
+            edges
+                .entry("unknown".into())
+                .or_insert_with(|| "@wait".into());
+        }
         edges
     }
 }
+
+pub(super) const RESERVED_OUTCOMES: [&str; 6] =
+    ["timeout", "invalid", "cap", "deadline", "unknown", "hold"];
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]

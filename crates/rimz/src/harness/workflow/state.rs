@@ -2,6 +2,7 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use super::WorkflowSpec;
+use super::spec::RESERVED_OUTCOMES;
 use crate::disk::paths::WorkflowPaths;
 use crate::store::workflow::{
     AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
@@ -124,7 +125,7 @@ impl Transition<'_> {
         let edges = check.edges();
         let object =
             object.and_then(|object| normalize_object(object, check, self.record.key.as_ref()));
-        let (object, outcome, target, reason, origin) = match object {
+        let (mut object, mut outcome, mut target, reason, origin) = match object {
             Ok(object) => {
                 let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
                 let target = edges[&outcome].clone();
@@ -146,6 +147,20 @@ impl Transition<'_> {
                 EvaluationOrigin::Engine,
             ),
         };
+        if matches!(check.kind(), Some(super::spec::CheckKind::Condition))
+            && let Some(case) = case_index(&object)
+            && check
+                .cases
+                .get(case as usize)
+                .is_some_and(|case| case.hold.is_some())
+            && !self
+                .hold_until(case)?
+                .is_some_and(|until| until <= self.now)
+        {
+            outcome = "hold".into();
+            object["outcome"] = json!(outcome);
+            target = "@wait".into();
+        }
         // current verified that this sequence owns the live attempt.
         let attempt = self.record.attempt.take().expect("current check attempt");
         self.push(
@@ -178,6 +193,23 @@ impl Transition<'_> {
         self.route(&target, object, reason)
     }
 
+    fn hold_until(&self, case: u32) -> Result<Option<Timestamp>, TimeInputErr> {
+        let Some(hold) = self.spec.checks[&self.record.node]
+            .cases
+            .get(case as usize)
+            .and_then(|case| case.hold.as_deref())
+        else {
+            return Ok(None);
+        };
+        let first = self
+            .record
+            .wait
+            .as_ref()
+            .filter(|wait| wait.is_hold() && wait.case == Some(case))
+            .map_or(self.now, |wait| wait.first);
+        Ok(first.checked_add(duration(hold)?).ok())
+    }
+
     pub(super) fn close_wait(&mut self) {
         if let Some(wait) = self.record.wait.take() {
             self.push(
@@ -206,23 +238,42 @@ impl Transition<'_> {
         }
         if target == "@wait" {
             let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-            let recheck_at = self.bounded_recheck(
+            let case = (outcome == "hold").then(|| case_index(&object)).flatten();
+            let detail = if let Some(case) = case {
+                Some(
+                    self.spec.checks[&self.record.node].cases[case as usize]
+                        .outcome
+                        .clone(),
+                )
+            } else if outcome == "unknown" {
+                object
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            let requested = if let Some(case) = case {
+                self.hold_until(case)?
+            } else {
                 object
                     .get("recheck_at")
                     .and_then(Value::as_str)
-                    .and_then(|s| s.parse::<Timestamp>().ok()),
-            )?;
+                    .and_then(|s| s.parse::<Timestamp>().ok())
+            };
+            let recheck_at = self.bounded_recheck(requested)?;
             if self
                 .record
                 .wait
                 .as_ref()
-                .is_some_and(|w| w.outcome != outcome)
+                .is_some_and(|w| (w.outcome.as_str(), w.case) != (outcome.as_str(), case))
             {
                 self.close_wait();
             }
             let wait = self.record.wait.get_or_insert_with(|| Wait {
                 node: self.record.node.clone(),
                 outcome,
+                case,
                 detail: None,
                 first: self.now,
                 last: self.now,
@@ -231,6 +282,7 @@ impl Transition<'_> {
             });
             wait.last = self.now;
             wait.count += 1;
+            wait.detail = detail;
             wait.recheck_at = recheck_at;
             self.record.recheck_at = recheck_at;
         } else {
@@ -272,6 +324,9 @@ impl Transition<'_> {
             }
         }
         self.record.attempt = None;
+        if self.record.wait.as_ref().is_some_and(Wait::is_hold) {
+            return Ok(());
+        }
         self.record.key = object
             .get("key")
             .and_then(|key| serde_json::from_value(key.clone()).ok());
@@ -316,6 +371,7 @@ impl Transition<'_> {
         let wait = self.record.wait.get_or_insert_with(|| Wait {
             node: self.record.node.clone(),
             outcome: outcome.into(),
+            case: None,
             detail: None,
             first: self.now,
             last: self.now,
@@ -598,6 +654,13 @@ fn duration(raw: &str) -> Result<std::time::Duration, TimeInputErr> {
     )
 }
 
+fn case_index(object: &Value) -> Option<u32> {
+    object
+        .get("case")
+        .and_then(Value::as_u64)
+        .and_then(|case| u32::try_from(case).ok())
+}
+
 fn normalize_object(
     object: Value,
     check: &super::Check,
@@ -610,7 +673,9 @@ fn normalize_object(
         .get("outcome")
         .and_then(Value::as_str)
         .ok_or("outcome must be a string")?;
-    if matches!(outcome, "timeout" | "invalid" | "cap" | "deadline")
+    if (RESERVED_OUTCOMES.contains(&outcome)
+        && !(outcome == "unknown"
+            && matches!(check.kind(), Some(super::spec::CheckKind::Condition))))
         || !check.edges().contains_key(outcome)
     {
         return Err(format!("reserved or unrouted outcome {outcome:?}"));
