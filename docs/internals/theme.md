@@ -39,7 +39,7 @@ Each kind of change lands in one layer. A scheme switch replaces Layer 1 and a s
 | --- | --- |
 | [`mod.rs`](../../crates/rimz/src/theme/mod.rs) | The public surface the CLI and sidebar import. |
 | [`raw.rs`](../../crates/rimz/src/theme/raw.rs) | `RawPalette`, the imported scheme colors, and `derive_tones`, the one place raw hues gain semantic meaning. `RawPalette::DEFAULT` holds the default scheme's colors. |
-| [`palette.rs`](../../crates/rimz/src/theme/palette.rs) | `Palette::resolve`: raw palette selection, slot overrides, depth quantization, the heat and calm ramps, the expense and cache-expired tones, and `ramp_tone`. |
+| [`palette.rs`](../../crates/rimz/src/theme/palette.rs) | `Palette::resolve`: raw palette selection, slot overrides, depth quantization, the heat and calm ramps, the expense, electric, and cache-expired tones, and `ramp_tone`. |
 | [`tone.rs`](../../crates/rimz/src/theme/tone.rs) | `Tone`, a resolved `Rgb` or `Indexed` color awaiting a renderer. |
 | [`oklab.rs`](../../crates/rimz/src/theme/oklab.rs) | Perceptual color math: `blend`, `lift_lightness`, `warm_toward`, and the gamut fit. |
 | [`glyphs.rs`](../../crates/rimz/src/theme/glyphs.rs) | The glyph catalog (one row per `GlyphRole`), `GlyphSet::resolve`, and the first-run Nerd Font probes. |
@@ -93,7 +93,7 @@ Each slot in `ThemeConfig` is an optional `ThemeColor`: a `PaletteRole` name, an
 
 ### 4. Build the ramps and derived tones
 
-Beside the flat slots, `Palette` carries two ramps and two derived tones:
+Beside the flat slots, `Palette` carries two ramps and three derived tones:
 
 | derived | stops | read by |
 | --- | --- | --- |
@@ -101,10 +101,11 @@ Beside the flat slots, `Palette` carries two ramps and two derived tones:
 | calm ramp | `body → good` | `Palette::pace_tone`: the shared burn-rate bands for the sidebar reset marker and CLI pace reading (cool tail); `Theme::calm_tone`: the Codex reset-credit expiry while auto-redeem is armed or holding |
 | `expense` | `alarm` with chroma scaled by `INPUT_EXPENSE_CHROMA` (1.30), then lightness lowered by `INPUT_EXPENSE_DEEPEN` (0.09) | `Component::Input`, the `↘` fresh-input marker and the reddest tone on screen |
 | `cache_expired` | the ramp's `alarm` stop blended halfway to `muted` in OKLab (`CACHE_EXPIRED_GREY`, 0.5), then depth-quantized | `Component::CacheExpired`, the context meter's single expired-cache fill and lead glyph, its age clock and the stale line's age past the lifetime, and the card's expired-cache notice wherever its stats show |
+| `electric` | `accent` with lightness raised by `ELECTRIC_LIFT` (0.10) in OKLab, keeping its hue family, then depth-quantized | `Component::FastMode` and the CLI's bold fast-mode badge |
 
 `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. `warm_heat_tone` maps its amount into `[HEAT_RAMP_WARM_START, 1.0]`, the tail from `warn` onward, for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
 
-Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule; `cache_expired` follows it for both `alarm` and `muted`. Neither derived tone adds a config slot.
+Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule; `cache_expired` follows it for both `alarm` and `muted`, and `electric` for `accent`. None of the derived tones adds a config slot.
 
 ## Color depth and graceful degradation
 

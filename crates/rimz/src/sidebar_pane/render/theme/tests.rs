@@ -517,6 +517,48 @@ fn luminance(color: Color) -> f32 {
 }
 
 #[test]
+fn electric_is_an_icy_accent_distinct_from_status_tones() {
+    use crate::theme::oklab::hue_angle;
+    use std::f32::consts::{PI, TAU};
+
+    let palette = truecolor_default().palette;
+    let electric = tone_color(palette.electric());
+    for tone in [palette.cool, palette.warn, palette.alarm, palette.good] {
+        assert_ne!(electric, tone_color(tone));
+    }
+    assert!(luminance(electric) > luminance(tone_color(palette.accent)));
+    let arc = (hue_angle(color_to_rgb(electric).unwrap())
+        - hue_angle(color_to_rgb(tone_color(palette.accent)).unwrap())
+        + PI)
+        .rem_euclid(TAU)
+        - PI;
+    assert!(arc.abs() < 0.20, "electric holds accent's hue: {arc:.3}rad");
+
+    let indexed = Theme::fixed(false).palette;
+    assert_ne!(indexed.electric(), indexed.cool);
+    assert_ne!(indexed.electric(), indexed.warn);
+}
+
+#[test]
+fn electric_follows_accent_overrides_at_both_depths() {
+    for accent in [ThemeColor::Rgb(32, 160, 176), ThemeColor::Indexed(30)] {
+        let config = ThemeConfig {
+            accent: Some(accent),
+            ..Default::default()
+        };
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            let palette = Palette::resolve(&config, depth);
+            let baseline = Palette::resolve(&ThemeConfig::default(), depth);
+            assert_ne!(palette.electric(), baseline.electric());
+            assert!(
+                luminance(tone_color(palette.electric())) > luminance(tone_color(palette.accent)),
+                "electric lifts the overridden accent at {depth:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn cache_expired_reads_as_greyed_alarm() {
     for theme in [truecolor_default(), Theme::fixed(false)] {
         let expired = theme.component(Component::CacheExpired);
