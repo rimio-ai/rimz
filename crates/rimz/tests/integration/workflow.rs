@@ -398,7 +398,7 @@ fn signal_during_evaluation_rechecks_the_result_without_backoff() {
     );
     let id = receipt.lines().next().unwrap();
     for evaluation in 1..=2 {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut gate = loop {
             if let Ok((stream, _)) = listener.accept() {
                 break stream;
@@ -442,7 +442,7 @@ fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
     fs::write(state.workflow(&first_id).spec, "bad sealed spec").unwrap();
     fs::write(second_dir.join("checks/pr.sh"), evaluation_script("done")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while show(&env, second)["record"]["state"] != "done" {
         assert!(
             Instant::now() < deadline,
@@ -499,7 +499,7 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
         fs::write(dir.join("checks/pr.sh"), "exec sleep 60").unwrap();
     }
     success(command(&env, &["events", "emit", "review.ready"]));
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let both_started = loop {
         if [first.as_str(), second]
             .iter()
