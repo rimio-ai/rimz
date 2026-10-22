@@ -78,7 +78,9 @@ impl RuntimeProjection {
     }
 
     /// The runtime-scoped projection over borrowed rows, cloning only the
-    /// rows it keeps — a long-lived reader's rollup stays shared.
+    /// rows it keeps — a long-lived reader's rollup stays shared. A launched
+    /// child that is not visible on its own stays while its parent is visible
+    /// and has no parent of its own; an ended grandchild drops out.
     pub(crate) fn runtime_from_refs<'a>(
         agents: impl IntoIterator<Item = &'a AgentState>,
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
