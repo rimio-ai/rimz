@@ -143,11 +143,12 @@ pub fn scan(root: &Path, patterns: &[String]) -> ScratchScan {
     scan
 }
 
+/// A staged team's memory: every Markdown file behind the archive link, which keeps `run.json` out.
 pub fn memory_patterns(team: &crate::config::Team) -> Vec<String> {
     if !team.staged() {
         return Vec::new();
     }
-    vec![board_relative_path(), format!("{TEAM_LINK}/*-notes.md")]
+    vec![format!("{TEAM_LINK}/*.md")]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -656,15 +657,13 @@ mod tests {
         std::os::unix::fs::symlink(archive.path(), checkout.path().join(".rimz/team")).unwrap();
         std::fs::write(archive.path().join("blackboard.md"), "Stage: Plan\n").unwrap();
         std::fs::write(archive.path().join("plan-notes.md"), "notes\n").unwrap();
+        std::fs::write(archive.path().join("draft.md"), "draft\n").unwrap();
         std::fs::write(archive.path().join("run.json"), "{}").unwrap();
         std::fs::write(checkout.path().join("extra.tmp"), "extra").unwrap();
         let team: crate::config::Team =
             toml::from_str("stages = ['Plan']\nscratch-files = ['/extra.tmp']").unwrap();
         let patterns = memory_patterns(&team);
-        assert_eq!(
-            patterns,
-            [".rimz/team/blackboard.md", ".rimz/team/*-notes.md"]
-        );
+        assert_eq!(patterns, [".rimz/team/*.md"]);
         let scan = scan(checkout.path(), &patterns);
         assert!(!scan.probe_failed);
         assert_eq!(
@@ -677,7 +676,11 @@ mod tests {
                     .to_str()
                     .unwrap())
                 .collect::<Vec<_>>(),
-            [".rimz/team/blackboard.md", ".rimz/team/plan-notes.md"]
+            [
+                ".rimz/team/blackboard.md",
+                ".rimz/team/draft.md",
+                ".rimz/team/plan-notes.md"
+            ]
         );
         assert_eq!(board_stage(checkout.path()).unwrap().name, "Plan");
         let plain: crate::config::Team = toml::from_str("scratch-files = ['/extra.tmp']").unwrap();

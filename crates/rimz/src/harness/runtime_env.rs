@@ -288,15 +288,16 @@ mod tests {
     #[test]
     fn block_lists_memory_files_then_git_state() {
         let repo = repo("init");
-        for name in ["blackboard.md", "explore-notes.md"] {
-            std::fs::write(repo.path().join(name), "notes\n").unwrap();
+        std::fs::create_dir_all(repo.path().join(".rimz/team")).unwrap();
+        for name in ["blackboard.md", "explore-notes.md", "run.json"] {
+            std::fs::write(repo.path().join(".rimz/team").join(name), "notes\n").unwrap();
         }
-        let patterns = ["blackboard.md".to_owned(), "*-notes.md".to_owned()];
+        let patterns = [".rimz/team/*.md".to_owned()];
         let block = render(repo.path(), &patterns).unwrap();
         let (head, log) = block.split_once("$ git log -5 --oneline\n").unwrap();
         assert_eq!(
             head,
-            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls blackboard.md *-notes.md\nblackboard.md  explore-notes.md\n```\n\n```\n$ git status --short --branch\n## main\n?? blackboard.md\n?? explore-notes.md\n"
+            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls .rimz/team/*.md\nblackboard.md  explore-notes.md\n```\n\n```\n$ git status --short --branch\n## main\n?? .rimz/\n"
         );
         let (commit, tail) = log.split_once('\n').unwrap();
         assert!(commit.ends_with(" init"), "{commit}");

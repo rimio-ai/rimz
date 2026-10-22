@@ -120,7 +120,7 @@ The `ci.failed` binding is armed when the coder registers and is scoped to its w
 
 `<team>.md` is the tuning surface: swap models, change effort or tools in a role's frontmatter, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the agent bodies, team body, and `roles` list together: the prompts carry their own roster table, and a role's `owns` column must keep matching `stages`.
 
-The team consensus is built into RimZ. The pipeline is the team definition's Markdown body, appended after the consensus. The memory patterns are `[".rimz/team/blackboard.md", ".rimz/team/*-notes.md"]`. `scratch-files` adds extra checkout-local Git excludes only, not archived memory.
+The team consensus is built into RimZ. The pipeline is the team definition's Markdown body, appended after the consensus. The memory pattern is `[".rimz/team/*.md"]`. `scratch-files` adds extra checkout-local Git excludes only, not archived memory.
 
 Any of the three also makes a solid skeleton for a team of your own: copy the bundle, rename the team and its agent definitions, and reshape the roles to how your work splits. Validate it with `rimz agents validate`.
 

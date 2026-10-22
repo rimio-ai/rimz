@@ -248,7 +248,7 @@ The Team section (`launch_context.rs`) gives the member's identity, with a resum
 
 The pipeline line uses the team's declared `stages`, or the stages its roles own in role order. Consecutive stages with the same owner group together: `Pipeline: Explore, [Plan] (you) → Implement (@coder) → Reflect (you) → Done`. The current board stage uses the bracket notation of `team_stage::stage_strip`, including `[Done]`. Non-adjacent stages of one owner form separate groups. Seats owning no stage appear as `Also on the team: @scout.`; a team without stages gets `Members: @planner, @coder (you).` instead of a pipeline.
 
-Environment ends with the [team memory-file listing](./teams.md#scratch-files), using the fixed archive-memory patterns and paths relative to the checkout. It carries facts only: no board sentence, snapshot warning, or instructions to read or create files. A launch that gets the listing at prompt submit carries none here, so the listing is never in both places.
+Environment ends with the [team memory-file listing](./teams.md#scratch-files), using the fixed archive-memory pattern and the bare names of the files it matches. It carries facts only: no board sentence, snapshot warning, or instructions to read or create files. A launch that gets the listing at prompt submit carries none here, so the listing is never in both places.
 
 #### Environment at prompt submit
 

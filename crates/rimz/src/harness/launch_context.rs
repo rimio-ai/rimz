@@ -244,7 +244,7 @@ pub(super) fn files_block(context: &TeamLaunchContext) -> Option<String> {
     )
 }
 
-/// One `ls` fence over `patterns`, with the scanned files relative to `worktree`.
+/// One `ls` fence over `patterns`. A file behind the team link is named alone, since the command line already spells that directory; any other is relative to `worktree`.
 pub(super) fn files_listing(
     patterns: &[String],
     worktree: &Path,
@@ -259,6 +259,7 @@ pub(super) fn files_listing(
         .collect::<Vec<_>>()
         .join(" ");
     let root = std::path::absolute(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let team_dir = root.join(scratch::TEAM_LINK);
     let files = if scratch.files.is_empty() {
         "(no such files)".to_owned()
     } else {
@@ -266,13 +267,12 @@ pub(super) fn files_listing(
             .files
             .iter()
             .map(|file| {
-                escape_reminder_text(
-                    &file
-                        .path
-                        .strip_prefix(&root)
-                        .unwrap_or(&file.path)
-                        .to_string_lossy(),
-                )
+                let shown = file
+                    .path
+                    .strip_prefix(&team_dir)
+                    .or_else(|_| file.path.strip_prefix(&root))
+                    .unwrap_or(&file.path);
+                escape_reminder_text(&shown.to_string_lossy())
             })
             .collect::<Vec<_>>()
             .join("  ")
@@ -375,10 +375,7 @@ mod tests {
             pipeline: Vec::new(),
             worktree: PathBuf::from("/tmp/project-feature"),
             session: LaunchSession::Fresh,
-            scratch_patterns: vec![
-                ".rimz/team/blackboard.md".to_owned(),
-                ".rimz/team/*-notes.md".to_owned(),
-            ],
+            scratch_patterns: vec![".rimz/team/*.md".to_owned()],
             scratch: ScratchScan::default(),
         }
     }
@@ -394,7 +391,7 @@ mod tests {
         "###);
         assert_eq!(
             files_block(&context).unwrap(),
-            "```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n(no such files)\n```"
+            "```\n$ ls .rimz/team/*.md\n(no such files)\n```"
         );
         context.scratch_patterns.clear();
         assert_eq!(files_block(&context), None);
@@ -462,7 +459,7 @@ mod tests {
                 .iter()
                 .map(|file| {
                     file.path
-                        .strip_prefix(&context.worktree)
+                        .strip_prefix(context.worktree.join(".rimz/team"))
                         .unwrap()
                         .to_str()
                         .unwrap()
@@ -471,7 +468,7 @@ mod tests {
                 .join("  ");
             assert_eq!(
                 files_block(&context).unwrap(),
-                format!("```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{names}\n```")
+                format!("```\n$ ls .rimz/team/*.md\n{names}\n```")
             );
         }
         context.session = LaunchSession::Forked;
@@ -500,13 +497,13 @@ mod tests {
                 team_launch_context(&params(), &launch(), &team_reminder(team), worktree.path())
                     .unwrap();
             let listing = if present {
-                ".rimz/team/blackboard.md"
+                "blackboard.md"
             } else {
                 "(no such files)"
             };
             assert_eq!(
                 files_block(&context).unwrap(),
-                format!("```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{listing}\n```")
+                format!("```\n$ ls .rimz/team/*.md\n{listing}\n```")
             );
         }
     }
@@ -541,7 +538,7 @@ mod tests {
         assert!(!reminder(&context).contains("user"));
         assert_eq!(
             files_block(&context).unwrap(),
-            "```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n(no such files)\n```"
+            "```\n$ ls .rimz/team/*.md\n(no such files)\n```"
         );
     }
 

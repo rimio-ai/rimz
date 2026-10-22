@@ -1340,7 +1340,7 @@ fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
     let context = reply["additionalContext"].as_str().unwrap();
     assert!(
         context.starts_with(
-            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n.rimz/team/plan-notes.md\n```"
+            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls .rimz/team/*.md\nplan-notes.md\n```"
         ),
         "{context}"
     );

@@ -490,7 +490,7 @@ fn team_files_finish_environment_after_bullets() {
             Some(Path::new("/bin/zsh")),
         );
         let listing = if present {
-            ".rimz/team/blackboard.md"
+            "blackboard.md"
         } else {
             "(no such files)"
         };
@@ -500,7 +500,7 @@ fn team_files_finish_environment_after_bullets() {
             )
         );
         assert!(text.contains(&format!(
-            "you name.\n\n```\n$ ls .rimz/team/blackboard.md .rimz/team/*-notes.md\n{listing}\n```\n</system_reminder>"
+            "you name.\n\n```\n$ ls .rimz/team/*.md\n{listing}\n```\n</system_reminder>"
         )));
         assert_eq!(text.matches(worktree.path().to_str().unwrap()).count(), 1);
         assert_eq!(text.contains("[Done]"), present);
