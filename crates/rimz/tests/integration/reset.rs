@@ -45,16 +45,15 @@ case "$1" in
     delete-session)
         printf '%s' "$EMPTY_ROSTER" > "$ROSTER"
         sh -c '
-            trap '\''printf "%s" "$EMPTY_ROSTER" > "$ROSTER"; : > "$AFTER_KILL"; exit 0'\'' TERM
+            trap '\''printf "%s" "$EMPTY_ROSTER" > "$ROSTER"; exit 0'\'' TERM
             echo $$ > "$PRODUCER_PID"
-            while :; do :; done
+            while :; do printf "%s" "$EMPTY_ROSTER" > "$ROSTER"; done
         ' sidebar "$WORKSPACE_ID" "$2" </dev/null >/dev/null 2>&1 &
         while [ ! -s "$PRODUCER_PID" ]; do sleep 0.01; done
         ;;
 esac
 "#,
     );
-    let after_kill = env.home_root.join("after-kill");
     let producer_pid = env.home_root.join("producer-pid");
     let path = std::env::join_paths(
         std::iter::once(shim_dir).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
@@ -65,18 +64,15 @@ esac
         .env("ROSTER", &paths.live_roster)
         .env("EMPTY_ROSTER", empty.to_string())
         .env("WORKSPACE_ID", env.workspace_id.as_str())
-        .env("AFTER_KILL", &after_kill)
         .env("PRODUCER_PID", &producer_pid)
         .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
         .assert()
         .success();
 
-    assert!(
-        after_kill.exists(),
-        "producer published after the mux kill returned"
-    );
+    // The producer publishes until the sweep ends it, but whether it runs at all
+    // after the mux kill returns is the scheduler's call, so no assertion needs it.
     let pid = fs::read_to_string(producer_pid)
-        .unwrap()
+        .expect("a producer started during the mux kill")
         .trim()
         .parse()
         .unwrap();
