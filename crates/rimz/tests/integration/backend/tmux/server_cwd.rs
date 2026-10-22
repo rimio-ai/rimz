@@ -127,6 +127,10 @@ fn birth_refuses_a_deleted_cwd_server_only_when_it_strands_panes() {
     );
 }
 
+/// Where a `-c <project>` pane on `server` lands. The path is read only after
+/// `sleep` has exec'd: before tmux 3.7 the forked child changes directory
+/// after the fork, so an earlier read can report the server's own deleted cwd
+/// and misclassify a server that places panes.
 fn probe_pane_cwd(server: &TmuxServer, project: &std::path::Path) -> String {
     server.output(&[
         "new-session",
