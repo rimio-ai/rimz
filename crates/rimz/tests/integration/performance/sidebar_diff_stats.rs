@@ -1,10 +1,11 @@
 //! Cross-process single-flight proof for the sidebar's per-worktree git probes.
 //!
-//! A multi-tab session runs one `rimz sidebar serve` per tab, each forking
-//! `rimz sidebar snapshot --json`, which runs git per worktree (trunk ref →
-//! merge-base → numstat → folded head facts). Those probes are single-flighted
-//! across the fleet: one elected producer forks git and writes the shared
-//! `diff-stats.json` cache; the rest read it back.
+//! Every producer that refreshes the heavy lanes runs git per worktree (trunk
+//! ref → merge-base → numstat → folded head facts): the room host's cache
+//! refresher thread, and any `rimz sidebar snapshot --json` run against the
+//! same room. Those probes are single-flighted across processes: one elected
+//! producer forks git and writes the shared `diff-stats.json` cache; the rest
+//! read it back. The tests here drive that election with CLI snapshot processes.
 //!
 //! No live mux needed. We point `RIMZ_TEST_PANE_LIST` at a pane fixture
 //! whose `cwd`s are real on-disk git worktrees (bypassing `list-panes` while
