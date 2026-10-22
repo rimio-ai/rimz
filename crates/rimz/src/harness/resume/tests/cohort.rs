@@ -1598,6 +1598,181 @@ fn dead_placeholder_does_not_shadow_the_conversation() {
     );
 }
 
+fn unregistered_team_board(board: Option<&str>) -> (tempfile::TempDir, AgentState) {
+    let root = tempfile::tempdir().unwrap();
+    if let Some(board) = board {
+        let path = root.path().join(".rimz/team/blackboard.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, board).unwrap();
+    }
+    let member = AgentState {
+        channel: Some("feature-team".into()),
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        pane: None,
+        ..team_agent(
+            "codex",
+            "launch_coder",
+            "coder",
+            root.path().to_str().unwrap(),
+            1,
+        )
+    };
+    (root, member)
+}
+
+#[test]
+fn board_held_unregistered_team_reopens_every_seat_fresh() {
+    let (root, placeholder) = unregistered_team_board(Some("Stage: Plan (@planner)"));
+    let cells = [
+        cohort_cell("claude", Some("planner")),
+        cohort_cell("codex", Some("coder")),
+    ];
+    let result = cohort(std::slice::from_ref(&placeholder), &cells, Some("forge"));
+    assert!(
+        result.is_ok(),
+        "a pending board must reopen its team: {result:?}"
+    );
+    let plan = result.unwrap();
+    assert_eq!(plan.cwd.as_deref(), Some(root.path()));
+    assert_eq!(plan.channel.as_deref(), Some("feature-team"));
+    assert_eq!(plan.lane_label, "#feature-team");
+    assert_eq!(plan.seeds, [CohortSeed::Fresh, CohortSeed::Fresh]);
+    assert_eq!(plan.fresh, ["claude:feature-team", "codex:feature-team"]);
+    assert!(plan.refilled.is_empty());
+    let conversation = AgentState {
+        agent_id: "conversation".into(),
+        last_activity: Timestamp::now() - std::time::Duration::from_secs(30),
+        ..placeholder.clone()
+    };
+    let plan = cohort(&[placeholder, conversation], &cells, Some("forge")).unwrap();
+    assert_eq!(resume_id(&plan.seeds[1]), Some("conversation"));
+}
+
+#[test]
+fn board_resume_selects_the_newest_held_checkout_in_scope() {
+    let (older, mut first) = unregistered_team_board(Some("Stage: Plan"));
+    let (newer, mut second) = unregistered_team_board(Some("Stage: Plan"));
+    first.agent_id = "launch_older".into();
+    first.last_activity = Timestamp::now() - std::time::Duration::from_secs(30);
+    second.agent_id = "launch_newer".into();
+    second.channel = Some("newer".into());
+    let agents = [first, second];
+    for (all, checkout, channel) in [
+        (true, newer.path(), "newer"),
+        (false, older.path(), "feature-team"),
+    ] {
+        let result = cohort_with(
+            &agents,
+            &[cohort_cell("codex", Some("coder"))],
+            Some("forge"),
+            dead,
+            |path| all || path == older.path(),
+            |_| true,
+        );
+        assert_eq!(
+            result.map(|plan| (plan.cwd, plan.channel)),
+            Ok((Some(checkout.to_owned()), Some(channel.into())))
+        );
+    }
+}
+
+#[test]
+fn unregistered_team_resume_requires_its_own_pending_board() {
+    let cells = [cohort_cell("codex", Some("coder"))];
+    for board in [None, Some("Stage: Done"), Some("No stage")] {
+        let (_root, member) = unregistered_team_board(board);
+        assert!(
+            matches!(
+                cohort(&[member], &cells, Some("forge")),
+                Err(CohortResumeErr::NothingToResume { .. })
+            ),
+            "{board:?}"
+        );
+    }
+    let (_root, placeholder) = unregistered_team_board(Some("Stage: Plan"));
+    let other = AgentState {
+        team: Some("other".into()),
+        agent_id: "launch_other".into(),
+        last_activity: Timestamp::now(),
+        ..placeholder.clone()
+    };
+    assert!(matches!(
+        cohort(&[placeholder.clone(), other], &cells, Some("forge")),
+        Err(CohortResumeErr::NothingToResume { .. })
+    ));
+    assert!(matches!(
+        cohort_with(
+            std::slice::from_ref(&placeholder),
+            &cells,
+            Some("forge"),
+            dead,
+            |_| false,
+            |_| true
+        ),
+        Err(CohortResumeErr::NothingToResume { .. })
+    ));
+    for cells in [
+        cells.as_slice(),
+        &[cohort_cell("codex", None), cohort_cell("claude", None)],
+        &[profile_cell("codex", "astra")],
+    ] {
+        assert!(matches!(
+            cohort(std::slice::from_ref(&placeholder), cells, None),
+            Err(CohortResumeErr::NothingToResume { .. })
+        ));
+    }
+}
+
+#[test]
+fn board_resume_does_not_replace_present_placeholders() {
+    let (_root, mut member) = unregistered_team_board(Some("Stage: Plan"));
+    member.ended_at = None;
+    member.pane = Some(PaneRef::from_id(pane_id("terminal_coder")));
+    let cells = [cohort_cell("codex", Some("coder"))];
+    assert!(matches!(
+        cohort(std::slice::from_ref(&member), &cells, Some("forge")),
+        Err(CohortResumeErr::NothingToResume { .. })
+    ));
+    member.runtime_owner = Some(crate::store::runtime::current_process_owner(
+        crate::pane::RuntimeOwnerKind::Agent,
+        "launch_coder",
+    ));
+    assert!(matches!(
+        cohort_with(
+            &[member],
+            &cells,
+            Some("forge"),
+            crate::store::runtime::agent_liveness,
+            |_| true,
+            |_| true
+        ),
+        Err(CohortResumeErr::MembersStillLive { .. })
+    ));
+}
+
+#[test]
+fn team_restore_does_not_reopen_a_placeholder_only_board() {
+    let (root, member) = unregistered_team_board(Some("Stage: Plan"));
+    let (teams, profiles, commands) = team_configs();
+    let (tabs, refilled) = plan_team_restore_tabs(
+        &[member],
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(root.path()),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+        &[],
+        dead,
+    );
+    assert!(tabs.is_empty());
+    assert!(refilled.is_empty());
+}
+
 #[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
     let old_planner = team_agent("claude", "old-planner", "planner", "/code/forge", 30);
