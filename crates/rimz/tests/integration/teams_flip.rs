@@ -365,6 +365,70 @@ fn stop_receipt_resume_command_reopens_the_unregistered_cohort() {
 }
 
 #[test]
+fn team_show_root_alias_resume_command_reopens_registered_cohort() {
+    assert_root_show_resume(true);
+}
+
+#[test]
+fn team_show_root_alias_resume_command_reopens_unregistered_cohort() {
+    assert_root_show_resume(false);
+}
+
+fn assert_root_show_resume(registered: bool) {
+    for root_alias in ["main", "directory", "path"] {
+        let fixture = Fixture::new();
+        let root = &fixture.env.project_root;
+        let directory = root.file_name().unwrap().to_str().unwrap();
+        let lane = format!("{directory}/forge");
+        if registered {
+            fixture.ended_in("claude", "coder", &lane);
+        } else {
+            fixture.seed_member("claude", "coder", "coder", None, &lane, root);
+            let workspace = fixture.env.resolve_workspace(root);
+            let ended =
+                AgentLifecycleObservation::new(Some("launch_coder".into()), LifecycleSignal::Ended);
+            fixture
+                .env
+                .store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    "claude",
+                    "AgentEnded",
+                    &ended,
+                ))
+                .unwrap();
+            std::fs::write(fixture.board(), BOARD).unwrap();
+        }
+        let alias = match root_alias {
+            "directory" => directory,
+            "path" => root.to_str().unwrap(),
+            _ => root_alias,
+        };
+        let output = fixture
+            .command()
+            .args(["teams", "show", &format!("forge#{alias}")])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(stderr.contains("no live cohort in #main"), "{stderr}");
+        let command = stderr
+            .lines()
+            .find_map(|line| line.split_once("; resume: ").map(|(_, command)| command))
+            .unwrap();
+        let args = shlex::split(command).unwrap();
+        assert_eq!(args[0], "rimz");
+        let receipt = success(fixture.launch_command().args(&args[1..]).output().unwrap());
+        assert!(
+            receipt.starts_with(&format!("resuming forge in #{lane}")),
+            "{receipt}"
+        );
+        assert_eq!(command, format!("rimz teams resume 'forge#{lane}'"));
+    }
+}
+
+#[test]
 fn team_resume_resolves_a_root_named_lane_without_git() {
     assert_resume_lane("project/forge");
 }
