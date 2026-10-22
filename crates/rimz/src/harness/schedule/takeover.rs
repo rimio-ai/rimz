@@ -1,17 +1,21 @@
-//! Who occupies a resident launch checkout, and whether a takeover may stop
-//! them.
+//! Who occupies a checkout for loop takeover and workflow admission, and
+//! whether a takeover may stop them.
 //!
-//! Pure over the agent rows: the CLI helper reads the snapshot and the owned
-//! worktrees, stops what this returns, and presents. One snapshot decides for
-//! every occupant, so an agent that starts a turn between that read and its
-//! pane close is still stopped.
+//! The caller supplies runtime-scoped agent rows before this reads owned
+//! worktrees and then the clock. It checks candidate owners again because a
+//! cached row may outlive its process. An occupant needs a pane stamp and an
+//! owner not known dead; no multiplexer is read. The rows stay unchanged for
+//! the caller's stop. The read-to-close window includes discovery and owner
+//! probes: an agent starting a turn after the row read is still stopped.
 
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
 use crate::agents::{AgentState, AgentStatus};
+use crate::store::runtime::{AgentLiveness, agent_liveness};
 use crate::utils::path::normalize_path_lexical;
+use crate::worktree::{self, WorktreeErr};
 
 /// The open turn that keeps a takeover from stopping an agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,17 +48,53 @@ pub enum Takeover<'a> {
     Blocked(Vec<(&'a AgentState, OpenTurn)>),
 }
 
-/// Decide the takeover of one checkout. An occupant is a live pane-backed
-/// launch recorded at or under the checkout, read through the one row that
-/// currently is that launch; `owned` worktrees nested inside it keep their own
-/// agents. `checkouts` and `owned` carry every path form the caller resolved
-/// (as launched, and physical where a symlink leads there), since a row may
-/// record either. The snapshot must carry rest certificates.
-pub fn plan<'a>(
+/// Read checkout occupancy from the caller's runtime-scoped roster.
+/// The caller must read its rows, including rest certificates and
+/// local-session bindings, before this call. Candidate owners are checked
+/// again because the cached roster can outlive them; known-dead owners do not
+/// occupy. Returned agents borrow those unchanged rows; the clock is sampled
+/// after owned-worktree discovery. No multiplexer is consulted.
+pub fn read<'a>(
+    agents: &'a [AgentState],
+    checkout: &Path,
+    project_root: &Path,
+) -> Result<Takeover<'a>, WorktreeErr> {
+    let checkouts = path_forms(checkout.to_path_buf()).collect::<Vec<_>>();
+    let owned = match worktree::discover_owned(project_root) {
+        Ok(owned) => owned
+            .into_iter()
+            .flat_map(|tree| path_forms(tree.marker.worktree_path))
+            .collect(),
+        Err(WorktreeErr::NotRepo) => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    Ok(plan(
+        agents,
+        &checkouts,
+        &owned,
+        Timestamp::now(),
+        agent_liveness,
+    ))
+}
+
+fn path_forms(path: PathBuf) -> impl Iterator<Item = PathBuf> {
+    let physical = path.canonicalize().ok();
+    std::iter::once(path).chain(physical)
+}
+
+/// Decide the takeover of one checkout. An occupant is a launch with a pane
+/// stamp and owner liveness other than `Dead`, recorded at or under the
+/// checkout, read through the one row that currently is that launch; `owned`
+/// worktrees nested inside it keep their own agents. `checkouts` and `owned`
+/// carry every path form `read` resolved (as launched, and physical where a
+/// symlink leads there), since a row may record either. The snapshot must
+/// carry rest certificates.
+fn plan<'a>(
     agents: &'a [AgentState],
     checkouts: &[PathBuf],
     owned: &[PathBuf],
     now: Timestamp,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Takeover<'a> {
     let checkouts: Vec<PathBuf> = checkouts
         .iter()
@@ -67,7 +107,9 @@ pub fn plan<'a>(
         .collect();
     let mut occupants: Vec<&AgentState> = crate::address::launch_occupants(agents)
         .into_iter()
-        .filter(|agent| occupies(agent, &checkouts, &nested))
+        .filter(|agent| {
+            occupies(agent, &checkouts, &nested) && liveness(agent) != AgentLiveness::Dead
+        })
         .collect();
     occupants.sort_by_key(|agent| agent.is_launched_child());
     let mut blockers = Vec::new();
@@ -192,14 +234,69 @@ mod tests {
         checkouts: &[&str],
         owned: &[&str],
     ) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
+        decide_in_with_liveness(agents, checkouts, owned, |_| AgentLiveness::Unknown)
+    }
+
+    fn decide_in_with_liveness(
+        agents: &[AgentState],
+        checkouts: &[&str],
+        owned: &[&str],
+        liveness: impl Fn(&AgentState) -> AgentLiveness,
+    ) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
         let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        match plan(agents, &paths(checkouts), &paths(owned), now()) {
+        match plan(agents, &paths(checkouts), &paths(owned), now(), liveness) {
             Takeover::Stop(occupants) => Ok(ids(&occupants)),
             Takeover::Blocked(blockers) => Err(blockers
                 .into_iter()
                 .map(|(agent, turn)| (agent.agent_id.as_str().to_owned(), turn))
                 .collect()),
         }
+    }
+
+    #[test]
+    fn a_stamped_row_with_a_dead_owner_does_not_occupy() {
+        let stamped = agent("stamped", AgentStatus::Running, "/repo/wt");
+        assert_eq!(
+            decide_in_with_liveness(&[stamped], &["/repo/wt"], &[], |_| AgentLiveness::Dead),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn a_stamped_row_with_a_live_owner_occupies() {
+        let stamped = agent("stamped", AgentStatus::Running, "/repo/wt");
+        assert_eq!(
+            decide_in_with_liveness(&[stamped], &["/repo/wt"], &[], |_| AgentLiveness::Live {
+                pid: 42
+            }),
+            Err(vec![("stamped".to_owned(), OpenTurn::Working)])
+        );
+    }
+
+    #[test]
+    fn a_stamped_row_with_an_unknown_owner_occupies() {
+        let stamped = agent("stamped", AgentStatus::Running, "/repo/wt");
+        assert_eq!(
+            decide_in_with_liveness(&[stamped], &["/repo/wt"], &[], |_| AgentLiveness::Unknown),
+            Err(vec![("stamped".to_owned(), OpenTurn::Working)])
+        );
+    }
+
+    #[test]
+    fn an_open_turn_in_a_child_without_a_pane_blocks_its_parent() {
+        let parent = agent("parent", AgentStatus::Idle, "/repo/wt");
+        let mut child = child_of(&parent, "child", AgentStatus::Running, "/elsewhere");
+        child.pane = None;
+        assert_eq!(
+            decide_in_with_liveness(&[parent, child], &["/repo/wt"], &[], |agent| {
+                if agent.agent_id.as_str() == "child" {
+                    AgentLiveness::Dead
+                } else {
+                    AgentLiveness::Unknown
+                }
+            }),
+            Err(vec![("child".to_owned(), OpenTurn::Working)])
+        );
     }
 
     #[test]

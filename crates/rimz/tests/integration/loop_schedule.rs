@@ -2983,6 +2983,8 @@ enum Takeover {
     Restricted,
     IdleOccupants,
     WorkingOccupant,
+    ClosedPane,
+    OmittedTab,
     SymlinkedCheckout,
     FailedStop,
     OpenRunPane,
@@ -3003,6 +3005,16 @@ fn resident_takeover_stops_idle_occupants_of_every_origin_and_no_other_checkout(
 #[test]
 fn resident_takeover_waits_for_a_working_occupant_then_stops_it_and_launches() {
     resident_takeover_case(Takeover::WorkingOccupant);
+}
+
+#[test]
+fn resident_takeover_ignores_a_working_row_in_a_closed_pane_and_an_unrecorded_live_pane() {
+    resident_takeover_case(Takeover::ClosedPane);
+}
+
+#[test]
+fn resident_takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
+    resident_takeover_case(Takeover::OmittedTab);
 }
 
 #[cfg(unix)]
@@ -3051,6 +3063,7 @@ fn resident_takeover_case(case: Takeover) {
         (cwd.clone(), cwd)
     };
     let working = symlinked || case == Takeover::WorkingOccupant;
+    let working = working || matches!(case, Takeover::ClosedPane | Takeover::OmittedTab);
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &launch_cwd);
@@ -3087,9 +3100,13 @@ fn resident_takeover_case(case: Takeover) {
     let child_owner = dummy_agent_process();
     let child_pid = child_owner.id();
     reap_later(child_owner);
+    let closed_owner = (case == Takeover::ClosedPane).then(dummy_agent_process);
+    let closed_pid = closed_owner.as_ref().map(std::process::Child::id);
     let owner_pid = |session: &str| {
         if session.ends_with("-child") {
             child_pid
+        } else if session == "old-coder" {
+            closed_pid.unwrap_or_else(std::process::id)
         } else {
             std::process::id()
         }
@@ -3149,6 +3166,13 @@ fn resident_takeover_case(case: Takeover) {
     for (session, checkout, pane, launch) in occupants {
         seed_agent_launch(&env, checkout, session, launch, None);
         hook(session, checkout, pane, "SessionStart");
+    }
+    if case == Takeover::ClosedPane {
+        // Make the final live-owner hook publish even inside the cadence window.
+        std::fs::File::open(store.paths().cache_dir.join("publish.stamp"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
     }
     if working {
         hook("old-coder", &cwd, Some("51"), "UserPromptSubmit");
@@ -3211,6 +3235,16 @@ fn resident_takeover_case(case: Takeover) {
                 r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
             );
         }
+        if matches!(case, Takeover::ClosedPane | Takeover::OmittedTab) {
+            command.env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                json!([
+                    {"id":52,"is_plugin":false,"tab_id":1,"title":"sibling"},
+                    {"id":99,"is_plugin":false,"tab_id":1,"title":"sh","pane_cwd":cwd}
+                ])
+                .to_string(),
+            );
+        }
         command
     };
     write_loop_config(
@@ -3260,8 +3294,50 @@ fn resident_takeover_case(case: Takeover) {
     let assists = || rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
     let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
 
+    if let Some(mut owner) = closed_owner {
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let cached = rimz::store::snapshot::read_fresh_latest(store.paths())
+            .expect("the final live-owner hook published the roster");
+        let ghost = cached
+            .agents
+            .iter()
+            .find(|agent| {
+                agent
+                    .runtime_owner
+                    .as_ref()
+                    .is_some_and(|recorded| recorded.pid == owner.id())
+            })
+            .unwrap();
+        assert_eq!(
+            rimz::store::runtime::agent_liveness(ghost),
+            rimz::store::runtime::AgentLiveness::Dead
+        );
+    }
     let before_agents = serde_json::to_value(store.snapshot().unwrap().agents).unwrap();
     let output = fire();
+    if case == Takeover::OmittedTab {
+        assert_eq!(
+            last_loop_record(&env).result,
+            LoopRunResult::TakeoverBlocked
+        );
+    }
+    if case == Takeover::ClosedPane {
+        assert_eq!(last_loop_record(&env).result, LoopRunResult::Launched);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = trace_text();
+        assert!(!trace.contains("close-pane"), "{trace}");
+        assert!(ledger()["resident"].contains_key(&checkout));
+        let assists = assists();
+        assert_eq!(assists.len(), 1);
+        let assist = serde_json::to_value(&assists[0]).unwrap();
+        assert!(assist.get("stopped").is_none(), "{assist}");
+        return;
+    }
     if case == Takeover::Restricted {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("saved untrusted"), "{stderr}");
@@ -3349,6 +3425,9 @@ fn resident_takeover_case(case: Takeover) {
             seeded
         );
 
+        if case == Takeover::OmittedTab {
+            return;
+        }
         hook("old-coder", &cwd, Some("51"), "Stop");
     }
     let output = if working { fire() } else { output };

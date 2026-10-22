@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::{
-    path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
+    ScrubSessionEnvExt, path_with_front, trust_codex_preflight_hooks, trust_codex_project,
+    write_fake_login_shell,
 };
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::store::workflow as records;
@@ -10,6 +11,12 @@ struct Room {
     env: Env,
     shell: PathBuf,
     bin: PathBuf,
+}
+
+fn dummy_agent_process() -> std::process::Child {
+    let mut owner = std::process::Command::new("sleep");
+    owner.scrub_session_env().arg("30");
+    owner.spawn().unwrap()
 }
 
 #[test]
@@ -59,8 +66,17 @@ fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
             r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
         )
         .unwrap();
-        room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
-        room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+        let mut owner = dummy_agent_process();
+        room.hook_with_owner(
+            &id,
+            &run,
+            owner.id(),
+            json!({"hook_event_name":"SessionStart"}),
+        );
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+        room.hook_with_owner(&id, &run, owner.id(), json!({"hook_event_name":"Stop"}));
         until(&room.env, &id, |v| {
             v["record"]["attempt"]["seq"].as_u64() != Some(seq)
         });
@@ -109,8 +125,17 @@ fn hook_woken_attempt_keeps_the_emitting_shell() {
         r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
     )
     .unwrap();
-    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
-    room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+    let mut owner = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart"}),
+    );
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+    room.hook_with_owner(&id, &run, owner.id(), json!({"hook_event_name":"Stop"}));
     let value = until(&room.env, &id, |value| {
         (value["record"]["attempt"]["run"].is_object()
             && value["record"]["attempt"]["run"]["run_id"] != run.run_id.as_str())
@@ -488,11 +513,16 @@ impl Room {
         rimz::harness::run::load(&self.env.state_path_for(&self.env.project_root), &run_id).unwrap()
     }
 
-    fn hook(&self, id: &str, run: &RunRecord, mut payload: Value) {
+    fn hook(&self, id: &str, run: &RunRecord, payload: Value) {
+        self.hook_with_owner(id, run, self.env.agent_owner_pid(), payload);
+    }
+
+    fn hook_with_owner(&self, id: &str, run: &RunRecord, owner_pid: u32, mut payload: Value) {
         payload["session_id"] = json!("workflow-session");
         payload["cwd"] = json!(self.env.project_root);
         let mut cmd = self.hook_command(run.kind.as_str());
-        cmd.env("RIMZ_RUN_ID", run.run_id.as_str())
+        cmd.env("RIMZ_AGENT_PID", owner_pid.to_string())
+            .env("RIMZ_RUN_ID", run.run_id.as_str())
             .env("RIMZ_AGENT_NAME", run.agent_name.as_deref().unwrap())
             .env("RIMZ_WORKFLOW_RUN", id)
             .env("ZELLIJ", "1")
@@ -593,9 +623,10 @@ fn show_keeps_durable_history_when_takeover_blockers_are_unavailable() {
     record.wait.as_mut().unwrap().outcome = "takeover".into();
     records::write(&paths, &record, &guard).unwrap();
     drop(guard);
+    // Missing git fails owned-worktree discovery, without a pane listing.
     let text = success(
         room.command(&["workflow", "show", &id])
-            .env("RIMZ_ZELLIJ_BIN", "/nonexistent-zellij")
+            .env("PATH", "/nonexistent-git-bin")
             .output()
             .unwrap(),
     );

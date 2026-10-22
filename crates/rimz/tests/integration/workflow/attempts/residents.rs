@@ -25,6 +25,55 @@ fn seed(room: &Room, name: &str, pane: u32, launch: LaunchParams, signal: Lifecy
 }
 
 #[test]
+fn takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
+    let room = Room::new("takeover=true");
+    fs::write(room.env.project_root.join("spawn.log"), "").unwrap();
+    fs::write(room.env.project_root.join("panes.json"), "[]").unwrap();
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        let mut cmd = room.hook_command("claude");
+        cmd.env("RIMZ_AGENT_NAME", "resident")
+            .env("ZELLIJ", "1")
+            .env("ZELLIJ_PANE_ID", "71");
+        success(
+            room.env
+                .spawn_payload(
+                    cmd,
+                    &json!({
+                        "hook_event_name": event,
+                        "session_id": "resident",
+                        "cwd": room.env.project_root,
+                    })
+                    .to_string(),
+                )
+                .wait_with_output()
+                .unwrap(),
+        );
+        room.env.drain_hooks();
+    }
+    let snapshot = room.env.store().snapshot_cached().unwrap();
+    let resident = snapshot
+        .agents
+        .iter()
+        .find(|row| row.name.as_deref() == Some("resident"))
+        .unwrap();
+    assert!(matches!(
+        rimz::store::runtime::agent_liveness(resident),
+        rimz::store::runtime::AgentLiveness::Live { .. }
+    ));
+    let id = room.start();
+    let value = until(&room.env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "takeover"
+            || value["record"]["attempt"]["run"].is_object()
+    });
+    assert_eq!(value["record"]["wait"]["outcome"], "takeover");
+    assert!(value["record"]["visits"].as_object().unwrap().is_empty());
+    assert!(value["record"]["attempt"].is_null());
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    assert!(!trace.contains("new-tab"));
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
+#[test]
 fn takeover_waits_for_open_turn_then_stops_idle_occupant() {
     let room = Room::new("takeover=true");
     fs::write(
@@ -105,7 +154,18 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
         r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
     )
     .unwrap();
-    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let mut owner = dummy_agent_process();
+    // Publish the live owner even when the launch fell inside the cadence window.
+    fs::File::open(room.env.store().paths().cache_dir.join("publish.stamp"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart"}),
+    );
     let state = room.env.state_path_for(&room.env.project_root);
     {
         let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
@@ -114,6 +174,21 @@ fn successor_visit_ignores_the_stopped_attempts_closed_pane() {
         record.attempt.as_mut().unwrap().started_at =
             jiff::Timestamp::now() - jiff::SignedDuration::from_hours(2);
         records::write(&paths, &record, &guard).unwrap();
+        // The trace shim cannot kill the owner when it closes the attempt's pane.
+        // End it while admission is locked, leaving the published roster intact.
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let cached = rimz::store::snapshot::read_fresh_latest(&state)
+            .expect("the live-owner hook published the roster");
+        let ghost = cached
+            .agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name)
+            .unwrap();
+        assert_eq!(
+            rimz::store::runtime::agent_liveness(ghost),
+            rimz::store::runtime::AgentLiveness::Dead
+        );
     }
     success(
         room.command(&["workflow", "advance", &id])
