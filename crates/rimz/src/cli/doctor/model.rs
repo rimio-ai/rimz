@@ -498,8 +498,8 @@ impl From<rimz::daemon_view::DaemonShape> for DaemonTab {
                 faults,
                 fix: concat!(
                     "RimZ restarts only the loop watch at its next daemon repair; ",
-                    "close the loop watch pane to do it now, ",
-                    "and RimZ reopens it in the runtime column"
+                    "close the loop watch pane to restart it sooner, ",
+                    "and RimZ reopens it in the runtime column within about 30 seconds"
                 )
                 .to_owned(),
             },

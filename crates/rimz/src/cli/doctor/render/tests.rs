@@ -1176,8 +1176,8 @@ fn daemon_tab_repairable_warns_and_names_the_loop_only_repair() {
     let fix = out.split_once("fix:").expect("repair has a fix").1;
     for text in [
         "RimZ restarts only the loop watch at its next daemon repair",
-        "close the loop watch pane to do it now",
-        "RimZ reopens it in the runtime column",
+        "close the loop watch pane to restart it sooner",
+        "RimZ reopens it in the runtime column within about 30 seconds",
     ] {
         assert!(fix.contains(text), "{out}");
     }
@@ -1279,7 +1279,7 @@ fn daemon_tab_json_pins_every_state_and_omits_an_absent_row() {
             json!({"ready": {
                 "state": "repairable",
                 "faults": ["content_not_full_height", "runtime_split"],
-                "fix": "RimZ restarts only the loop watch at its next daemon repair; close the loop watch pane to do it now, and RimZ reopens it in the runtime column"
+                "fix": "RimZ restarts only the loop watch at its next daemon repair; close the loop watch pane to restart it sooner, and RimZ reopens it in the runtime column within about 30 seconds"
             }}),
         ),
         (
