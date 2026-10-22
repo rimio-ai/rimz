@@ -713,7 +713,39 @@ allowed-dependencies = [
 # Config bootstrap, loading, and editing share one entry-exists test that keeps dangling links present (+1).
 # symlink_dir_atomically publishes checkout archive links through the durable rename funnel (+1).
 # StatePaths::home keeps the team-link home guard independent of the workspace layout (+1).
-surface-budget = 268
+# lease::{Lease, LeaseAttempt, LeaseState, claim, probe, remove_if_free} share gated single-flight mechanics (+6).
+# The lease module exposes these mechanics to harness and store (+1).
+surface-budget = 275
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::Lease"
+reason = "Watchers and loop runners retain the same lease guard for their lifetimes."
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::LeaseAttempt"
+reason = "Both lease claimants distinguish an acquired lifetime hold from another claimant's body."
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::LeaseState"
+reason = "Watch and run probes distinguish free leases from held leases, including empty legacy bodies."
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::claim"
+reason = "Watchers and loop runners serialize lease attempts and metadata publication under the directory gate."
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::probe"
+reason = "Watch and run liveness reads must not defeat a concurrent claimant or read its partial body."
+
+[[verdict]]
+kind = "item"
+key = "disk::lease::remove_if_free"
+reason = "Store GC removes free locks under their directory gate without depending on harness lease names."
 
 [[verdict]]
 kind = "item"

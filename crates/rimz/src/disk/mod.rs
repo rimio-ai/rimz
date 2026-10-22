@@ -6,6 +6,11 @@
 
 pub mod atomic;
 pub(crate) mod buckets;
+#[allow(
+    dead_code,
+    reason = "Lease consumers migrate in the following commits."
+)]
+pub(crate) mod lease;
 pub mod lock;
 pub(crate) mod parse_cache;
 pub mod paths;
