@@ -4183,6 +4183,16 @@ reason = "Returned by pub agent_liveness, which the harness and the tmux backend
 
 [[verdict]]
 kind = "item"
+key = "store::runtime::OWNER_EXIT_BOUND"
+reason = "Stops in the binary and rebirth share the bound for departing runtime owners."
+
+[[verdict]]
+kind = "item"
+key = "store::runtime::await_owner_exits"
+reason = "Stops in the binary and rebirth share a bounded wait without signalling owners."
+
+[[verdict]]
+kind = "item"
 key = "store::runtime::RuntimeProjection"
 reason = "Returned by pub Store::runtime_projection and re-exported from the crate root; the harness rebirth path names it (pass 23a)."
 

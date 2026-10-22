@@ -8,6 +8,7 @@ use crate::agents::{AgentState, state::standing_successor};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use std::collections::{BTreeSet, HashSet};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeScope {
@@ -207,6 +208,29 @@ pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
         };
     }
     AgentLiveness::Unknown
+}
+
+/// How long stops and boundary inspections wait for departing agent processes:
+/// an exec wrapper holds its provider through two signal graces after the
+/// pane's hangup, and the margin covers a loaded host.
+pub const OWNER_EXIT_BOUND: Duration = Duration::from_secs(3);
+const OWNER_EXIT_POLL: Duration = Duration::from_millis(25);
+
+/// Wait until no supplied agent has a live owner, or `deadline` passes.
+///
+/// Reports whether it slept, so callers can refresh records written during the
+/// wait. Never signals owners; their wrappers own termination.
+pub fn await_owner_exits(agents: &[&AgentState], deadline: Instant) -> bool {
+    let mut slept = false;
+    while agents
+        .iter()
+        .any(|agent| matches!(agent_liveness(agent), AgentLiveness::Live { .. }))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(OWNER_EXIT_POLL);
+        slept = true;
+    }
+    slept
 }
 
 #[cfg(test)]
