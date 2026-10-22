@@ -226,6 +226,127 @@ fi
 }
 
 #[cfg(unix)]
+fn birth_cwd_shim(response: &str) -> (tempfile::TempDir, TmuxBackend) {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+[ "$4" = display-message ] || exit 0
+count=0
+if [ -f "$dir/reads" ]; then read -r count < "$dir/reads"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$dir/reads"
+{response}
+"#
+    ));
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    (temp, backend)
+}
+
+#[cfg(unix)]
+fn birth_cwd_read_count(temp: &tempfile::TempDir) -> usize {
+    std::fs::read_to_string(temp.path().join("reads"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_raced_reads_pass_once_the_path_settles() {
+    let (temp, backend) =
+        birth_cwd_shim(r#"if [ "$count" -le 3 ]; then printf '/\n'; else printf '/project\n'; fi"#);
+    let result = backend.ensure_session(&session_options());
+    assert!(
+        result.is_ok(),
+        "a transient cwd must not refuse birth: {result:?}"
+    );
+    assert_eq!(birth_cwd_read_count(&temp), 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_healthy_or_empty_read_is_single() {
+    for response in ["printf '/project\\n'", ":"] {
+        let (temp, backend) = birth_cwd_shim(response);
+        let result = backend.ensure_session(&session_options());
+        assert!(
+            result.is_ok(),
+            "a matching or unknown cwd passes: {result:?}"
+        );
+        assert_eq!(birth_cwd_read_count(&temp), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_stranding_server_refuses_after_the_bound() {
+    let (temp, backend) = birth_cwd_shim("printf '/\\n'");
+    let bound = Duration::from_millis(200);
+    let started = Instant::now();
+    let result = backend.verify_birth_cwd_within("rimz-test", Path::new("/project"), bound);
+    assert!(started.elapsed() >= bound, "refused before the bound");
+    let MuxErr::ServerCwdUnusable {
+        session,
+        requested,
+        actual,
+        socket,
+    } = result.expect_err("a persistent mismatch must refuse birth")
+    else {
+        panic!("expected ServerCwdUnusable");
+    };
+    assert_eq!(session, "rimz-test");
+    assert_eq!(requested, Path::new("/project"));
+    assert_eq!(actual, Path::new("/"));
+    assert_eq!(socket, backend.socket);
+    assert!(birth_cwd_read_count(&temp) > 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_empty_reread_passes() {
+    let (temp, backend) = birth_cwd_shim(r#"if [ "$count" = 1 ]; then printf '/\n'; fi"#);
+    let result = backend.ensure_session(&session_options());
+    assert!(
+        result.is_ok(),
+        "an unreadable reread is unknown, not unsafe: {result:?}"
+    );
+    assert_eq!(birth_cwd_read_count(&temp), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_slow_first_read_still_gets_a_reread() {
+    let (temp, backend) = birth_cwd_shim(
+        r#"if [ "$count" = 1 ]; then sleep 0.1; printf '/\n'; else printf '/project\n'; fi"#,
+    );
+    let result = backend.verify_birth_cwd_within(
+        "rimz-test",
+        Path::new("/project"),
+        Duration::from_millis(25),
+    );
+    assert!(
+        result.is_ok(),
+        "a slow first read must not spend the reread bound: {result:?}"
+    );
+    assert_eq!(birth_cwd_read_count(&temp), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn birth_cwd_reread_spawn_failure_propagates() {
+    let (temp, backend) = birth_cwd_shim("rm \"$0\"; printf '/\\n'");
+    let result =
+        backend.verify_birth_cwd_within("rimz-test", Path::new("/project"), Duration::ZERO);
+    assert!(
+        matches!(result, Err(MuxErr::NotInstalled { .. })),
+        "a reread spawn failure must propagate: {result:?}"
+    );
+    assert_eq!(birth_cwd_read_count(&temp), 1);
+}
+
+#[cfg(unix)]
 #[test]
 fn ensure_session_does_not_ignore_global_environment_repair_failure() {
     let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
