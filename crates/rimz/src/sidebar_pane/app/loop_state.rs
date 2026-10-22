@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::diag::focus_trace::{FocusTraceEvent, PushBlock, PushVerdict};
 use crate::diag::record::{
-    AnomalyKind, ClickedRowDisplacementCause, RendererExitCause,
-    SidebarWidthControlTrigger as WidthControlTrigger,
+    AnomalyKind, ClickedRowDisplacementCause, SidebarWidthControlTrigger as WidthControlTrigger,
 };
 use crate::ids::PaneId;
 use crate::mux::focus_anchor::{
@@ -48,7 +47,6 @@ use super::focus::{FocusRepairDispatch, spawn_pane_focus};
 use super::focus::{finish_focus_request, request_focus_until};
 use super::focus_push::{FocusPeers, FocusPush};
 use super::gate::{GateState, gate_remaining};
-use super::health::degraded_too_long;
 use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
 use super::layout_freeze;
@@ -130,11 +128,6 @@ struct FoldPreparation {
     anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
 }
 
-enum FoldExit {
-    Degraded(Option<String>),
-    EmptyTab,
-}
-
 #[derive(Default)]
 struct FoldEffects {
     diagnostics: Vec<crate::diag::record::DiagEvent>,
@@ -148,7 +141,6 @@ struct FoldEffects {
     observations: Vec<observe::OwnFrameSig>,
     anomalies: Vec<observe::AnomalyDraft>,
     degraded: Option<String>,
-    exit: Option<FoldExit>,
     acknowledgments: Vec<Arc<FetchUpdate>>,
     invalidate: bool,
     retry_focus_repair: bool,
@@ -216,8 +208,6 @@ pub(super) struct LoopState {
     width_control: WidthController,
     pub(super) titled: bool,
     pub(super) should_exit: bool,
-    pub(super) exit_cause: Option<RendererExitCause>,
-    pub(super) tab_emptied: bool,
     pub(super) request_reload: Box<dyn Fn() + Send>,
     pub(super) baseline_changed: BaselineReporter,
     last_reported_baseline: Option<PaneId>,
@@ -406,19 +396,6 @@ impl LoopState {
         if let Some(reason) = effects.degraded {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason, "sidebar refresh degraded");
         }
-        match effects.exit {
-            Some(FoldExit::Degraded(reason)) => warn!(
-                target: SIDEBAR_HEALTH_TARGET,
-                session = %self.config.session_name,
-                reason = reason.as_deref(),
-                "sidebar degraded too long; respawning the renderer in place",
-            ),
-            Some(FoldExit::EmptyTab) => debug!(
-                session = %self.config.session_name,
-                "sidebar tab emptied; exiting so the pane closes itself",
-            ),
-            None => {}
-        }
         if effects.invalidate {
             self.result_rx.invalidate();
         }
@@ -589,8 +566,6 @@ impl LoopState {
             width_control,
             titled: false,
             should_exit: false,
-            exit_cause: None,
-            tab_emptied: false,
             request_reload: Box::new(|| {}),
             baseline_changed: Box::new(|_| {}),
             last_reported_baseline: baseline_pane.clone(),
@@ -976,10 +951,7 @@ impl LoopState {
             fetched_at: _,
             last_self_close_check: _,
             last_heartbeat: _,
-            // Exit detail and baseline reporting, set beside `should_exit` or
-            // from `ui` outside the fold.
-            exit_cause: _,
-            tab_emptied: _,
+            // Baseline reporting, read from `ui` outside the fold.
             last_reported_baseline: _,
             painted_baseline: _,
             painted_selection: _,
@@ -2699,44 +2671,19 @@ impl LoopState {
     }
 
     fn exit_verdict(&mut self, rejected: bool) -> ApplyOutcome {
-        // A renderer degraded this long is non-functional. Close the attachment so the supervisor reattaches in place while the mux/store outage clears.
-        if degraded_too_long(&self.view.health, self.clock.timestamp()) {
-            self.fold_effects.exit = Some(FoldExit::Degraded(
-                self.view
-                    .health
-                    .alert
-                    .as_ref()
-                    .map(|alert| alert.reason.clone()),
-            ));
-            return ApplyOutcome {
-                should_exit: true,
-                tab_emptied: false,
-                rejected,
-            };
-        }
-
         // Own-view (sibling count) rides in on the snapshot — the producer computes
         // it from the same pane list it already enumerated. Presence publication and
         // the poll backstop feed this latch; resize only decides whether to hold a
         // grown-width paint while the fresh fold is pending.
-        if self.self_close.should_close(
-            self.view
-                .current
-                .own_view
-                .as_ref()
-                .map(|view| view.sibling_count),
-            self.clock.now(),
-        ) {
-            self.fold_effects.exit = Some(FoldExit::EmptyTab);
-            return ApplyOutcome {
-                should_exit: true,
-                tab_emptied: true,
-                rejected,
-            };
-        }
         ApplyOutcome {
-            should_exit: false,
-            tab_emptied: false,
+            should_exit: self.self_close.should_close(
+                self.view
+                    .current
+                    .own_view
+                    .as_ref()
+                    .map(|view| view.sibling_count),
+                self.clock.now(),
+            ),
             rejected,
         }
     }
@@ -2903,14 +2850,6 @@ impl LoopState {
             });
         }
         self.should_exit = applied.should_exit;
-        if applied.should_exit {
-            self.exit_cause = Some(if applied.tab_emptied {
-                RendererExitCause::SelfCloseEmptyTab
-            } else {
-                RendererExitCause::DegradedGaveUp
-            });
-        }
-        self.tab_emptied |= applied.tab_emptied;
         self.apply_focus_anchor();
         self.observe_commit();
         self.dirty = true;

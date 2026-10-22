@@ -1,9 +1,7 @@
-//! Debounced, sticky health of the refresh loop, and the give-up rule that
-//! respawns a renderer degraded past rescue in its existing pane.
+//! Debounced, sticky health of the refresh loop.
 
 use jiff::Timestamp;
 
-pub(super) use crate::sidebar::timing::GIVE_UP_AFTER_DEGRADED;
 pub(super) use crate::sidebar::timing::HEALTH_ALERT_AFTER_FAILURES as ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::render::Alert;
 
@@ -60,22 +58,3 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>, now: Times
         }
     }
 }
-
-/// Whether the refresh loop has been *continuously* degraded past
-/// [`GIVE_UP_AFTER_DEGRADED`]. Keys off the sticky health alert: `since` is
-/// pinned to the start of the current failure episode and an authoritative
-/// success clears the active state (the alert lingers only as a dim recovered
-/// notice), so this fires only on an unbroken run of failures, never after a
-/// producer verdict or consumer-read recovery.
-pub(super) fn degraded_too_long(health: &Health, now: Timestamp) -> bool {
-    health
-        .alert
-        .as_ref()
-        .filter(|alert| alert.is_active())
-        .is_some_and(|alert| {
-            now.duration_since(alert.since).as_secs() >= GIVE_UP_AFTER_DEGRADED.as_secs() as i64
-        })
-}
-
-#[cfg(test)]
-mod tests;

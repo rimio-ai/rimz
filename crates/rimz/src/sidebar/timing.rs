@@ -256,14 +256,6 @@ pub(crate) const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
 /// close-verdict refresh and the hold expiry share one user-visible ceiling.
 pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
 
-/// How long the refresh loop may stay continuously degraded before the renderer
-/// gives up and asks its supervisor to respawn it in place. Generous so a
-/// transient mux hiccup or the sub-second gap while `cargo install` swaps
-/// `rimz` does not churn the worker; short enough that a genuinely broken
-/// renderer (deleted store, dead mux, or an old build past the current runtime
-/// contract) enters bounded retry instead of lingering on stale data.
-pub(crate) const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);
-
 /// Settling window and maximum delay for an ambiguous same-command exit.
 /// Immediate recovery reads stay inside the window regardless of their count;
 /// the render loop wakes at this deadline and forces a non-skippable fold.

@@ -63,7 +63,7 @@ The contract types are in [`view.rs`](../../../crates/rimz/src/store/snapshot/vi
 | [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | the off-thread fetch worker: cadence, request coalescing, notification state, publication ([state.md](./state.md#one-fetch-cycle)) |
 | [`app/selection.rs`](../../../crates/rimz/src/sidebar_pane/app/selection.rs) | the identity-keyed highlight, the browse layer, and the key and mouse handlers |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs) | the last-resort hold that refuses a regressive frame |
-| [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce, the sticky alert, and the give-up rule |
+| [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | failure debounce and the sticky alert |
 | [`app/lifecycle.rs`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs) | the self-close latch and the grow-resize paint hold |
 | [`app/layout_freeze.rs`](../../../crates/rimz/src/sidebar_pane/app/layout_freeze.rs) | the view-owned row and group order freeze |
 | [`host/reload.rs`](../../../crates/rimz/src/sidebar_pane/host/reload.rs) | detecting that the workspace build target changed |
@@ -130,7 +130,7 @@ The mux roster can arrive incomplete: a partial pane set, or a live pane missing
 | Nameless and newborn panes | projection | A pane with no readable command, or a pane first seen this produce without a resolved cwd, folds no row this frame instead of an anonymous row (ladder rung 5); the next read names it. A stamped pane still binds by id and keeps rendering. |
 | Last-resort hold | renderer | Absorbs a residual race that would erase or demote a stable row set. It holds an agent-to-process demotion only while the foreground command is unchanged or missing; a changed command means the agent exited and the shell returned, which commits at once. |
 
-The producer repairs live in [`sidebar/produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs), the hold in [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs), and the fusion rule that lets a real close override a carried pane in [state.md](./state.md#fusion-rules). Carried panes and gate holds show as dim bottom notices without counting as health failures. When pane discovery fails outright, the renderer keeps its last good frame and eventually raises the health alert ([degraded reads](#degraded-reads-and-give-up)).
+The producer repairs live in [`sidebar/produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs), the hold in [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs), and the fusion rule that lets a real close override a carried pane in [state.md](./state.md#fusion-rules). Carried panes and gate holds show as dim bottom notices without counting as health failures. When pane discovery fails outright, the renderer keeps its last good frame and eventually raises the health alert ([degraded reads](#degraded-reads)).
 
 ## Ranking and grouping
 
@@ -420,13 +420,11 @@ On `self-close` the supervisor runs one authoritative mux listing. A present own
 
 The renderer-side guards protect paint, not lifetime. A fused `PaneClosed` overlay deletes its card immediately but never changes the sibling count ([state.md](./state.md#fusion-rules)). Closing the last sibling grows the sidebar to full width, so a bounded grow-resize hold in [`lifecycle.rs`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs) suppresses the widened repaint while the request reaches the supervisor. The hold arms only when the grow lands beyond the room width target, so attaching a detached-born session repaints at once at its legitimate width. The birth path keeps the hold through its confirm window until a non-empty fold resets it or the supervisor accepts the request.
 
-### Degraded reads and give-up
-
-Give-up is the counterpart of self-close: self-close asks to end the pane when the view empties, and give-up reattaches in place when the view can no longer be read.
+### Degraded reads
 
 The attachment keeps its last committed frame. When a produce fails (a vanished store, a dead mux, a transient error) the loop reuses that frame and absorbs a single failure silently. A failure that persists past the debounce raises a sticky health alert pinned to the bottom edge (`! Sidebar degraded for 8s: snapshot failed: store not found`), truncating the body so the alert cannot scroll off. On recovery the alert stays as a dim dismissable notice. An attachment recovers health only from a completed produce, so a paintable fast fold cannot hide repeated pane-read failure. [`health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) folds these outcomes into `Health`.
 
-A renderer degraded past `GIVE_UP_AFTER_DEGRADED` (30 seconds) records `renderer_exit` with cause `degraded_gave_up` and closes its attachment without a control word. The supervisor observes the stream loss, shows the host-unavailable notice, and retries in the same pane; the host's other attachments stay alive.
+A degraded attachment stays attached with its last committed frame and active alert for as long as the failure lasts. Its data backstop keeps requesting folds; completed production recovers health without replacing the frame with a host-unavailable notice. A wedged worker is not replaced automatically; if it wedges before reporting a failure, the frame can remain stale without an alert.
 
 Across attach rounds the supervisor also watches that its pane still exists. A fresh presence roster containing the pane resets the strike count without a mux command; each due probe counts on an observation newer than the supervisor's last, and supervision ends only after three distinct authoritative absences, recorded as `supervisor_pane_gone`. The evidence rules are shared with orphan reaping in [multiplexers.md](../multiplexers.md#sidebar-orphan-reaping).
 

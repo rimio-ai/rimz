@@ -8,9 +8,8 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType};
-use tracing::warn;
+use tracing::{debug, warn};
 
-use crate::diag::record::{DiagEvent, RendererExitCause};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps};
 use crate::{MuxName, RuntimePaths};
@@ -31,8 +30,6 @@ pub(in crate::sidebar_pane) enum AttachmentExit {
     Closed,
     /// The pane's tab looks empty; the supervisor confirms against the mux.
     SelfClose,
-    /// The fold stayed degraded past the renderer's patience.
-    GaveUp,
 }
 
 /// Closes a running attachment from another thread.
@@ -252,19 +249,13 @@ impl Attachment {
         state.report_baseline();
         state.clear_pixel(&mut terminal);
         loop_result?;
-        if !state.tab_emptied
-            && let Some(cause) = state.exit_cause
-        {
-            diag.emit_unlimited(DiagEvent::RendererExit { cause });
+        if state.should_exit {
+            debug!(
+                session = %config.session_name,
+                "sidebar tab emptied; exiting so the pane closes itself",
+            );
+            return Ok(AttachmentExit::SelfClose);
         }
-        Ok(
-            if state.exit_cause == Some(RendererExitCause::DegradedGaveUp) {
-                AttachmentExit::GaveUp
-            } else if state.tab_emptied {
-                AttachmentExit::SelfClose
-            } else {
-                AttachmentExit::Closed
-            },
-        )
+        Ok(AttachmentExit::Closed)
     }
 }

@@ -552,6 +552,6 @@ Each degradation has one owner, and none leaves a wrong verdict that outlives th
 | Clock skew | Event expiry uses receiver time, so no event lives forever. | A skewed sender can briefly mis-order an overlay; the verifying pull corrects it. |
 | Cold host: no fold yet | Memory starts empty with each host. | The placeholder remains until the first fold. |
 | Panicking produce | The panic guard catches the unwind and discards the fold cursor. | One degraded outcome; the next cycle refolds cold. |
-| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the health alert and, past `GIVE_UP_AFTER_DEGRADED`, closes the attachment for notice-and-retry ([sidebar.md → Degraded reads and give-up](./sidebar.md#degraded-reads-and-give-up)). |
+| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert; the attachment stays open and its data backstop keeps requesting folds until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
 
 Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. Flicker, duplicate rows, or a phantom external group each map to a record in `diag.log.jsonl`; `rimz doctor` shows the recent tail, and [diagnostics.md](../diagnostics.md) names the taxonomy.
