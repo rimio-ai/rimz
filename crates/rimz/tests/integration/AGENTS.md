@@ -55,6 +55,9 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 - A Zellij focus probe sets up the client before it measures. A client that has sent no input since attaching is not moved by `action focus-pane-id` and is not the client a focus-taking `new-pane` follows, so type into it first. An empty `ZELLIJ_CONFIG_DIR` opens a floating first-run wizard that takes focus, so a hand-built probe writes a `config.kdl` with `show_startup_tips false` before attaching. A focus proof for a user-run command issues the action from inside the client's pane, inheriting `ZELLIJ` and `ZELLIJ_PANE_ID`: an action from outside any pane is a different condition.
 - Exact geometry assertions over repeated Zellij splits size the anchor's extent to a multiple of the resulting parts. Halving an odd extent takes a cell from a neighbour (a 39-row anchor became 20+20 while its neighbour went from 39 to 38), which reads as a placement fault.
 - A live test finds a RimZ-opened Zellij tab by its name once and addresses it by `tab_id` afterwards (`PaneGeometry::tab_id`, `wait_for_tab_sidebar_pane`). With a real sidebar host, the status pass renames a RimZ tab that hosts no agent to the shell name within seconds of its first frame ([tab naming](../../../../docs/internals/multiplexers.md)), so a second name-keyed lookup races that rename and loses under load.
+- A live test that seeds N agents waits for the sidebar to show all N (for example the `⢿ N` running count) and homes the view before sending its first key.
+- A value captured from a wait is checked against what its later comparisons assert; a wait predicate narrower than the comparison is a partial-read race.
+- A fix to one instance of a test race greps the same file for that pattern and fixes every instance in the same commit.
 
 ## Placement
 
