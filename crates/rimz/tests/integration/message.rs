@@ -1926,7 +1926,7 @@ fn assert_sweep_registration_wait(ends_again: bool) {
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(
-        shown.contains("expired") && shown.contains("did not register within"),
+        shown.contains("expired") && shown.contains(&format!("did not register by {deadline}")),
         "{shown}"
     );
 }
@@ -4494,6 +4494,7 @@ enum ResumeFollowUpCase {
     Ordinary,
     Late,
     InFlight,
+    RegistrationWindow,
     EndedDuringRetry,
     SplitFailed,
     WaitReply,
@@ -4509,6 +4510,11 @@ fn parent_message_survives_late_child_registration() {
 #[test]
 fn parent_message_queues_second_follow_up_without_second_pane() {
     assert_parent_follow_up_case(None, None, ResumeFollowUpCase::InFlight);
+}
+
+#[test]
+fn parent_message_follow_ups_share_one_resume_deadline() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::RegistrationWindow);
 }
 
 #[test]
@@ -4772,6 +4778,13 @@ fn assert_parent_follow_up_case(
     if case == ResumeFollowUpCase::WaitExpired {
         send_command.env("RIMZ_MESSAGE_REGISTER_TIMEOUT_MS", "4000");
     }
+    let register_limit = Duration::from_secs(60);
+    if case == ResumeFollowUpCase::RegistrationWindow {
+        send_command.env(
+            "RIMZ_MESSAGE_REGISTER_TIMEOUT_MS",
+            register_limit.as_millis().to_string(),
+        );
+    }
     if case == ResumeFollowUpCase::SplitFailed {
         send_command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
     }
@@ -4851,6 +4864,7 @@ fn assert_parent_follow_up_case(
         case,
         ResumeFollowUpCase::Late
             | ResumeFollowUpCase::InFlight
+            | ResumeFollowUpCase::RegistrationWindow
             | ResumeFollowUpCase::EndedDuringRetry
     ) {
         let output = sender.take().unwrap().wait_with_output().unwrap();
@@ -4874,25 +4888,36 @@ fn assert_parent_follow_up_case(
         assert!(receipt.contains(&register_by.to_string()), "{receipt}");
         if case != ResumeFollowUpCase::Late {
             let before = std::fs::read_to_string(&trace).unwrap();
-            let mut retry = traced_rimz(&env, &trace);
-            retry
-                .args(["--mux", "zellij", "message", &target, "second follow up"])
-                .env("PATH", path_with_front(&shim))
-                .env(
-                    "SHELL",
-                    crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
-                )
-                .env("RIMZ_TEST_PANE_LIST", &panes)
-                .env("RIMZ_AGENT_KIND", "claude")
-                .env("RIMZ_AGENT_ID", "parent")
-                .env("ZELLIJ_PANE_ID", "1")
-                .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+            let follow_up = |text: &str| {
+                let mut command = traced_rimz(&env, &trace);
+                command
+                    .args(["--mux", "zellij", "message", &target, text])
+                    .env("PATH", path_with_front(&shim))
+                    .env(
+                        "SHELL",
+                        crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+                    )
+                    .env("RIMZ_TEST_PANE_LIST", &panes)
+                    .env("RIMZ_AGENT_KIND", "claude")
+                    .env("RIMZ_AGENT_ID", "parent")
+                    .env("ZELLIJ_PANE_ID", "1")
+                    .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+                if case == ResumeFollowUpCase::RegistrationWindow {
+                    command.env(
+                        "RIMZ_MESSAGE_REGISTER_TIMEOUT_MS",
+                        register_limit.as_millis().to_string(),
+                    );
+                }
+                command
+            };
+            let mut retry = follow_up("second follow up");
             let ends_again = case == ResumeFollowUpCase::EndedDuringRetry;
-            if ends_again {
+            let retry_output = if ends_again {
                 retry_after_child_ends_again(&env, &mut retry, &child_name, &cwd);
+                None
             } else {
-                run_success(&mut retry, "queue second follow-up");
-            }
+                Some(run_success(&mut retry, "queue second follow-up"))
+            };
             let after = std::fs::read_to_string(&trace).unwrap();
             let opens = |log: &str| {
                 log.lines()
@@ -4921,6 +4946,33 @@ fn assert_parent_follow_up_case(
                     .collect::<Vec<_>>(),
                 ["follow up", "second follow up"]
             );
+            if case == ResumeFollowUpCase::RegistrationWindow {
+                assert_eq!(
+                    records[1].register_by,
+                    Some(register_by),
+                    "a joining follow-up must share the resume's registration deadline"
+                );
+                let receipt = String::from_utf8_lossy(&retry_output.as_ref().unwrap().stdout);
+                assert!(receipt.contains(&register_by.to_string()), "{receipt}");
+                let remaining = register_by.duration_since(jiff::Timestamp::now());
+                if remaining.is_positive() {
+                    std::thread::sleep(remaining.unsigned_abs());
+                }
+                run_success(&mut follow_up("third follow up"), "start a new resume");
+                let after = std::fs::read_to_string(&trace).unwrap();
+                assert_eq!(
+                    opens(&after),
+                    2,
+                    "a lapsed resume must not hold the next follow-up: {after}"
+                );
+                let records = store.list_pending_messages().unwrap();
+                assert_eq!(records.len(), 3);
+                assert_eq!(records[2].text, "third follow up");
+                assert_eq!(
+                    records[2].register_by,
+                    Some(records[2].enqueued_at + register_limit)
+                );
+            }
             return;
         }
         Some(output)
@@ -4970,7 +5022,8 @@ fn assert_parent_follow_up_case(
             let output = sender.take().unwrap().wait_with_output().unwrap();
             assert_eq!(output.status.code(), Some(1), "{output:?}");
             assert!(
-                String::from_utf8_lossy(&output.stderr).contains("did not register within"),
+                String::from_utf8_lossy(&output.stderr)
+                    .contains(&format!("did not register by {deadline}")),
                 "{output:?}"
             );
             return;

@@ -473,6 +473,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
             message_id: leg.message_id.clone(),
             reason: Some(crate::message::dispatch::ParkReason::Resuming {
                 register_by: Timestamp::now(),
+                attempt: crate::store::writer::ResumeAttempt::Started,
             }),
         },
         0,

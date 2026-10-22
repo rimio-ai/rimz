@@ -1076,19 +1076,13 @@ upward-dependencies = [
 # TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
 # InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
-# resume_in_flight shares durable resume deduplication with the parent-only doorway (+1).
 # spawn_queued_head shares the FIFO selection and delivery argv across hooks and resumed wrappers (+1).
-surface-budget = 86
+surface-budget = 85
 
 [[verdict]]
 kind = "item"
 key = "message::spawn_queued_head"
 reason = "Lifecycle checkpoints and resumed wrappers trigger the same card's FIFO head without importing another CLI command."
-
-[[verdict]]
-kind = "item"
-key = "message::dispatch::resume_in_flight"
-reason = "The parent-only resume doorway uses the message owner's queued registration deadlines to avoid opening a second pane."
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -1672,7 +1666,13 @@ path = "crates/rimz/src/store"
 # Store::queue_resuming_message rechecks the live card atomically with resume enqueue (+1).
 # message::read_status gives the parked resume monitor a fold-free single-record lookup (+1).
 # MessageRecord::awaiting_registration shares the card-aware registration wait across delivery, expiry and resume dispatch (+1).
-surface-budget = 493
+# ResumeAttempt carries the queue commit's join-or-start decision through dispatch to the doorway (+1).
+surface-budget = 494
+
+[[verdict]]
+kind = "item"
+key = "store::writer::queue::ResumeAttempt"
+reason = "Dispatch and the parent-only resume doorway act on the queue commit's locked join-or-start decision."
 
 [[verdict]]
 kind = "item"
@@ -1687,7 +1687,7 @@ reason = "The parked resume monitor reads one status across queue and all retain
 [[verdict]]
 kind = "item"
 key = "store::writer::queue::Store::queue_resuming_message"
-reason = "Dispatch's resume enqueue checks for a newly live card under the same workspace lock as its durable queue write."
+reason = "Dispatch's resume enqueue checks for a newly live card and decides join-or-start and the shared registration deadline under the same workspace lock as its durable queue write."
 
 [[verdict]]
 kind = "item"

@@ -5,9 +5,10 @@ use crate::cli::supervised;
 use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
 use rimz::message::dispatch::{
-    self, DispatchErr, DispatchOutcome, DispatchRequest, DispatchResult,
+    self, DispatchErr, DispatchOutcome, DispatchRequest, DispatchResult, ParkReason,
 };
 use rimz::store::run::RunRecord;
+use rimz::store::writer::ResumeAttempt;
 use std::path::Path;
 
 fn ended_child<'a>(
@@ -216,23 +217,26 @@ fn resume_resolved(
     {
         return Ok(ResumeChildOutcome::AlreadyBound);
     }
-    let in_flight = dispatch::resume_in_flight(store, child, &current.agents, None)?;
     dispatch_request.resuming_recipient = Some(child.clone());
     let result = match dispatch::dispatch(&parent_workspace, store, dispatch_request) {
         Ok(result) => result,
         Err(DispatchErr::RecipientBecameLive) => return Ok(ResumeChildOutcome::AlreadyBound),
         Err(error) => return Ok(ResumeChildOutcome::DispatchFailed(error)),
     };
-    let [DispatchOutcome::Queued { message_id, .. }] = result.outcomes.as_slice() else {
+    let [
+        DispatchOutcome::Queued {
+            message_id,
+            reason: Some(ParkReason::Resuming { attempt, .. }),
+            ..
+        },
+    ] = result.outcomes.as_slice()
+    else {
         unreachable!("one resuming recipient always parks one record");
     };
+    if *attempt == ResumeAttempt::Joined {
+        return Ok(ResumeChildOutcome::Dispatched(result));
+    }
     let opened = (|| -> Result<()> {
-        if in_flight {
-            let queued = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-            if dispatch::resume_in_flight(store, child, &queued.agents, Some(message_id))? {
-                return Ok(());
-            }
-        }
         let mut request = resume_request(
             child,
             run,

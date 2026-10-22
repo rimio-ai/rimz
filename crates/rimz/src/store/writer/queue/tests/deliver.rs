@@ -7,34 +7,176 @@ fn user_message(text: &str) -> String {
 const BLOCKER: &str = "stuck: no live pane";
 
 #[test]
-fn resume_enqueue_refuses_a_card_that_became_live() {
-    for live in [false, true] {
+fn resume_enqueue_decides_one_registration_deadline_under_the_lock() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Case {
+        Fresh,
+        Waiting,
+        ShorterLimit,
+        Expired,
+        Cancelled,
+        EndedAgain,
+        EndTie,
+        Legacy,
+        MixedDeadlines,
+        DifferentCard,
+        NamedCard,
+        DifferentKind,
+        Live,
+        DeadlineTie,
+        Absent,
+        Claimed,
+        Sent,
+    }
+
+    use Case::*;
+    use ResumeAttempt::{Joined, Started};
+    for (case, attempt, deadline_offset) in [
+        (Fresh, Some(Started), 120),
+        (Waiting, Some(Joined), 30),
+        (ShorterLimit, Some(Joined), 30),
+        (Expired, Some(Started), 120),
+        (Cancelled, Some(Started), 120),
+        (EndedAgain, Some(Started), 120),
+        (EndTie, Some(Joined), 30),
+        (Legacy, Some(Started), 120),
+        (MixedDeadlines, Some(Joined), 30),
+        (DifferentCard, Some(Started), 120),
+        (NamedCard, Some(Joined), 30),
+        (DifferentKind, Some(Started), 120),
+        (Live, None, 120),
+        (DeadlineTie, Some(Started), 120),
+        (Absent, Some(Joined), 30),
+        (Claimed, Some(Started), 120),
+        (Sent, Some(Started), 120),
+    ] {
         let q = Queue::new();
         let receiver = agent();
-        for signal in [
-            Some(LifecycleSignal::Registered),
-            (!live).then_some(LifecycleSignal::Ended),
+        let now = Timestamp::now();
+        let enqueued_at = now - Duration::from_secs(60);
+        let ended_at = (!matches!(case, Absent | Live)).then_some(
+            enqueued_at
+                + jiff::SignedDuration::from_secs(match case {
+                    EndedAgain => 1,
+                    EndTie => 0,
+                    _ => -1,
+                }),
+        );
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            receiver.kind.as_str(),
+            "test",
+            &AgentLifecycleObservation::new(Some("parent".into()), LifecycleSignal::Registered),
+        ))
+        .unwrap();
+        for (signal, timestamp) in [
+            (case != Absent).then_some((
+                LifecycleSignal::Registered,
+                enqueued_at - Duration::from_secs(2),
+            )),
+            ended_at.map(|timestamp| (LifecycleSignal::Ended, timestamp)),
         ]
         .into_iter()
         .flatten()
         {
-            q.append_event(&EventEnvelope::agent_lifecycle(
+            let mut observation =
+                AgentLifecycleObservation::new(Some(receiver.agent_id.clone()), signal);
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(receiver.kind.clone());
+            observation.launch.launch_depth = Some(1);
+            let mut event = EventEnvelope::agent_lifecycle(
                 q.workspace_id.clone(),
                 "session",
                 receiver.kind.as_str(),
                 "test",
-                &AgentLifecycleObservation::new(Some(receiver.agent_id.clone()), signal),
-            ))
-            .unwrap();
+                &observation,
+            );
+            event.timestamp = timestamp;
+            q.append_event(&event).unwrap();
         }
-        let mut message = q.record(1);
-        message.register_by = Some(message.enqueued_at + Duration::from_secs(120));
+        let snapshot = q.snapshot().unwrap();
+        let observed = snapshot
+            .agents
+            .iter()
+            .find(|observed| receiver.card_ref().matches(observed.card_ref()));
         assert_eq!(
-            q.queue_resuming_message(&message, "session").unwrap(),
-            !live
+            observed.map(|observed| observed.ended_at),
+            (case != Absent).then_some(ended_at),
+            "{case:?}: fixture must retain the child's lifecycle row: {:?}",
+            snapshot.agents
         );
-        assert_eq!(q.live().len(), usize::from(!live));
-        assert_eq!(q.count("message.queued"), usize::from(!live));
+        if case != Fresh {
+            let mut earlier = q.record(1);
+            earlier.enqueued_at = enqueued_at;
+            earlier.register_by = match case {
+                Expired => Some(now - Duration::from_secs(1)),
+                DeadlineTie => Some(now),
+                Legacy => None,
+                _ => Some(now + Duration::from_secs(30)),
+            };
+            match case {
+                DifferentCard => {
+                    earlier.agent_id = "other".into();
+                    earlier.agent_name = Some("other".into());
+                }
+                NamedCard => {
+                    earlier.agent_id = "launch_child".into();
+                    earlier.agent_name = Some("otter".into());
+                }
+                DifferentKind => earlier.kind = AgentKind::new_unchecked("codex"),
+                Claimed => earlier.status = MessageStatus::Claimed,
+                Sent => earlier.status = MessageStatus::Sent,
+                _ => {}
+            }
+            if case == MixedDeadlines {
+                let mut later = earlier.clone();
+                later.message_id = message_id(2);
+                later.register_by = Some(now + Duration::from_secs(60));
+                q.queue_message(&later, "session").unwrap();
+            }
+            q.queue_message(&earlier, "session").unwrap();
+            if case == Cancelled {
+                q.cancel_message(&earlier.message_id, "session", "canceled during preflight")
+                    .unwrap();
+            }
+        }
+        let mut message = q.record(3);
+        message.enqueued_at = now;
+        message.register_by =
+            Some(now + Duration::from_secs(if case == ShorterLimit { 5 } else { 120 }));
+        if case == NamedCard {
+            message.agent_name = Some("otter".into());
+        }
+        let mut expected_live = q.live();
+        let queued_before = q.count("message.queued");
+        let expected = attempt.map(|attempt| {
+            let mut stored = message.clone();
+            stored.register_by = Some(now + Duration::from_secs(deadline_offset));
+            expected_live.push(stored.clone());
+            (stored, attempt)
+        });
+        assert_eq!(
+            q.queue_resuming_message_with(&message, "session", || {
+                assert!(
+                    crate::disk::lock::WorkspaceLock::try_acquire(&q.paths().workspace_lock)
+                        .unwrap()
+                        .is_none(),
+                    "read the clock only after taking the workspace lock"
+                );
+                now
+            })
+            .unwrap(),
+            expected,
+            "{case:?}"
+        );
+        assert_eq!(q.live(), expected_live, "{case:?}");
+        assert_eq!(
+            q.count("message.queued"),
+            queued_before + usize::from(attempt.is_some()),
+            "{case:?}"
+        );
     }
 }
 
@@ -1096,7 +1238,13 @@ fn reconcile_registration_deadline_is_card_aware() {
             let history = q.history();
             assert_eq!(history[0].status, MessageStatus::Expired);
             let reason = history[0].last_error.as_deref().unwrap();
-            assert!(reason.contains("did not register within"), "{reason}");
+            assert!(
+                reason.contains(&format!(
+                    "did not register by {}",
+                    record.register_by.unwrap()
+                )),
+                "{reason}"
+            );
             assert!(
                 reason.contains(
                     receiver

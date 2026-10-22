@@ -36,7 +36,7 @@ pub use lifecycle::{
 pub(crate) use queue::{BlockerUpdate, DeliverySweepUpdate};
 pub use queue::{
     BoundaryClaim, DeliveryAck, DeliveryAckMatch, DeliveryFailureDisposition, EditOutcome,
-    MessageEdit,
+    MessageEdit, ResumeAttempt,
 };
 
 /// Terminal audit-only message outcome for a target that never resolved to a
