@@ -81,7 +81,7 @@ A key RimZ knows but that has no stored value and no printed default fails with 
 1. Parses the value (rules below) and rejects a key RimZ does not know, so a typo never lands in the file.
 2. Reads the owning file, or starts from its template when the file does not exist.
 3. Checks the value against the key's type and format.
-4. Sets the key in place: it uncomments the file's commented line for the key when there is one and otherwise adds the key, keeping every other line and comment as it was.
+4. Sets the key in place: it uncomments the file's commented line for the key when there is one and otherwise adds the key. An inline table on the key's path becomes a standard `[table]` block, keeping its comments; every other line stays as it was.
 5. Validates the whole resulting file.
 6. Writes the file atomically (a temporary file renamed over the original).
 

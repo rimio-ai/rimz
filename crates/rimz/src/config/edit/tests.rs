@@ -1945,6 +1945,280 @@ fn sidebar_glyphs_set_key_is_set_shorthand() {
 }
 
 #[test]
+fn inline_account_table_update_preserves_comments_and_siblings() {
+    assert_inline_account_update(
+        "[accounts.codex]\nteam-2 = {}\n# team one\nteam-1 = { history = \"shared\" }   # hand\n\n[accounts.codex.team-9]\nlabel = 'other'\n\n[notifications]\n# tail\n",
+        "[accounts.codex]\nteam-2 = {}\n\n# team one\n[accounts.codex.team-1]   # hand\nhistory = \"standalone\"\nlabel = \"work\"\n\n[accounts.codex.team-9]\nlabel = 'other'\n\n[notifications]\n# tail\n",
+    );
+}
+
+#[test]
+fn inline_multiline_account_comments_stay_with_entries() {
+    assert_inline_account_update(
+        "[accounts.codex]\nteam-1 = {\n  # pool choice\n  history = \"shared\", # history mode\n  # display choice\n  label = \"a\", # display\n  # after last\n} # hand\n",
+        "[accounts.codex]\n\n[accounts.codex.team-1] # hand\n# pool choice\nhistory = \"standalone\" # history mode\n# display choice\nlabel = \"work\" # display\n# after last\n",
+    );
+}
+
+#[test]
+fn inline_multiline_account_brace_comments_survive() {
+    assert_inline_account_update(
+        "[accounts.codex]\nteam-1 = { # opening\n  history = \"shared\",\n  label = \"a\" # display before closing\n  # after last without comma\n} # closing\n",
+        "[accounts.codex]\n\n[accounts.codex.team-1] # closing\n# opening\nhistory = \"standalone\"\nlabel = \"work\" # display before closing\n# after last without comma\n",
+    );
+}
+
+#[test]
+fn inline_multiline_empty_account_comments_follow_header() {
+    let (_dir, editor) =
+        inline_editor("[accounts.codex]\nteam-1 = { # opening\n  # empty account\n} # closing\n");
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let name = "team-1".parse().unwrap();
+    let update = || editor.upsert_named_account(&kind, &name, None, None, None);
+    update().unwrap();
+    let path = editor.files.core_path();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert_eq!(
+        text,
+        "[accounts.codex]\n\n[accounts.codex.team-1] # closing\n# opening\n# empty account\n"
+    );
+    let config = MachineConfig::parse_text(path, &text, editor.files.agents_home()).unwrap();
+    assert!(config.accounts.codex.contains_key(&name));
+    update().unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+}
+
+#[test]
+fn inline_multiline_nested_comments_stay_untouched() {
+    assert_inline_account_update(
+        "[accounts]\ncodex = {\n  # stay inline\n  team-2 = {\n    # nested account\n    history = \"shared\", # nested mode\n  },\n  # converted account\n  team-1 = { history = \"shared\" },\n}\n",
+        "[accounts]\n\n[accounts.codex]\n# stay inline\nteam-2 = {\n    # nested account\n    history = \"shared\", # nested mode\n  }\n\n# converted account\n[accounts.codex.team-1]\nhistory = \"standalone\"\nlabel = \"work\"\n",
+    );
+}
+
+#[test]
+fn inline_provider_table_update_converts_only_the_named_path() {
+    assert_inline_account_update(
+        "[accounts]\ncodex = { team-2 = {}, team-1 = { history = \"shared\" } } # provider\n\n[notifications]\n# tail\n",
+        "[accounts]\n\n[accounts.codex] # provider\nteam-2 = {}\n\n[accounts.codex.team-1]\nhistory = \"standalone\"\nlabel = \"work\"\n\n[notifications]\n# tail\n",
+    );
+}
+
+#[test]
+fn inline_root_table_update_precedes_existing_sections() {
+    assert_inline_account_update(
+        "# accounts here\naccounts = { codex = { team-2 = {}, team-1 = { history = \"shared\" } } }  # root\n\n[notifications]\n# tail\n",
+        "\n# accounts here\n[accounts]  # root\n\n[accounts.codex]\nteam-2 = {}\n\n[accounts.codex.team-1]\nhistory = \"standalone\"\nlabel = \"work\"\n\n[notifications]\n# tail\n",
+    );
+}
+
+fn inline_editor(seed: &str) -> (tempfile::TempDir, ConfigEditor) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, seed).unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    (dir, editor)
+}
+
+fn assert_inline_account_update(seed: &str, expected: &str) {
+    let (_dir, editor) = inline_editor(seed);
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let name = "team-1".parse().unwrap();
+    let update = || {
+        editor.upsert_named_account(
+            &kind,
+            &name,
+            None,
+            Some(super::super::AccountHistory::Standalone),
+            Some("work"),
+        )
+    };
+    let result = update();
+    assert!(
+        result.is_ok(),
+        "inline account must be editable: {result:?}"
+    );
+    let path = editor.files.core_path();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert_eq!(text, expected);
+    assert_eq!(text.matches("[accounts.codex.team-1]").count(), 1);
+    let config = MachineConfig::parse_text(path, &text, editor.files.agents_home()).unwrap();
+    assert_eq!(config.accounts.codex[&name].history.as_str(), "standalone");
+    assert_eq!(config.accounts.codex[&name].label.as_deref(), Some("work"));
+    update().unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+}
+
+#[test]
+fn inline_account_label_clear_keeps_an_empty_declaration() {
+    let (_dir, editor) = inline_editor("[accounts.claude]\npersonal = { label = \"work\" }\n");
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let name = "personal".parse().unwrap();
+    let result = editor.upsert_named_account(&kind, &name, None, None, Some(""));
+    assert!(result.is_ok(), "inline label must clear: {result:?}");
+    let path = editor.files.core_path();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert_eq!(text, "[accounts.claude]\n\n[accounts.claude.personal]\n");
+    let config = MachineConfig::parse_text(path, &text, editor.files.agents_home()).unwrap();
+    assert!(config.accounts.claude.contains_key(&name));
+    assert_eq!(config.accounts.claude[&name].label, None);
+}
+
+#[test]
+fn inline_account_no_field_update_preserves_the_declaration() {
+    for fields in ["", "history = 'standalone', label = 'work'"] {
+        let (_dir, editor) = inline_editor(&format!("[accounts.codex]\nteam-1 = {{ {fields} }}\n"));
+        let result = editor.upsert_named_account(
+            &crate::ids::AgentKind::new_unchecked("codex"),
+            &"team-1".parse().unwrap(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "inline declaration must survive: {result:?}"
+        );
+        let path = editor.files.core_path();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("[accounts.codex.team-1]\n"), "{text}");
+        let config = MachineConfig::parse_text(path, &text, editor.files.agents_home()).unwrap();
+        let account = &config.accounts.codex["team-1"];
+        assert_eq!(
+            account.label.as_deref(),
+            (!fields.is_empty()).then_some("work")
+        );
+        assert_eq!(
+            account.history.as_str(),
+            if fields.is_empty() {
+                "shared"
+            } else {
+                "standalone"
+            }
+        );
+    }
+}
+
+#[test]
+fn inline_config_set_converts_account_and_other_containers() {
+    for (seed, key, value, expected) in [
+        (
+            "[accounts.codex]\nteam-1 = { history = 'shared' }\n",
+            "accounts.codex.team-1.label",
+            "work",
+            "[accounts.codex]\n\n[accounts.codex.team-1]\nhistory = 'shared'\nlabel = \"work\"\n",
+        ),
+        (
+            "harness = { auto_compact = 'off' } # harness\n\n[notifications]\n",
+            "harness.auto_compact",
+            "200k",
+            "[harness] # harness\nauto_compact = \"200k\"\n\n[notifications]\n",
+        ),
+    ] {
+        let (_dir, editor) = inline_editor(seed);
+        let result = editor.set(key, value);
+        assert!(
+            result.is_ok(),
+            "inline config path must be editable: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(editor.files.core_path()).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn non_table_account_segment_still_fails_with_document_shape() {
+    let (_dir, editor) = inline_editor("[accounts]\nclaude = 'not a table'\n");
+    assert!(matches!(
+        editor.upsert_named_account(
+            &crate::ids::AgentKind::new_unchecked("claude"),
+            &"personal".parse().unwrap(),
+            None,
+            None,
+            None,
+        ),
+        Err(ConfigEditErr::DocumentShape { segment }) if segment == "claude"
+    ));
+}
+
+#[test]
+fn inline_account_use_converts_the_selection_table() {
+    let (_dir, editor) = inline_editor("[accounts]\nuse = { claude = 'work' } # selection\n");
+    let result = editor.use_account(
+        &crate::ids::AgentKind::new_unchecked("claude"),
+        &"personal".parse().unwrap(),
+    );
+    assert!(
+        result.is_ok(),
+        "inline selection must be editable: {result:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(editor.files.core_path()).unwrap(),
+        "[accounts]\n\n[accounts.use] # selection\nclaude = \"personal\"\n"
+    );
+}
+
+#[test]
+fn inline_account_removal_drops_only_empty_provider_tables() {
+    for seed in [
+        "[accounts]\ncodex = { team-1 = {}, team-2 = {} }\n",
+        "accounts = { codex = { team-1 = {}, team-2 = {} } }\n",
+    ] {
+        let (_dir, editor) = inline_editor(seed);
+        let kind = crate::ids::AgentKind::new_unchecked("codex");
+        let result = editor.remove_named_account(&kind, &"team-1".parse().unwrap());
+        assert!(
+            matches!(result, Ok(true)),
+            "inline account must be removable: {result:?}"
+        );
+        let text = std::fs::read_to_string(editor.files.core_path()).unwrap();
+        assert!(
+            !text.contains("team-1") && text.contains("team-2 = {}"),
+            "{text}"
+        );
+        editor
+            .remove_named_account(&kind, &"team-2".parse().unwrap())
+            .unwrap();
+        let text = std::fs::read_to_string(editor.files.core_path()).unwrap();
+        assert!(
+            !text.contains("codex"),
+            "empty provider table remains: {text}"
+        );
+    }
+}
+
+#[test]
+fn inline_first_account_is_placed_beside_its_section() {
+    for seed in [
+        "[accounts]\ncodex = { team-2 = {} }\n\n[notifications]\n# tail\n",
+        "accounts = { codex = { team-2 = {} } }\n\n[notifications]\n# tail\n",
+    ] {
+        let (_dir, editor) = inline_editor(seed);
+        let result = editor.upsert_named_account(
+            &crate::ids::AgentKind::new_unchecked("codex"),
+            &"team-1".parse().unwrap(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "inline provider must allow a first add: {result:?}"
+        );
+        let text = std::fs::read_to_string(editor.files.core_path()).unwrap();
+        assert!(
+            text.contains("team-2 = {}\n\n[accounts.codex.team-1]\n\n[notifications]\n# tail\n"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");

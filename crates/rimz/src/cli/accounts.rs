@@ -500,8 +500,7 @@ fn add(
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
     let existing = catalog.select(kind, &name).ok();
     let declaring = existing.is_none();
-    // The login under the requested declaration, which reaches the config
-    // file only once the home is reconciled to it.
+    // Resolve the requested history mode without changing the recorded declaration.
     let mut accounts = machine.accounts.clone();
     if let Some(declared) = accounts.named_mut(kind) {
         let account = declared
@@ -552,10 +551,11 @@ fn add(
     // Sound: `select` answers a non-default name only with a declared home.
     let named_home = login.home().expect("a named account has a home");
     rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
-    // A first declaration is written before the home changes, so a rerun
-    // finds it; mode and label updates wait until the home is reconciled.
+    // First declarations precede home creation; rerun edits are checked before
+    // any home changes and written only after reconciliation succeeds.
+    let editor = ConfigEditor::machine();
     let write_declaration = || {
-        ConfigEditor::machine().upsert_named_account(
+        editor.upsert_named_account(
             kind,
             &name,
             home_flag.as_deref().filter(|_| declaring),
@@ -565,6 +565,8 @@ fn add(
     };
     if declaring {
         write_declaration()?;
+    } else if history.is_some() || label.is_some() {
+        editor.check_named_account_update(kind, &name, history, label.as_deref())?;
     }
     let home = login.home().expect("a named account has a home");
     std::fs::create_dir_all(home)
@@ -575,7 +577,10 @@ fn add(
         rimz::room::other_live_agents_on(&account, &[]).ok()
     })?;
     if !declaring && (history.is_some() || label.is_some()) {
-        write_declaration()?;
+        write_declaration().with_context(|| {
+            let mode = if login.shares_history() { "shared" } else { "standalone" };
+            format!("{kind} account `{name}` home already matches the requested `{mode}` history mode; rerun the same command to record it in config.toml")
+        })?;
     }
     let mut out = render::out();
     if let Some(shared) = shared {

@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use toml_edit::{Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{
+    Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, RawString, Table, TableLike, Value,
+};
 
 use crate::disk::atomic::write_bytes_atomically;
 
@@ -147,6 +149,7 @@ impl ConfigEditor {
     /// Declare `[accounts.<kind>.<name>]`, or set the given fields of a
     /// declared one. An empty label removes that field. An account with no
     /// fields is written as an empty table so its defaults stay derived.
+    /// An inline table on the account's path becomes a standard table.
     pub fn upsert_named_account(
         &self,
         kind: &crate::ids::AgentKind,
@@ -155,6 +158,31 @@ impl ConfigEditor {
         history: Option<super::AccountHistory>,
         label: Option<&str>,
     ) -> Result<()> {
+        let text = self.named_account_text(kind, name, home, history, label)?;
+        write(self.files.core_path(), text.as_bytes())
+    }
+
+    /// Check the update [`Self::upsert_named_account`] would make to a
+    /// declared account, without writing it.
+    pub fn check_named_account_update(
+        &self,
+        kind: &crate::ids::AgentKind,
+        name: &crate::ids::LoginName,
+        history: Option<super::AccountHistory>,
+        label: Option<&str>,
+    ) -> Result<()> {
+        self.named_account_text(kind, name, None, history, label)
+            .map(|_| ())
+    }
+
+    fn named_account_text(
+        &self,
+        kind: &crate::ids::AgentKind,
+        name: &crate::ids::LoginName,
+        home: Option<&Path>,
+        history: Option<super::AccountHistory>,
+        label: Option<&str>,
+    ) -> Result<String> {
         let file = self.files.file(MachineConfigFileKind::Core);
         let text = read_config_or_template(file.path(), file.template())?;
         let mut doc = parse_document(file.path(), &text)?;
@@ -188,7 +216,7 @@ impl ConfigEditor {
             table_at_mut(&mut doc, &key)?.remove("label");
             validate_merged_text(file.path(), &doc.to_string(), self.files.agents_home())?;
         }
-        write(file.path(), doc.to_string().as_bytes())
+        Ok(doc.to_string())
     }
 
     /// Select an account for new rooms; `default` clears the machine override.
@@ -675,12 +703,114 @@ fn parse_document(path: &Path, text: &str) -> Result<DocumentMut> {
 
 /// The table at `path`, created as an empty table where the document has none.
 fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut Table> {
+    convert_inline_tables(doc, path)?;
     let position = if !path.is_empty() && item_at(doc, path).is_none() {
         place_new_table(doc, path).position
     } else {
         0
     };
     placed_table_at_mut(doc, path, position)
+}
+
+/// Convert only existing containers on the path, before table-placement decisions.
+fn convert_inline_tables(doc: &mut DocumentMut, path: &[String]) -> Result<()> {
+    let mut table = doc.as_table_mut();
+    // The renderer starts root-level tables at zero, even without a stored position.
+    let mut position = table.position().unwrap_or(0);
+    for segment in path {
+        let Some((mut key, item)) = table.get_key_value_mut(segment) else {
+            return Ok(());
+        };
+        if let Item::Value(Value::InlineTable(inline)) = item {
+            let above = decor_text(key.leaf_decor().prefix()).trim_start_matches('\n');
+            let mut block = inline_into_block(std::mem::take(inline), above);
+            key.leaf_decor_mut().clear();
+            block.set_position(Some(position));
+            *item = Item::Table(block);
+        }
+        table = item
+            .as_table_mut()
+            .ok_or_else(|| ConfigEditErr::DocumentShape {
+                segment: segment.clone(),
+            })?;
+        position = table.position().unwrap_or(position);
+    }
+    Ok(())
+}
+
+/// `inline` as a standard table that keeps every comment: `above`, the
+/// lines over its key, over the header, and each entry's comments over or
+/// beside that entry's line.
+fn inline_into_block(mut inline: InlineTable, above: &str) -> Table {
+    let mut decor = Decor::default();
+    // An unset prefix lets the renderer omit the blank line before the file's first table.
+    if !above.trim().is_empty() {
+        decor.set_prefix(format!("\n{above}"));
+    }
+    let mut header_suffix = decor_text(inline.decor().suffix()).to_owned();
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (key, value) in inline.iter_mut() {
+        let mut over = String::new();
+        for (same_line, comment) in decor_comments(key.leaf_decor().prefix()) {
+            match entries.last_mut() {
+                // A comment after the previous entry's comma annotates that entry.
+                Some((_, beside)) if same_line => push_comment(beside, true, comment),
+                _ => {
+                    over.push_str(comment);
+                    over.push('\n');
+                }
+            }
+        }
+        let mut beside = String::new();
+        for (same_line, comment) in decor_comments(value.decor().suffix()) {
+            push_comment(&mut beside, same_line, comment);
+        }
+        entries.push((over, beside));
+    }
+    let trailing = decor_comments(Some(inline.trailing()));
+    if let Some((_, beside)) = entries.last_mut() {
+        trailing.for_each(|(same_line, comment)| push_comment(beside, same_line, comment));
+    } else {
+        trailing.for_each(|(_, comment)| push_comment(&mut header_suffix, false, comment));
+    }
+    decor.set_suffix(header_suffix);
+    // `into_table` resets each entry's decor and keeps each entry a value.
+    let mut block = inline.into_table();
+    for ((mut key, item), (over, beside)) in block.iter_mut().zip(entries) {
+        key.leaf_decor_mut().set_prefix(over);
+        if let Some(value) = item.as_value_mut() {
+            value.decor_mut().set_suffix(beside);
+        }
+    }
+    *block.decor_mut() = decor;
+    block
+}
+
+fn decor_text(raw: Option<&RawString>) -> &str {
+    raw.and_then(RawString::as_str).unwrap_or_default()
+}
+
+/// The comment lines in decor text, each flagged when it sits on the line
+/// the text starts on.
+fn decor_comments(raw: Option<&RawString>) -> impl Iterator<Item = (bool, &str)> {
+    decor_text(raw)
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line = line.trim_start();
+            line.starts_with('#').then_some((index == 0, line))
+        })
+}
+
+/// Append `comment` to a decor suffix: beside the line when it shared one
+/// and nothing is there yet, otherwise on a line of its own.
+fn push_comment(suffix: &mut String, same_line: bool, comment: &str) {
+    suffix.push(if same_line && suffix.is_empty() {
+        ' '
+    } else {
+        '\n'
+    });
+    suffix.push_str(comment);
 }
 
 /// [`table_at_mut`], giving each table it creates `position`.
@@ -845,9 +975,9 @@ fn for_each_table_mut(table: &mut Table, visit: &mut impl FnMut(&mut Table)) {
 
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
     let (leaf, parents) = path.split_last()?;
-    let mut table = doc.as_table();
+    let mut table: &dyn TableLike = doc.as_table();
     for segment in parents {
-        table = table.get(segment)?.as_table()?;
+        table = table.get(segment)?.as_table_like()?;
     }
     table.get(leaf)
 }
@@ -1399,6 +1529,7 @@ fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
 
 fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> Result<()> {
     let (leaf, parents) = path.split_last().expect("validated key has a leaf");
+    convert_inline_tables(doc, parents)?;
     let mut item = value_to_item(value);
     let old = item_at(doc, path);
     let old_position = old.and_then(Item::as_table).and_then(Table::position);

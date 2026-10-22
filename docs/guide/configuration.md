@@ -25,7 +25,7 @@ rimz config set timezone "America/New_York"    # transcript times, scheduling, a
 
 `set` edits one real file, and knowing which file and how is what makes it safe to run.
 
-It takes a dotted key and routes it to the file that owns it: `theme.*` to `theme.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`. A key RimZ does not know is refused, so a typo never reaches the file. The edit itself is in place, through `toml_edit`, so your comments and formatting survive. RimZ then re-validates the whole result and writes it as a temp file renamed over the original, so a crash mid-write never leaves half a file.
+It takes a dotted key and routes it to the file that owns it: `theme.*` to `theme.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`. A key RimZ does not know is refused, so a typo never reaches the file. The edit itself is in place, through `toml_edit`, so your comments and surrounding formatting survive. RimZ then re-validates the whole result and writes it as a temp file renamed over the original, so a crash mid-write never leaves half a file.
 
 What lands is byte-for-byte the file you would have edited by hand, which is what makes undoing ordinary: run `set` again with the old value, or delete the line to fall back to the default.
 
