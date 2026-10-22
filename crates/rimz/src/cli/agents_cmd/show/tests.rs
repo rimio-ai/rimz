@@ -32,6 +32,30 @@ fn run(status: RunStatus) -> RunRecord {
 }
 
 #[test]
+fn show_model_names_the_tier_and_every_pass() {
+    let mut state = rimz::testkit::agent_state("codex", "coder", jiff::Timestamp::UNIX_EPOCH);
+    state.model = Some("astra".into());
+    state.tier = Some(
+        serde_json::from_value(serde_json::json!({
+            "tier": "senior", "model": "astra",
+            "unbuildable": [{"model": "opus", "error": "user-only skill; enable model invocation"}],
+            "skipped": [{"model": "fable", "reason": "logged_out"}]
+        }))
+        .unwrap(),
+    );
+    let mut entry = entry();
+    entry.model = super::super::report::model_report(&state);
+    let text = strip(|w| render_agent_section(w, &entry));
+    assert!(text.contains("astra (senior; opus: not buildable: user-only skill; enable model invocation; fable: logged out)"), "{text}");
+    state.tier.as_mut().unwrap().unbuildable.clear();
+    state.tier.as_mut().unwrap().skipped.clear();
+    entry.model = super::super::report::model_report(&state);
+    let text = strip(|w| render_agent_section(w, &entry));
+    assert!(text.contains("astra (senior)"), "{text}");
+    assert!(!text.contains("passed"));
+}
+
+#[test]
 fn card_projection_show_live_run_duration_moves_without_exit() {
     let run = run(RunStatus::Running);
     for secs in [120, 180] {

@@ -370,7 +370,12 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
         facts.push(profile.clone());
     }
     if let Some(model) = &agent.model.label {
-        facts.push(model.clone());
+        let mut model = model.clone();
+        if let Some(tier) = &agent.model.tier {
+            let passes: String = tier.passes().map(|pass| format!("; {pass:#}")).collect();
+            model.push_str(&format!(" ({}{passes})", tier.tier));
+        }
+        facts.push(model);
     }
     let address = if handle == agent.handle {
         String::new()

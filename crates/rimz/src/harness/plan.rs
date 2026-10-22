@@ -972,6 +972,10 @@ pub fn plan_supervised_launch(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchFinalizeWarning {
+    TierMoved {
+        profile: String,
+        stamp: crate::agents::TierStamp,
+    },
     LaterModelWins {
         profile: String,
         setting: String,
@@ -992,6 +996,20 @@ pub enum LaunchFinalizeWarning {
 impl fmt::Display for LaunchFinalizeWarning {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TierMoved { profile, stamp } => {
+                let passes = stamp
+                    .passes()
+                    .map(|pass| format!("{pass:#}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                write!(
+                    formatter,
+                    "warning: `{profile}` tier {} chose {}; passed {}",
+                    stamp.tier,
+                    stamp.model,
+                    passes.replace(['\r', '\n'], " ")
+                )
+            }
             Self::LaterModelWins {
                 profile,
                 setting,
@@ -1096,6 +1114,17 @@ pub fn finalize_launch_layout(
     let mut warnings = Vec::new();
     for cell in layout.agent_cells_mut() {
         finalize_agent_cell(cell, options, &mut warnings)?;
+        if let Some(stamp) = cell.launch.tier.as_ref().filter(|stamp| stamp.moved()) {
+            warnings.push(LaunchFinalizeWarning::TierMoved {
+                profile: cell
+                    .launch
+                    .role
+                    .as_ref()
+                    .or(cell.launch.profile.as_ref())
+                    .map_or_else(|| cell.kind.to_string(), Clone::clone),
+                stamp: stamp.as_ref().clone(),
+            });
+        }
     }
 
     if let Some(limit) = options.max_turns {

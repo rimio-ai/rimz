@@ -23,6 +23,26 @@ fn card_row(card: AgentCard) -> SidebarRow {
 }
 
 #[test]
+fn model_report_carries_the_launch_tier_only_when_stamped() {
+    let mut state = agent("model");
+    assert!(
+        serde_json::to_value(model_report(&state))
+            .unwrap()
+            .get("tier")
+            .is_none()
+    );
+    let stamp = serde_json::json!({
+        "tier": "senior", "model": "astra",
+        "unbuildable": [{"model": "opus", "error": "enable the skill"}]
+    });
+    state.tier = Some(serde_json::from_value(stamp.clone()).unwrap());
+    assert_eq!(
+        serde_json::to_value(model_report(&state)).unwrap()["tier"],
+        stamp
+    );
+}
+
+#[test]
 fn card_projection_description_matches_shared_rule() {
     let now = Timestamp::UNIX_EPOCH;
     let state = agent("description");

@@ -181,6 +181,7 @@ fn write_spec(w: &mut impl Write, report: &TeamReport) -> Result<()> {
                     crate::cli::profile_report::model_label(model, role.tier, role.tier_fallback)
                 }),
                 leader: report.leader.as_deref() == Some(role.role.as_str()),
+                tier: None,
             })
             .collect(),
     )

@@ -180,6 +180,8 @@ A trailing launch prompt attaches to exactly one agent identity: a named team's 
 
 A fresh tier walk records every entry passed ahead of the pick: `unbuildable` holds the family's full build error, and `skipped` holds usage reasons. Build passes remain with usage routing off and when every available family is spent and the walk retries its first buildable entry. Exclusions ordered after the pick are static validation information, not moves. Any move writes one `tier_fallback` assist at the placement boundary below.
 
+`finalize_launch_layout` returns one `LaunchFinalizeWarning::TierMoved` per moved cell, including every pass and full build error. Interactive and supervised fresh launches print it once; headless judges retain it in their record. Cohort matching also finalizes a freshly routed layout before restoring recorded posture, so its launch printer suppresses these move warnings for `--continue` and an exact-id `--resume <id>`; a bare `--resume` opens the provider's picker on the freshly routed layout and prints them. Lane restore and rebirth do not print finalize warnings. Receipts and agent reports read the preserved stamp independently.
+
 A rule that must hold for every launch (a durable record, a preflight, a stamp) has to hold on each of these paths. Paths rebuilding from profiles or seeds already in memory need the same checks as entry-point resolution, so they are the ones a new rule misses. The last column is where each path writes its `tier_fallback` assist ([loops.md § The assist log](./loops.md#the-assist-log)).
 
 | Path | Builds its layout in | Records a tier fallback |

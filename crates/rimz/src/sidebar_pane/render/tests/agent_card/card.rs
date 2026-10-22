@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn tier_move_marker_follows_the_model_at_exact_width_boundaries() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("route the work"),
+    );
+    codex.model = Some("astra".into());
+    codex.tier = Some(
+        serde_json::from_value(serde_json::json!({
+            "tier": "senior", "model": "astra",
+            "unbuildable": [{"model": "opus", "error": "enable model invocation"}]
+        }))
+        .unwrap(),
+    );
+    for set in ["unicode", "nerd_font"] {
+        let mut snapshot = snapshot_with(vec![codex.clone()]);
+        snapshot.theme.glyphs.set = Some(set.into());
+        for width in [31, 32, 33, 45, 46, 47] {
+            let rendered = snapshot_to_screen(&snapshot, width, 15);
+            assert_eq!(
+                rendered.contains("astra ↪"),
+                width >= 32,
+                "{set}, {width}:\n{rendered}"
+            );
+            assert_eq!(
+                rendered.contains('↪'),
+                width >= 32,
+                "{set}, {width}:\n{rendered}"
+            );
+        }
+        if set == "unicode" {
+            assert_snapshot("tier_move_card", snapshot_to_screen(&snapshot, 46, 15));
+        }
+    }
+    codex.tier.as_mut().unwrap().unbuildable.clear();
+    assert!(!snapshot_to_screen(&snapshot_with(vec![codex.clone()]), 46, 15).contains('↪'));
+    codex
+        .tier
+        .as_mut()
+        .unwrap()
+        .unbuildable
+        .push(crate::agents::TierUnbuildable {
+            model: "opus".into(),
+            error: "enable model invocation".into(),
+        });
+    codex.model = None;
+    assert!(!snapshot_to_screen(&snapshot_with(vec![codex]), 46, 15).contains('↪'));
+}
+
+#[test]
 fn idle_agent_card_lead_uses_soft_gray_when_unselected() {
     let idle = agent(
         "idle-1",

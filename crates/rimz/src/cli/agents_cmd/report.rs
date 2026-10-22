@@ -95,6 +95,8 @@ pub(super) struct ModelReport {
     pub id: Option<String>,
     pub effort: Option<String>,
     pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Box<rimz::agents::TierStamp>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -562,7 +564,12 @@ pub(super) fn model_report(agent: &AgentState) -> ModelReport {
         window.map_or_else(|| name.clone(), |window| format!("{name}[{window}]"))
     });
     let label = model_label(display.as_deref(), effort.as_deref());
-    ModelReport { id, effort, label }
+    ModelReport {
+        id,
+        effort,
+        label,
+        tier: agent.tier.clone(),
+    }
 }
 
 fn model_label(model: Option<&str>, effort: Option<&str>) -> Option<String> {
