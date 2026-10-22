@@ -1199,11 +1199,11 @@ impl MuxBackend for ZellijBackend {
         // `name [Created Ns ago] (EXITED - attach to resurrect)` for stopped
         // sessions. `list_sessions` is the live-session set used by `rimz list`
         // and `rimz reload`, so filter resurrectable corpses out here.
-        let sessions = listing
+        let mut sessions = listing
             .lines()
             .filter_map(live_session_name_from_line)
             .collect::<Vec<_>>();
-        self.check_unlisted_sockets(&spec, &sessions)?;
+        self.check_unlisted_sockets(&spec, &mut sessions)?;
         Ok(sessions)
     }
 
