@@ -642,7 +642,7 @@ fn status_orders_details_and_predicts_the_next_query_from_each_state() {
         expected.extend([
             "peak",
             "last query",
-            "requests",
+            "editor requests",
             "restarts",
             "leases",
             "check on save",

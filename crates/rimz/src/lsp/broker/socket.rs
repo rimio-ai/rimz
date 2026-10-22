@@ -277,7 +277,6 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
             if model.request_phase == RequestPhase::Serving {
-                model.entry.request_count = model.entry.request_count.saturating_add(1);
                 model.entry.last_request_at_ms = Some(crate::utils::time::unix_now_ms());
                 registry::publish(&model.entry)?;
             }

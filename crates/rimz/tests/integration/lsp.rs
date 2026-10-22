@@ -2787,7 +2787,14 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     assert_eq!(query("symbol")["result"], json!([]));
     let status = rpc(json!({"op": "status"}));
     assert_eq!(status["state"], "ready");
-    assert_eq!(status["request_count"], 1);
+    assert_eq!(status["request_count"], 0);
+    assert!(status["last_request_at_ms"].is_u64());
+    let published: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("entry.json")).unwrap()).unwrap();
+    assert_eq!(
+        published["last_request_at_ms"],
+        status["last_request_at_ms"]
+    );
     let server_pid = status["server_pid"].as_u64().unwrap();
     assert_eq!(
         std::fs::read_to_string(format!("/proc/{server_pid}/oom_score_adj"))
