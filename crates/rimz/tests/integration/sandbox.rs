@@ -113,12 +113,10 @@ fn provider_sandbox_config_set_does_not_probe() {
     );
 }
 
-#[test]
 #[cfg(target_os = "linux")]
-fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
-    let env = Env::new();
+fn drainer_lease_command(env: &Env) -> std::process::Command {
     env.record(&env.project_root);
-    enable(&env);
+    enable(env);
     let shims = env.home_root.join("lease-bin");
     crate::common::write_path_shim(
         &shims,
@@ -130,19 +128,31 @@ fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
         "claude",
         "case \"$1\" in --version) echo 'claude 9.0.0'; exit 0;; auth) exit 0;; esac; printf ready > \"$RIMZ_TEST_PROVIDER_READY\"; while [ ! -f \"$RIMZ_TEST_PROVIDER_EXIT\" ]; do /usr/bin/sleep 0.02; done",
     );
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let mut command = env.rimz();
+    command
+        .args(exec_args(env, &request))
+        .env("PATH", path_with_front(&shims))
+        .env("SHELL", write_fake_login_shell(env, "lease-shell", &[]))
+        .env(
+            "RIMZ_TEST_PROVIDER_READY",
+            env.project_root.join("provider-ready"),
+        )
+        .env(
+            "RIMZ_TEST_PROVIDER_EXIT",
+            env.project_root.join("provider-exit"),
+        )
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100");
+    command
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
+    let env = Env::new();
     let ready = env.project_root.join("provider-ready");
     let exit = env.project_root.join("provider-exit");
-    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
-    let mut wrapper = env
-        .rimz()
-        .args(exec_args(&env, &request))
-        .env("PATH", path_with_front(&shims))
-        .env("SHELL", write_fake_login_shell(&env, "lease-shell", &[]))
-        .env("RIMZ_TEST_PROVIDER_READY", &ready)
-        .env("RIMZ_TEST_PROVIDER_EXIT", &exit)
-        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
-        .spawn()
-        .unwrap();
+    let mut wrapper = drainer_lease_command(&env).spawn().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !ready.exists() {
         assert!(
@@ -197,6 +207,94 @@ fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_wrapper_holds_the_same_drainer_across_the_park_handoff() {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    let mut command = drainer_lease_command(&env);
+    let barrier = env.runtime_paths().sock_dir.join("lease-handoff.sock");
+    let listener = UnixListener::bind(&barrier).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut wrapper = command
+        .env("RIMZ_TEST_DRAINER_LEASE_HANDOVER", &barrier)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut release = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break stream;
+        }
+        assert!(
+            wrapper.try_wait().unwrap().is_none(),
+            "wrapper exited before the handoff"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "parked image never reached the handoff"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let socket = env.runtime_paths().hook_drainer_socket_path();
+    let probe = || {
+        let stream = UnixStream::connect(&socket);
+        assert!(
+            stream.is_ok(),
+            "the parked image must inherit a live drainer lease: {stream:?}"
+        );
+        let mut stream = stream.unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let pid = nix::sys::socket::getsockopt(&stream, nix::sys::socket::sockopt::PeerCredentials)
+            .unwrap()
+            .pid();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::json!({"through":0,"reply_for":null})
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        serde_json::from_str::<rimz::harness::hook_drain::DrainReceipt>(&line).unwrap();
+        pid as u32
+    };
+    let before = probe();
+    // The probe is closed before this window: only the wrapper may keep the lease alive.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        rimz::proc::process_is_live(before, None),
+        "the inherited lease must keep the same drainer alive while the parked image is held"
+    );
+    assert_eq!(
+        probe(),
+        before,
+        "the same drainer must still answer requests"
+    );
+    release.write_all(&[1]).unwrap();
+    std::fs::write(env.project_root.join("provider-exit"), "exit").unwrap();
+    assert!(wrapper.wait().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rimz::disk::lock::WorkspaceLock::try_acquire(&env.runtime_paths().hook_drainer_lock())
+        .unwrap()
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "provider exit must release the lease"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !socket.exists(),
+        "the released drainer must unlink its socket"
+    );
 }
 
 fn child_cap_launch(explicit_host: bool) {

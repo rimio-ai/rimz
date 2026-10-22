@@ -106,6 +106,7 @@ fn unsupported_park_state_names_the_file_and_refuses() {
         entered_worktree: None,
         cwd: dir.path().to_owned(),
         isolation: rimz::config::Isolation::Host,
+        drainer_lease_fd: None,
         workspace: super::super::tests::test_workspace(dir.path()),
     };
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &state).unwrap();
@@ -122,6 +123,15 @@ fn unsupported_park_state_names_the_file_and_refuses() {
     assert_eq!(
         restored["workspace"],
         serde_json::to_value(&state.workspace).unwrap()
+    );
+    assert!(restored.get("drainer_lease_fd").is_none());
+    let mut inherited = restored;
+    inherited["drainer_lease_fd"] = 42.into();
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &inherited).unwrap();
+    let restored = serde_json::to_value(ParkState::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        restored["drainer_lease_fd"], 42,
+        "park state must retain the inherited lease fd"
     );
     state.relaunch_cap = 256;
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &state).unwrap();
@@ -409,6 +419,7 @@ fn park_errors_before_supervision_fail_the_run_and_end_the_provider() {
             entered_worktree: None,
             cwd: dir.path().into(),
             isolation: rimz::config::Isolation::Host,
+            drainer_lease_fd: None,
             workspace: workspace.clone(),
         };
         let path = paths.park_state_file(Some("test"), None, std::process::id());
