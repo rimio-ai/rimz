@@ -4,6 +4,7 @@ use crate::common::Env;
 use assert_cmd::assert::OutputAssertExt;
 use predicates::prelude::PredicateBooleanExt;
 use rimz::config::{MachineConfig, effective};
+use rimz::lsp::registry::{self, State, StopReason};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -768,6 +769,187 @@ fn lsp_stop_acknowledges_alarms_and_explains_empty_selections() {
         json!({"op":"stop", "reason":"checkout removed"}),
     );
     broker.wait().unwrap();
+}
+
+fn scripted_lsp_stop(
+    env: &Env,
+    before: State,
+    after: Option<State>,
+    args: &[&str],
+) -> (std::process::Output, Vec<String>) {
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let root = env.project_root.canonicalize().unwrap();
+    let pid = std::process::id();
+    let entry = registry::Entry {
+        kind: None,
+        editor_check_on_save: None,
+        root: root.clone(),
+        project: Some(root),
+        server: "rust".into(),
+        nonce: "scripted-stop".into(),
+        broker_pid: pid,
+        broker_start_token: rimz::proc::process_start_token(pid).unwrap(),
+        server_pid: None,
+        server_start_token: None,
+        state: before,
+        started_at_ms: 0,
+        ready_at_ms: None,
+        estimate_bytes: 8000,
+        settings_hash: "scripted-stop".into(),
+        request_count: 0,
+        last_request_at_ms: None,
+        peak_rss_kb: 5,
+        restarts: 0,
+        last_crash: None,
+        leases: Vec::new(),
+        attached: Vec::new(),
+    };
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(registry::key(&entry.root, &entry.server).unwrap());
+    rimz::disk::atomic::write_temp_then_rename_cache(&directory.join("entry.json"), &entry)
+        .unwrap();
+    let listener = UnixListener::bind(directory.join("sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let broker = scope.spawn(|| {
+            let mut requests = Vec::new();
+            while !finished.load(Ordering::Relaxed) {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("scripted broker accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let op = request["op"].as_str().unwrap();
+                requests.push(op.to_owned());
+                let response = match op {
+                    "hello" => json!({"nonce": entry.nonce}),
+                    "stop" => {
+                        assert_eq!(request["reason"], "stopped by hand");
+                        json!({"ok": true, "nonce": entry.nonce})
+                    }
+                    "status" => match &after {
+                        Some(state) => {
+                            let mut current = entry.clone();
+                            current.state = state.clone();
+                            serde_json::to_value(current).unwrap()
+                        }
+                        None => json!({"nonce": entry.nonce}),
+                    },
+                    _ => panic!("unexpected scripted broker operation: {op}"),
+                };
+                writeln!(stream, "{response}").unwrap();
+            }
+            requests
+        });
+        let output = env.rimz().args(args).output();
+        finished.store(true, Ordering::Relaxed);
+        (output.unwrap(), broker.join().unwrap())
+    })
+}
+
+#[test]
+fn lsp_stop_fails_when_an_alarm_is_still_recorded() {
+    for args in [
+        vec!["lsp", "stop"],
+        vec!["lsp", "stop", "--server", "rust"],
+        vec!["lsp", "stop", "--all"],
+    ] {
+        let env = Env::new();
+        let root = env.project_root.canonicalize().unwrap();
+        let alarm = State::Dormant {
+            reason: Some(StopReason::MemoryPressure),
+            since_ms: 100,
+        };
+        let (output, requests) = scripted_lsp_stop(&env, alarm.clone(), Some(alarm), &args);
+        output.assert().code(1).stdout("").stderr(format!(
+            "error: rust ({}): not acknowledged, still dormant: memory pressure while its broker finishes stopping the server (run rimz lsp stop again in a second)\n",
+            root.display()
+        ));
+        assert_eq!(requests, ["hello", "stop", "status"]);
+    }
+}
+
+#[test]
+fn lsp_stop_fails_when_a_running_row_has_crashed() {
+    let env = Env::new();
+    let (output, requests) = scripted_lsp_stop(
+        &env,
+        State::Ready,
+        Some(State::Dormant {
+            reason: Some(StopReason::Crashed),
+            since_ms: 100,
+        }),
+        &["lsp", "stop"],
+    );
+    output
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicates::str::contains(
+            "not acknowledged, still dormant: crashed",
+        ));
+    assert_eq!(requests, ["hello", "stop", "status"]);
+}
+
+#[test]
+fn lsp_stop_fails_when_a_non_alarm_row_has_crashed() {
+    let env = Env::new();
+    let (output, requests) = scripted_lsp_stop(
+        &env,
+        State::Dormant {
+            reason: Some(StopReason::Idle),
+            since_ms: 50,
+        },
+        Some(State::Dormant {
+            reason: Some(StopReason::Crashed),
+            since_ms: 100,
+        }),
+        &["lsp", "stop"],
+    );
+    output
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicates::str::contains(
+            "not acknowledged, still dormant: crashed",
+        ));
+    assert_eq!(requests, ["hello", "stop", "status"]);
+}
+
+#[test]
+fn lsp_stop_keeps_acknowledgment_when_status_is_unparseable() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    let (output, requests) = scripted_lsp_stop(
+        &env,
+        State::Dormant {
+            reason: Some(StopReason::MemoryPressure),
+            since_ms: 100,
+        },
+        None,
+        &["lsp", "stop"],
+    );
+    output.assert().success().stdout(format!(
+        "acknowledged rust ({}), was dormant: memory pressure\n",
+        root.display()
+    ));
+    assert_eq!(requests, ["hello", "stop", "status"]);
 }
 
 #[test]
