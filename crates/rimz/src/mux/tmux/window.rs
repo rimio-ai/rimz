@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::companion_layout::GridPane;
 use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
+use crate::mux::{PaneRect, ViewGeometry};
 
 use super::TmuxBackend;
 use super::options::{
@@ -40,6 +40,13 @@ struct TmuxPaneCell {
     width: u64,
     top: u64,
     height: u64,
+}
+
+struct NativePaneRect {
+    rect: PaneRect,
+    plain: bool,
+    floating: bool,
+    chrome: bool,
 }
 
 pub(super) struct OpenedWindow {
@@ -272,25 +279,26 @@ impl TmuxBackend {
         parse_fitted_panes(&String::from_utf8_lossy(&output.stdout))
     }
 
-    pub(super) fn companion_geometry(
+    fn pane_rectangles(
         &self,
         anchor: &PaneId,
-    ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
+        timeout: std::time::Duration,
+    ) -> Result<Option<Vec<NativePaneRect>>> {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
-        let output = self.cmd().args([
+        let output = match self.cmd().args([
             "list-panes", "-t", anchor.raw(), "-F",
             "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{@rimz_stack}|#{pane_start_command}",
-        ]).run_with_timeout(std::time::Duration::from_secs(2))?;
-        let mut work = Vec::new();
-        let mut chrome = Vec::new();
+        ]).run_with_timeout(timeout) {
+            Ok(output) => output,
+            Err(MuxErr::Command { stderr, .. }) if stderr.contains("can't find pane") => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let mut panes = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let fields = line.splitn(7, '|').collect::<Vec<_>>();
             let [cell, zoomed, floating, sidebar, command, stack, spawn] = fields.as_slice() else {
                 return Ok(None);
             };
-            if *zoomed == "1" || *floating == "1" || !stack.is_empty() {
-                return Ok(None);
-            }
             let Some(cell) = parse_tmux_pane_cell(cell) else {
                 return Ok(None);
             };
@@ -299,23 +307,70 @@ impl TmuxBackend {
                 .strip_prefix('%')
                 .and_then(|id| id.parse::<u64>().ok())
                 .is_none()
+                || cell.width == 0
+                || cell.height == 0
+                || cell.left.checked_add(cell.width).is_none()
+                || cell.top.checked_add(cell.height).is_none()
             {
                 return Ok(None);
             }
-            let pane = GridPane {
+            let pane = PaneRect {
                 pane_id: PaneId::from_parts(MuxName::Tmux, cell.pane_id),
                 x: cell.left,
                 y: cell.top,
                 cols: cell.width,
                 rows: cell.height,
             };
-            if *sidebar == "1"
-                || crate::pane::command_is_sidebar_chrome(command)
-                || spawn_command_is_sidebar_serve(spawn)
-            {
-                chrome.push(pane);
+            panes.push(NativePaneRect {
+                rect: pane,
+                plain: *zoomed != "1" && stack.is_empty(),
+                floating: *floating == "1",
+                chrome: *sidebar == "1"
+                    || crate::pane::command_is_sidebar_chrome(command)
+                    || spawn_command_is_sidebar_serve(spawn),
+            });
+        }
+        Ok(Some(panes))
+    }
+
+    pub(super) fn read_view_geometry(
+        &self,
+        anchor: &PaneId,
+        timeout: std::time::Duration,
+    ) -> Result<Option<ViewGeometry>> {
+        let Some(listed) = self.pane_rectangles(anchor, timeout)? else {
+            return Ok(None);
+        };
+        let mut panes = Vec::new();
+        for pane in listed.into_iter().filter(|pane| !pane.floating) {
+            if !pane.plain {
+                return Ok(None);
+            }
+            panes.push(pane.rect);
+        }
+        if !panes.iter().any(|pane| pane.pane_id == *anchor) {
+            return Ok(None);
+        }
+        Ok(Some(ViewGeometry { panes, gap: 1 }))
+    }
+
+    pub(super) fn companion_geometry(
+        &self,
+        anchor: &PaneId,
+    ) -> Result<Option<(Vec<PaneRect>, Vec<PaneRect>)>> {
+        let Some(listed) = self.pane_rectangles(anchor, std::time::Duration::from_secs(2))? else {
+            return Ok(None);
+        };
+        let mut work = Vec::new();
+        let mut chrome = Vec::new();
+        for pane in listed {
+            if !pane.plain || pane.floating {
+                return Ok(None);
+            }
+            if pane.chrome {
+                chrome.push(pane.rect);
             } else {
-                work.push(pane);
+                work.push(pane.rect);
             }
         }
         if !work.iter().any(|pane| pane.pane_id == *anchor) {
@@ -327,8 +382,8 @@ impl TmuxBackend {
     pub(super) fn balance_companion_grid(
         &self,
         anchor: &PaneId,
-        before: &[GridPane],
-        chrome_before: &[GridPane],
+        before: &[PaneRect],
+        chrome_before: &[PaneRect],
     ) -> Result<()> {
         let Some((panes, chrome)) = self.companion_geometry(anchor)? else {
             return Ok(());
@@ -1359,13 +1414,13 @@ impl TmuxBackend {
 
 /// Encode only the supported columns and optional full-height left sidebar.
 /// A single native layout replacement avoids ancestor-dependent resize effects.
-pub(super) fn companion_tmux_layout(panes: &[GridPane], chrome: &[GridPane]) -> Option<String> {
+pub(super) fn companion_tmux_layout(panes: &[PaneRect], chrome: &[PaneRect]) -> Option<String> {
     let first = panes.first()?;
     let right = panes.iter().map(|pane| pane.x + pane.cols).max()?;
     let bottom = panes.iter().map(|pane| pane.y + pane.rows).max()?;
     let width = right - first.x;
     let height = bottom - first.y;
-    let leaf = |pane: &GridPane| {
+    let leaf = |pane: &PaneRect| {
         Some(format!(
             "{}x{},{},{},{}",
             pane.cols,

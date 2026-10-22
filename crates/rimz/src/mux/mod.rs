@@ -45,6 +45,24 @@ pub use width::{
 };
 pub use zellij::ZellijBackend;
 
+/// Outer pane rectangle, including backend-owned frame cells where applicable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneRect {
+    pub pane_id: PaneId,
+    pub x: u64,
+    pub y: u64,
+    pub cols: u64,
+    pub rows: u64,
+}
+
+/// Tiled terminal panes of one view, including its sidebar but not plugins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewGeometry {
+    pub panes: Vec<PaneRect>,
+    /// Cells separating abutting outer rectangles: zero on Zellij, one on tmux.
+    pub gap: u64,
+}
+
 /// Ambient pane and session identity, not multiplexer endpoint configuration.
 pub(crate) const AMBIENT_MUX_ENV: [&str; 5] = [
     "TMUX",
@@ -993,6 +1011,15 @@ pub enum SessionLiveness {
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
+    /// Read the anchor's tiled view. `None` means it is absent or not plain tiling
+    /// (fullscreen, zoomed, suppressed, stacked, or missing geometry).
+    fn view_geometry(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        timeout: Duration,
+    ) -> Result<Option<ViewGeometry>>;
+
     /// Pin a pane to close when its command exits, whatever the user's retention
     /// setting. The default is for backends whose managed panes already close on exit.
     fn close_pane_on_exit(&self, _pane: &PaneId) -> Result<()> {

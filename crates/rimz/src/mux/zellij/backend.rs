@@ -24,7 +24,7 @@ use super::{
 };
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::companion_layout::{GridPane, balance, plan_append};
+use crate::mux::companion_layout::{balance, plan_append};
 use crate::mux::tab_name::{TabNameIntent, TabOwnerRecord, ViewNaming};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
@@ -35,6 +35,7 @@ use crate::mux::{
     SplitPlacement, SplitTarget, TabOptions, WidthStep, confirm_resume_tab_shapes,
     ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
+use crate::mux::{PaneRect, ViewGeometry};
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 use serde::Deserialize;
 
@@ -216,10 +217,10 @@ fn confirm_tab_action(mut probe: impl FnMut() -> Result<bool>) -> Result<bool> {
 }
 
 fn companion_grid_preserved(
-    before: &[GridPane],
-    chrome: &[GridPane],
-    panes: &[GridPane],
-    current_chrome: &[GridPane],
+    before: &[PaneRect],
+    chrome: &[PaneRect],
+    panes: &[PaneRect],
+    current_chrome: &[PaneRect],
 ) -> bool {
     current_chrome == chrome
         && before
@@ -235,8 +236,8 @@ struct CompanionStep {
 }
 
 fn companion_step(
-    panes: &[GridPane],
-    targets: &[GridPane],
+    panes: &[PaneRect],
+    targets: &[PaneRect],
     right: u64,
     bottom: u64,
 ) -> (u64, Option<CompanionStep>) {
@@ -276,47 +277,76 @@ impl ZellijBackend {
             .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION)
     }
 
-    fn companion_geometry(
+    fn listed_view_panes(
         &self,
         session: &str,
         anchor: &PaneId,
         timeout: Duration,
-    ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
+    ) -> Result<Option<Vec<RawListedPane>>> {
+        ensure_pane_backend(anchor, MuxName::Zellij)?;
         let listed = self.raw_listed_panes(session, timeout)?;
         let native = ZellijPaneId::try_from(anchor)
             .ok()
             .and_then(ZellijPaneId::terminal_id);
         let Some(tab) = listed
             .iter()
-            .find(|pane| !pane.is_plugin && Some(pane.id) == native)
+            .find(|pane| !pane.is_plugin && !pane.is_floating && Some(pane.id) == native)
             .and_then(|pane| pane.tab_id)
         else {
             return Ok(None);
         };
+        Ok(Some(
+            listed
+                .into_iter()
+                .filter(|pane| pane.tab_id == Some(tab))
+                .collect(),
+        ))
+    }
+
+    fn pane_rectangle(pane: &RawListedPane) -> Option<PaneRect> {
+        let (Some(x), Some(y), Some(cols), Some(rows)) =
+            (pane.pane_x, pane.pane_y, pane.pane_columns, pane.pane_rows)
+        else {
+            return None;
+        };
+        if cols == 0 || rows == 0 {
+            return None;
+        }
+        x.checked_add(cols)?;
+        y.checked_add(rows)?;
+        Some(PaneRect {
+            pane_id: PaneId::from_parts(
+                MuxName::Zellij,
+                format!(
+                    "{}_{id}",
+                    if pane.is_plugin { "plugin" } else { "terminal" },
+                    id = pane.id,
+                ),
+            ),
+            x,
+            y,
+            cols,
+            rows,
+        })
+    }
+
+    fn companion_geometry(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        timeout: Duration,
+    ) -> Result<Option<(Vec<PaneRect>, Vec<PaneRect>)>> {
+        let Some(listed) = self.listed_view_panes(session, anchor, timeout)? else {
+            return Ok(None);
+        };
         let mut work = Vec::new();
         let mut chrome = Vec::new();
-        for pane in listed.into_iter().filter(|pane| pane.tab_id == Some(tab)) {
+        for pane in listed {
             if pane.is_fullscreen || pane.is_suppressed {
                 return Ok(None);
             }
-            let (Some(x), Some(y), Some(cols), Some(rows)) =
-                (pane.pane_x, pane.pane_y, pane.pane_columns, pane.pane_rows)
-            else {
+            let Some(grid) = Self::pane_rectangle(&pane) else {
                 return Ok(None);
-            };
-            let grid = GridPane {
-                pane_id: PaneId::from_parts(
-                    MuxName::Zellij,
-                    format!(
-                        "{}_{id}",
-                        if pane.is_plugin { "plugin" } else { "terminal" },
-                        id = pane.id
-                    ),
-                ),
-                x,
-                y,
-                cols,
-                rows,
             };
             if pane.is_plugin
                 || pane.is_floating
@@ -336,14 +366,14 @@ impl ZellijBackend {
         &self,
         session: &str,
         anchor: &PaneId,
-        before: &[GridPane],
-        chrome: &[GridPane],
+        before: &[PaneRect],
+        chrome: &[PaneRect],
     ) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut previous_error = None;
         let mut confirmed_targets = None;
         let mut last_move: Option<CompanionStep> = None;
-        let bounds = |panes: &[GridPane]| {
+        let bounds = |panes: &[PaneRect]| {
             (
                 panes.iter().map(|pane| pane.x).min(),
                 panes.iter().map(|pane| pane.y).min(),
@@ -416,8 +446,8 @@ impl ZellijBackend {
         &self,
         session: &str,
         anchor: &PaneId,
-        panes: &[GridPane],
-        chrome: &[GridPane],
+        panes: &[PaneRect],
+        chrome: &[PaneRect],
         step: &CompanionStep,
         deadline: Instant,
     ) -> Result<bool> {
@@ -1066,6 +1096,31 @@ pub(super) fn live_tab_shapes(
 }
 
 impl MuxBackend for ZellijBackend {
+    fn view_geometry(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        timeout: Duration,
+    ) -> Result<Option<ViewGeometry>> {
+        let Some(listed) = self.listed_view_panes(session, anchor, timeout)? else {
+            return Ok(None);
+        };
+        let mut panes = Vec::new();
+        for pane in listed
+            .into_iter()
+            .filter(|pane| !pane.is_plugin && !pane.is_floating)
+        {
+            if pane.is_fullscreen || pane.is_suppressed {
+                return Ok(None);
+            }
+            let Some(rect) = Self::pane_rectangle(&pane) else {
+                return Ok(None);
+            };
+            panes.push(rect);
+        }
+        Ok(Some(ViewGeometry { panes, gap: 0 }))
+    }
+
     fn pane_content_size(
         &self,
         pane: &PaneId,
