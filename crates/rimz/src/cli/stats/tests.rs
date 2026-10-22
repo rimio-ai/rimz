@@ -1,4 +1,5 @@
 use super::*;
+use rimz::agents::spending::{EffortTally, EffortWindow};
 use rimz::theme::theme_glyphs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,8 @@ fn window_flag_accepts_each_mode_and_rejects_assists() {
         vec!["--json"],
         vec!["--agents"],
         vec!["--agents", "--json"],
+        vec!["--teams"],
+        vec!["--teams", "--json"],
         vec!["--subagents"],
         vec!["--subagents", "--json"],
         vec!["--refresh"],
@@ -29,9 +32,15 @@ fn window_flag_accepts_each_mode_and_rejects_assists() {
 
 #[test]
 fn agents_flag_conflicts_with_other_explicit_views() {
-    for flag in ["--subagents", "--refresh", "--assists"] {
+    for flag in ["--teams", "--subagents", "--refresh", "--assists"] {
         let error = StatsArgs::augment_args(clap::Command::new("stats"))
             .try_get_matches_from(["stats", "--agents", flag])
+            .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+    for flag in ["--agents", "--subagents", "--refresh", "--assists"] {
+        let error = StatsArgs::augment_args(clap::Command::new("stats"))
+            .try_get_matches_from(["stats", "--teams", flag])
             .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
@@ -92,6 +101,305 @@ fn full_panel_text(stats: &Stats, held: bool) -> String {
         panel::render_spend(&mut out, stats, 20_000, false, None, Window::Today, "\n").unwrap();
     }
     strip_ansi(std::str::from_utf8(&out).unwrap())
+}
+
+fn effort_role(tally: SpendTally, effort: EffortWindow) -> rimz::agents::spending::RoleTally {
+    rimz::agents::spending::RoleTally {
+        tally,
+        effort: EffortTally {
+            day: effort,
+            week: effort,
+            month: effort,
+            year: effort,
+        },
+    }
+}
+
+fn team_cache() -> ProviderSpendingCache {
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        refreshed_at_ms: (20_000 * 86_400 + 15 * 3_600) * 1_000,
+        ..Default::default()
+    };
+    cache.days.insert(20_000, day(1_000, 100.0));
+    cache.spending.total = every_window(tally(1_000, 100.0, 10));
+    cache.roles.recorded_since_secs = Some(20_000 * 86_400 + 12 * 3_600);
+    cache.roles.effort_since_secs = Some(20_000 * 86_400 + 13 * 3_600);
+    cache.roles.agents.insert(
+        "solo".into(),
+        effort_role(
+            every_window(tally(100, 20.0, 1)),
+            EffortWindow {
+                active_ms: 45_000,
+                ..Default::default()
+            },
+        ),
+    );
+    cache.roles.subagents.insert(
+        "child".into(),
+        effort_role(
+            every_window(tally(100, 20.0, 3)),
+            EffortWindow {
+                active_ms: 2_460_000,
+                ..Default::default()
+            },
+        ),
+    );
+    cache.roles.teams.insert(
+        "recon".into(),
+        [
+            ("coder", 30.0, 3, 10_800_000, 0, 5, 2),
+            ("planner", 20.0, 2, 7_200_000, 1, 2, 3),
+            ("reviewer", 10.0, 1, 4_320_000, 0, 2, 4),
+        ]
+        .into_iter()
+        .map(
+            |(role, usd, sessions, active_ms, from_user, from_teammates, to_teammates)| {
+                (
+                    role.into(),
+                    effort_role(
+                        every_window(tally(100, usd, sessions)),
+                        EffortWindow {
+                            active_ms,
+                            from_user,
+                            from_teammates,
+                            to_teammates,
+                        },
+                    ),
+                )
+            },
+        )
+        .collect(),
+    );
+    cache
+}
+
+#[test]
+fn teams_sum_seats_and_render_effort_without_role_rows() {
+    for (from_user, from_teammates, messages) in [
+        (1, 9, "10 (1 you)"),
+        (56, 1_178, "1234 (56 you)"),
+        (0, 10, "10"),
+        (0, 0, "-"),
+    ] {
+        let mut cache = team_cache();
+        for seat in cache.roles.teams.get_mut("recon").unwrap().values_mut() {
+            seat.effort.day.from_user = 0;
+            seat.effort.day.from_teammates = 0;
+        }
+        let seat = cache
+            .roles
+            .teams
+            .get_mut("recon")
+            .unwrap()
+            .get_mut("coder")
+            .unwrap();
+        seat.effort.day.from_user = from_user;
+        seat.effort.day.from_teammates = from_teammates;
+        let stats = Stats::from_provider(cache);
+        for held in [false, true] {
+            let text = full_panel_text(&stats, held);
+            let agents = text
+                .find(if held { "Agents\n" } else { "Agents (" })
+                .expect(&text);
+            let teams = text
+                .find(if held { "Teams\n" } else { "Teams (" })
+                .expect(&text);
+            let children = text.find("Subagents").expect(&text);
+            assert!(agents < teams && teams < children, "{text}");
+            let row = text
+                .lines()
+                .find(|line| line.contains("recon"))
+                .expect(&text);
+            assert!(row.contains("$60") && row.contains("60.0%"), "{row}");
+            for role in ["coder", "planner", "reviewer"] {
+                assert!(
+                    !text.contains(role),
+                    "panels never unfold team roles: {text}"
+                );
+            }
+            if held {
+                assert!(
+                    !text.contains("ACTIVE") && !text.contains("MESSAGES"),
+                    "{text}"
+                );
+            } else {
+                assert!(
+                    text.contains("ACTIVE") && text.contains("MESSAGES"),
+                    "{text}"
+                );
+                let cells: Vec<_> = row.split_whitespace().collect();
+                assert_eq!(&cells[..5], ["recon", "$60", "60.0%", "6", "6h12m"]);
+                assert_eq!(
+                    row.split("6h12m")
+                        .nth(1)
+                        .unwrap()
+                        .trim_start()
+                        .split("300")
+                        .next()
+                        .unwrap()
+                        .trim(),
+                    messages
+                );
+                let header = text
+                    .lines()
+                    .find(|line| line.contains("MESSAGES"))
+                    .expect(&text);
+                assert_eq!(
+                    row.find(" 300").unwrap() + " 300".len(),
+                    header.find("TOKENS").unwrap() + "TOKENS".len(),
+                    "TOKENS stays aligned past a wide MESSAGES cell:\n{header}\n{row}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn teams_json_preserves_role_effort_in_every_window() {
+    let stats = Stats::from_provider(team_cache());
+    for window in Window::TABS {
+        let value = json::stats_json_value(&stats, &AssistStats::default(), 20_000, false, window);
+        assert_eq!(value["agents"].as_array().unwrap().len(), 1);
+        assert_eq!(value["agents"][0]["profile"], "solo");
+        assert_eq!(value["agents"][0]["active_secs"], 45);
+        assert_eq!(value["subagents"][0]["active_secs"], 2460);
+        let team = &value["teams"][0];
+        assert_eq!(
+            keys(team),
+            [
+                "active_secs",
+                "cache_hit_pct",
+                "cached",
+                "input",
+                "messages",
+                "output",
+                "roles",
+                "sessions",
+                "share",
+                "team",
+                "tokens",
+                "usd"
+            ]
+        );
+        assert_eq!(team["team"], "recon");
+        assert_eq!(team["sessions"], 6);
+        assert_eq!(team["active_secs"], 22_320);
+        assert_eq!(team["usd"], 60.0);
+        assert_eq!(team["tokens"], 300);
+        assert_eq!(team["share"], 0.6);
+        assert_eq!(
+            team["messages"],
+            serde_json::json!({"total": 10, "from_user": 1})
+        );
+        let roles = team["roles"].as_array().unwrap();
+        assert_eq!(roles.len(), 3);
+        assert_eq!(roles[0]["role"], "coder");
+        assert_eq!(
+            keys(&roles[0]),
+            [
+                "active_secs",
+                "cache_hit_pct",
+                "cached",
+                "from_teammates",
+                "from_user",
+                "input",
+                "output",
+                "role",
+                "sessions",
+                "share",
+                "to_teammates",
+                "tokens",
+                "usd"
+            ]
+        );
+        assert_eq!(roles[0]["from_teammates"], 5);
+        assert_eq!(roles[0]["to_teammates"], 2);
+        assert_eq!(roles[0]["share"], 0.3);
+        assert_eq!(value["effort_since"], "2024-10-04");
+    }
+}
+
+#[test]
+fn effort_only_rows_survive_panels_and_json() {
+    for effort in [
+        EffortWindow {
+            active_ms: 500,
+            ..Default::default()
+        },
+        EffortWindow {
+            from_user: 1,
+            ..Default::default()
+        },
+        EffortWindow {
+            to_teammates: 1,
+            ..Default::default()
+        },
+    ] {
+        let mut cache = team_cache();
+        cache.days.clear();
+        cache.spending.total = SpendTally::default();
+        for seat in cache
+            .roles
+            .agents
+            .values_mut()
+            .chain(cache.roles.subagents.values_mut())
+            .chain(
+                cache
+                    .roles
+                    .teams
+                    .values_mut()
+                    .flat_map(|roles| roles.values_mut()),
+            )
+        {
+            *seat = effort_role(SpendTally::default(), effort);
+        }
+        let stats = Stats::from_provider(cache);
+        for held in [false, true] {
+            let text = full_panel_text(&stats, held);
+            for section in ["Agents", "Teams", "Subagents"] {
+                assert!(
+                    text.contains(section),
+                    "effort alone admits {section}: {text}"
+                );
+            }
+        }
+        let value = json::stats_json_value(
+            &stats,
+            &AssistStats::default(),
+            20_000,
+            false,
+            Window::Today,
+        );
+        for section in ["agents", "teams", "subagents"] {
+            assert_eq!(value[section].as_array().unwrap().len(), 1, "{value}");
+        }
+    }
+}
+
+#[test]
+fn teams_cap_compact_rows_and_keep_effort_notes_after_the_last_section() {
+    let mut cache = team_cache();
+    let roles = cache.roles.teams["recon"].clone();
+    cache.roles.teams = (0..5)
+        .map(|i| (format!("team-{i}"), roles.clone()))
+        .collect();
+    cache.roles.agents.clear();
+    cache.roles.subagents.clear();
+    let stats = Stats::from_provider(cache.clone());
+    let text = full_panel_text(&stats, false);
+    assert!(text.contains("2 other teams"), "{text}");
+    for held in [false, true] {
+        let text = full_panel_text(&stats, held);
+        let note = text
+            .find("active time and messages recorded since Oct 04")
+            .expect(&text);
+        assert!(text.rfind("team-").unwrap() < note, "{text}");
+        assert!(text.find("roles recorded since").unwrap() < note, "{text}");
+    }
+    cache.roles.recorded_since_secs = None;
+    cache.roles.effort_since_secs = Some(20_000 * 86_400);
+    assert!(!full_panel_text(&Stats::from_provider(cache), false).contains("recorded since"));
 }
 
 #[test]
@@ -235,6 +543,7 @@ fn profile_agents_json_is_unfolded_and_counts_sessions() {
     assert_eq!(
         keys(&value["agents"][0]),
         [
+            "active_secs",
             "cache_hit_pct",
             "cached",
             "input",
@@ -301,6 +610,7 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
             "CACHED",
             "HIT",
             &count.to_ascii_uppercase(),
+            "ACTIVE",
         ] {
             assert!(text.contains(column), "{text}");
         }
@@ -309,9 +619,9 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
             line.trim_end().chars().count()
         };
         assert_eq!(
-            end_column(&count.to_ascii_uppercase()),
+            end_column("ACTIVE"),
             end_column("alpha"),
-            "the count header ends where its values end: {text}"
+            "the active header ends where its values end: {text}"
         );
         assert!(!text.contains("other "), "{text}");
         assert!(!text.contains("Spend activity"), "{text}");
@@ -699,6 +1009,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
             "roles_since",
             "sessions",
             "subagents",
+            "teams",
             "timezone",
             "unit",
             "window",
@@ -708,6 +1019,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
     assert_eq!(
         keys(&value["subagents"][0]),
         [
+            "active_secs",
             "cache_hit_pct",
             "cached",
             "input",
@@ -1273,15 +1585,7 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         stats.total.month.tokens
     );
     assert_eq!(published.spending.by_provider, stats.by_provider);
-    assert_eq!(
-        published
-            .roles
-            .subagents
-            .into_iter()
-            .map(|(profile, entry)| (profile, entry.tally))
-            .collect::<BTreeMap<_, _>>(),
-        stats.subagents
-    );
+    assert_eq!(published.roles.subagents, stats.subagents);
     for transcript in [first, second] {
         assert!(
             cursor
@@ -1558,6 +1862,8 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -1611,6 +1917,8 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
                 agents: BTreeMap::new(),
                 subagents: BTreeMap::new(),
                 recorded_since_secs: None,
+                effort_since_secs: None,
+                teams: BTreeMap::new(),
                 by_day: BTreeMap::new(),
                 by_model: BTreeMap::new(),
                 by_provider: BTreeMap::new(),
@@ -1681,6 +1989,8 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -1719,6 +2029,8 @@ fn refresh_result_carries_success_error_and_panic() {
             agents: BTreeMap::new(),
             subagents: BTreeMap::new(),
             recorded_since_secs: None,
+            effort_since_secs: None,
+            teams: BTreeMap::new(),
             by_day: BTreeMap::new(),
             by_model: BTreeMap::new(),
             by_provider: BTreeMap::new(),
@@ -1794,6 +2106,8 @@ fn heatmap_cells_render_spaced() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day,
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -1849,6 +2163,8 @@ fn windows_lines_fold_cache_read_for_trailing_windows() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -1882,6 +2198,8 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -1917,16 +2235,35 @@ fn panel_fit_preserves_data_before_header_chrome() {
             + usize::from(plan.model_rows > 0) * SECTION_CHROME_ROWS
             + usize::from(plan.provider_rows > 0) * SECTION_CHROME_ROWS
             + usize::from(plan.agent_rows > 0) * SECTION_CHROME_ROWS
+            + usize::from(plan.team_rows > 0) * SECTION_CHROME_ROWS
             + usize::from(plan.subagent_rows > 0) * SECTION_CHROME_ROWS
             + plan.model_rows
             + plan.provider_rows
             + plan.agent_rows
+            + plan.team_rows
             + plan.subagent_rows
             + usize::from(assist_rows > 0) * (2 + assist_rows)
-            + usize::from(plan.agent_rows > 0 || plan.subagent_rows > 0) * note_rows
+            + usize::from(plan.agent_rows > 0 || plan.team_rows > 0 || plan.subagent_rows > 0)
+                * note_rows
     };
 
-    let tall = fit(Some(80), true, [4, 5, 4, 3], 2, 0);
+    let all_five = fit(Some(55), true, [8, 10, 7, 6, 6], 0, 0);
+    assert!(all_five.header && all_five.team_rows >= 3, "{all_five:?}");
+    let teams_last = fit(Some(33), true, [8, 10, 7, 6, 6], 0, 2);
+    assert_eq!(teams_last.subagent_rows, 0);
+    assert_eq!(teams_last.agent_rows, 0);
+    assert!(teams_last.team_rows > 0, "{teams_last:?}");
+    let subagents_first = fit(Some(36), true, [8, 10, 7, 6, 6], 0, 2);
+    assert_eq!(subagents_first.subagent_rows, 0);
+    assert!(subagents_first.agent_rows > 0 && subagents_first.team_rows > 0);
+    for rows in 26..80 {
+        let plan = fit(Some(rows), true, [8, 10, 7, 6, 6], 0, 2);
+        assert!(used(plan, 0, 2) < rows, "{rows}: {plan:?}");
+        assert!(plan.subagent_rows == 0 || plan.agent_rows > 0);
+        assert!(plan.agent_rows == 0 || plan.team_rows > 0);
+    }
+
+    let tall = fit(Some(80), true, [4, 5, 4, 0, 3], 2, 0);
     assert_eq!(
         tall,
         PanelPlan {
@@ -1934,12 +2271,13 @@ fn panel_fit_preserves_data_before_header_chrome() {
             model_rows: 4,
             provider_rows: 5,
             agent_rows: 4,
+            team_rows: 0,
             subagent_rows: 3,
         }
     );
     assert!(used(tall, 2, 0) <= 79);
 
-    let floor = fit(Some(49), true, [8, 10, 7, 6], 0, 0);
+    let floor = fit(Some(49), true, [8, 10, 7, 0, 6], 0, 0);
     assert_eq!(
         floor,
         PanelPlan {
@@ -1947,12 +2285,13 @@ fn panel_fit_preserves_data_before_header_chrome() {
             model_rows: 3,
             provider_rows: 3,
             agent_rows: 3,
+            team_rows: 0,
             subagent_rows: 3,
         }
     );
     assert!(used(floor, 0, 0) <= 48);
 
-    let without_header = fit(Some(40), true, [8, 10, 7, 6], 0, 0);
+    let without_header = fit(Some(40), true, [8, 10, 7, 0, 6], 0, 0);
     assert_eq!(
         without_header,
         PanelPlan {
@@ -1960,12 +2299,13 @@ fn panel_fit_preserves_data_before_header_chrome() {
             model_rows: 3,
             provider_rows: 3,
             agent_rows: 3,
+            team_rows: 0,
             subagent_rows: 3,
         }
     );
     assert!(used(without_header, 0, 0) <= 39);
 
-    let very_short = fit(Some(32), true, [8, 10, 7, 6], 0, 0);
+    let very_short = fit(Some(32), true, [8, 10, 7, 0, 6], 0, 0);
     assert_eq!(
         very_short,
         PanelPlan {
@@ -1973,19 +2313,20 @@ fn panel_fit_preserves_data_before_header_chrome() {
             model_rows: 1,
             provider_rows: 1,
             agent_rows: 1,
+            team_rows: 0,
             subagent_rows: 1,
         }
     );
     assert!(used(very_short, 0, 0) <= 31);
 
-    let no_subagents = fit(Some(31), true, [8, 10, 7, 6], 0, 2);
+    let no_subagents = fit(Some(31), true, [8, 10, 7, 0, 6], 0, 2);
     assert!(!no_subagents.header);
     assert_eq!(no_subagents.subagent_rows, 0);
     assert_eq!(no_subagents.agent_rows, 1);
     assert!(no_subagents.model_rows > 0 && no_subagents.provider_rows > 0);
     assert!(used(no_subagents, 0, 2) <= 30);
 
-    let no_profiles = fit(Some(30), true, [8, 10, 7, 6], 0, 2);
+    let no_profiles = fit(Some(30), true, [8, 10, 7, 0, 6], 0, 2);
     assert_eq!(no_profiles.subagent_rows, 0);
     assert_eq!(no_profiles.agent_rows, 0);
     assert!(no_profiles.model_rows > 0 && no_profiles.provider_rows > 0);
@@ -1993,7 +2334,7 @@ fn panel_fit_preserves_data_before_header_chrome() {
 
     for note_rows in [0, 2] {
         for rows in 26..80 {
-            let plan = fit(Some(rows), true, [8, 10, 7, 6], 0, note_rows);
+            let plan = fit(Some(rows), true, [8, 10, 7, 0, 6], 0, note_rows);
             assert!(
                 used(plan, 0, note_rows) < rows,
                 "{rows}-row pane must not overflow: {plan:?}"
@@ -2003,27 +2344,29 @@ fn panel_fit_preserves_data_before_header_chrome() {
         }
     }
 
-    let no_breakdowns = fit(Some(24), true, [0; 4], 0, 0);
+    let no_breakdowns = fit(Some(24), true, [0; 5], 0, 0);
     assert!(!no_breakdowns.header);
     assert!(used(no_breakdowns, 0, 0) <= 23);
 
     assert_eq!(
-        fit(None, true, [8, 10, 7, 6], 2, 0),
+        fit(None, true, [8, 10, 7, 0, 6], 2, 0),
         PanelPlan {
             header: true,
             model_rows: MAX_MODELS,
             provider_rows: MAX_SPEND_ROWS,
             agent_rows: MAX_SPEND_ROWS,
+            team_rows: 0,
             subagent_rows: MAX_SPEND_ROWS,
         }
     );
     assert_eq!(
-        fit(Some(24), false, [8, 10, 7, 6], 0, 0),
+        fit(Some(24), false, [8, 10, 7, 0, 6], 0, 0),
         PanelPlan {
             header: false,
             model_rows: MAX_MODELS,
             provider_rows: MAX_SPEND_ROWS,
             agent_rows: MAX_SPEND_ROWS,
+            team_rows: 0,
             subagent_rows: MAX_SPEND_ROWS,
         }
     );
@@ -2040,6 +2383,8 @@ fn model_cells_show_usd_and_cache_read_detail() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("claude-opus-4-8".to_owned(), spend),
@@ -2096,6 +2441,8 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_model: model_map([
             ("timed".to_owned(), timed.clone()),
             ("untimed".to_owned(), untimed.clone()),
@@ -2195,6 +2542,8 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("claude-opus-4-8".to_owned(), claude_model),
@@ -2237,6 +2586,8 @@ fn model_breakdown_ranks_by_usd_before_tokens() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             (
@@ -2267,6 +2618,8 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("claude-opus-4-8".to_owned(), week_model),
@@ -2293,6 +2646,8 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
@@ -2323,6 +2678,8 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
@@ -2359,6 +2716,8 @@ fn model_breakdown_folds_unpriced_rows_by_work_token_share() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             ("model-a".to_owned(), model_tally(9_800, 0.0, 9_800, 0, 0)),
@@ -2388,6 +2747,8 @@ fn dual_share_models() -> Stats {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             (
@@ -2505,6 +2866,8 @@ fn provider_cells_rank_by_dollars_and_skip_empty_providers() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::from([
@@ -2573,6 +2936,8 @@ fn provider_breakdown_folds_tail_totals_into_other() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::from([
@@ -2623,6 +2988,8 @@ fn provider_breakdown_folds_rows_below_one_percent_into_other() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::from([
@@ -2714,23 +3081,21 @@ fn profile_breakdown_folds_against_profile_spend_not_fleet() {
         day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::from([
-            ("implementer".to_owned(), tally(500, 0.5, 5)),
-            ("explorer".to_owned(), tally(300, 0.3, 3)),
-            ("finder".to_owned(), tally(1, 0.001, 1)),
+            ("implementer".to_owned(), role_tally(tally(500, 0.5, 5))),
+            ("explorer".to_owned(), role_tally(tally(300, 0.3, 3))),
+            ("finder".to_owned(), role_tally(tally(1, 0.001, 1))),
         ]),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
         total: tally(0, 100.0, 0),
     };
 
-    let rows = profile_breakdown(
-        &stats.subagents,
-        Window::Year,
-        stats.total.year.usd,
-        Some(MAX_SPEND_ROWS),
-    );
+    let tallies = RoleView::Subagents.rows(&stats, Window::Year);
+    let rows = profile_breakdown(&tallies, stats.total.year.usd, Some(MAX_SPEND_ROWS));
 
     assert_eq!(
         rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
@@ -2747,17 +3112,13 @@ fn profile_breakdown_folds_against_profile_spend_not_fleet() {
 fn profile_breakdown_names_the_sections_work_and_unpriced_profiles() {
     let mut stats = dual_share_models();
     stats.subagents = BTreeMap::from([
-        ("implementer".into(), tally(9_700, 99.8, 9)),
-        ("explorer".into(), tally(200, 0.2, 2)),
-        ("finder".into(), tally(100, 0.0, 1)),
+        ("implementer".into(), role_tally(tally(9_700, 99.8, 9))),
+        ("explorer".into(), role_tally(tally(200, 0.2, 2))),
+        ("finder".into(), role_tally(tally(100, 0.0, 1))),
     ]);
     stats.total = tally(1_000_000, 1_000.0, 100);
-    let rows = profile_breakdown(
-        &stats.subagents,
-        Window::Year,
-        stats.total.year.usd,
-        Some(MAX_SPEND_ROWS),
-    );
+    let tallies = RoleView::Subagents.rows(&stats, Window::Year);
+    let rows = profile_breakdown(&tallies, stats.total.year.usd, Some(MAX_SPEND_ROWS));
 
     assert_eq!(
         rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
@@ -2796,8 +3157,14 @@ fn stats_json_lists_unpriced_usage_without_folding_or_empty_windows() {
         .map(|(id, tally)| (id.clone(), produced(tally.clone())))
         .collect();
     stats.by_provider = rows.clone();
-    stats.agents = rows.clone();
-    stats.subagents = rows;
+    stats.agents = rows
+        .iter()
+        .map(|(key, tally)| (key.clone(), role_tally(tally.clone())))
+        .collect();
+    stats.subagents = rows
+        .into_iter()
+        .map(|(key, tally)| (key, role_tally(tally)))
+        .collect();
     stats.total = every_window(tally(10_101, 12.0, 4));
     let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false, Window::Week);
 
@@ -2871,6 +3238,8 @@ fn stat_share_bar_stretches_to_panel_width() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([
             (
@@ -2921,6 +3290,8 @@ fn stat_sections_share_a_percent_column() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: model_map([(
             "claude-opus-4-8".to_owned(),
@@ -2981,6 +3352,8 @@ fn insights_sessions_line_has_no_glyph() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -3010,6 +3383,8 @@ fn insights_sessions_scope_to_the_active_window() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -3050,6 +3425,8 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::from([
             (today, day(35, 12.0)),
             (today - 1, day(50, 18.0)),
@@ -3126,6 +3503,8 @@ fn insights_append_the_prior_window_spend_trend() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -3158,6 +3537,8 @@ fn year_daily_average_keeps_recent_activity() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
@@ -3822,6 +4203,8 @@ fn today_index_uses_the_publications_zone() {
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
+        effort_since_secs: None,
+        teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),

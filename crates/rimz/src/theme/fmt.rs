@@ -93,6 +93,20 @@ pub fn duration_label(mins: u64) -> String {
     }
 }
 
+/// Active agent-time: seconds or minutes below an hour, two units above.
+pub fn active_duration(seconds: u64) -> String {
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    if seconds < 3_600 {
+        return format!("{}m", seconds / 60);
+    }
+    if seconds < 86_400 {
+        return format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60);
+    }
+    format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
+}
+
 pub fn dollars2(usd: f64) -> String {
     let cents = (usd.max(0.0) * 100.0).round() as u64;
     format!("${}.{:02}", group_thousands(cents / 100), cents % 100)

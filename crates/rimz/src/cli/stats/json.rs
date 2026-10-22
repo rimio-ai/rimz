@@ -7,6 +7,8 @@ struct StatsJson<'a> {
     window: Window,
     #[serde(skip_serializing_if = "Option::is_none")]
     roles_since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort_since: Option<String>,
     timezone: &'a str,
     unit: &'static str,
     sessions: u32,
@@ -19,6 +21,7 @@ struct StatsJson<'a> {
     models: Vec<ModelJson>,
     providers: Vec<ProviderJson>,
     agents: Vec<RoleJson>,
+    teams: Vec<TeamJson>,
     subagents: Vec<RoleJson>,
     days: Vec<DayJson>,
     assists: &'a assists::AssistRollup,
@@ -44,6 +47,13 @@ struct RoleJson {
     profile: String,
     #[serde(flatten)]
     count: RoleCount,
+    active_secs: u64,
+    #[serde(flatten)]
+    spend: SpendJson,
+}
+
+#[derive(Serialize)]
+struct SpendJson {
     input: u64,
     output: u64,
     cached: u64,
@@ -53,40 +63,125 @@ struct RoleJson {
     share: f64,
 }
 
+fn spend_json(spend: &SpendWindow, total_usd: f64) -> SpendJson {
+    SpendJson {
+        input: spend.input,
+        output: spend.output,
+        cached: spend.cache_read,
+        cache_hit_pct: spend.cache_hit_percent(),
+        tokens: spend.display_tokens(),
+        usd: spend.usd,
+        share: if total_usd > 0.0 {
+            spend.usd / total_usd
+        } else {
+            0.0
+        },
+    }
+}
+
 fn role_rows(stats: &Stats, active: Window, role: RoleView) -> Vec<RoleJson> {
     let total_usd = active.select(&stats.total).usd;
     let mut rows: Vec<_> = role
-        .tallies(stats)
-        .iter()
-        .map(|(profile, tally)| (profile, active.select(tally)))
-        .filter(|(_, spend)| spend.usd > 0.0 || spend.tokens > 0)
-        .map(|(profile, spend)| RoleJson {
-            profile: profile.clone(),
+        .rows(stats, active)
+        .into_iter()
+        .filter(|(_, row)| row.has_usage())
+        .map(|(profile, row)| RoleJson {
+            profile,
             count: match role {
-                RoleView::Agents => RoleCount::Sessions {
-                    sessions: spend.sessions,
+                RoleView::Agents | RoleView::Teams => RoleCount::Sessions {
+                    sessions: row.spend.sessions,
                 },
                 RoleView::Subagents => RoleCount::Runs {
-                    runs: spend.sessions,
+                    runs: row.spend.sessions,
                 },
             },
-            input: spend.input,
-            output: spend.output,
-            cached: spend.cache_read,
-            cache_hit_pct: spend.cache_hit_percent(),
-            tokens: spend.display_tokens(),
-            usd: spend.usd,
-            share: if total_usd > 0.0 {
-                spend.usd / total_usd
-            } else {
-                0.0
-            },
+            active_secs: row.effort.active_ms / 1000,
+            spend: spend_json(&row.spend, total_usd),
         })
         .collect();
     rows.sort_by(|a, b| {
-        b.usd
-            .total_cmp(&a.usd)
+        b.spend
+            .usd
+            .total_cmp(&a.spend.usd)
             .then_with(|| a.profile.cmp(&b.profile))
+    });
+    rows
+}
+
+#[derive(Serialize)]
+struct TeamJson {
+    team: String,
+    sessions: u32,
+    active_secs: u64,
+    messages: TeamMessagesJson,
+    #[serde(flatten)]
+    spend: SpendJson,
+    roles: Vec<TeamRoleJson>,
+}
+
+#[derive(Serialize)]
+struct TeamMessagesJson {
+    total: u64,
+    from_user: u64,
+}
+
+#[derive(Serialize)]
+struct TeamRoleJson {
+    role: String,
+    sessions: u32,
+    active_secs: u64,
+    from_user: u64,
+    from_teammates: u64,
+    to_teammates: u64,
+    #[serde(flatten)]
+    spend: SpendJson,
+}
+
+fn team_rows(stats: &Stats, active: Window) -> Vec<TeamJson> {
+    let total_usd = active.select(&stats.total).usd;
+    let mut rows: Vec<_> = RoleView::Teams
+        .rows(stats, active)
+        .into_iter()
+        .filter(|(_, row)| row.has_usage())
+        .map(|(team, row)| {
+            let mut roles: Vec<_> = stats.teams[&team]
+                .iter()
+                .map(|(role, tally)| (role, active.select_role(tally)))
+                .filter(|(_, row)| row.has_usage())
+                .map(|(role, row)| TeamRoleJson {
+                    role: role.clone(),
+                    sessions: row.spend.sessions,
+                    active_secs: row.effort.active_ms / 1000,
+                    from_user: row.effort.from_user,
+                    from_teammates: row.effort.from_teammates,
+                    to_teammates: row.effort.to_teammates,
+                    spend: spend_json(&row.spend, total_usd),
+                })
+                .collect();
+            roles.sort_by(|a, b| {
+                b.spend
+                    .usd
+                    .total_cmp(&a.spend.usd)
+                    .then_with(|| a.role.cmp(&b.role))
+            });
+            TeamJson {
+                team,
+                sessions: row.spend.sessions,
+                active_secs: row.effort.active_ms / 1000,
+                messages: TeamMessagesJson {
+                    total: row.messages(),
+                    from_user: row.effort.from_user,
+                },
+                spend: spend_json(&row.spend, total_usd),
+                roles,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.spend
+            .usd
+            .total_cmp(&a.spend.usd)
+            .then_with(|| a.team.cmp(&b.team))
     });
     rows
 }
@@ -96,13 +191,21 @@ fn stamp(at: &jiff::Zoned) -> String {
 }
 
 pub(super) fn roles_value(stats: &Stats, active: Window, role: RoleView) -> serde_json::Value {
+    let rows = if role == RoleView::Teams {
+        serde_json::json!(team_rows(stats, active))
+    } else {
+        serde_json::json!(role_rows(stats, active, role))
+    };
     let mut value = serde_json::json!({
         "as_of": stamp(&stats.as_of()),
         "window": active,
-        (role.key()): role_rows(stats, active, role),
+        (role.key()): rows,
     });
     if let Some(since) = stats.recorded_since() {
         value["roles_since"] = since.strftime("%Y-%m-%d").to_string().into();
+    }
+    if let Some(since) = stats.effort_since() {
+        value["effort_since"] = since.strftime("%Y-%m-%d").to_string().into();
     }
     value
 }
@@ -269,6 +372,9 @@ fn stats_json<'a>(
         roles_since: stats
             .recorded_since()
             .map(|since| since.strftime("%Y-%m-%d").to_string()),
+        effort_since: stats
+            .effort_since()
+            .map(|since| since.strftime("%Y-%m-%d").to_string()),
         timezone: &stats.timezone,
         unit: if dollars { "usd" } else { "tokens" },
         sessions: active.select(&stats.total).sessions,
@@ -307,6 +413,7 @@ fn stats_json<'a>(
         models,
         providers,
         agents: role_rows(stats, active, RoleView::Agents),
+        teams: team_rows(stats, active),
         subagents: role_rows(stats, active, RoleView::Subagents),
         days,
         assists: &assists.rollup,

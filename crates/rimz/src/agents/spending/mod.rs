@@ -198,7 +198,7 @@ pub struct EffortWindow {
 }
 
 impl EffortWindow {
-    fn merge(&mut self, other: Self) {
+    pub fn merge(&mut self, other: Self) {
         self.active_ms = self.active_ms.saturating_add(other.active_ms);
         self.from_user = self.from_user.saturating_add(other.from_user);
         self.from_teammates = self.from_teammates.saturating_add(other.from_teammates);

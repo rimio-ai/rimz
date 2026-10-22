@@ -174,6 +174,7 @@ In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for
 | --- | --- |
 | `reset_countdown` | two-unit reset countdown: `5h00m`, `1d01h` |
 | `window_label`, `duration_label` | rate-limit window labels: the scope label if any, else `5h`, `7d`, `90m` |
+| `active_duration` | seconds-based agent-time for attribution and stats: `45s`, `41m`, `6h12m`, `1d03h` |
 | `dollars2`, `dollars_cap` | thousands-grouped dollars; `dollars_cap`, sidebar-only, drops `.00` on whole amounts |
 | `dollars_estimate` | approximate cache-rebuild dollars, two significant figures, cents below $10 and integers above, omitted below $0.005 |
 | `group_thousands` | `12,345` |
