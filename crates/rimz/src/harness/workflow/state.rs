@@ -629,11 +629,15 @@ impl Transition<'_> {
         else {
             return;
         };
-        // An absent token cannot prove ownership of a PID recycled since publication.
-        if let Some(start) = &child.start
-            && crate::proc::process_start_token(child.pid).as_ref() == Some(start)
-            && let Ok(pid) = i32::try_from(child.pid)
-        {
+        let owns_group = match crate::proc::process_start_token(child.pid) {
+            Some(start) => child.start.as_ref() == Some(&start),
+            None => crate::proc::process_group_has_env(
+                child.pid,
+                "RIMZ_WORKFLOW_RUN",
+                self.record.id.as_str(),
+            ),
+        };
+        if owns_group && let Ok(pid) = i32::try_from(child.pid) {
             let _ = nix::sys::signal::killpg(
                 nix::unistd::Pid::from_raw(pid),
                 nix::sys::signal::Signal::SIGKILL,

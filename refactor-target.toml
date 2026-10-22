@@ -736,7 +736,8 @@ allowed-dependencies = [
 # RuntimePaths::sidebar_reconcile_lock serializes attach and repair for one session (+1).
 # RuntimePaths::group_roots_path gives the fetch writer its own cache lane (+1).
 # StatePaths::lsp_usage_paths keeps usage records and locks in their lifetime classes (+1).
-surface-budget = 280
+# WorkflowPaths::check_log owns per-evaluation shell output paths (+1).
+surface-budget = 281
 
 [[verdict]]
 kind = "item"
@@ -1086,8 +1087,9 @@ path = "crates/rimz/src/harness"
 # runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
 # Workflow Case and WhenExpr::truth share condition specifications and three-valued truth (+2).
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
+# WatchDeadline, run_command and CheckOutcome::{code,interrupted} share hosted shell execution (+4).
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
-surface-budget = 967
+surface-budget = 971
 
 [[verdict]]
 kind = "item"
@@ -1356,7 +1358,13 @@ upward-dependencies = [
 # input_tty provides the detached focus helper's non-consuming pty probe (+1).
 # `memory::Pressure` and `memory::pressure` give the lsp kill and eviction records the memory stall averages (+2).
 # TreeMemory adds swap to the existing status walk (+1).
-surface-budget = 140
+# process_group_has_env proves a reaped workflow leader's surviving group ownership (+1).
+surface-budget = 141
+
+[[verdict]]
+kind = "item"
+key = "proc::process_group_has_env"
+reason = "Workflow abandonment must prove a surviving group's run marker after its leader is reaped."
 
 [[verdict]]
 kind = "item"
@@ -2600,7 +2608,8 @@ allowed-dependencies = [
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
 # CheckSignalGuard and TaskFire::record_signal_guard hold SIGTERM through terminal recording (+2).
-surface-budget = 61
+# CheckOutcome::{code,interrupted} expose hosted-shell exit and interruption without copying output (+2).
+surface-budget = 63
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
@@ -7611,6 +7620,16 @@ reason = "Inherent priority cascade of pinned bind rules: owning stamp, resume, 
 kind = "item"
 key = "harness::schedule::runner::run_command"
 reason = "Pass 28e: after collapsing watch deadlines, cx 10.8 (cognitive/cyclomatic/SLOC 21/50/130) remains in fix-pinned SIGINT forwarding, identity stripping, kill plus bounded drain, lossless check-in and Tee tail phases. Extracting echo setup or reader reaping into single-caller helpers moves complexity without deleting it."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::WatchDeadline"
+reason = "Workflow shell checks use the existing exit-code runner with their own interrupt and PID-publication callbacks, without changing loop deadlines."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths::check_log"
+reason = "Workflow shell output uses a classed per-sequence path beside the judge output path."
 
 [[verdict]]
 kind = "item"

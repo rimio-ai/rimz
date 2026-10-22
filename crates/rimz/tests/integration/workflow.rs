@@ -8,6 +8,7 @@ mod attempts;
 mod conditions;
 mod judges;
 mod scope;
+mod shells;
 mod ticks;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
@@ -1181,7 +1182,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert_eq!(
         report["rows"],
         json!([{
-            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "agent": null, "do_background": false,
+            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "shell": null, "agent": null, "do_background": false,
             "edges": [
                 {"outcome":"deadline", "target":"@user", "source":"default"},
                 {"outcome":"invalid", "target":"@user", "source":"default"},
@@ -1210,6 +1211,32 @@ fn validate_json_shape_errors_and_exit_status() {
     assert!(schema.status.success());
     let schema: Value = serde_json::from_slice(&schema.stdout).unwrap();
     assert!(schema["properties"]["checks"].is_object());
+    fs::write(
+        dir.join("workflow.toml"),
+        format!("{HEADER}[checks.pr]\nshell='printf shell'\non={{pass='@done',fail='@user'}}\n"),
+    )
+    .unwrap();
+    let report: Value =
+        serde_json::from_str(&success(command(&env, &["workflow", "validate", "--json"]))).unwrap();
+    assert_eq!(
+        report,
+        json!({
+            "warnings": [], "errors": [],
+            "rows": [{
+                "workflow":"review", "node":"pr", "kind":"check", "runner":"shell",
+                "run":null, "shell":"printf shell", "agent":null, "do_background":false,
+                "edges":[
+                    {"outcome":"deadline", "target":"@user", "source":"default"},
+                    {"outcome":"fail", "target":"@user", "source":"explicit"},
+                    {"outcome":"invalid", "target":"@user", "source":"default"},
+                    {"outcome":"pass", "target":"@done", "source":"explicit"},
+                    {"outcome":"timeout", "target":"@user", "source":"default"}
+                ]
+            }]
+        })
+    );
+    let text = success(command(&env, &["workflow", "validate"]));
+    assert!(text.contains("printf shell"), "{text}");
     assert!(
         !env.rimz_home().join("ws").exists(),
         "validation must not birth a room"

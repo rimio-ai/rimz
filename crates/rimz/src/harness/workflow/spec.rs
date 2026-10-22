@@ -44,6 +44,7 @@ pub struct StepEdges {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Check {
     pub run: Option<String>,
+    pub shell: Option<String>,
     pub agent: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
@@ -83,16 +84,18 @@ fn nonempty_cases<'de, D: serde::Deserializer<'de>>(
 
 pub(super) enum CheckKind<'a> {
     Run(&'a str),
+    Shell(&'a str),
     Agent(&'a str),
     Condition,
 }
 
 impl Check {
     pub(super) fn kind(&self) -> Option<CheckKind<'_>> {
-        match (&self.run, &self.agent, self.cases.is_empty()) {
-            (Some(run), None, true) => Some(CheckKind::Run(run)),
-            (None, Some(agent), true) => Some(CheckKind::Agent(agent)),
-            (None, None, false) => Some(CheckKind::Condition),
+        match (&self.run, &self.shell, &self.agent, self.cases.is_empty()) {
+            (Some(run), None, None, true) => Some(CheckKind::Run(run)),
+            (None, Some(shell), None, true) => Some(CheckKind::Shell(shell)),
+            (None, None, Some(agent), true) => Some(CheckKind::Agent(agent)),
+            (None, None, None, false) => Some(CheckKind::Condition),
             _ => None,
         }
     }

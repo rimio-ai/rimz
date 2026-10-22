@@ -61,7 +61,7 @@ waiting: sweep, takeover, since 09:10, ×3
 
 ## Cancel and resume
 
-`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, judge, or step attempt. A run already finished prints `already terminal; unchanged`.
+`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell, judge, or step attempt. A run already finished prints `already terminal; unchanged`.
 
 `rimz workflow resume <RUN> [--at <NODE>] [--extend <GRANT>]...` puts a parked run back to work, at its current node or at `--at <NODE>`, with a fresh timeout clock and a cleared check retry. `--extend` repeats:
 
@@ -74,7 +74,7 @@ An active run accepts `--extend` alone; `--at` needs a parked run. A finished ru
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the script, agent profile, or `condition`), `BACKGROUND` (whether the step's agent reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, agent profile, or `condition`), `BACKGROUND` (whether the step's agent reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
@@ -121,6 +121,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 `list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line or park reason as printed. The human column remains `CHECKOUT` for both kinds.
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
+
+A shell answer is `{outcome, code, log}` plus an inherited `key` when present. Exit 0 is `pass`; another exit or signal is `fail`. `code` is an integer, or null after a signal. `log` is the absolute `work/<seq>.check.log` path, containing stdout and stderr together. Only `fail` has `reason` (`exited N` or `killed by signal`); output tails are not journaled. Both `on.pass` and `on.fail` are required. The only additional routes are `on.timeout` and `on.invalid`, each defaulting to `@user`; command spawn or log-open errors are `invalid`. The check's optional timeout spans waits and evaluations, without inheriting the loop's default timeout. A timeout routes `timeout`; a run deadline follows `workflow.on.deadline`. Both stop the shell's process group rather than answering `fail`. A `fail` routed to `@wait` shows `said fail` in the waiting line.
 
 A condition's answer has `outcome`, `readings` (a map from term key to string or null), and the winning zero-based `case` (omitted for `else` and `unknown`). A case's fixed string or integer `key`, or the inherited run key, is included when present. `unknown` includes a `reason` naming each unread key. While a case's `for` hold runs, the outcome is `hold`; `record.wait` carries `case`, `detail` (the case's outcome), `first`, `last`, `count`, and `recheck_at`. Without a hold, `wait.case` is omitted. `unknown` defaults to `@wait`; `timeout` and `invalid` default to `@user`. Explicit `on` entries override those defaults. `hold`, `unknown`, `timeout`, `invalid`, `cap`, and `deadline` are reserved outcome words, and `on.hold` is refused.
 

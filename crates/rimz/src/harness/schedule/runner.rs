@@ -3156,6 +3156,14 @@ impl CheckOutcome {
     pub fn terminated(&self) -> bool {
         self.terminated
     }
+
+    pub(crate) fn code(&self) -> Option<i32> {
+        self.code
+    }
+
+    pub(crate) fn interrupted(&self) -> bool {
+        self.interrupted
+    }
 }
 
 pub enum CheckEcho {
@@ -3239,10 +3247,14 @@ pub fn run_check(
     )
 }
 
-pub(super) enum WatchDeadline {
+pub(crate) enum WatchDeadline<'a> {
     KillAfter(Duration),
     /// Run to exit, with an optional one-time check-in.
     Watch(Option<Duration>),
+    Hosted {
+        interrupted: &'a dyn Fn() -> bool,
+        spawned: &'a mut dyn FnMut(u32) -> std::io::Result<()>,
+    },
 }
 
 #[cfg(not(test))]
@@ -3346,10 +3358,10 @@ pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<C
     Ok(guard)
 }
 
-pub(super) fn run_command(
+pub(crate) fn run_command(
     dir: &Path,
     cmd: &str,
-    deadline: WatchDeadline,
+    mut deadline: WatchDeadline<'_>,
     echo: CheckEcho,
     env: &BTreeMap<String, String>,
     mut check_in: impl FnMut(u64, String),
@@ -3381,20 +3393,27 @@ pub(super) fn run_command(
             .map(|capture| capture.output())
             .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))
     };
-    let (mut command, mut interrupts, kill_after, check_in_after) = match deadline {
+    let (mut command, mut interrupts, kill_after, check_in_after) = match &deadline {
         WatchDeadline::KillAfter(timeout) => (
             check_command(cmd),
             Some(CheckSignals::new(
                 &[signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM],
                 record_hold,
             )?),
-            Some(timeout),
+            Some(*timeout),
             None,
         ),
         WatchDeadline::Watch(check_in) => {
             let mut command = Command::new("sh");
             command.args(["-c", cmd]);
-            (command, None, None, check_in)
+            (command, None, None, *check_in)
+        }
+        WatchDeadline::Hosted { .. } => {
+            use std::os::unix::process::CommandExt;
+
+            let mut command = Command::new("sh");
+            command.args(["-c", cmd]).process_group(0);
+            (command, None, None, None)
         }
     };
     if env.contains_key(LOOP_TASK_ENV) {
@@ -3428,12 +3447,29 @@ pub(super) fn run_command(
     let started = Instant::now();
     let mut kill_at = kill_after.map(|timeout| started + timeout);
     let mut check_in_at = check_in_after.map(|timeout| started + timeout);
+    let publication_error = match &mut deadline {
+        WatchDeadline::Hosted { spawned, .. } => spawned(child.id()).err(),
+        _ => None,
+    };
+    let host_interrupted =
+        || matches!(&deadline, WatchDeadline::Hosted { interrupted, .. } if interrupted());
+    let hosted = matches!(&deadline, WatchDeadline::Hosted { .. });
     let mut interrupted = false;
     let mut terminated = false;
     let mut forwarded = false;
     let mut pending_signals = Vec::new();
     let (status, timed_out) = loop {
+        if publication_error.is_some() || host_interrupted() {
+            interrupted = true;
+            let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .with_context(|| format!("reaping interrupted hosted check `{cmd}`"))?;
+            break (status, false);
+        }
         if !forwarded
+            && (!hosted || (stdout.is_finished() && stderr.is_finished()))
             && let Some(status) = child
                 .try_wait()
                 .with_context(|| format!("waiting for loop check `{cmd}`"))?
@@ -3468,9 +3504,10 @@ pub(super) fn run_command(
                 Err(_) => false,
             },
         );
-        // A shell can exit before its group's TERM handlers. Keep the lock and
-        // original timeout until those members close their output pipes.
-        if (!terminated || (stdout.is_finished() && stderr.is_finished()))
+        // A shell can exit before its group's TERM handlers, and a hosted leader's start
+        // token and PGID are its kill handle. Keep the lock, the original timeout, and the
+        // leader unreaped until those members close their output pipes.
+        if (!(terminated || hosted) || (stdout.is_finished() && stderr.is_finished()))
             && let Some(status) = child
                 .try_wait()
                 .with_context(|| format!("waiting for loop check `{cmd}`"))?
@@ -3503,6 +3540,9 @@ pub(super) fn run_command(
         drain
             .join()
             .map_err(|_| anyhow::anyhow!("loop check output reader panicked"))??;
+    }
+    if let Some(error) = publication_error {
+        return Err(error).context("publishing hosted check child");
     }
     Ok(CheckOutcome {
         passed: status.success() && !timed_out && !interrupted,

@@ -3,11 +3,12 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{WorkflowSpec, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
+use crate::harness::schedule::runner::{self, CheckEcho, WatchDeadline};
 use crate::store::workflow::{self, RunRecord, RunState};
 
 mod condition;
@@ -67,6 +68,9 @@ pub(super) fn evaluate(
 ) -> Evaluation {
     match spec.checks[&record.node].kind() {
         Some(spec::CheckKind::Agent(_)) => return judge::evaluate(state, paths, spec, record),
+        Some(spec::CheckKind::Shell(shell)) => {
+            return evaluate_shell(state, paths, spec, record, shell);
+        }
         Some(spec::CheckKind::Condition) => {
             let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
             result.object = condition::evaluate(state, &spec.checks[&record.node], record);
@@ -133,7 +137,67 @@ pub(super) fn evaluate(
     result
 }
 
-fn with_child(
+fn evaluate_shell(
+    state: &StatePaths,
+    paths: &WorkflowPaths,
+    spec: &WorkflowSpec,
+    record: &RunRecord,
+    shell: &str,
+) -> Evaluation {
+    let mut result = Evaluation::failed("invalid", "shell evaluation interrupted");
+    result.object = (|| {
+        // Evaluation follows a recorded live attempt.
+        let attempt = record
+            .attempt
+            .as_ref()
+            .expect("prepared hosted shell check");
+        let log = paths.check_log(attempt.seq);
+        let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
+        let mut env = crate::workspace::pin_env(&state.workspace_id, &record.project_root);
+        env.insert("RIMZ_WORKFLOW_DIR".into(), paths.work.display().to_string());
+        env.insert("RIMZ_WORKFLOW_RUN".into(), record.id.to_string());
+        let output = with_child(
+            state,
+            paths,
+            spec,
+            record,
+            BTreeMap::new(),
+            |interrupted, spawned| {
+                runner::run_command(
+                    &record.scope.path,
+                    shell,
+                    WatchDeadline::Hosted {
+                        interrupted,
+                        spawned,
+                    },
+                    CheckEcho::Tee { file },
+                    &env,
+                    |_, _| {},
+                    &mut None,
+                )
+                .map_err(|error| format!("{error:#}"))
+            },
+        )?;
+        if output.interrupted() {
+            return Err("shell evaluation interrupted".into());
+        }
+        let mut object = json!({
+            "outcome": if output.passed() { "pass" } else { "fail" },
+            "code": output.code(),
+            "log": log,
+        });
+        if !output.passed() {
+            object["reason"] = json!(output.code().map_or_else(
+                || "killed by signal".into(),
+                |code| format!("exited {code}"),
+            ));
+        }
+        Ok(object)
+    })();
+    result
+}
+
+fn with_child<T>(
     state: &StatePaths,
     paths: &WorkflowPaths,
     spec: &WorkflowSpec,
@@ -142,8 +206,8 @@ fn with_child(
     execute: impl FnOnce(
         &dyn Fn() -> bool,
         &mut dyn FnMut(u32) -> std::io::Result<()>,
-    ) -> Result<crate::proc::BoundedOutput, String>,
-) -> Result<crate::proc::BoundedOutput, String> {
+    ) -> Result<T, String>,
+) -> Result<T, String> {
     // Evaluation follows a recorded live attempt.
     let attempt = record.attempt.as_ref().expect("prepared hosted evaluation");
     let interrupted = || {
