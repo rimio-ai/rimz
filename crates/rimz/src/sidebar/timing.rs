@@ -75,8 +75,7 @@ pub(super) const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// them. The poll is only the backstop for a *lost* event — pane truth can
 /// stale at most this long before it heals, while steady-state roster reads
 /// drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. Forced pane-frame freshness
-/// (`min_pane_cache_ms`) overrides it, while topology freshness floors stay
-/// reserved for explicit structural repair.
+/// (`min_pane_cache_ms`) overrides it without requiring a new plugin publication.
 pub(crate) const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
 /// How often the producer re-samples tmux client activity while an idle-capable

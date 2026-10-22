@@ -15,6 +15,18 @@ use crate::mux::{CommandSpec, MuxErr, PaneReadConsistency, Result, SessionLivene
 use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace};
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PresenceProbe {
+    Silent,
+    Stale {
+        ghost_panes: Vec<crate::ids::PaneId>,
+        produced_at_ms: u64,
+        observed_at_ms: u64,
+        writer: Option<super::pane_topology::TopologyWriter>,
+    },
+    Current,
+}
+
 pub(super) fn session_listing(spec: &CommandSpec, timeout: Duration) -> Result<String> {
     match spec.run_with_timeout(timeout) {
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
@@ -86,6 +98,58 @@ fn remove_path(path: &Path) -> bool {
 }
 
 impl ZellijBackend {
+    /// Compare a new plugin publication with a preceding live pane roster.
+    pub(crate) fn probe_presence(
+        &self,
+        runtime: &RuntimePaths,
+        session: &str,
+        timeout: Duration,
+    ) -> PresenceProbe {
+        let live = match self.authoritative_pane_listing(
+            session,
+            Some(runtime),
+            Some(&runtime.workspace_id),
+            super::RECONCILE_LIST_TIMEOUT,
+        ) {
+            Ok(live) => live,
+            Err(err) => {
+                tracing::debug!(session, error = %err, "presence roster probe could not read live panes");
+                return PresenceProbe::Silent;
+            }
+        };
+        let floor_ms = unix_now_ms();
+        if let Err(err) = self.dump_topology_for(session) {
+            tracing::debug!(session, error = %err, "presence roster dump request failed");
+        }
+        let Some(cache) = Self::wait_for_fresh_topology(runtime, session, floor_ms, timeout) else {
+            return PresenceProbe::Silent;
+        };
+        let terminals: std::collections::BTreeSet<_> = live
+            .panes
+            .iter()
+            .filter(|pane| !pane.is_plugin)
+            .map(|pane| pane.id)
+            .collect();
+        let Some(max_id) = terminals.last() else {
+            return PresenceProbe::Current;
+        };
+        let ghost_panes: Vec<_> = cache
+            .panes
+            .iter()
+            .filter(|pane| !pane.is_plugin && pane.id <= *max_id && !terminals.contains(&pane.id))
+            .map(|pane| crate::ids::PaneId::from(pane.native_id()))
+            .collect();
+        if ghost_panes.is_empty() {
+            return PresenceProbe::Current;
+        }
+        PresenceProbe::Stale {
+            ghost_panes,
+            produced_at_ms: cache.produced_at_ms,
+            observed_at_ms: live.produced_at_ms,
+            writer: cache.writer,
+        }
+    }
+
     pub(super) fn topology_panes(
         &self,
         session: &str,

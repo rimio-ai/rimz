@@ -981,6 +981,14 @@ impl RuntimePaths {
         ))
     }
 
+    /// Excludes sidebar reconciliation from liveness sampling through mutation.
+    pub(crate) fn sidebar_reconcile_lock(&self, mux: MuxName, session_name: &str) -> PathBuf {
+        self.lock_path(format!(
+            "sidebar-reconcile.{}.lock",
+            sidebar_host_key(mux, session_name)
+        ))
+    }
+
     /// Shared by room supervisors; claimed exclusively for birth and reset.
     pub fn room_lock(&self) -> PathBuf {
         self.lock_path("room.lock")

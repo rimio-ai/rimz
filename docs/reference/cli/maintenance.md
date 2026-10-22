@@ -219,12 +219,13 @@ rimz sidebar repair
 | `Repaired N sidebars geometry.` | Kept sidebars moved back to the full-height left dock. |
 | `N sidebars still working but not docked.` | Running, but still outside the left dock after repair. |
 | ``N sidebars could not be repaired; attach and re-run `rimz sidebar repair`.`` | The add or repair did not complete this pass. |
-| `No live presence channel for N sessions; repair skipped. Reattach or restart the session.` | On Zellij, repair needs the presence plugin; these sessions were left untouched. |
+| ``Presence plugin silent or stale in N sessions; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.`` | Plugin health is diagnostic; it does not prevent structural repair. |
+| ``Repair busy in N sessions (another repair holds the lock); re-run `rimz sidebar repair` when it finishes.`` | Another pass held the per-session lock beyond the sixty-second wait. |
 | ``Deferred N sidebar repairs (no attached client); attach and re-run `rimz sidebar repair`.`` | A detached Zellij session cannot take a new pane or geometry change until a client attaches. |
 | `Sidebar structure is healthy across N sessions.` | Nothing needed repair. |
 | `No running sidebars to repair.` | No live room. |
 
-The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
+Exit status is 1 after the full report if any repair failed, was deferred, remained misdocked, or was busy; otherwise it is 0. A silent or stale plugin alone does not fail the command. `rimz reload --repair` returns the repair's status without undoing the completed reload. The repair rules are in [sidebar internals](../../internals/sidebar/sidebar.md#structural-repair).
 
 ## Reset a wedged room
 

@@ -104,6 +104,20 @@ trait SidebarMux {
     ) -> crate::mux::Result<crate::mux::SidebarRecovery>;
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SidebarReconcileErr {
+    #[error(transparent)]
+    Lock(#[from] crate::disk::lock::LockErr),
+    #[error("cannot read sidebar build at {path}: {source}")]
+    Build {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Mux(#[from] crate::mux::MuxErr),
+}
+
 impl<T: MuxBackend + ?Sized> SidebarMux for T {
     fn name(&self) -> MuxName {
         MuxBackend::name(self)
@@ -304,7 +318,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
     // Fast path before contending — `single_flight`'s contract is that the
     // caller has already missed a fresh read by the time it elects.
     if fresh_sidebar_present(runtime) {
-        ensure_session_view(backend, runtime, opts);
+        ensure_session_view(backend, opts);
         return SidebarLaunchOutcome::SkippedFresh;
     }
     // Serialize check-then-launch through the shared single-flight election so
@@ -318,7 +332,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
             fresh_sidebar_present(runtime).then_some(())
         }) {
             Coalesced::Shared(()) => {
-                ensure_session_view(backend, runtime, opts);
+                ensure_session_view(backend, opts);
                 return SidebarLaunchOutcome::SkippedFresh;
             }
             Coalesced::Produce(guard) => Some(guard),
@@ -358,22 +372,32 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
     }
 }
 
-fn ensure_session_view<B: SidebarMux + ?Sized>(
-    backend: &B,
-    runtime: &RuntimePaths,
+/// Reconcile one session under exclusion, returning `None` when it stays busy.
+pub(crate) fn reconcile_session_sidebars(
+    backend: &dyn MuxBackend,
     opts: &SidebarPaneOptions,
-) {
-    let build = match crate::build_id::of_file(&opts.rimz_bin) {
-        Ok(build) => build,
-        Err(err) => {
-            tracing::warn!(
-                path = %opts.rimz_bin.display(),
-                error = %err,
-                "ensuring the session sidebar view skipped; room build is unreadable",
-            );
-            return;
-        }
+    wait: Duration,
+) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
+    reconcile_session(backend, opts, wait)
+}
+
+fn reconcile_session<B: SidebarMux + ?Sized>(
+    backend: &B,
+    opts: &SidebarPaneOptions,
+    wait: Duration,
+) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
+    let runtime = &opts.runtime;
+    let lock_path = runtime.sidebar_reconcile_lock(backend.name(), &opts.session_name);
+    let _guard = match crate::disk::lock::WorkspaceLock::acquire_with_timeout(&lock_path, wait) {
+        Ok(guard) => guard,
+        Err(crate::disk::lock::LockErr::Timeout { .. }) => return Ok(None),
+        Err(err) => return Err(err.into()),
     };
+    let build =
+        crate::build_id::of_file(&opts.rimz_bin).map_err(|source| SidebarReconcileErr::Build {
+            path: opts.rimz_bin.clone(),
+            source,
+        })?;
     let mut live = sidebar_liveness(runtime, &build, backend.name(), &opts.session_name);
     live.young_panes = young_sidebar_panes(
         backend.name(),
@@ -381,13 +405,24 @@ fn ensure_session_view<B: SidebarMux + ?Sized>(
         &opts.session_name,
         jiff::Timestamp::now(),
     );
-    match backend.reconcile_sidebars(opts, &live) {
-        Ok(_) => {}
-        Err(crate::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
-            session = %session,
+    Ok(Some(backend.reconcile_sidebars(opts, &live)?))
+}
+
+fn ensure_session_view<B: SidebarMux + ?Sized>(backend: &B, opts: &SidebarPaneOptions) {
+    match reconcile_session(backend, opts, Duration::from_secs(2)) {
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::debug!(
+            session = %opts.session_name,
             mux = %backend.name(),
-            "sidebar reconcile skipped; session not addressable yet (pre-attach gate will rebirth it)",
+            "sidebar reconcile skipped; another pass holds the session lock",
         ),
+        Err(SidebarReconcileErr::Mux(crate::mux::MuxErr::SessionNotFound { session })) => {
+            tracing::debug!(
+                session = %session,
+                mux = %backend.name(),
+                "sidebar reconcile skipped; session not addressable yet (pre-attach gate will rebirth it)",
+            )
+        }
         Err(err) => tracing::warn!(
             session = %opts.session_name,
             mux = %backend.name(),

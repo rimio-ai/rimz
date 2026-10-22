@@ -507,7 +507,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 | Lane | Cadence | Where staleness shows |
 | --- | --- | --- |
 | Pane frame | `SNAPSHOT_CACHE_TTL` (750 ms); `EVENT_PANE_TTL` (10 s) while presence is fresh or the retained prior has no viewed panes. An absent prior counts as watched; carried panes are capped at the poll TTL. | Pane open, close, and cwd or command regrouping with no exact event |
-| Zellij topology cache | `PRESENCE_STAMP_FRESH` (150 s); explicit freshness floors only for structural repair | Pre-producer pane listing and pushed client views |
+| Zellij topology cache | `PRESENCE_STAMP_FRESH` (150 s); explicit freshness floors for diagnostic probes and renderer geometry, never structural repair | Pre-producer pane listing and pushed client views |
 | Presence stamp | `PRESENCE_STAMP_FRESH` (150 s) | Switches the pane frame between poll-mode and event-mode TTLs |
 | Presence sample | Zellij on client-list events, tab switches, and keepalive; tmux every `PRESENCE_SAMPLE_TTL` (1 s) while clients are attached | Attach, detach, and viewed-pane gating; the tmux AFK badge clearing after input |
 | Git diff stats | Focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` (3 s) edit facts, `DIFF_STATS_FOCUSED_COMMIT_TTL` (10 s) commit facts. Background: `DIFF_STATS_TTL` (5 s) hot, `DIFF_STATS_SETTLED_TTL` (5 min) for an unviewed, not-hot worktree whose cached entry is clean and landed, `DIFF_STATS_IDLE_TTL` (60 s) for the rest. A host pass refreshes at most `MAX_HOST_PASS_ENTRIES` (8) due worktrees, viewed and hot first, then the oldest; the one-shot CLI refreshes all | Worktree header churn, ahead and behind counts, landed markers, trunk sync |

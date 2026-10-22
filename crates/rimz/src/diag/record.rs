@@ -651,6 +651,16 @@ pub enum DiagEvent {
         cache_observed_at_ms: Option<u64>,
         authoritative_observed_at_ms: u64,
     },
+    PresenceRosterStale {
+        session_name: String,
+        ghost_panes: Vec<PaneId>,
+        produced_at_ms: u64,
+        observed_at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plugin_id: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        loaded_at_ms: Option<u64>,
+    },
     SupervisorConvergence {
         target_build: String,
     },
@@ -718,6 +728,7 @@ impl DiagEvent {
             | Self::SubagentPaneBindTimeout { .. }
             | Self::ProviderStartupExit { .. }
             | Self::PaneCacheDivergence { .. }
+            | Self::PresenceRosterStale { .. }
             | Self::SupervisorPreflightRejected { .. }
             | Self::SelfCloseRejected { .. }
             | Self::RowConflict { .. }
@@ -838,6 +849,7 @@ impl DiagEvent {
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::RecoveryChildEnded { .. } => "recovery_child_ended",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
+            Self::PresenceRosterStale { .. } => "presence_roster_stale",
             Self::SupervisorConvergence { .. } => "supervisor_convergence",
             Self::SupervisorPreflightRejected { .. } => "supervisor_preflight_rejected",
             Self::SelfCloseRejected { .. } => "self_close_rejected",
@@ -1056,6 +1068,18 @@ impl DiagEvent {
             }
             Self::SupervisorPaneGone { pane_id } => {
                 format!("{}:{pane_id}", self.kind_name())
+            }
+            Self::PresenceRosterStale {
+                session_name,
+                plugin_id,
+                loaded_at_ms,
+                ..
+            } => {
+                let generation = match (plugin_id, loaded_at_ms) {
+                    (Some(plugin_id), Some(loaded_at_ms)) => format!("{loaded_at_ms}:{plugin_id}"),
+                    _ => "unknown".to_owned(),
+                };
+                format!("{}:{session_name}:{generation}", self.kind_name())
             }
             Self::SidebarOrphanReaped { pane_id, pid, .. }
             | Self::PaneCacheDivergence { pane_id, pid, .. } => {
@@ -1554,6 +1578,9 @@ impl DiagEvent {
             Self::SupervisorConvergence { target_build } => {
                 format!("supervisor converging onto build {target_build}")
             }
+            Self::PresenceRosterStale { session_name, .. } => format!(
+                "session `{session_name}` presence plugin roster is frozen; reattach or restart the session to reload it"
+            ),
             Self::SupervisorPreflightRejected {
                 target_build,
                 reason,

@@ -2,6 +2,105 @@ use super::*;
 use std::collections::HashSet;
 
 #[cfg(unix)]
+#[test]
+fn presence_probe_detects_only_proven_terminal_ghosts() {
+    use session::PresenceProbe;
+    let room = TestRoom::new();
+    let (temp, shim) =
+        support::pane_roster_shim(r#"[{"id":5,"tab_id":0},{"id":99,"is_plugin":true,"tab_id":0}]"#);
+    let backend = room.backend(&shim);
+    for (published, ghost) in [(3, true), (5, false), (6, false), (99, false)] {
+        let stamp = unix_now_ms() + 10_000;
+        room.write_cache(
+            stamp,
+            None,
+            None,
+            vec![terminal_pane(published, 0, 40, 0, "work")],
+        );
+        let mut cache =
+            pane_topology::read_pane_topology_cache(&room.runtime, "rimz-test").unwrap();
+        cache.writer = Some(pane_topology::TopologyWriter {
+            plugin_id: 7,
+            loaded_at_ms: 50,
+            build: None,
+            config: None,
+        });
+        pane_topology::write_pane_topology_cache(&room.runtime, &cache).unwrap();
+        let answer = backend.probe_presence(&room.runtime, "rimz-test", Duration::ZERO);
+        if ghost {
+            assert!(
+                matches!(answer, PresenceProbe::Stale { ref ghost_panes, produced_at_ms, observed_at_ms, writer: Some(ref writer) }
+                if ghost_panes == &[PaneId::from_parts(crate::MuxName::Zellij, "terminal_3")]
+                && produced_at_ms == stamp && observed_at_ms <= stamp && writer.plugin_id == 7 && writer.loaded_at_ms == 50),
+                "{answer:?}"
+            );
+        } else {
+            assert_eq!(answer, PresenceProbe::Current, "published id {published}");
+        }
+    }
+    let log = support::shim_log(&temp);
+    assert_eq!(
+        support::command_count(&log, "list-panes --all --json"),
+        4,
+        "{log}"
+    );
+    assert_eq!(
+        support::command_count(&log, "pipe --name rimz:dump_topology"),
+        4,
+        "{log}"
+    );
+    assert!(
+        log.find("list-panes").unwrap() < log.find("pipe --name rimz:dump_topology").unwrap(),
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn presence_probe_without_a_new_publication_is_silent() {
+    let room = TestRoom::new();
+    room.write_cache(1, None, None, vec![terminal_pane(3, 0, 40, 0, "work")]);
+    let (temp, shim) = support::pane_roster_shim(r#"[{"id":5,"tab_id":0}]"#);
+    let answer = room
+        .backend(&shim)
+        .probe_presence(&room.runtime, "rimz-test", Duration::ZERO);
+    assert_eq!(answer, session::PresenceProbe::Silent);
+    let log = support::shim_log(&temp);
+    assert_eq!(
+        support::command_count(&log, "list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        support::command_count(&log, "pipe --name rimz:dump_topology"),
+        1,
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn presence_probe_with_an_unreadable_live_roster_is_silent() {
+    let room = TestRoom::new();
+    let (temp, shim) = support::failing_roster_shim();
+    let answer = room
+        .backend(&shim)
+        .probe_presence(&room.runtime, "rimz-test", Duration::ZERO);
+    assert_eq!(answer, session::PresenceProbe::Silent);
+    let log = support::shim_log(&temp);
+    assert_eq!(
+        support::command_count(&log, "list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        support::command_count(&log, "pipe --name rimz:dump_topology"),
+        0,
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
 fn socket_listing_fixture(reply: &str) -> (tempfile::TempDir, ZellijBackend, PathBuf) {
     let (temp, shim) = support::zellij_shim(&format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/zellij.log\"\n{reply}\n"

@@ -7,6 +7,32 @@ use rimz::diag::record::{
 use rimz::ids::LinkTier;
 
 #[test]
+fn frozen_presence_roster_is_an_actionable_warning() {
+    let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+        "kind": "presence_roster_stale", "session_name": "frozen-room",
+        "ghost_panes": ["zellij:terminal_3"],
+        "produced_at_ms": 200, "observed_at_ms": 100,
+    }));
+    assert!(
+        event.is_ok(),
+        "doctor must recognize a frozen roster: {event:?}"
+    );
+    let event = event.unwrap();
+    assert_eq!(
+        classify_diagnostic(&event, event.severity()),
+        (model::DoctorState::Investigate, model::DoctorImpact::Warn)
+    );
+    let incidents = diagnostic_incidents(vec![diag_record(1, event)], 12, None, 2);
+    assert_eq!(incidents.len(), 1);
+    let summary = &incidents[0].summary;
+    assert!(
+        summary.contains("frozen-room") && summary.contains("frozen"),
+        "{summary}"
+    );
+    assert!(summary.contains("reattach or restart"), "{summary}");
+}
+
+#[test]
 fn remote_control_status_preserves_host_readiness_labels() {
     use RemoteControlHost::{Claude, Codex};
     use RuntimeControlLiveness::{Down, Unknown, Up};

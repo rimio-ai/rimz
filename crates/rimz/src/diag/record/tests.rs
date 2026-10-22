@@ -2,6 +2,47 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn stale_presence_rosters_round_trip_and_group_by_session_and_writer() {
+    let wire = serde_json::json!({
+        "kind": "presence_roster_stale", "session_name": "room",
+        "ghost_panes": ["zellij:terminal_3"],
+        "produced_at_ms": 200, "observed_at_ms": 100,
+        "plugin_id": 7, "loaded_at_ms": 50,
+    });
+    let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+    assert!(
+        decoded.is_ok(),
+        "stale roster diagnostic must decode: {decoded:?}"
+    );
+    let event = decoded.unwrap();
+    assert_eq!(event.severity(), DiagSeverity::Warn);
+    assert_eq!(event.kind_name(), "presence_roster_stale");
+    assert_eq!(event.identity_key(), "presence_roster_stale:room:50:7");
+    assert_eq!(event.family(), event.kind_name());
+    assert_eq!(event.family_key(), event.identity_key());
+    assert!(event.evidence_refs().is_empty());
+    assert!(event.summary().contains("room"));
+    assert!(event.summary().contains("frozen"));
+    assert!(event.summary().contains("reattach or restart"));
+    assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+    let mut repeated = wire.clone();
+    repeated["produced_at_ms"] = 300.into();
+    repeated["ghost_panes"] = serde_json::json!(["zellij:terminal_2"]);
+    let repeated = serde_json::from_value::<DiagEvent>(repeated).unwrap();
+    assert_eq!(event.identity_key(), repeated.identity_key());
+    for (field, value) in [
+        ("session_name", serde_json::json!("other")),
+        ("loaded_at_ms", 51.into()),
+        ("plugin_id", 8.into()),
+    ] {
+        let mut other = wire.clone();
+        other[field] = value;
+        let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+        assert_ne!(event.identity_key(), other.identity_key());
+    }
+}
+
+#[test]
 fn subagent_pane_bind_timeouts_round_trip_with_run_identity() {
     let run_id = crate::RunId::new();
     for (caller, expected) in [

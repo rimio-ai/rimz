@@ -1376,6 +1376,7 @@ fn classify_diagnostic(
         | DiagEvent::SubagentPaneBindTimeout { .. }
         | DiagEvent::ProviderStartupExit { .. }
         | DiagEvent::PaneCacheDivergence { .. }
+        | DiagEvent::PresenceRosterStale { .. }
         | DiagEvent::SupervisorConvergence { .. }
         | DiagEvent::SupervisorPreflightRejected { .. }
         | DiagEvent::SelfCloseRejected { .. }

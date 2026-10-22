@@ -98,6 +98,23 @@ fn sidebar_launch_skips_when_fresh_heartbeat_exists() {
 }
 
 #[test]
+fn fresh_sidebar_launch_skips_reconcile_while_session_lock_is_held() {
+    let h = Harness::new();
+    h.write_sidebar("sidebar.fresh.json", SIDEBAR_PROTOCOL_VERSION);
+    let backend = FakeSidebarMux::default();
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(
+        &h.runtime.sidebar_reconcile_lock(backend.name(), "session"),
+    )
+    .unwrap();
+
+    let outcome = launch_sidebar(&backend, &h.runtime, &sidebar_opts(&h), None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
+    assert_eq!(backend.open_calls(), 0);
+    assert_eq!(backend.reconcile_calls(), 0, "the holder excludes attach");
+}
+
+#[test]
 fn sidebar_launch_opens_once_without_heartbeat() {
     let h = Harness::new();
     h.ensure_runtime();

@@ -655,7 +655,7 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
     if outcome.presence_dead > 0 {
         writeln!(
             out,
-            "No live presence channel for {}; repair skipped. Reattach or restart the session.",
+            "Presence plugin silent or stale in {}; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.",
             n(outcome.presence_dead, "session"),
         )?;
     }
@@ -704,6 +704,13 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
             n(outcome.failed, "sidebar"),
         )?;
     }
+    if outcome.busy > 0 {
+        writeln!(
+            out,
+            "Repair busy in {} (another repair holds the lock); re-run `rimz sidebar repair` when it finishes.",
+            n(outcome.busy, "session"),
+        )?;
+    }
     if outcome.presence_dead
         + outcome.recovered
         + outcome.closed
@@ -712,6 +719,7 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
         + outcome.misdocked
         + outcome.deferred
         + outcome.failed
+        + outcome.busy
         == 0
     {
         writeln!(
@@ -719,6 +727,10 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
             "Sidebar structure is healthy across {}.",
             n(outcome.sessions, "session")
         )?;
+    }
+    if outcome.failed + outcome.deferred + outcome.misdocked + outcome.busy > 0 {
+        out.flush()?;
+        bail!("Sidebar repair is incomplete; see the report above.");
     }
     Ok(())
 }

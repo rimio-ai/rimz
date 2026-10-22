@@ -723,7 +723,8 @@ allowed-dependencies = [
 # lease::{Lease, LeaseAttempt, LeaseState, claim, probe, remove_if_free} share gated single-flight mechanics (+6).
 # The lease module exposes these mechanics to harness and store (+1).
 # Daily effort appends and the spending reader share classed segment paths (+2).
-surface-budget = 277
+# RuntimePaths::sidebar_reconcile_lock serializes attach and repair for one session (+1).
+surface-budget = 278
 
 [[verdict]]
 kind = "item"
@@ -754,6 +755,11 @@ reason = "Watch and run liveness reads must not defeat a concurrent claimant or 
 kind = "item"
 key = "disk::lease::remove_if_free"
 reason = "Store GC removes free locks under their directory gate without depending on harness lease names."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::sidebar_reconcile_lock"
+reason = "Attach and repair share one classed per-workspace, backend and session lock path."
 
 [[verdict]]
 kind = "item"
@@ -1467,6 +1473,16 @@ surface-budget = 245
 
 [[verdict]]
 kind = "item"
+key = "sidebar::SidebarReconcileErr"
+reason = "Reload reports lock, executable and mux failures from the shared reconcile boundary."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::reconcile_session_sidebars"
+reason = "Explicit repair uses the same lock-before-liveness reconcile entry as attachment."
+
+[[verdict]]
+kind = "item"
 key = "sidebar::timing::FOCUS_MARKER_TMUX_DWELL"
 reason = "The renderer measures the tmux marker dwell at the consuming focus fold."
 
@@ -2114,7 +2130,18 @@ allowed-dependencies = [
 ]
 # Tab ownership mutations resolve the session's canonical runtime paths (+1).
 # session_listing shares denied-directory classification with the live listing (+1).
-surface-budget = 17
+# PresenceProbe and ZellijBackend::probe_presence expose diagnostic-only roster health (+2).
+surface-budget = 19
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::session::PresenceProbe"
+reason = "Reload distinguishes silent, current and provably stale presence without gating live repair."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::session::ZellijBackend::probe_presence"
+reason = "Repair compares a post-live-read publication against monotonic terminal IDs for diagnostics."
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/pets"
