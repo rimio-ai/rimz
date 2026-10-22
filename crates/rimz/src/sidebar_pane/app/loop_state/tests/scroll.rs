@@ -199,6 +199,17 @@ pub(super) struct SharedPanes {
 
 impl SharedPanes {
     pub(super) fn new(mux: MuxName) -> Self {
+        let mut pair = Self::unpainted(mux);
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.with_shared_view(false, false, |state| {
+            let group = state.current.worktree_groups[0].key.clone();
+            state.ui.expanded_groups.insert(group);
+        });
+        pair.paint(0);
+        pair
+    }
+
+    fn unpainted(mux: MuxName) -> Self {
         let (a, b, _) = pane_pair(mux);
         let snapshot = a.state.current.clone();
         let clock = LoopClock::play(snapshot.now);
@@ -213,12 +224,6 @@ impl SharedPanes {
             rig.state.clock = pair.clock.clone();
             rig.share_views(pair.plane.views.clone());
         }
-        pair.sample(&[(1, 0)]);
-        pair.panes[0].state.with_shared_view(false, false, |state| {
-            let group = state.current.worktree_groups[0].key.clone();
-            state.ui.expanded_groups.insert(group);
-        });
-        pair.paint(0);
         pair
     }
 
@@ -275,6 +280,18 @@ impl SharedPanes {
             .unwrap();
     }
 
+    fn fold(&mut self, index: usize) {
+        let fold = self.plane.views.lock().unwrap().fold.clone().unwrap();
+        let own_pane = self.panes[index].state.config.own_pane.clone();
+        self.panes[index].deliver(FetchUpdate::Fold {
+            fold,
+            own_pane,
+            refresh_override: None,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        });
+    }
+
     fn input(&mut self, index: usize) {
         let rig = &mut self.panes[index];
         rig.state
@@ -288,6 +305,145 @@ impl SharedPanes {
 
     pub(super) fn view(&self, index: usize) -> render::ViewState {
         self.panes[index].state.inspect_view(|ui, _| ui.clone())
+    }
+}
+
+#[test]
+fn first_observed_reveal_reads_siblings_after_dwell_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::unpainted(mux);
+        for row in Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows) {
+            row.unread = true;
+        }
+        pair.sample(&[]);
+        pair.fold(1);
+        assert!(!pair.panes[1].state.watched());
+        pair.sample(&[(1, 1)]);
+        pair.paint(1);
+
+        assert!(
+            pair.panes[1]
+                .state
+                .inspect_view(|_, view| view.tab_read_dwell_until.is_some())
+        );
+        let arrived = pair.view(1);
+        assert!(arrived.freeze.is_some());
+        assert_eq!(arrived.viewing_own_tab, Some(true));
+        let held = arrived.freeze.unwrap().frozen;
+        assert_eq!(held.groups, arrived.last_order.groups);
+        assert_eq!(held.rows, arrived.last_order.rows);
+        assert!(
+            pair.panes[1]
+                .state
+                .current
+                .rows()
+                .find(|row| row.id == "agent-10")
+                .unwrap()
+                .unread
+        );
+
+        pair.clock
+            .advance(TAB_READ_DWELL + Duration::from_millis(1));
+        pair.sample(&[(1, 1)]);
+        pair.fold(1);
+        let current = &pair.panes[1].state.current;
+        let own = current.own_view.as_ref().unwrap();
+        assert!(
+            current
+                .rows()
+                .filter(|row| row.pane_ids().any(|id| own.working_pane_ids.contains(id)))
+                .all(|row| !row.unread)
+        );
+        assert!(
+            ReadMarks::load(&pair.panes[1].runtime)
+                .cleared_at_ms("agent-10")
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn reattach_after_expiry_reads_siblings_after_dwell_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::new(mux);
+        pair.input(0);
+        assert!(pair.view(0).scroll_offset > 0);
+        let selected = pair
+            .snapshot
+            .rows()
+            .next()
+            .unwrap()
+            .pane_ids()
+            .next()
+            .unwrap()
+            .clone();
+        pair.panes[0].view().ui.baseline_pane = Some(selected.clone());
+        pair.panes[0].view().ui.selected_pane = Some(selected);
+        pair.panes[0].view().ui.selected_index = Some(0);
+        pair.sample(&[]);
+        pair.plane.views.lock().unwrap().refresh(pair.clock.now());
+        pair.clock.advance(
+            Duration::from_millis(pair.snapshot.sidebar.afk_after_ms()) + Duration::from_millis(1),
+        );
+        for row in Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows) {
+            row.unread = true;
+        }
+        pair.sample(&[(1, 0)]);
+        pair.panes[0].state.with_shared_view(false, false, |state| {
+            assert_eq!(state.ui.scroll_offset, 0);
+            assert_eq!(state.ui.selected_index, None);
+            assert_eq!(state.ui.baseline_pane, None);
+            assert!(state.ui.freeze.is_none());
+        });
+        pair.paint(0);
+        assert!(
+            pair.panes[0]
+                .state
+                .inspect_view(|_, view| view.tab_read_dwell_until.is_some())
+        );
+        assert!(pair.view(0).freeze.is_some());
+        assert!(
+            pair.panes[0]
+                .state
+                .current
+                .rows()
+                .find(|row| row.id == "agent-1")
+                .unwrap()
+                .unread
+        );
+
+        pair.clock
+            .advance(TAB_READ_DWELL + Duration::from_millis(1));
+        pair.sample(&[(1, 0)]);
+        pair.fold(0);
+        let current = &pair.panes[0].state.current;
+        let own = current.own_view.as_ref().unwrap();
+        assert!(
+            current
+                .rows()
+                .filter(|row| row.pane_ids().any(|id| own.working_pane_ids.contains(id)))
+                .all(|row| !row.unread)
+        );
+        assert!(
+            ReadMarks::load(&pair.panes[0].runtime)
+                .cleared_at_ms("agent-1")
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn born_visible_arms_no_arrival_effects_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let pair = SharedPanes::new(mux);
+        assert_eq!(
+            pair.panes[0]
+                .state
+                .inspect_view(|_, view| view.tab_read_dwell_until),
+            None
+        );
+        assert!(pair.view(0).freeze.is_none());
+        assert!(!pair.view(0).arrival_pending);
     }
 }
 
