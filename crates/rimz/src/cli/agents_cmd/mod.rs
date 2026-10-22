@@ -310,6 +310,54 @@ impl LaunchOverrideArgs {
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
+struct SessionResumeOverrides {
+    /// Ask before tool use where supported (@handle only).
+    #[arg(long, conflicts_with = "yolo")]
+    ask: bool,
+    /// Skip provider permission prompts where supported (@handle only).
+    #[arg(long)]
+    yolo: bool,
+    /// Save this model for later resumes (@handle only).
+    #[arg(long, value_name = "MODEL", conflicts_with = "tier")]
+    model: Option<String>,
+    /// Select a same-provider tier and save it (@handle only).
+    #[arg(long, value_name = "TIER")]
+    tier: Option<rimz::config::tiers::ModelTier>,
+    /// Rebase onto a same-provider profile or kind (@handle only).
+    #[arg(long, value_name = "PROFILE|KIND")]
+    agent: Option<String>,
+    /// Save this reasoning effort for later resumes (@handle only).
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
+    /// Enable provider fast mode and save it (@handle only).
+    #[arg(long, conflicts_with = "no_fast")]
+    fast: bool,
+    /// Disable provider fast mode and save it (@handle only).
+    #[arg(long)]
+    no_fast: bool,
+    /// Replace the session's saved isolation (@handle only).
+    #[arg(long, value_name = "host|scoped|sandbox")]
+    isolation: Option<rimz::config::Isolation>,
+}
+
+impl SessionResumeOverrides {
+    fn into_launch_overrides(self) -> LaunchOverrideArgs {
+        LaunchOverrideArgs {
+            ask: self.ask,
+            yolo: self.yolo,
+            model: self.model,
+            tier: self.tier,
+            agent: self.agent,
+            effort: self.effort,
+            fast: self.fast,
+            no_fast: self.no_fast,
+            isolation: self.isolation,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Args)]
 pub(crate) struct AgentLaunchArgs {
     /// Resume an exact provider session; omit the id to request its session picker.
     #[arg(
@@ -319,8 +367,7 @@ pub(crate) struct AgentLaunchArgs {
         value_parser = clap::builder::NonEmptyStringValueParser::new(),
         conflicts_with_all = [
             "continue_cohort", "prompt", "channel", "from_pr", "description", "budget",
-            "worktree", "fresh", "detach", "cwd", "name", "print", "model", "tier",
-            "agent", "effort", "fast", "no_fast", "isolation", "ask", "yolo",
+            "worktree", "fresh", "detach", "cwd", "name", "print",
             "system_prompt_file", "append_system_prompt_files", "passthrough"
         ]
     )]
@@ -675,6 +722,8 @@ enum AgentsSubcmd {
         /// Open without focusing the resumed tab.
         #[arg(long)]
         bg: bool,
+        #[command(flatten)]
+        overrides: SessionResumeOverrides,
     },
     /// Force-refresh agent-card context from local transcripts and helpers.
     Refresh(RefreshArgs),
@@ -930,6 +979,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             from_pr,
             bg,
             fresh,
+            overrides,
         }) => {
             if let Some(reference) = scope.as_deref().filter(|scope| scope.starts_with('@')) {
                 if fresh {
@@ -937,7 +987,12 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                         "--fresh takes a lane scope, not an agent reference; drop --fresh to resume this session".to_owned(),
                     ).into());
                 }
-                return resume::resume_agent(reference, bg, globals);
+                return resume::resume_agent(reference, bg, overrides, globals);
+            }
+            if overrides != SessionResumeOverrides::default() {
+                return Err(UsageError::new(
+                    "launch overrides apply to one closed session (@handle); to change a lane's settings use rimz agents <spec> --continue or rimz teams resume".to_owned(),
+                ).into());
             }
             return resume_lane(scope.or(worktree), from_pr, bg, fresh, globals);
         }

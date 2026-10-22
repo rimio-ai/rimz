@@ -169,6 +169,21 @@ pub(super) fn launch_override_preset(
     })
 }
 
+pub(super) fn resume_overrides<'a>(
+    overrides: &'a LaunchOverrideArgs,
+    machine: &'a MachineConfig,
+    unavailable: &'a dyn Fn(&str, &str) -> Option<rimz::agents::TierSkipReason>,
+) -> Result<rimz::harness::resume::ResumeOverrides<'a>> {
+    Ok(rimz::harness::resume::ResumeOverrides {
+        team: None,
+        permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
+        preset: launch_override_preset(overrides)?,
+        agent: overrides.agent.as_deref(),
+        tier: overrides.tier.map(|tier| (tier, &machine.tiers)),
+        unavailable: Some(unavailable),
+    })
+}
+
 pub(super) fn resolve_launch_prompt_file(
     path: Option<&Path>,
     flag: &str,

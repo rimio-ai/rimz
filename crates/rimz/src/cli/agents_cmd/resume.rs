@@ -4,7 +4,6 @@
 //! machine facts, preflights providers, applies mux/store actions, and renders
 //! their user-facing result.
 
-use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -15,7 +14,7 @@ use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
     LaneSummary, LaneWorktree, MaterializedRecovery, ResumeContext, ResumeSkip, ResumeSkipReason,
-    plan_lane_resume, plan_resume, resume_session_present,
+    SingleResumeOptions, plan_lane_resume, plan_recorded_resume, resume_session_present,
 };
 use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget};
 
@@ -144,7 +143,12 @@ pub(super) fn resume_provider(
     }.map(|()| true)
 }
 
-pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn resume_agent(
+    reference: &str,
+    bg: bool,
+    overrides: super::SessionResumeOverrides,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let ctx = crate::cli::ctx::Ctx::open(globals)?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -180,6 +184,7 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
     };
     validate_recorded_resume(&agent, &agent.kind, None)?;
     let args = super::AgentLaunchArgs {
+        overrides: overrides.into_launch_overrides(),
         cohort: super::CohortLaunchArgs {
             bg,
             ..Default::default()
@@ -258,9 +263,8 @@ fn resume_selected(
         &machine,
         Timestamp::now(),
     );
-    let config = LaneRestoreConfig::load(&machine, &workspace.project_root, |kind, model| {
-        availability.unavailable(kind, model)
-    })?;
+    let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
+    let config = LaneRestoreConfig::load(&machine, &workspace.project_root, &unavailable)?;
     let resume_ctx = ResumeContext {
         in_place: placement == Placement::SamePane,
         project_root: Some(&workspace.project_root),
@@ -272,31 +276,40 @@ fn resume_selected(
         logins: &logins,
         catalog: &catalog,
     };
-    let (name, session_id, plan) = match source {
-        ResumeSource::Recorded(agent) => (
-            agent
-                .name
-                .as_deref()
-                .unwrap_or(agent.agent_id.as_str())
-                .to_owned(),
-            &agent.agent_id,
-            plan_resume(
-                std::slice::from_ref(agent),
-                &BTreeSet::new(),
+    let options = SingleResumeOptions {
+        overrides: super::resume_overrides(&args.overrides, &machine, &unavailable)?,
+        isolation: args.overrides.isolation,
+        machine_isolation: machine.agents.isolation,
+    };
+    let (name, session_id, plan, facts) = match source {
+        ResumeSource::Recorded(agent) => {
+            let (plan, facts) = plan_recorded_resume(
+                agent,
                 resume_ctx,
+                &options,
                 Path::is_dir,
                 resume_session_present,
-            ),
-        ),
+            );
+            (
+                agent
+                    .name
+                    .as_deref()
+                    .unwrap_or(agent.agent_id.as_str())
+                    .to_owned(),
+                &agent.agent_id,
+                plan,
+                facts,
+            )
+        }
         ResumeSource::Provider(observation, profile) => {
-            let (name, plan, _) = rimz::harness::resume::plan_provider_resume(
+            let (name, plan, facts) = rimz::harness::resume::plan_provider_resume(
                 observation,
                 profile,
                 &snapshot.agents,
                 resume_ctx,
-                &Default::default(),
+                &options,
             );
-            (name, &observation.session_id, plan)
+            (name, &observation.session_id, plan, facts)
         }
     };
     report_posture_warnings(&plan.warnings)?;
@@ -322,6 +335,16 @@ fn resume_selected(
             });
         bail!("cannot resume @{name}: {reason}");
     };
+    let adapter = rimz::agents::find_definition(kind.as_str())
+        .with_context(|| format!("unknown agent kind `{kind}`"))?;
+    if let Some(facts) = &facts {
+        rimz::sandbox::preflight_launch(
+            facts.isolation,
+            kind,
+            facts.skills,
+            adapter.manual_skill(),
+        )?;
+    }
     crate::cli::lsp_admission::admit(&tab.cwd, &machine)?;
     rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &tab.cwd)?;
     let login = logins.login(kind, &machine.accounts)?;
@@ -345,8 +368,6 @@ fn resume_selected(
         &mut Default::default(),
         &mut crate::cli::render::err(),
     )?;
-    let adapter = rimz::agents::find_definition(kind.as_str())
-        .with_context(|| format!("unknown agent kind `{kind}`"))?;
     let repo_root = match source {
         ResumeSource::Recorded(agent) if agent.checkout.is_some() => None,
         _ => workspace.at_launch_dir(&tab.cwd)?.cwd_project_root,
@@ -361,9 +382,18 @@ fn resume_selected(
         ),
         None,
     )?;
+    let record_tier_fallback = || {
+        if let Some(launch) = facts
+            .as_ref()
+            .and_then(|facts| facts.tier_fallback.as_ref())
+        {
+            rimz::harness::assist_log::record_tier_fallback(kind, session_id, Some(&name), launch);
+        }
+    };
     let receipt = format!("resumed {kind}:{name} ({session_id})");
     if placement == Placement::NewTab {
         room.open_resume_tab(tab, focus.takes_focus())?;
+        record_tier_fallback();
         writeln!(std::io::stdout().lock(), "{receipt}")?;
         return Ok(());
     }
@@ -398,6 +428,7 @@ fn resume_selected(
             },
         },
         || {
+            record_tier_fallback();
             let _ = writeln!(std::io::stdout().lock(), "{receipt}");
         },
     )
