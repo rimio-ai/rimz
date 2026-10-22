@@ -221,6 +221,15 @@ impl TmuxBackend {
 }
 
 impl MuxBackend for TmuxBackend {
+    fn view_geometry(
+        &self,
+        _session: &str,
+        anchor: &PaneId,
+        timeout: Duration,
+    ) -> Result<Option<crate::mux::ViewGeometry>> {
+        self.read_view_geometry(anchor, timeout)
+    }
+
     fn close_pane_on_exit(&self, pane: &PaneId) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         self.cmd()

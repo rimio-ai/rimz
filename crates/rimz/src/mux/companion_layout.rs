@@ -2,21 +2,11 @@
 
 use crate::ids::PaneId;
 
-use super::SplitDirection;
+use super::{PaneRect, SplitDirection};
 
 pub const COMPANION_PANE_LIMIT: usize = 8;
 const MAX_ROWS: usize = 4;
 const MAX_COLUMNS: usize = 2;
-
-/// Outer pane rectangle, including backend-owned frame cells where applicable.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct GridPane {
-    pub(super) pane_id: PaneId,
-    pub(super) x: u64,
-    pub(super) y: u64,
-    pub(super) cols: u64,
-    pub(super) rows: u64,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct GridSplit {
@@ -24,7 +14,7 @@ pub(super) struct GridSplit {
     pub(super) direction: SplitDirection,
 }
 
-fn columns(panes: &[GridPane], gap: u64) -> Option<Vec<Vec<&GridPane>>> {
+fn columns(panes: &[PaneRect], gap: u64) -> Option<Vec<Vec<&PaneRect>>> {
     if panes.is_empty() || panes.len() > COMPANION_PANE_LIMIT {
         return None;
     }
@@ -32,7 +22,7 @@ fn columns(panes: &[GridPane], gap: u64) -> Option<Vec<Vec<&GridPane>>> {
     ordered.sort_by_key(|pane| (pane.x, pane.y));
     let top = ordered.first()?.y;
     let bottom = panes.iter().map(|pane| pane.y + pane.rows).max()?;
-    let mut bands: Vec<Vec<&GridPane>> = Vec::new();
+    let mut bands: Vec<Vec<&PaneRect>> = Vec::new();
     for pane in ordered {
         if pane.cols == 0 || pane.rows == 0 {
             return None;
@@ -65,7 +55,7 @@ fn columns(panes: &[GridPane], gap: u64) -> Option<Vec<Vec<&GridPane>>> {
 
 /// Start with two columns, then grow each column to at most four rows.
 /// Unknown/manual/stacked shapes are left alone rather than retiled destructively.
-pub(super) fn plan_append(panes: &[GridPane], gap: u64) -> Option<GridSplit> {
+pub(super) fn plan_append(panes: &[PaneRect], gap: u64) -> Option<GridSplit> {
     if panes.len() >= COMPANION_PANE_LIMIT {
         return None;
     }
@@ -98,7 +88,7 @@ pub(super) fn plan_append(panes: &[GridPane], gap: u64) -> Option<GridSplit> {
 /// Equal column widths and equal heights within each column, without moving
 /// processes between columns. Backends may only approximate these targets when
 /// their resize steps are coarse.
-pub(super) fn balance(panes: &[GridPane], gap: u64) -> Option<Vec<GridPane>> {
+pub(super) fn balance(panes: &[PaneRect], gap: u64) -> Option<Vec<PaneRect>> {
     let bands = columns(panes, gap)?;
     let left = panes.iter().map(|pane| pane.x).min()?;
     let top = panes.iter().map(|pane| pane.y).min()?;
@@ -118,7 +108,7 @@ pub(super) fn balance(panes: &[GridPane], gap: u64) -> Option<Vec<GridPane>> {
             if rows < 3 || cols < 6 {
                 return None;
             }
-            targets.push(GridPane {
+            targets.push(PaneRect {
                 pane_id: pane.pane_id.clone(),
                 x,
                 y,
@@ -140,7 +130,7 @@ mod tests {
     #[test]
     fn companion_layout_starts_with_two_columns_and_grows_to_eight() {
         for gap in [0, 1] {
-            let mut panes = vec![GridPane {
+            let mut panes = vec![PaneRect {
                 pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
                 x: 50,
                 y: 1,
@@ -201,7 +191,7 @@ mod tests {
 
     #[test]
     fn companion_layout_rejects_stacks_and_unrecognised_geometry() {
-        let pane = GridPane {
+        let pane = PaneRect {
             pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
             x: 50,
             y: 0,

@@ -1152,7 +1152,23 @@ path = "crates/rimz/src/mux"
 # ViewSize, LaggingViews, LaggingView and the three backend verbs share hidden-view geometry (+6).
 # FittedPane carries per-pane rows and proven sidebar columns across the fit/push seam (+1).
 # MuxBackend::close_pane_on_exit lets the sidebar pin only its own pane's lifetime (+1).
-surface-budget = 292
+# PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
+surface-budget = 295
+
+[[verdict]]
+kind = "item"
+key = "mux::PaneRect"
+reason = "One outer rectangle vocabulary serves companion tiling and the backend-neutral daemon shape judge."
+
+[[verdict]]
+kind = "item"
+key = "mux::ViewGeometry"
+reason = "The daemon judge consumes each view's tiled terminal rectangles and native separator width."
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::view_geometry"
+reason = "Read-only daemon inspection and repair share authoritative view geometry on both backends."
 
 [[verdict]]
 kind = "item"

@@ -586,6 +586,15 @@ mod zone_backend {
     }
 
     impl m::MuxBackend for Backend {
+        fn view_geometry(
+            &self,
+            _session: &str,
+            _anchor: &PaneId,
+            _timeout: Duration,
+        ) -> m::Result<Option<m::ViewGeometry>> {
+            panic!("unexpected view_geometry")
+        }
+
         fn name(&self) -> MuxName {
             MuxName::Tmux
         }
