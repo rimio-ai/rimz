@@ -224,7 +224,7 @@ Reset is destructive and asks before replacing the wedged room; [rebuild a wedge
 
 ### The loop watch spans the bottom of the `rimzd` tab
 
-Run `rimz doctor` and read `daemon tab` in `MULTIPLEXER`. When the loop watch spans beneath both the content and runtime columns and restarting it would restore their shape, RimZ restarts only the loop watch at its next daemon repair. To do that now, close the loop watch pane; RimZ reopens it in the runtime column. Doctor only inspects the tab and never changes it.
+Run `rimz doctor` and read `daemon tab` in `MULTIPLEXER`. When the loop watch spans beneath both the content and runtime columns and restarting it would restore their shape, RimZ restarts only the loop watch at its next daemon repair. To restart it sooner, close the loop watch pane; RimZ reopens it in the runtime column within about 30 seconds. Doctor only inspects the tab and never changes it.
 
 For other misshapen layouts, the row names the misplaced columns and RimZ leaves the tab as it is. To rebuild it, close the `rimzd` tab, then run `rimz start` from outside the room, after detaching or from another terminal: a start inside the room only reports that you are already in it. The start reopens the tab from its layout while your agents keep running. Closing the tab stops its panes until that start. A fullscreen or zoomed pane, or a tab that changes during the check, can leave the shape unjudged; this is a note, not a warning. See [daemon view](./configuration.md#daemon-view) for its content-column configuration.
 
