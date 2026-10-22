@@ -862,6 +862,7 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
             stamp + 10,
             event,
         );
+        rig.record_event(&envelope);
         rig.state
             .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
     }

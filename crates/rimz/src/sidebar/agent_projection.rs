@@ -287,20 +287,7 @@ pub(super) fn publish_if_changed(
     fresh: &AgentProjectionPublication,
     last_published: &mut Option<AgentProjectionPublication>,
 ) {
-    if let Err(err) = publish_with(
-        &runtime.agent_projection_path(),
-        fresh,
-        last_published,
-        || {
-            if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
-                tracing::debug!(
-                    workspace = %runtime.workspace_id,
-                    error = %err,
-                    "agent-projection publication could not wake sidebars"
-                );
-            }
-        },
-    ) {
+    if let Err(err) = publish_with(&runtime.agent_projection_path(), fresh, last_published) {
         tracing::debug!(
             workspace = %runtime.workspace_id,
             error = %err,
@@ -365,14 +352,12 @@ fn publish_with(
     path: &Path,
     published: &AgentProjectionPublication,
     last_published: &mut Option<AgentProjectionPublication>,
-    on_changed: impl FnOnce(),
 ) -> crate::disk::atomic::Result<bool> {
     if last_published.as_ref() == Some(published) {
         return Ok(false);
     }
     crate::disk::atomic::write_temp_then_rename_cache(path, published)?;
     *last_published = Some(published.clone());
-    on_changed();
     Ok(true)
 }
 
@@ -492,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_publication_wakes_after_visible_write() {
+    fn semantic_publication_writes_once_per_change() {
         let temp = tempfile::tempdir().unwrap();
         let runtime = RuntimePaths::under(
             crate::WorkspaceId::from_project_root(temp.path()),
@@ -507,24 +492,24 @@ mod tests {
             inputs: LocalSessionInputs::default(),
             observations: Vec::new(),
         };
-        let wakes = Cell::new(0);
         let mut last_published = None;
-        publish_with(&path, &published, &mut last_published, || {
-            let visible: AgentProjectionPublication =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            assert_eq!(visible, published);
-            wakes.set(wakes.get() + 1);
-        })
-        .unwrap();
-        assert!(!publish_with(&path, &published, &mut last_published, || wakes.set(99)).unwrap());
-        assert_eq!(wakes.get(), 1);
+        assert!(publish_with(&path, &published, &mut last_published).unwrap());
+        assert_eq!(read_publication(&runtime, "room"), Some(published.clone()));
+        assert!(!publish_with(&path, &published, &mut last_published).unwrap());
+
+        let published = AgentProjectionPublication {
+            wiring: projection("claude"),
+            ..published
+        };
+        assert!(publish_with(&path, &published, &mut last_published).unwrap());
+        assert_eq!(read_publication(&runtime, "room"), Some(published.clone()));
+        assert!(publish_with(&path, &published, &mut None).unwrap());
 
         let mut restarted = read_publication(&runtime, "room");
         assert!(
-            !publish_with(&path, &published, &mut restarted, || wakes.set(99)).unwrap(),
-            "the unchanged first probe after restart does not publish or wake"
+            !publish_with(&path, &published, &mut restarted).unwrap(),
+            "a restart seeded from disk does not rewrite an unchanged publication"
         );
-        assert_eq!(wakes.get(), 1);
     }
 
     #[test]

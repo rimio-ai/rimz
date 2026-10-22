@@ -53,7 +53,7 @@ pub(super) use self::backend::PaneBackend;
 #[cfg(test)]
 pub(super) use self::backend::tests::Pty;
 pub(super) use self::input::{Wakeup, decode_wakeup};
-pub(super) use self::plane::DataPlane;
+pub(super) use self::plane::{DataPlane, RoomEvents};
 pub(super) use self::socket::EventForwarder;
 
 #[cfg(feature = "testkit")]

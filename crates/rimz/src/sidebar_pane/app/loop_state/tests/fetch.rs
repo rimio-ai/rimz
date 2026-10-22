@@ -126,6 +126,86 @@ fn renderer_local_reconciliation_state_forces_full_content() {
 }
 
 #[test]
+fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
+    let clock = LoopClock::play(Timestamp::from_second(1_700_000_000).unwrap());
+    let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    let mut process = pane("terminal_9", "tab_0", false);
+    process.command = Some("sh".to_owned());
+    let pane_id = process.pane_id.clone();
+    let mut snapshot = snapshot_with_panes(&rig.ws, vec![process]);
+    snapshot.panes_produced_at_ms = Some(clock.now_ms() - 1);
+    rig.fold(snapshot, SnapshotSource::Produced);
+    let envelope = SidebarEventEnvelope::new(
+        rig.ws.clone(),
+        Some("rimz-test".to_owned()),
+        clock.now_ms(),
+        SidebarEvent::CommandChanged {
+            pane_id: pane_id.clone(),
+            command: "vim".to_owned(),
+        },
+    );
+    rig.record_event(&envelope);
+    clock.advance(Duration::from_millis(12_001));
+    rig.state.events().prune(clock.now_ms());
+    rig.state
+        .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
+    assert_eq!(
+        rig.view()
+            .current
+            .row_owning_pane(&pane_id)
+            .unwrap()
+            .pane
+            .as_ref()
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("sh"),
+        "a late pane must not extend the overlay's ingress TTL"
+    );
+    assert_eq!(*rig.state.events(), EventStore::default());
+}
+
+#[test]
+fn a_body_filter_save_reaches_origin_and_peer_in_memory_only_with_effects() {
+    let mut rig = Rig::new();
+    let plane = super::super::super::plane::DataPlane::detached();
+    let mut peer = rig.state.config.clone();
+    peer.instance_id = crate::SidebarInstanceId::new();
+    let (origin_tx, origin_rx) = std::sync::mpsc::sync_channel(64);
+    let (peer_tx, peer_rx) = std::sync::mpsc::sync_channel(64);
+    let _origin = plane.subscribe(&rig.state.config, origin_tx);
+    let _peer = plane.subscribe(&peer, peer_tx);
+    rig.state.room_events = Some(plane.room_events(&rig.runtime));
+    let filter = BodyLens {
+        filter: None,
+        query: Some("auth".to_owned()),
+    };
+    rig.state.persist_body_filter(filter.clone());
+    assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
+    for inbox in [&origin_rx, &peer_rx] {
+        let wakeup = inbox.try_recv();
+        assert!(
+            matches!(&wakeup, Ok(Wakeup::Event(envelope))
+                if envelope.workspace_id == rig.ws
+                    && envelope.session_name.as_deref() == Some("rimz-test")
+                    && envelope.event == SidebarEvent::BodyFilterChanged),
+            "the save must fan out in memory, including its origin: {wakeup:?}"
+        );
+        assert!(inbox.try_recv().is_err());
+    }
+
+    rig.state.clock = LoopClock::play(Timestamp::now());
+    rig.state.persist_body_filter(BodyLens::default());
+    assert_eq!(
+        crate::sidebar::body_filter::load(&rig.runtime),
+        BodyLens::default()
+    );
+    for inbox in [&origin_rx, &peer_rx] {
+        assert!(inbox.try_recv().is_err(), "play clocks disable dispatch");
+    }
+}
+
+#[test]
 fn synthetic_fold_releases_baseline_after_overlay_expires() {
     let mut rig = Rig::new();
     let mut process = pane("terminal_9", "tab_0", false);
@@ -1185,22 +1265,16 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 }
 
 #[test]
-fn search_commit_writes_and_broadcasts_the_lens() {
+fn search_commit_writes_and_dispatches_the_lens() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();
     rig.view().current = agent_snapshot(&rig.ws);
-    std::fs::create_dir_all(rig.state.host_wake_path.parent().unwrap()).unwrap();
-    let socket = crate::sidebar_pane::host::bind_wake_socket(&rig.state.host_wake_path).unwrap();
-    socket
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
-    write_heartbeat(
-        &rig.state.config,
-        &rig.runtime,
-        &rig.state.host_wake_path,
-        None,
-    )
-    .unwrap();
+    let plane = super::super::super::plane::DataPlane::detached();
+    let mut peer = rig.state.config.clone();
+    peer.instance_id = crate::SidebarInstanceId::new();
+    let (wake, inbox) = std::sync::mpsc::sync_channel(64);
+    let _peer = plane.subscribe(&peer, wake);
+    rig.state.room_events = Some(plane.room_events(&rig.runtime));
     for code in [KeyCode::Char('/'), KeyCode::Char('a'), KeyCode::Enter] {
         rig.state
             .on_input(
@@ -1219,10 +1293,8 @@ fn search_commit_writes_and_broadcasts_the_lens() {
             .as_deref(),
         Some("a")
     );
-    let mut bytes = [0; 2048];
-    let len = socket.recv(&mut bytes).unwrap();
-    let envelope: SidebarEventEnvelope = serde_json::from_slice(&bytes[..len]).unwrap();
-    assert_eq!(envelope.event, SidebarEvent::BodyFilterChanged);
+    assert!(matches!(inbox.try_recv(), Ok(Wakeup::Event(envelope))
+        if envelope.event == SidebarEvent::BodyFilterChanged));
 }
 
 #[test]

@@ -106,6 +106,7 @@ impl Attachment {
         baseline_pane: Option<crate::ids::PaneId>,
         baseline_changed: BaselineReporter,
     ) -> Result<AttachmentExit> {
+        let subscription = plane.subscribe(&self.config, self.wake.clone());
         let Self {
             config,
             runtime,
@@ -142,7 +143,6 @@ impl Attachment {
         terminal.swap_buffers();
 
         let initial_width = terminal.size().map(|s| s.width).ok();
-        let subscription = plane.subscribe(&config, wake.clone());
         let host_wake_path =
             runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let pixel_lease = match PixelLease::acquire(&runtime) {
@@ -173,6 +173,7 @@ impl Attachment {
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
+        state.room_events = Some(plane.room_events(&runtime));
         state.share_views(plane.views.clone());
         state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
         state.wake = Some(wake);

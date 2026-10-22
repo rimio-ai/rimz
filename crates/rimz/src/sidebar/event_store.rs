@@ -1,4 +1,4 @@
-//! Renderer-owned realtime event overlay policy and storage.
+//! Room-plane realtime event overlay policy and storage.
 
 use crate::agents::LifecycleSignal;
 use crate::ids::PaneId;

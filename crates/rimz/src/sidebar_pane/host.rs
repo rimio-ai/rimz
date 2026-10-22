@@ -22,8 +22,8 @@ mod reload;
 use crate::RuntimePaths;
 use crate::diag::focus_trace::{FocusTraceEvent, PushDelivery};
 use crate::sidebar_pane::app::{
-    Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, ServeConfig, SidebarAppErr,
-    Wakeup, decode_wakeup,
+    Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, RoomEvents, ServeConfig,
+    SidebarAppErr, Wakeup, decode_wakeup,
 };
 use crate::sidebar_pane::attach::{
     self, Control, ControlLine, Hello, PROTOCOL, REJECT_BUILD, REJECT_CAPACITY, REJECT_PROTOCOL,
@@ -224,6 +224,7 @@ struct Host {
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     plane: DataPlane,
+    room_events: RoomEvents,
     socket_path: PathBuf,
     build: Option<String>,
     reload_action: fn(&crate::WorkspaceId) -> reload::ReloadAction,
@@ -250,11 +251,13 @@ impl Host {
         timing: Timing,
     ) -> Arc<Self> {
         let (events, inbox) = std::sync::mpsc::channel();
+        let room_events = plane.room_events(&runtime);
         Arc::new(Self {
             template,
             runtime,
             diag,
             plane,
+            room_events,
             socket_path,
             build,
             reload_action: reload::reload_action,
@@ -588,10 +591,7 @@ impl Host {
                 let _ = self.events.send(Event::Reload);
                 return;
             }
-            crate::harness::hibernate::wake_focused(&self.runtime, &envelope.event);
-            for live in lock(&self.attachments).values() {
-                let _ = live.close.wake.try_send(Wakeup::Event(envelope.clone()));
-            }
+            self.room_events.dispatch(envelope);
             return;
         }
         let Some((instance, position)) = std::str::from_utf8(bytes)

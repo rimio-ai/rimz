@@ -1039,31 +1039,75 @@ fn stream_input_ignores_unknown_lines_and_delivers_keys() {
 fn room_events_are_scoped_once_before_reaching_each_attachment() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();
-    let (first, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
-    let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let first_hello = hello(&SidebarInstanceId::new());
+    let second_hello = hello(&SidebarInstanceId::new());
+    let (first, first_live) = room.host.admit(&first_hello).unwrap();
+    let (second, second_live) = room.host.admit(&second_hello).unwrap();
+    let _first = room.host.plane.subscribe(
+        &room.host.config_for(&first_hello),
+        first_live.close.wake.clone(),
+    );
+    let _second = room.host.plane.subscribe(
+        &room.host.config_for(&second_hello),
+        second_live.close.wake.clone(),
+    );
     let mut envelope = SidebarEventEnvelope::new(
         workspace(),
         Some("another-session".into()),
         1,
-        SidebarEvent::PanesChanged,
+        SidebarEvent::FocusChanged {
+            focused: vec![crate::ids::PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_1",
+            )],
+            unfocused: Vec::new(),
+        },
     );
     room.host
         .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
     for pane in [&first, &second] {
         assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
+    assert_eq!(room.host.plane.event_store(), Default::default());
     envelope.session_name = None;
+    let before = crate::utils::time::unix_now_ms();
     room.host
         .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
+    let after = crate::utils::time::unix_now_ms();
+    let recorded = room.host.plane.event_store();
+    let ttl_ms = 12_000;
+    assert!(
+        recorded.has_focus_since(1, before + ttl_ms),
+        "record before either attachment consumes its inbox"
+    );
+    assert!(!recorded.has_focus_since(1, after + ttl_ms + 1));
     for pane in [&first, &second] {
         assert_eq!(pane.inbox.try_recv(), Ok(Wakeup::Event(envelope.clone())));
+        assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
     envelope.workspace_id = WorkspaceId::from_project_root(Path::new("/another-workspace"));
+    envelope.sent_at_ms = 2;
     room.host
         .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
     for pane in [&first, &second] {
         assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
+    assert_eq!(room.host.plane.event_store(), recorded);
+
+    for _ in 0..64 {
+        first_live.close.wake.try_send(Wakeup::Tick).unwrap();
+    }
+    envelope.workspace_id = workspace();
+    envelope.sent_at_ms = 3;
+    room.host
+        .room_wakeup(&serde_json::to_vec(&envelope).unwrap());
+    assert!(room.host.plane.event_store().has_focus_since(3, after));
+    assert_eq!(second.inbox.try_recv(), Ok(Wakeup::Event(envelope)));
+    assert_eq!(second.inbox.try_recv(), Err(Empty));
+    for _ in 0..64 {
+        assert_eq!(first.inbox.try_recv(), Ok(Wakeup::Tick));
+    }
+    assert_eq!(first.inbox.try_recv(), Err(Empty));
 }
 
 #[test]
@@ -1280,8 +1324,18 @@ esac
 fn room_events_of_an_unknown_kind_reach_no_attachment() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();
-    let (first, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
-    let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let first_hello = hello(&SidebarInstanceId::new());
+    let second_hello = hello(&SidebarInstanceId::new());
+    let (first, first_live) = room.host.admit(&first_hello).unwrap();
+    let (second, second_live) = room.host.admit(&second_hello).unwrap();
+    let _first = room
+        .host
+        .plane
+        .subscribe(&room.host.config_for(&first_hello), first_live.close.wake);
+    let _second = room
+        .host
+        .plane
+        .subscribe(&room.host.config_for(&second_hello), second_live.close.wake);
     let envelope = SidebarEventEnvelope::new(workspace(), None, 1, SidebarEvent::PanesChanged);
     for kind in ["retired_event", "pane_frame_published"] {
         let mut value = serde_json::to_value(&envelope).unwrap();
@@ -1297,7 +1351,12 @@ fn room_events_of_an_unknown_kind_reach_no_attachment() {
 fn room_reload_words_and_envelopes_request_the_host_not_the_panes() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();
-    let (pane, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let hello = hello(&SidebarInstanceId::new());
+    let (pane, live) = room.host.admit(&hello).unwrap();
+    let _subscription = room
+        .host
+        .plane
+        .subscribe(&room.host.config_for(&hello), live.close.wake);
     let envelope = SidebarEventEnvelope::new(workspace(), None, 1, SidebarEvent::Reload);
     for bytes in [b"reload".to_vec(), serde_json::to_vec(&envelope).unwrap()] {
         room.host.room_wakeup(&bytes);
