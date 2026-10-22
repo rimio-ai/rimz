@@ -2017,10 +2017,18 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
 #[test]
 fn stamped_turn_releases_provisional_from_pre_binding_split() {
     let pane_id = "zellij:terminal_1";
+    let record = Box::new(crate::agents::LaunchRecord {
+        model: Some("gpt-6-astra".into()),
+        ..crate::agents::LaunchRecord::default()
+    });
     let events = [
         launch_event(
             "codex",
             AgentLaunchPayload {
+                launch: LaunchParams {
+                    record: Some(record.clone()),
+                    ..LaunchParams::default()
+                },
                 pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
                 prompt: None,
                 ..launch_payload("launch_a", "lucid-atlas")
@@ -2049,6 +2057,7 @@ fn stamped_turn_releases_provisional_from_pre_binding_split() {
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(agents[0].record.as_ref(), Some(&record));
     assert_eq!(
         agents[0].pane.as_ref().map(|pane| pane.pane_id.as_str()),
         Some(pane_id)

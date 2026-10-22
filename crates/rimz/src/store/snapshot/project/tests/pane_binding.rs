@@ -85,19 +85,51 @@ fn assert_picker_uses_latest_launch(recorded: bool) {
 
 #[test]
 fn picked_session_adopts_new_identity_or_revives_closed_identity() {
+    let saved_launch: LaunchParams = serde_json::from_value(json!({
+        "record": {"model": "saved-model", "effort": "low", "agent": "saved-profile"},
+        "tier": {"tier": "junior", "model": "saved-model"},
+        "mode": "ask", "isolation": "scoped"
+    }))
+    .unwrap();
+    let picker_launch: LaunchParams = serde_json::from_value(json!({
+        "record": {"model": "picked-model", "effort": "high", "agent": "picker-profile",
+            "fast": true},
+        "tier": {"tier": "senior", "model": "picked-model"},
+        "mode": "yolo", "isolation": "host"
+    }))
+    .unwrap();
     for (kind, signal) in [("claude", "registered"), ("codex", "turn_started")] {
-        for (recorded, old_pane) in [(false, None), (true, None), (true, Some("tmux:%3"))] {
+        for (recorded, old_pane, bare_picker) in [
+            (false, None, false),
+            (true, None, false),
+            (true, Some("tmux:%3"), false),
+            (true, Some("tmux:%3"), true),
+        ] {
+            let launch = if bare_picker {
+                LaunchParams::default()
+            } else {
+                picker_launch.clone()
+            };
             let mut events = Vec::new();
             if recorded {
                 events.push(launch_event(
                     kind,
                     AgentLaunchPayload {
+                        launch: saved_launch.clone(),
                         description: Some("saved history".into()),
                         launch_id: Some("launch_old".into()),
                         pane_id: old_pane.map(|pane| PaneId::parse(pane).unwrap()),
                         ..launch_payload("picked-id", "old-handle")
                     },
                 ));
+                if let Some(pane) = old_pane {
+                    events.push(attach_with_isolation(
+                        kind,
+                        "picked-id",
+                        pane,
+                        Some(crate::config::Isolation::Scoped),
+                    ));
+                }
                 let mut child = launch_payload("child-1", "child-handle");
                 child.launch_id = Some("launch_child".into());
                 child.pane_id = Some(PaneId::parse("tmux:%8").unwrap());
@@ -122,11 +154,19 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
             events.push(launch_event(
                 kind,
                 AgentLaunchPayload {
+                    launch: launch.clone(),
                     pane_id: Some(PaneId::parse("tmux:%7").unwrap()),
                     launch_id: Some("launch_picker".into()),
                     prompt: None,
                     ..launch_payload("launch_picker", "new-handle")
                 },
+            ));
+            let picker_stamp = (!bare_picker).then_some(crate::config::Isolation::Host);
+            events.push(attach_with_isolation(
+                kind,
+                "launch_picker",
+                "tmux:%7",
+                picker_stamp,
             ));
             events.push(raw_lifecycle_at(
                 kind,
@@ -147,6 +187,14 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
                 .find(|agent| agent.agent_id == "picked-id")
                 .unwrap();
             assert_eq!(agent.agent_id.as_str(), "picked-id");
+            assert_eq!(agent.record, launch.record);
+            assert_eq!(agent.tier, launch.tier);
+            assert_eq!(agent.mode, launch.mode);
+            assert_eq!(agent.isolation, launch.isolation);
+            assert_eq!(
+                agent.effective_isolation,
+                picker_stamp.or(old_pane.map(|_| crate::config::Isolation::Scoped))
+            );
             assert_eq!(
                 crate::address::launch_row(
                     &agents,
@@ -184,6 +232,18 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
             }
         }
     }
+}
+
+fn attach_with_isolation(
+    kind: &str,
+    agent_id: &str,
+    pane_id: &str,
+    isolation: Option<crate::config::Isolation>,
+) -> EventEnvelope {
+    let mut event =
+        serde_json::to_value(attach_event(kind, agent_id, None, pane_id, None, 42)).unwrap();
+    event["params"]["effective_isolation"] = json!(isolation);
+    serde_json::from_value(event).unwrap()
 }
 
 #[test]
