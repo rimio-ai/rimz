@@ -1,16 +1,17 @@
-//! The server-cwd contract: a tmux server only honours a pane's requested
-//! directory while it can read its own.
+//! The server-cwd contract: panes land in the directory they ask for, and birth
+//! refuses a server that cannot place them there.
 //!
-//! tmux's `spawn.c` performs the pane `chdir` only when `getcwd()` on the
-//! server succeeds. A server born in a directory that is later deleted — a
-//! disposable worktree, a swept tempdir — therefore strands every later pane
-//! in that deleted directory even when RimZ passes an absolute `-c`.
+//! Since tmux 3.7, `spawn.c` performs the pane `chdir` only when `getcwd()` on
+//! the server succeeds. A server born in a directory that is later deleted
+//! therefore strands every later pane there, even with an absolute `-c`.
+//! Earlier releases honour `-c` regardless of the server's cwd.
 
 use super::support::*;
 
-/// The regression: RimZ runs every tmux client from `/`, so the server it
-/// births inherits a directory that cannot be deleted, and panes keep landing
-/// where they were asked to even after the launch directory is gone.
+/// RimZ runs every tmux client from `/`, so its server inherits a directory
+/// that cannot be deleted and panes keep landing where requested after the
+/// launch directory is gone. This guards the client-cwd pin on tmux 3.7 and
+/// later; earlier releases honour `-c` without it.
 #[test]
 fn panes_honor_cwd_after_the_launch_directory_is_deleted() {
     require_tmux!();
@@ -41,9 +42,8 @@ fn panes_honor_cwd_after_the_launch_directory_is_deleted() {
 
     std::fs::remove_dir(&launch).expect("unlink launch dir");
 
-    // A window created after the launch directory vanished still lands where
-    // it was asked to; before the managed endpoint pinned the client cwd this
-    // reported the deleted directory instead.
+    // A later window still lands where requested; on tmux 3.7 and later,
+    // without the client-cwd pin this reported the deleted directory instead.
     server.output(&[
         "new-window",
         "-t",
@@ -67,44 +67,54 @@ fn panes_honor_cwd_after_the_launch_directory_is_deleted() {
     );
 }
 
-/// A server RimZ did not birth can still be poisoned — one left over from an
-/// older release, or started by hand. Birth proves the server can place a pane
-/// and refuses with a socket-scoped fix rather than opening a broken room.
+/// A server RimZ did not birth can have a deleted cwd. Since tmux 3.7, this
+/// strands panes and birth refuses with a socket-scoped fix. Before 3.7, such
+/// a server still places `-c` panes and birth accepts it.
 #[test]
-fn birth_refuses_a_server_whose_own_directory_was_deleted() {
+fn birth_refuses_a_deleted_cwd_server_only_when_it_strands_panes() {
     require_tmux!();
     let tempdir = TempDir::new().expect("tempdir");
     let runtime_root = tempdir.path().join("runtime");
     let project = tempdir.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
-    let socket = rimz::mux::tmux::managed_server_socket_path_under(&runtime_root);
-    std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("create socket dir");
+    let project = project.canonicalize().expect("canonical project");
+    let server = TmuxServer::in_runtime_root(&runtime_root);
+    let socket = &server.socket;
 
     // Poison the endpoint: birth a server from a directory, then delete it.
     let launch = tempdir.path().join("launch");
     std::fs::create_dir_all(&launch).expect("create launch dir");
+    let launch = launch.canonicalize().expect("canonical launch dir");
     let born = std::process::Command::new("tmux")
         .scrub_session_env()
         .current_dir(&launch)
         .arg("-S")
-        .arg(&socket)
+        .arg(socket)
         .args(["new-session", "-d", "-s", "squatter", "sleep 120"])
         .bounded_status()
         .expect("spawn poisoned server");
     assert!(born.success(), "poisoned server should start");
     std::fs::remove_dir(&launch).expect("unlink launch dir");
 
-    let server = TmuxServer::in_runtime_root(&runtime_root);
-    let err = server
-        .backend
-        .ensure_session(&session_opts(
-            "poisoned-room",
-            WorkspaceId::from_project_root(&project),
-            &project,
-            &project,
-            Some((120, 40)),
-        ))
-        .expect_err("birth must refuse a server that cannot place panes");
+    let probe_cwd = probe_pane_cwd(&server, &project);
+    let places_panes = std::path::Path::new(&probe_cwd) == project;
+    assert!(
+        places_panes || probe_cwd == format!("{} (deleted)", launch.display()),
+        "probe pane must be in the project or the deleted launch directory, got: {probe_cwd:?}",
+    );
+
+    let birth = server.backend.ensure_session(&session_opts(
+        "poisoned-room",
+        WorkspaceId::from_project_root(&project),
+        &project,
+        &project,
+        Some((120, 40)),
+    ));
+    if places_panes {
+        birth.expect("birth must accept a server that can place panes");
+        return;
+    }
+    let err = birth.expect_err("birth must refuse a server that cannot place panes");
 
     let message = err.to_string();
     assert!(
@@ -115,4 +125,18 @@ fn birth_refuses_a_server_whose_own_directory_was_deleted() {
         message.contains(socket.to_str().expect("utf8 socket")),
         "the fix is scoped to the RimZ socket so other tmux servers survive, got: {message}",
     );
+}
+
+fn probe_pane_cwd(server: &TmuxServer, project: &std::path::Path) -> String {
+    server.output(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cwd-probe",
+        "-c",
+        project.to_str().expect("utf8 project"),
+        "sleep 120",
+    ]);
+    server.wait_for_pane_command("cwd-probe", "sleep");
+    server.pane_current_path("cwd-probe")
 }
