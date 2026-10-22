@@ -219,6 +219,23 @@ A Markdown team seat records profile `<team>.<role>`; a TOML `[agents.teams]` se
 
 History publications (aggregate version 21) include `roles.agents` for solo profiles, `roles.teams` keyed by team then role, and `roles.subagents` by profile, each leaf a `SpendTally`. All three maps default to empty when absent, preserving older publications for readers that do not gate on the version. Native sessions count once per placement after deduplication, including a Claude parent's companion files. `roles.recorded_since_secs` is the earliest parsed record's epoch second across both retained segments, over all roles. Empty ledgers publish `None`; malformed tails contribute nothing. Retention means this is the first retained record, not necessarily the first ever. Solo, team-role, and subagent tallies together are a subset of fleet spend in every window; provider totals include every session independently of provenance. Published model values carry `{tally, kind}`: the producing kind with the greatest year dollars wins, ties broken by greater year tokens then ascending kind name. No model-family classifier participates.
 
+## Session effort ledger
+
+`cache/providers/session-effort/<UTC-date>.jsonl` holds home-wide active-time releases and message counts, independent of room and run retention. Each record carries provider `kind`, native `session`, RFC 3339 `at`, and a flattened `event`:
+
+| Event | Payload | Meaning |
+| --- | --- | --- |
+| `active` | `active_ms` | Newly released active-time credit, in milliseconds. |
+| `from_user` | none | A newly appended Prompt whose recorded origin is Human. |
+| `from_agent` | optional `sender_kind`, `sender_session` | A newly appended Message; resolved sender identity uses the sender's native session. |
+| `totals` | `active_ms`, `from_user`, `from_teammates`, `to_teammates` | The compaction record shape: totals for one provider, session, and UTC day, stamped at that day's latest event. |
+
+The append chooses its daily segment from the current wall clock, not the event's `at`, so a delayed frame cannot write into an old segment. It reads no ledger data and takes no lock: one `append_record_bytes`, then `sync_file_data`, with parent sync on creation. Every append starts with a newline, separating it from a possibly torn previous tail without reading that tail. Readers ignore blank lines, malformed records, and unknown fields. Hook write errors warn without changing the hook reply.
+
+The runtime active-time sidecar keeps a release watermark under its existing per-record lock. A Stop releases all unreleased credit; progress and pulses release on the next operation at least ten minutes after the last release. Their return value carries the released milliseconds (a pulse also returns its changed flag), and the hook appends only nonzero releases, after the sidecar update returns. The release uses the operation's timestamp, including the provider's error boundary for a Stop; side conversations credit their host. Progress and pulses at or before `last_progress` release nothing. A Stop releases even when stamped at or before `last_progress`, because a turn error's boundary can trail the last frame and its credit would otherwise wait for the session's next turn; the watermark already makes a repeated or replayed Stop release nothing. A pre-upgrade sidecar treats its existing credited total as already released on first touch, with no historical backfill. The grace-capped live tail used by attribution is not released until an operation credits it.
+
+Message effort follows the transcript entry actually appended: an ask-answering prompt records Answer instead of Prompt and contributes nothing, as do harness prompts, waits, and subagent reports. A queued agent message resolves its sender's launch id through the hook's room snapshot; a parent-authored launch brief uses the parent's row. Missing sender rows or an unavailable snapshot leave sender identity absent, and a header-only message never credits a sender. Every received Message counts as `from_agent`, regardless of its sender's team; sender-side credit can only be derived when that identity resolved. Replay skips entries the transcript already recorded, so it appends effort only for newly written entries. A process crash between updating the sidecar or transcript and appending effort loses that record; replay of a completed effect does not double count it. That holds for process crashes only: the effort append is data-synced but the transcript entry and the sidecar it dedupes against are not, so after a power cut a replay can count a message or a release again.
+
 ## See also
 
 - [providers.md](./providers.md): accounts, subscription windows, paid usage, and the provider panel the headline paints on.

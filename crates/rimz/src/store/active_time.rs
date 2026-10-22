@@ -6,13 +6,21 @@
 //! cannot accrue forever. The files are runtime-sidecar projection inputs, not
 //! durable event-log truth.
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::sidecar;
+
+const RELEASE_INTERVAL: SignedDuration = SignedDuration::from_secs(10 * 60);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ReleaseWatermark {
+    credited_ms: u64,
+    at: Timestamp,
+}
 
 /// One session's frozen credit and optional live working span.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +32,8 @@ pub struct ActiveTimeRecord {
     pub last_progress: Timestamp,
     #[serde(default)]
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release: Option<ReleaseWatermark>,
 }
 
 impl ActiveTimeRecord {
@@ -51,15 +61,16 @@ impl sidecar::SidecarRecord for ActiveTimeRecord {
 }
 
 /// Open or advance a working span. A resumed inactive record starts at `at`
-/// without crediting the idle gap.
+/// without crediting the idle gap. Return newly released milliseconds, at most
+/// once per ten minutes of progress.
 pub fn record_progress(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
     at: Timestamp,
     grace_secs: u32,
-) -> Result<(), atomic::AtomicErr> {
-    update_record(runtime, kind, agent_id, at, |record, existed| {
+) -> Result<u64, atomic::AtomicErr> {
+    update_record(runtime, kind, agent_id, at, false, |record, existed| {
         if !existed {
             record.active = true;
             return true;
@@ -79,18 +90,19 @@ pub fn record_progress(
         record.last_progress = at;
         true
     })
-    .map(|_| ())
+    .map(|(_, released)| released)
 }
 
-/// Advance an already-open working span without opening a new one.
+/// Advance an already-open working span without opening a new one. Return
+/// `(changed, released_ms)`, with the same release cadence as progress.
 pub fn record_pulse(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
     at: Timestamp,
     grace_secs: u32,
-) -> Result<bool, atomic::AtomicErr> {
-    update_record(runtime, kind, agent_id, at, |record, existed| {
+) -> Result<(bool, u64), atomic::AtomicErr> {
+    update_record(runtime, kind, agent_id, at, false, |record, existed| {
         if !existed || !record.active || at <= record.last_progress {
             return false;
         }
@@ -104,15 +116,16 @@ pub fn record_pulse(
     })
 }
 
-/// Close a working span at `at`. Repeated stops are idempotent.
+/// Close a working span at `at` and return all unreleased milliseconds, even
+/// when `at` trails the last progress; a repeated stop releases nothing.
 pub fn record_stop(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
     at: Timestamp,
     grace_secs: u32,
-) -> Result<(), atomic::AtomicErr> {
-    update_record(runtime, kind, agent_id, at, |record, existed| {
+) -> Result<u64, atomic::AtomicErr> {
+    update_record(runtime, kind, agent_id, at, true, |record, existed| {
         if !existed || !record.active {
             return false;
         }
@@ -125,7 +138,7 @@ pub fn record_stop(
         record.last_progress = record.last_progress.max(at);
         true
     })
-    .map(|_| ())
+    .map(|(_, released)| released)
 }
 
 fn bounded_elapsed_ms(later: Timestamp, earlier: Timestamp, grace_secs: u32) -> u64 {
@@ -146,9 +159,11 @@ fn update_record(
     kind: &str,
     agent_id: &str,
     at: Timestamp,
+    release_on_stop: bool,
     update: impl FnOnce(&mut ActiveTimeRecord, bool) -> bool,
-) -> Result<bool, atomic::AtomicErr> {
-    sidecar::update(
+) -> Result<(bool, u64), atomic::AtomicErr> {
+    let mut released = 0;
+    let changed = sidecar::update(
         runtime,
         &runtime.active_time_dir,
         kind,
@@ -159,9 +174,29 @@ fn update_record(
             credited_ms: 0,
             last_progress: at,
             active: false,
+            release: Some(ReleaseWatermark { credited_ms: 0, at }),
         },
-        update,
-    )
+        |record, existed| {
+            let initialized = record.release.is_none();
+            let watermark = *record.release.get_or_insert(ReleaseWatermark {
+                credited_ms: record.credited_ms,
+                at,
+            });
+            let fresh = at > record.last_progress;
+            let changed = update(record, existed);
+            if release_on_stop || (fresh && at.duration_since(watermark.at) >= RELEASE_INTERVAL) {
+                released = record.credited_ms.saturating_sub(watermark.credited_ms);
+                if released > 0 {
+                    record.release = Some(ReleaseWatermark {
+                        credited_ms: record.credited_ms,
+                        at,
+                    });
+                }
+            }
+            changed || initialized || released > 0
+        },
+    )?;
+    Ok((changed, released))
 }
 
 thread_local! {
@@ -259,7 +294,11 @@ mod tests {
     #[test]
     fn pulse_requires_an_open_span() {
         let (_dir, runtime) = runtime();
-        assert!(!record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        assert!(
+            !record_pulse(&runtime, "claude", "sess-1", at(10), GRACE)
+                .unwrap()
+                .0
+        );
         assert!(
             read_for_keys(&runtime, [("claude", "sess-1")])
                 .into_iter()
@@ -269,7 +308,11 @@ mod tests {
 
         record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
         record_stop(&runtime, "claude", "sess-1", at(5), GRACE).unwrap();
-        assert!(!record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        assert!(
+            !record_pulse(&runtime, "claude", "sess-1", at(10), GRACE)
+                .unwrap()
+                .0
+        );
         assert_eq!(record(&runtime).credited_ms, 5_000);
     }
 
@@ -278,7 +321,11 @@ mod tests {
         let (_dir, runtime) = runtime();
         record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
 
-        assert!(record_pulse(&runtime, "claude", "sess-1", at(10), GRACE).unwrap());
+        assert!(
+            record_pulse(&runtime, "claude", "sess-1", at(10), GRACE)
+                .unwrap()
+                .0
+        );
         let record = record(&runtime);
         assert_eq!(record.credited_ms, 10_000);
         assert_eq!(record.last_progress, at(10));
@@ -290,7 +337,11 @@ mod tests {
         let (_dir, runtime) = runtime();
         record_progress(&runtime, "claude", "sess-1", at(10), GRACE).unwrap();
 
-        assert!(!record_pulse(&runtime, "claude", "sess-1", at(5), GRACE).unwrap());
+        assert!(
+            !record_pulse(&runtime, "claude", "sess-1", at(5), GRACE)
+                .unwrap()
+                .0
+        );
         let record = record(&runtime);
         assert_eq!(record.credited_ms, 0);
         assert_eq!(record.last_progress, at(10));
@@ -340,18 +391,115 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    record_progress(&runtime, "claude", "sess-1", at(second), GRACE).unwrap();
+                    record_progress(&runtime, "claude", "sess-1", at(second), GRACE).unwrap()
                 })
             })
             .collect::<Vec<_>>();
         barrier.wait();
-        for thread in threads {
-            thread.join().unwrap();
-        }
+        let released: u64 = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .sum();
 
         let record = record(&runtime);
         assert_eq!(record.credited_ms, 16_000);
         assert_eq!(record.last_progress, at(16));
+        let released = released + record_stop(&runtime, "claude", "sess-1", at(17), GRACE).unwrap();
+        assert_eq!(released, 17_000, "concurrent credit must be released once");
+    }
+
+    #[test]
+    fn stop_releases_all_unreleased_credit_once() {
+        let (_dir, runtime) = runtime();
+        assert_eq!(
+            record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap(),
+            0
+        );
+        assert_eq!(
+            record_progress(&runtime, "claude", "sess-1", at(10), GRACE).unwrap(),
+            0
+        );
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(15), GRACE).unwrap(),
+            15_000
+        );
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(20), GRACE).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn progress_and_pulse_release_at_ten_minutes_and_reset_the_watermark() {
+        let (_dir, runtime) = runtime();
+        record_progress(&runtime, "claude", "sess-1", at(0), 1_000).unwrap();
+        assert_eq!(
+            record_progress(&runtime, "claude", "sess-1", at(599), 1_000).unwrap(),
+            0
+        );
+        assert_eq!(
+            record_progress(&runtime, "claude", "sess-1", at(600), 1_000).unwrap(),
+            600_000
+        );
+        assert_eq!(
+            record_pulse(&runtime, "claude", "sess-1", at(1_199), 1_000).unwrap(),
+            (true, 0)
+        );
+        assert_eq!(
+            record_pulse(&runtime, "claude", "sess-1", at(1_201), 1_000).unwrap(),
+            (true, 601_000)
+        );
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(1_202), 1_000).unwrap(),
+            1_000
+        );
+    }
+
+    #[test]
+    fn stale_progress_waits_but_a_stale_stop_releases_pending_credit() {
+        let (_dir, runtime) = runtime();
+        record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
+        record_progress(&runtime, "claude", "sess-1", at(120), GRACE).unwrap();
+        for second in [120, 60] {
+            assert_eq!(
+                record_progress(&runtime, "claude", "sess-1", at(second), GRACE).unwrap(),
+                0
+            );
+            assert_eq!(
+                record_pulse(&runtime, "claude", "sess-1", at(second), GRACE).unwrap(),
+                (false, 0)
+            );
+        }
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(60), GRACE).unwrap(),
+            120_000,
+            "a stop stamped before the last progress still releases"
+        );
+        for second in [120, 130] {
+            assert_eq!(
+                record_stop(&runtime, "claude", "sess-1", at(second), GRACE).unwrap(),
+                0
+            );
+        }
+        assert_eq!(record(&runtime).credited_ms, 120_000);
+    }
+
+    #[test]
+    fn legacy_sidecar_takes_prior_credit_as_already_released() {
+        let (_dir, runtime) = runtime();
+        std::fs::create_dir_all(&runtime.active_time_dir).unwrap();
+        let path = sidecar::path(&runtime.active_time_dir, "active", "claude", "sess-1");
+        std::fs::write(path, br#"{"kind":"claude","agent_id":"sess-1","credited_ms":600000,"last_progress":"1970-01-01T00:10:00Z","active":true}"#).unwrap();
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(610), GRACE).unwrap(),
+            10_000
+        );
+        assert_eq!(record(&runtime).credited_ms, 610_000);
+        record_progress(&runtime, "claude", "sess-1", at(620), GRACE).unwrap();
+        assert_eq!(
+            record_stop(&runtime, "claude", "sess-1", at(630), GRACE).unwrap(),
+            10_000
+        );
     }
 
     #[test]

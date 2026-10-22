@@ -3,6 +3,7 @@
 use super::*;
 
 use rimz::agents::peel_rimz_blocks;
+use rimz::agents::spending::session_effort::{self, SessionEffortEvent, SessionEffortRecord};
 use rimz::store::run::RunPromptOrigin;
 use std::borrow::Cow;
 
@@ -360,6 +361,16 @@ pub(super) fn record_conversation(
             for section in sections {
                 use rimz::transcript::SectionOrigin;
                 let mut origin = Cow::Borrowed(&section.origin);
+                let mut sender = match section.record.map(|message| &message.sender) {
+                    Some(rimz::store::message::MessageSender::Agent {
+                        kind,
+                        agent_id: Some(id),
+                        ..
+                    }) => snapshot.as_ref().and_then(|snapshot| {
+                        rimz::address::launch_row(snapshot.agents.iter(), kind, id)
+                    }),
+                    _ => None,
+                };
                 if section.origin == SectionOrigin::Human
                     && section.record.is_none()
                     && let Some(run) = run
@@ -372,6 +383,14 @@ pub(super) fn record_conversation(
                 {
                     origin = Cow::Owned(match run.prompt_origin() {
                         RunPromptOrigin::Parent => {
+                            sender = state.and_then(|state| {
+                                let (kind, id) = state.launcher()?;
+                                rimz::address::launch_row(
+                                    snapshot.as_ref()?.agents.iter(),
+                                    kind,
+                                    id,
+                                )
+                            });
                             let parent = state.and_then(|state| {
                                 launched_parent_handle(
                                     snapshot.as_ref()?,
@@ -416,14 +435,41 @@ pub(super) fn record_conversation(
                 } else {
                     None
                 };
-                entries.push((entry, fallback_prompt));
+                entries.push((entry, fallback_prompt, sender));
             }
             replace_turn_opened_by(store, agent, &agent_id, matched_ids);
-            for (entry, fallback_prompt) in entries {
+            for (entry, fallback_prompt, sender) in entries {
                 if already_recorded(&entry) {
                     continue;
                 }
-                append_turn_entry(store.paths(), &entry, fallback_prompt.as_ref())?;
+                let entry = append_turn_entry(store.paths(), &entry, fallback_prompt.as_ref())?;
+                let event = match entry.entry {
+                    rimz::transcript::TranscriptKind::Prompt
+                        if entry.origin() == rimz::transcript::EntryOrigin::Human =>
+                    {
+                        SessionEffortEvent::FromUser
+                    }
+                    rimz::transcript::TranscriptKind::Message => SessionEffortEvent::FromAgent {
+                        sender_kind: sender.map(|sender| sender.kind.clone()),
+                        sender_session: sender.map(|sender| sender.agent_id.clone()),
+                    },
+                    _ => continue,
+                };
+                if let Err(error) = session_effort::record(
+                    store.runtime_paths(),
+                    &SessionEffortRecord {
+                        kind: entry.kind.clone(),
+                        session: entry.agent_id.clone(),
+                        at: entry.at,
+                        event,
+                    },
+                ) {
+                    warn!(
+                        agent = agent.spec().kind,
+                        %error,
+                        "lifecycle: failed to append session effort"
+                    );
+                }
             }
             return Ok(());
         }
@@ -479,18 +525,20 @@ fn launched_parent_handle(
     rimz::address::agent_sender_handle(&sender, &peers, child_channel, root_channel.as_deref())
 }
 
-fn append_turn_entry(
+fn append_turn_entry<'a>(
     paths: &rimz::StatePaths,
-    entry: &rimz::transcript::TranscriptEntry,
-    fallback_prompt: Option<&rimz::transcript::TranscriptEntry>,
-) -> rimz::transcript::Result<()> {
+    entry: &'a rimz::transcript::TranscriptEntry,
+    fallback_prompt: Option<&'a rimz::transcript::TranscriptEntry>,
+) -> rimz::transcript::Result<&'a rimz::transcript::TranscriptEntry> {
     let Some(fallback_prompt) = fallback_prompt else {
-        return rimz::transcript::append(paths, entry);
+        rimz::transcript::append(paths, entry)?;
+        return Ok(entry);
     };
-    if !rimz::transcript::append_answer_if_missing(paths, entry)? {
-        rimz::transcript::append(paths, fallback_prompt)?;
+    if rimz::transcript::append_answer_if_missing(paths, entry)? {
+        return Ok(entry);
     }
-    Ok(())
+    rimz::transcript::append(paths, fallback_prompt)?;
+    Ok(fallback_prompt)
 }
 
 fn replace_turn_opened_by(

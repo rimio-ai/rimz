@@ -598,6 +598,117 @@ fn deferred_lifecycle_and_active_time_use_the_ingress_timestamp() {
     assert_eq!(agent.turn_ended_at, Some(stop.ts));
 }
 
+#[test]
+fn completed_effort_releases_are_not_repeated_on_replay() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let started = Timestamp::now() - Duration::from_secs(10);
+    let mut prompt = stop_frame(&env);
+    prompt.ts = started;
+    prompt.event = Some("UserPromptSubmit".into());
+    prompt.payload = json!({"session_id": "drain-session", "prompt": "work on this"}).to_string();
+    let mut apply = env.rimz();
+    apply
+        .args(["hooks", "apply"])
+        .stdin(std::process::Stdio::piped());
+    let output = env
+        .spawn_payload(apply, &serde_json::to_string(&prompt).unwrap())
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut stop = stop_frame(&env);
+    stop.ts = started + Duration::from_secs(10);
+    let (stop, _) = append_frame(&env, stop);
+    let (mut drainer, release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
+    let directory = env.rimz_home().join("cache/providers/session-effort");
+    let read_effort = || {
+        std::fs::read_dir(&directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|entry| rimz::agents::spending::session_effort::read_segment(&entry.path()))
+            .map(|record| serde_json::to_value(record).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let before = read_effort();
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+    drop(release);
+    once(&env);
+    assert_eq!(
+        before.len(),
+        2,
+        "the first apply records one prompt and one active release: {before:?}"
+    );
+    assert_eq!(before[0]["event"], "from_user");
+    assert_eq!(before[1]["event"], "active");
+    assert_eq!(before[1]["active_ms"], 10_000);
+    assert_eq!(before[1]["at"], stop.ts.to_string());
+    assert_eq!(
+        read_effort(),
+        before,
+        "a completed effect is never credited twice"
+    );
+}
+
+#[test]
+fn effort_write_failure_warns_without_changing_the_hook_reply() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let directory = env.rimz_home().join("cache/providers");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("session-effort"), "block effort writes").unwrap();
+    let started = Timestamp::now() - Duration::from_secs(10);
+    for (event, at, payload) in [
+        (
+            "UserPromptSubmit",
+            started,
+            json!({"session_id": "drain-session", "prompt": "work on this"}),
+        ),
+        (
+            "Stop",
+            started + Duration::from_secs(10),
+            json!({"session_id": "drain-session"}),
+        ),
+    ] {
+        let mut frame = stop_frame(&env);
+        frame.event = Some(event.into());
+        frame.ts = at;
+        frame.payload = payload.to_string();
+        let mut apply = env.rimz();
+        apply
+            .args(["hooks", "apply"])
+            .env("RUST_LOG", "warn")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let output = env
+            .spawn_payload(apply, &serde_json::to_string(&frame).unwrap())
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "the provider's reply remains neutral: {output:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("failed to append session effort"),
+            "{event}: {stderr}"
+        );
+    }
+    let store = env.store();
+    let records = rimz::store::active_time::read_for_keys(
+        store.runtime_paths(),
+        [("claude", "drain-session")],
+    );
+    assert_eq!(records[0].credited_ms, 10_000);
+    assert!(!records[0].active);
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+}
+
 // A hang guard: cargo xtask stress has no per-copy timeout, a failed apply child can leave its
 // watched drainer alive, and a drainer the hook or reload spawned has no handle to watch.
 const READINESS_HANG_GUARD: Duration = Duration::from_secs(60);
