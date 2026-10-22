@@ -238,19 +238,10 @@ pub(super) fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport
             report.locks_would_check += 1;
             continue;
         }
-        let mut file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(io_err(err)),
-        };
-        match crate::disk::lock::try_lock_file(&mut file, &path) {
-            Ok(()) => sweep.remove_file_if_exists(
-                &path,
-                |report| report.sidecar_files_removed += 1,
-                report,
-            )?,
-            Err(fs::TryLockError::WouldBlock) => continue,
-            Err(fs::TryLockError::Error(err)) => return Err(io_err(err)),
+        if let Some(bytes) = crate::disk::lease::remove_if_free(&path).map_err(io_err)? {
+            sweep.record_removed(&path, bytes, report, |report| {
+                report.sidecar_files_removed += 1
+            });
         }
     }
     Ok(())

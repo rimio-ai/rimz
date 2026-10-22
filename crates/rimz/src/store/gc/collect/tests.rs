@@ -144,6 +144,23 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
 }
 
 #[test]
+fn lock_sweep_keeps_directory_gates_and_counts_them_in_previews() {
+    let temp = tempdir().unwrap();
+    let gate = temp.path().join("lease-gate.lock");
+    let nested_gate = temp.path().join("pane-write/lease-gate.lock");
+    drop(crate::disk::lock::WorkspaceLock::acquire(&gate).unwrap());
+    drop(crate::disk::lock::WorkspaceLock::acquire(&nested_gate).unwrap());
+    let mut preview = GcReport::default();
+    collect_locks(temp.path(), &mut Sweep::new(true), &mut preview).unwrap();
+    assert_eq!(preview.locks_would_check, 2);
+    let mut actual = GcReport::default();
+    collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+    assert!(gate.is_file(), "the directory gate must survive GC");
+    assert!(nested_gate.is_file(), "each directory keeps its own gate");
+    assert_eq!(actual.sidecar_files_removed, 0);
+}
+
+#[test]
 fn lock_sweep_keeps_subdirs_so_a_queued_waiter_can_reopen() {
     let temp = tempdir().unwrap();
     let pane_dir = temp.path().join("pane-write");

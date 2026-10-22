@@ -84,7 +84,7 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `shared/` | State | Room-wide files agents hand each other; no sweep. Hard reset removes it; otherwise it goes when the room directory is pruned. |
 | `team-notes/` | State | Per-run team archives; `gc.team_notes_retention` defaults to `forever`. A duration removes a whole run only after its newest recursive entry mtime expires, without following symlinks. Soft reset keeps it; hard reset and whole-room deletion remove it. |
 | `out/` | State | RimZ-written results under `out/<reader>/`; `out/` and each reader directory are created at mode `0700`. A response file goes once it is older than 7 days and no run record names its agent (the stem before the first `.`); a `wait-` file once it is older than 7 days and its watcher is not live. An empty reader directory goes. |
-| `locks/` | State | Try-lock and unlink while held; keep busy files (including shared supervisor holds on `room.lock`) and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
+| `locks/` | State | Try-lock and unlink while held under the file's own directory gate; keep the `lease-gate.lock` itself, busy files (including shared supervisor holds on `room.lock`), and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, including existing gates, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exceptions: keep agent telemetry while its room is live, because the external exporter holds its inode open; preserve `hibernate/admission.json` until room teardown, since only birth republishes it. |
 | `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
@@ -135,7 +135,7 @@ shared/                                       room-wide shared files
 out/<reader>/<name>[.<n>|.<run_id>].output    child and peer responses
 out/<reader>/<wait-name>.output               watched-command output
 locks/*.lock                                 room, workspace, publish, subagent-zone, loop-instances,
-                                             loop-run-<name>[-<checkout id>], loop-watch-<name>,
+                                             loop-run-<name>[-<checkout id>], loop-watch-<name>, lease-gate,
                                              message-sweep, sidebar-launch, snapshot,
                                              topology-writer, authoritative-pane-probe, focus-anchor,
                                              pr-state, diff-stats, budget.fleet, hook-drainer,
