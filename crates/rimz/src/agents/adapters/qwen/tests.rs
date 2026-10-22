@@ -450,7 +450,7 @@ fn reads_gate_details_from_permission_requests() {
             .ask_detail()
             .map(str::to_owned)
             .as_deref(),
-        Some(r#"run_shell_command: {"command":"cargo xtask gate"}"#)
+        Some("run_shell_command: cargo xtask gate")
     );
     assert_eq!(
         hook_output(&adapter, "PreToolUse", &question)

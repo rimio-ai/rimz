@@ -1,5 +1,7 @@
 //! Shared normalization for compatible native questionnaire payloads.
 
+use std::path::Path;
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -125,17 +127,82 @@ pub(super) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<A
     }])
 }
 
+/// How a permission summary prints the input field it picked.
+#[derive(Clone, Copy)]
+enum TargetKind {
+    /// Free text, with every whitespace run folded to one space.
+    Text,
+    /// A path, shown relative to the payload's `cwd` when it lies inside it.
+    Path,
+}
+
+/// Input fields that name what a tool call acts on, in the order a summary
+/// tries them: a search tool's `path` only scopes its `pattern`, so it is
+/// last. The names cover the Claude, Qwen, and Qoder tool inputs.
+const PERMISSION_TARGETS: [(&str, TargetKind); 8] = [
+    ("command", TargetKind::Text),
+    ("file_path", TargetKind::Path),
+    ("notebook_path", TargetKind::Path),
+    ("absolute_path", TargetKind::Path),
+    ("url", TargetKind::Text),
+    ("pattern", TargetKind::Text),
+    ("query", TargetKind::Text),
+    ("path", TargetKind::Path),
+];
+
+/// Longest permission summary after the tool name, in characters.
+const PERMISSION_SUMMARY_CHARS: usize = 160;
+
+/// The one-line detail of a permission ask: the tool name, then the target
+/// the call acts on, or the input's compact JSON when no field in
+/// [`PERMISSION_TARGETS`] holds a nonblank string.
 pub(super) fn permission_detail(payload: &Value) -> Option<String> {
     let tool = non_empty(payload.get("tool_name").and_then(Value::as_str))?;
-    let summary = payload
-        .get("tool_input")
-        .and_then(|input| serde_json::to_string(input).ok())
-        .filter(|input| input != "{}" && input != "null")
-        .map(|input| input.chars().take(160).collect::<String>());
-    Some(match summary {
-        Some(summary) => format!("{tool}: {summary}"),
-        None => tool,
+    let Some(input) = payload.get("tool_input").filter(|input| {
+        !input.is_null() && input.as_object().is_none_or(|fields| !fields.is_empty())
+    }) else {
+        return Some(tool);
+    };
+    let cwd = payload.get("cwd").and_then(Value::as_str).map(Path::new);
+    let summary = permission_target(input, cwd).unwrap_or_else(|| input.to_string());
+    Some(format!("{tool}: {}", bounded_summary(&summary)))
+}
+
+fn permission_target(input: &Value, cwd: Option<&Path>) -> Option<String> {
+    PERMISSION_TARGETS.iter().find_map(|&(field, kind)| {
+        let value = input.get(field)?.as_str()?;
+        match kind {
+            TargetKind::Text => {
+                let text = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                (!text.is_empty()).then_some(text)
+            }
+            TargetKind::Path => {
+                let path = non_empty(Some(value))?;
+                Some(display_path(&path, cwd))
+            }
+        }
     })
+}
+
+fn display_path(path: &str, cwd: Option<&Path>) -> String {
+    cwd.and_then(|cwd| Path::new(path).strip_prefix(cwd).ok())
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .map_or_else(
+            || path.to_owned(),
+            |relative| relative.display().to_string(),
+        )
+}
+
+fn bounded_summary(summary: &str) -> String {
+    if summary.chars().count() <= PERMISSION_SUMMARY_CHARS {
+        return summary.to_owned();
+    }
+    let mut head = summary
+        .chars()
+        .take(PERMISSION_SUMMARY_CHARS - 1)
+        .collect::<String>();
+    head.push('…');
+    head
 }
 
 fn normalize(
@@ -314,6 +381,83 @@ mod tests {
         .expect("detail");
         let summary = detail.strip_prefix("shell: ").expect("summary");
         assert_eq!(summary.chars().count(), 160);
-        assert!(summary.starts_with(r#"{"command":"#));
+        assert!(summary.starts_with("xxx"));
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn permission_detail_names_the_target_and_falls_back_to_json() {
+        let cwd = "/work/tree";
+        for (tool_input, expected) in [
+            (
+                json!({"command": "cargo test \\\n  --all", "description": "Run tests"}),
+                "Bash: cargo test \\ --all",
+            ),
+            (
+                json!({"file_path": "/work/tree/.rimz/team/notes.md", "old_string": "a", "new_string": ""}),
+                "Bash: .rimz/team/notes.md",
+            ),
+            (
+                // `content` sorts before `file_path` in the JSON: the path still leads.
+                json!({"content": "# Review\n\nverdict", "file_path": "/work/tree/review.md"}),
+                "Bash: review.md",
+            ),
+            (
+                json!({"file_path": "/elsewhere/notes.md"}),
+                "Bash: /elsewhere/notes.md",
+            ),
+            (json!({"path": "/work/tree"}), "Bash: /work/tree"),
+            (
+                json!({"path": "/work/treehouse/a"}),
+                "Bash: /work/treehouse/a",
+            ),
+            (
+                json!({"pattern": "fn main", "path": "/work/tree/src"}),
+                "Bash: fn main",
+            ),
+            (
+                json!({"url": "https://docs.rs/serde"}),
+                "Bash: https://docs.rs/serde",
+            ),
+            (json!({"query": "  rust\tserde "}), "Bash: rust serde"),
+            // A blank or non-string target field moves on to the next field.
+            (
+                json!({"command": "  ", "file_path": "/work/tree/a.rs"}),
+                "Bash: a.rs",
+            ),
+            (
+                json!({"command": ["ls"], "url": "https://x.test"}),
+                "Bash: https://x.test",
+            ),
+            // No readable target: the input's compact JSON.
+            (json!({"command": 7}), r#"Bash: {"command":7}"#),
+            (
+                json!({"prompt": "review it"}),
+                r#"Bash: {"prompt":"review it"}"#,
+            ),
+            (json!(["ls"]), r#"Bash: ["ls"]"#),
+        ] {
+            let payload = json!({"tool_name": "Bash", "cwd": cwd, "tool_input": tool_input});
+            assert_eq!(
+                permission_detail(&payload).as_deref(),
+                Some(expected),
+                "{tool_input}"
+            );
+        }
+
+        let without_cwd =
+            json!({"tool_name": "Edit", "tool_input": {"file_path": "/work/tree/a.rs"}});
+        assert_eq!(
+            permission_detail(&without_cwd).as_deref(),
+            Some("Edit: /work/tree/a.rs")
+        );
+        let short_json = permission_detail(
+            &json!({"tool_name": "Task", "tool_input": {"prompt": "y".repeat(200)}}),
+        )
+        .expect("detail");
+        let summary = short_json.strip_prefix("Task: ").expect("summary");
+        assert_eq!(summary.chars().count(), 160);
+        assert!(summary.starts_with(r#"{"prompt":"#));
+        assert!(summary.ends_with('…'));
     }
 }
