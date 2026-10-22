@@ -331,13 +331,9 @@ fn take_over_checkout(
             ));
         }
     };
-    let mut tracker = crate::cli::agents_cmd::StopTracker::default();
-    for occupant in &occupants {
-        // An occupant its parent's stop already took is skipped; any failure,
-        // a pane left open included, fails the fire, so every occupant's pane
-        // is closed once the loop ends.
-        crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, occupant, &mut tracker)?
-            .into_result(&handle(occupant))?;
+    let stops = crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, &occupants)?;
+    for (occupant, stop) in occupants.iter().zip(stops) {
+        stop.into_result(&handle(occupant))?;
     }
     Ok(ControlFlow::Continue(
         occupants.into_iter().map(handle).collect(),

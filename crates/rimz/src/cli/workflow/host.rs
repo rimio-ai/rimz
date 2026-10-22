@@ -149,18 +149,6 @@ fn children(snapshot: &SidebarSnapshot, root: &AgentState, stopped: &[&AgentStat
     }
 }
 
-fn stop_tree(
-    ctx: &Ctx,
-    globals: &GlobalFlags,
-    snapshot: &SidebarSnapshot,
-    root: &AgentState,
-    tracker: &mut agents_cmd::StopTracker,
-) -> Result<()> {
-    let peers = rimz::address::addressable_agents(snapshot);
-    let handle = rimz::address::agent_handle(root, &peers, true);
-    agents_cmd::stop_resolved(ctx, globals, snapshot, root, tracker)?.into_result(&handle)
-}
-
 impl workflow::AttemptHost for Host<'_> {
     fn occupancy(&self, scope: &Path, root: &Path) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
@@ -191,11 +179,11 @@ impl workflow::AttemptHost for Host<'_> {
                 bail!("checkout acquired an open turn before takeover");
             };
             let peers = rimz::address::addressable_agents(&snapshot);
-            let mut tracker = agents_cmd::StopTracker::default();
+            let stops = agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, &agents)?;
             let mut stopped = Vec::new();
-            for agent in agents {
+            for (agent, stop) in agents.into_iter().zip(stops) {
                 let handle = rimz::address::agent_handle(agent, &peers, true);
-                stop_tree(&ctx, self.globals, &snapshot, agent, &mut tracker)?;
+                stop.into_result(&handle)?;
                 stopped.push(handle);
             }
             Ok(stopped)
@@ -328,14 +316,12 @@ impl workflow::AttemptHost for Host<'_> {
             };
             let stopped = descendants(&snapshot.agents, root);
             let result = children(&snapshot, root, &stopped);
-            stop_tree(
-                &ctx,
-                self.globals,
-                &snapshot,
-                root,
-                &mut agents_cmd::StopTracker::default(),
-            )
-            .context("stopping workflow attempt")?;
+            let peers = rimz::address::addressable_agents(&snapshot);
+            let handle = rimz::address::agent_handle(root, &peers, true);
+            agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, &[root])?
+                .remove(0)
+                .into_result(&handle)
+                .context("stopping workflow attempt")?;
             Ok(result)
         })()
         .map_err(host_error)

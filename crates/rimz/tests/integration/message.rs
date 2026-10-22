@@ -3575,6 +3575,50 @@ fn stop_and_focus_print_paste_ready_receipts() {
 }
 
 #[test]
+fn stop_names_a_still_running_owner_without_offering_resume() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let pid = env.agent_owner_pid();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "receipt-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("receipt-pet".to_owned());
+            observation.launch.role = Some("receipt-pet".to_owned());
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = Some(rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "receipt-session",
+                pid,
+            ));
+        },
+    );
+    let stop = traced_rimz(&env, "receipt.log")
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "100")
+        .args(["agents", "stop", "@receipt-pet"])
+        .output()
+        .unwrap();
+    assert!(stop.status.success(), "{stop:?}");
+    let receipt = String::from_utf8_lossy(&stop.stdout);
+    assert!(
+        receipt.contains("stopped @receipt-pet (claude)"),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains(&format!(
+            "@receipt-pet#main: pane closed, but its process {pid} is still running; \
+             a resume refuses until it exits"
+        )),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("; resume:"), "{receipt}");
+}
+
+#[test]
 fn stop_non_resumable_agent_omits_resume_clause() {
     let env = Env::new();
     env.record(&env.project_root);

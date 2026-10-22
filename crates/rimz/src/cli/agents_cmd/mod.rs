@@ -111,7 +111,6 @@ use resume::resume_lane;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
-pub(in crate::cli) use stop::StopTracker;
 pub(in crate::cli) use stop::stop_resolved;
 use stop::{WhenIdle, parse_when_idle, stop_agent};
 use supervised::OutputFormat;
