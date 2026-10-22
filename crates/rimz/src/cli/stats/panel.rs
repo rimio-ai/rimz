@@ -458,11 +458,14 @@ impl SpendSection {
         }
     }
 
-    fn plural(self) -> &'static str {
-        match self {
-            Self::Models => "models",
-            Self::Providers => "providers",
-            Self::Profiles(role) => role.key(),
+    fn noun(self, count: usize) -> &'static str {
+        match (self, count) {
+            (Self::Models, 1) => "model",
+            (Self::Models, _) => "models",
+            (Self::Providers, 1) => "provider",
+            (Self::Providers, _) => "providers",
+            (Self::Profiles(role), 1) => role.noun(),
+            (Self::Profiles(role), _) => role.key(),
         }
     }
 
@@ -689,7 +692,10 @@ fn spend_section(
         for (_, row) in &tail {
             spend.merge(row);
         }
-        rows.push((format!("{} other {}", tail.len(), section.plural()), spend));
+        rows.push((
+            format!("{} other {}", tail.len(), section.noun(tail.len())),
+            spend,
+        ));
     }
     let width = rows
         .iter()
