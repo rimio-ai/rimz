@@ -61,10 +61,26 @@ fn until(env: &Env, id: &str, predicate: impl Fn(&Value) -> bool) -> Value {
         }
         assert!(
             Instant::now() < deadline,
-            "workflow did not settle: {value:#}"
+            "workflow did not settle\n{}{value:#}",
+            died_attempts(&value)
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// One line per attempt that died, so a summary quoting the first lines of a
+/// settle panic names the failing attempt ahead of the whole dump.
+fn died_attempts(value: &Value) -> String {
+    events(value, "attempt")
+        .iter()
+        .filter(|row| row["outcome"] == "died")
+        .map(|row| {
+            format!(
+                "died attempt: seq={} step={} reason={}\n",
+                row["seq"], row["node"], row["reason"]
+            )
+        })
+        .collect()
 }
 
 fn settled(env: &Env, id: &str, state: &str) -> Value {
