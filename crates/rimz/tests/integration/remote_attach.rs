@@ -2182,7 +2182,8 @@ fn supervised_remote_attach_ends_when_the_session_disappears() {
                 r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
             )
             .env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state)
-            .env("RIMZ_REMOTE_SUPERVISED", "1");
+            .env("RIMZ_REMOTE_SUPERVISED", "1")
+            .env("RIMZ_REMOTE_WATCHDOG_MS", "25");
         if attach_exits {
             command.env("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT", "1");
         }
@@ -2247,6 +2248,7 @@ fn watchdog_sentinel_reaches_the_local_clean_exit_policy() {
     );
     cmd.env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state);
     cmd.env("RIMZ_REMOTE_SUPERVISED", "1");
+    cmd.env("RIMZ_REMOTE_WATCHDOG_MS", "25");
     cmd.env("RIMZ_REMOTE_GATETIME_MS", "20");
 
     let (output, settings) = run_pty_command(remote_connect_pty(), cmd);
