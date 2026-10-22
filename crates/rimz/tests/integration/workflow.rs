@@ -106,6 +106,19 @@ fn context(value: &Value) -> Value {
     .unwrap()
 }
 
+fn backdate_check(env: &Env, value: &Value) {
+    let state =
+        rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let path = Path::new(value["dir"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .join("record.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["entered_at"] = json!("2000-01-01T00:00:00Z");
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &record).unwrap();
+}
+
 fn evaluation_script(outcome: &str) -> String {
     format!("printf '%s\\n' '{{\"outcome\":\"{outcome}\"}}'\n")
 }
@@ -685,6 +698,53 @@ fn timeout_kills_script_and_routes_or_parks() {
 }
 
 #[test]
+fn timeout_before_script_spawn_records_no_digests() {
+    use std::io::Write;
+    use std::os::unix::net::UnixListener;
+
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"),
+        "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
+    );
+    let socket = env.runtime_root.join("context-gate.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .env("RIMZ_TEST_WORKFLOW_CONTEXT_GATE", &socket)
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut gate = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break stream;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "host never reached context publication"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let value = show(&env, id);
+    backdate_check(&env, &value);
+    gate.write_all(&[1]).unwrap();
+    let value = settled(&env, id, "parked");
+    let evaluations = events(&value, "evaluation");
+    assert_eq!(evaluations.len(), 1, "{evaluations:#?}");
+    assert_eq!(evaluations[0]["outcome"], "timeout");
+    assert_eq!(evaluations[0]["digests"], json!({}), "{evaluations:#?}");
+    assert!(
+        !Path::new(value["dir"].as_str().unwrap())
+            .join("script.pid")
+            .exists()
+    );
+    assert_eq!(value["record"]["park"]["reason"], "timeout");
+}
+
+#[test]
 fn waiting_timeout_and_live_deadline_use_original_clock() {
     let (env, _) = fixture(&format!("{HEADER}{}", WAIT.replace("1h", "1s")), PENDING);
     let id = start(&env);
@@ -763,11 +823,15 @@ fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
 fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
+    use sha2::Digest;
+
+    let script = "exec sleep 60\n";
+    let digest = hex::encode(sha2::Sha256::digest(script.as_bytes()));
     for bounded in [false, true] {
         let spec = format!(
             "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"
         );
-        let (env, _) = fixture(&spec, "exec sleep 60\n");
+        let (env, _) = fixture(&spec, script);
         let id = start(&env);
         let value = until(&env, &id, |value| {
             value["record"]["attempt"]["child"]["pid"].is_number()
@@ -786,16 +850,10 @@ fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
             }
         }
         let resume = ResumeHost(host);
-        if bounded {
-            let mut record = value["record"].clone();
-            record["entered_at"] = json!("2000-01-01T00:00:00Z");
-            let path = Path::new(value["dir"].as_str().unwrap())
-                .parent()
-                .unwrap()
-                .join("record.json");
-            fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
-        }
         drop(guard);
+        if bounded {
+            backdate_check(&env, &value);
+        }
         success(command(
             &env,
             &["workflow", if bounded { "advance" } else { "cancel" }, &id],
@@ -809,9 +867,15 @@ fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
             std::thread::sleep(Duration::from_millis(10));
         }
         let value = show(&env, &id);
+        let evaluations = events(&value, "evaluation");
         assert_eq!(
-            events(&value, "evaluation")[0]["outcome"],
+            evaluations[0]["outcome"],
             if bounded { "timeout" } else { "canceled" }
+        );
+        assert_eq!(
+            evaluations[0]["digests"],
+            json!({"checks/pr.sh": digest}),
+            "{evaluations:#?}"
         );
         drop(resume);
     }

@@ -33,9 +33,7 @@ fn run(
         .ok_or("judge needs a prompt-file")?;
     let prompt_file = spec::confined_file(&record.spec_dir, file).map_err(|e| e.to_string())?;
     let prompt = std::fs::read_to_string(prompt_file).map_err(|e| e.to_string())?;
-    result
-        .digests
-        .insert(file.clone(), digest(prompt.as_bytes()));
+    let digests = BTreeMap::from([(file.clone(), digest(prompt.as_bytes()))]);
     let attempt = record.attempt.as_ref().expect("prepared judge attempt");
     let output_path = paths.check_output(attempt.seq);
     let prompt = format!(
@@ -100,11 +98,18 @@ fn run(
         }
         let admitted =
             crate::harness::headless::admit(adapter, &plan).map_err(|e| e.to_string())?;
-        let output = with_child(state, paths, spec, record, |interrupted, spawned| {
-            admitted
-                .execute_hosted(Duration::from_secs(u32::MAX.into()), interrupted, spawned)
-                .map_err(|e| e.to_string())
-        })?;
+        let output = with_child(
+            state,
+            paths,
+            spec,
+            record,
+            digests,
+            |interrupted, spawned| {
+                admitted
+                    .execute_hosted(Duration::from_secs(u32::MAX.into()), interrupted, spawned)
+                    .map_err(|e| e.to_string())
+            },
+        )?;
         let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
         let response = form.read_result(
             &output.stdout,

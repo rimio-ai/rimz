@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -47,7 +45,7 @@ impl Transition<'_> {
         };
         if let Ok(object) = object {
             self.record.check_retry_context = None;
-            self.finish_check(seq, Ok(object), result.digests, result.stderr_tail)?;
+            self.finish_check(seq, Ok(object), result.stderr_tail)?;
             for entry in &mut self.entries {
                 if entry.seq == Some(seq)
                     && let JournalEvent::Evaluation {
@@ -70,7 +68,7 @@ impl Transition<'_> {
                 origin: EvaluationOrigin::Engine,
                 outcome: failure.into(),
                 object: object.clone(),
-                digests: result.digests,
+                digests: attempt.digests,
                 started_at: attempt.started_at,
                 ended_at: self.now,
                 stderr_tail: result.stderr_tail,
@@ -117,7 +115,6 @@ impl Transition<'_> {
         &mut self,
         seq: u64,
         object: Result<Value, String>,
-        digests: BTreeMap<String, String>,
         stderr_tail: Option<String>,
     ) -> Result<(), TimeInputErr> {
         if !self.current(seq) {
@@ -152,12 +149,8 @@ impl Transition<'_> {
                 EvaluationOrigin::Engine,
             ),
         };
-        let started_at = self
-            .record
-            .attempt
-            .as_ref()
-            .map(|a| a.started_at)
-            .unwrap_or(self.now);
+        // current verified that this sequence owns the live attempt.
+        let attempt = self.record.attempt.take().expect("current check attempt");
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
@@ -166,8 +159,8 @@ impl Transition<'_> {
                 cost_usd: None,
                 retry: None,
                 object: object.clone(),
-                digests,
-                started_at,
+                digests: attempt.digests,
+                started_at: attempt.started_at,
                 ended_at: self.now,
                 stderr_tail: if reason == ParkReason::Invalid {
                     stderr_tail
@@ -176,7 +169,6 @@ impl Transition<'_> {
                 },
             },
         );
-        self.record.attempt = None;
         if reason == ParkReason::Invalid {
             self.push(
                 Some(seq),
@@ -492,10 +484,10 @@ impl Transition<'_> {
                 JournalEvent::Evaluation {
                     origin: EvaluationOrigin::Engine,
                     cost_usd: None,
-                    retry: None,
+                    retry: attempt.retry,
                     outcome: outcome.into(),
                     object: Value::Null,
-                    digests: BTreeMap::new(),
+                    digests: attempt.digests,
                     started_at: attempt.started_at,
                     ended_at: self.now,
                     stderr_tail: None,
