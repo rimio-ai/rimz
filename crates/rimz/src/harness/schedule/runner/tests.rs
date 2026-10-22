@@ -736,18 +736,33 @@ fn surplus_gate_covers_every_branch() {
 }
 
 #[test]
+fn run_lock_probes_never_defeat_a_starting_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("task.lock");
+    std::fs::write(&path, b"").unwrap();
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            for _ in 0..10_000 {
+                probe_run_lock_path(&path).unwrap();
+            }
+        });
+        start.wait();
+        for _ in 0..10_000 {
+            let claim = acquire_run_lock_file(&path, None).unwrap();
+            assert!(
+                matches!(claim, RunLockAttempt::Acquired(_)),
+                "a probe must not make a run look overlapped"
+            );
+            drop(claim);
+        }
+    });
+}
+
+#[test]
 fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let open = |path: &Path, create: bool| {
-        std::fs::OpenOptions::new()
-            .create(create)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(path)
-            .expect("open lock")
-    };
-
     let missing_path = dir.path().join("missing.lock");
     assert!(matches!(
         probe_run_lock_path(&missing_path).expect("probe missing lock"),
@@ -759,7 +774,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     );
 
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(open(&path, true), &path, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -767,7 +782,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         serde_json::from_slice(&std::fs::read(&path).expect("read lock")).expect("parse lock info");
     assert_eq!(written.pid, std::process::id());
 
-    match acquire_run_lock_file(open(&path, false), &path, None).expect("contend for lock") {
+    match acquire_run_lock_file(&path, None).expect("contend for lock") {
         RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
         RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
         RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
@@ -776,7 +791,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     drop(guard);
     let before_probe = std::fs::read(&path).expect("read lock before probe");
     assert!(matches!(
-        probe_run_lock_file(open(&path, false), &path).expect("probe available lock"),
+        probe_run_lock_path(&path).expect("probe available lock"),
         RunLockState::Available
     ));
     assert_eq!(
@@ -786,11 +801,17 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     );
 
     let empty_path = dir.path().join("legacy.lock");
-    let holder = open(&empty_path, true);
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&empty_path)
+        .expect("open lock");
     holder.try_lock().expect("hold empty lock");
     assert!(
         matches!(
-            probe_run_lock_file(open(&empty_path, false), &empty_path).expect("probe empty lock"),
+            probe_run_lock_path(&empty_path).expect("probe empty lock"),
             RunLockState::Held(None)
         ),
         "a held lock with no metadata is still held"
@@ -801,14 +822,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
 fn wait_for_run_lock_release_observes_guard_drop() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("task.lock");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .expect("open lock");
-    let guard = match acquire_run_lock_file(file, &path, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };

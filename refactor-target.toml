@@ -2402,7 +2402,8 @@ path = "crates/rimz/src/harness/schedule/runner.rs"
 allowed-dependencies = [
     "agents",
     "config",
-    "disk::lock",
+    # Run claims and liveness reads share the directory-gated lease protocol with watcher and GC attempts.
+    "disk::lease",
     "disk::paths",
     "harness::assist_log",
     "harness::budget",
