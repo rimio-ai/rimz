@@ -951,7 +951,8 @@ path = "crates/rimz/src/harness"
 # UnknownSpec, SpecCandidate, SpecKind, choices and team_summary serve CLI rendering (+5).
 # Team archive registration and its launch posture cross the CLI boundary (+2 net).
 # scratch::{board_relative_path, durable_board_path} share receipt and durable board spellings (+2).
-surface-budget = 941
+# scratch::holding_team supplies read-only board holds to automatic worktree callers (+1).
+surface-budget = 942
 
 [[verdict]]
 kind = "item"
@@ -1763,7 +1764,8 @@ path = "crates/rimz/src/worktree"
 # LandingPlan, landing_plan and land replace merge_to_main (+2).
 # discover_owned_cached shares host polling enumeration between conditions and timer firing (+1).
 # discover_checkout and CheckoutDiscoveryErr carry validated checkout discovery into launch compilation (+2).
-surface-budget = 81
+# ProtectionSet::insert_team accepts CLI-gathered team-board pins (+1).
+surface-budget = 82
 
 [[verdict]]
 kind = "item"
@@ -5814,12 +5816,22 @@ reason = "The public bounded_map signature carries lane attribution through util
 [[verdict]]
 kind = "item"
 key = "worktree::Holders"
-reason = "Shared inspection and sweep records carry agent handles, bare-pane counts, and loop-task names to the CLI."
+reason = "Shared inspection and sweep records carry agent handles, bare-pane counts, loop-task names, and team names to the CLI."
 
 [[verdict]]
 kind = "item"
 key = "worktree::ProtectionSet::insert_loop_task"
 reason = "The CLI supplies task pins as plain facts without coupling worktree removal to the schedule catalog."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ProtectionSet::insert_team"
+reason = "The CLI supplies team pins as plain facts without coupling worktree removal to board discovery or caller policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::scratch::holding_team"
+reason = "Automatic worktree callers share the read-only board hold and run-label reader without changing advisory stage reads."
 
 [[verdict]]
 kind = "item"

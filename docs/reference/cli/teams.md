@@ -301,7 +301,7 @@ rimz teams stop forge -w feat-rate-limits
 
 `stop` and `restart` continue past a failed member and exit `1` when any member failed. A member whose account fails the [account check](./agents.md#the-account-check-at-launch) is one such `restart` failure; a team launch and `rimz teams resume` refuse whole on it.
 
-After a successful stop, a pending board keeps an existing checkout held. The receipt names its stage and prints the addressed resume and `flip ... Done` release commands. Stopping does not finish the board; ordinary worktree cleanup still applies.
+After a successful stop, a pending board keeps an existing checkout held. The receipt names its stage and prints the addressed resume and `flip ... Done` release commands. Stopping does not finish the board: until it reaches `Done`, agent-exit cleanup, `worktree sweep`, and `gc` keep a RimZ-owned checkout ([worktree sweep](./worktree.md#sweep-landed-worktrees)), while an explicit `worktree remove` still removes it.
 
 Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#worktree` or `-w NAME` selects by lane or worktree name. With no live cohort, the error suggests `rimz teams resume <team>`.
 
@@ -424,7 +424,7 @@ rimz teams flip Done "reflection recorded in .rimz/team/reflect-notes.md; run co
 
 A project team that is not trusted is refused, as for any command that reads an untrusted project config.
 
-With no live members, a user can still flip the held board. The receipt says `no live members`; a `Done` flip that ends the board's hold adds `checkout released`, and one made while a recorded member still holds the checkout does not. Release ends the board's hold, not the checkout itself: no worktree is removed. Other stages name the absent owner as `not live; woken on resume`.
+With no live members, a user can still flip the held board. The receipt says `no live members`; a `Done` flip that ends the board's hold adds `checkout released`, and one made while a recorded member still holds the checkout does not. Release ends the board's hold, not the checkout itself: no worktree is removed. Afterwards, automatic cleanup or `gc` may reclaim a clean, landed RimZ-owned checkout. Other stages name the absent owner as `not live; woken on resume`.
 
 ### Stage rules
 

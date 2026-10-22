@@ -127,7 +127,7 @@ feat-a    feat-a  landed            -
 | `WORKTREE` | The name, which is also the channel. |
 | `BRANCH` | The branch checked out now, or `-` on a detached `HEAD`. |
 | `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included. |
-| `HOLDERS` | Holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, and `loop task NAME` for each holding task, or `-`. Ended agents are omitted. |
+| `HOLDERS` | Holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, `loop task NAME` for each holding task, then `team NAME` for each holding board, or `-`. Ended agents are omitted. |
 
 `--json` prints an array of objects, `[]` when there are none.
 
@@ -141,7 +141,7 @@ feat-a    feat-a  landed            -
 | `dirty` | `true` or `false`. |
 | `landed` | `true`, `false`, or `null` when unknown. |
 | `reasons` | All keep reason ids in precedence order: `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. Empty means removable. |
-| `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), and `loop_tasks` (deduplicated task names, `[]` when none). |
+| `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), `loop_tasks` (deduplicated task names), then `teams` (deduplicated team names). Both name arrays are `[]` when none. |
 
 ## Open a shell in a worktree
 
@@ -233,15 +233,17 @@ would remove (1) from ~/code/query-engine-worktrees
 nothing was removed; run `rimz worktree sweep` to remove the 1
 ```
 
-`sweep` removes every RimZ-owned worktree that is clean, proven landed, and has no pane, agent, or armed loop-task holder, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
+`sweep` removes every RimZ-owned worktree that is clean, proven landed, and has no pane, agent, armed loop-task holder, or team board short of `Done`, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
 
 An enabled machine or instance task holds its root and its run directory until removed, disabled, or past its deadline; a paused task still holds them. `--each-worktree` holds only its root. A task that launches with `--worktree` holds only its root unless it has a check, judge, `when`, or watch that needs its run directory too. Project tasks do not hold trees. Holders print as `loop task NAME`; they also keep trees during unattended agent-exit cleanup. Explicit `remove` and `merge` ignore loop holders.
+
+A board behind the checkout-root `.rimz/team` link holds the tree until its first `Stage:` line says `Done`. A board with no stage, or one that cannot be read for a reason other than not-found, also holds it. A missing board, a dangling link, a `.rimz` shared through `.worktreelink`, and a legacy root `blackboard.md` hold nothing. Boards in subdirectories are not checked. The holder prints as `team NAME`, or `team unknown` when the run's team cannot be read. It also protects unattended agent-exit cleanup and `gc`; explicit `remove` and `merge` ignore board holders. Release it with `rimz teams flip TEAM#LANE Done "finished"`.
 
 Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook); `--dry-run` runs no hooks.
 
 | `kept` reason | Meaning |
 | --- | --- |
-| `in use` | An open pane or an agent is in the tree, or an armed loop task needs it. Unlike `remove`, an agent RimZ cannot prove dead still counts. |
+| `in use` | An open pane or an agent is in the tree, an armed loop task needs it, or its team board is short of `Done` (including an unreadable board or one with no stage). Unlike `remove`, an agent RimZ cannot prove dead still counts. |
 | `uncommitted changes` | The tree is dirty. |
 | `unlanded work` | The work has not landed. |
 | `unknown` | RimZ cannot prove whether the work landed. |
@@ -250,6 +252,6 @@ The report groups each kept tree under its first reason, then names additional r
 
 Quitting the agent that worked in a tree reclaims nothing: its pane says the worktree was kept and names `rimz worktree sweep`, then drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
 
-A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, or any workspace's instance-task file cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`.
+A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster, machine loop file, workspace listing, any workspace's instance-task file, or the owned-worktree listing cannot be read, `sweep` removes nothing and exits 1, naming the failed source. Listing is best-effort: unreadable task sources contribute no loop holders to `list`, and a failed board enumeration contributes no team holders (the listing itself still requires Git's worktree list).
 
 [`rimz gc`](./maintenance.md#sweep-stale-state) runs the same sweep as one area of its report.

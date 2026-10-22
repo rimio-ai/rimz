@@ -535,6 +535,9 @@ fn sweep_worktrees(
                 super::worktree_protection::ProtectionErr::LoopTasks(error) => {
                     WorktreeSkip::LoopTasksUnavailable(format!("{error:#}"))
                 }
+                super::worktree_protection::ProtectionErr::WorktreeListing(_) => {
+                    WorktreeSkip::ListFailed
+                }
             });
         }
     };

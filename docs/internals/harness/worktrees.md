@@ -41,7 +41,7 @@ The marker's `worktree_path` is the tree's identity everywhere a cohort or agent
 | [`worktree/hooks.rs`](../../../crates/rimz/src/worktree/hooks.rs) | Machine-local lifecycle command execution and bounded failure tails. |
 | [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | `info/exclude` registration for linked directories and team scratch patterns. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | The `rimz worktree` commands and the hidden `cleanup` helper. |
-| [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane, agent, and loop-task facts for each removal caller. |
+| [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane, agent, loop-task, and team-board facts for each removal caller. |
 | [`cli/mod.rs`](../../../crates/rimz/src/cli/mod.rs) | `resolve_launch_checkout` (unmarked-checkout confirmation and PR retry), `resolve_pr_branch_choice`, and `confirm_cross_repo_worktree`. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The worktree area of the aggregate `rimz gc` report. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The exec wrapper that enters a tree and triggers cleanup when the agent exits. |
@@ -212,15 +212,16 @@ Landing requires that local branch to be held by a checkout in `git worktree lis
 
 ### Protection facts
 
-Git state alone cannot make removal safe: a tree can be clean and landed while someone still has a shell open in it or a loop task needs it later. `ProtectionSet` holds normalized occupied or pinned paths, and a candidate checkout is protected when any of those paths equals it or lies inside it.
+Git state alone cannot make removal safe: a tree can be clean and landed while someone still has a shell open in it, a loop task needs it later, or a team board is short of `Done`. `ProtectionSet` holds normalized occupied or pinned paths, and a candidate checkout is protected when any of those paths equals it or lies inside it.
 
-The CLI gathers pane cwds from the mux and agent rows from the store; `protection_set_from_runtime` folds them. It adds task pins through `ProtectionSet::insert_loop_task`:
+The CLI gathers pane cwds from the mux and agent rows from the store; `protection_set_from_runtime` folds them. It adds task pins through `ProtectionSet::insert_loop_task` and team pins through `ProtectionSet::insert_team`:
 
 - A pane contributes its cwd, unless it is sidebar chrome or the caller's own pane.
 - A live agent contributes its recorded `worktree_path` and its process cwd.
 - An agent of unknown liveness contributes its recorded path under `Occupancy::Unproven` only.
 - A dead agent, or any agent bound to the caller's own pane, contributes nothing.
 - An armed machine or instance loop task contributes its root and usually its run directory. `crates/rimz/src/harness/schedule/catalog.rs::worktree_pins` is the shared rule: live and paused tasks pin until their deadline (equality is expired); disabled and project-source tasks do not. Fan-out tasks pin only their root. A spawning `--worktree` task also pins only its root unless a check, judge, condition, or watch needs its run directory. Invalid actions or triggers do not release pins.
+- A team board short of `Done` contributes its checkout root. `crates/rimz/src/harness/scratch.rs::holding_team` reads the board once through the root's `.rimz/team` link, following foreign links too. A `.rimz` that is itself a symlink (shared through `.worktreelink`) holds nothing, the rule `crates/rimz/src/harness/team_notes.rs::register` enforces when it refuses to register a team there, since the board behind it belongs to the checkout it shares. The first `Stage:` line decides; no stage or a read error other than not-found holds the tree. `Done`, a missing board, a dangling link, and legacy root boards hold nothing. The label comes from the linked `run.json`, falling back to `unknown`. Subdirectory boards are not searched.
 
 `crates/rimz/src/harness/schedule/catalog.rs::load_worktree_pins` reads machine `loop.toml` and every workspace's instance file strictly, without loading project catalogs. It applies the catalog's existing machine-over-instance precedence within each root. Missing instance files are empty; any unreadable listing or source fails the whole protection read, since a room's tasks can pin another room's tree. Arming is read leniently: a missing overlay defaults machine and instance tasks to live, the protective direction.
 
@@ -228,20 +229,23 @@ Paths are normalized lexically (`.` and `..` folded) before comparison, so `/rep
 
 `Occupancy` and the own-pane exemption are where the callers differ, and `cli/worktree_protection.rs` fixes them per caller:
 
-| Caller | Occupancy | Own pane exempt | Loop tasks | Missing facts |
-| --- | --- | --- | --- | --- |
-| `worktree remove`, `worktree merge` (`for_explicit_removal`) | `ProvenLive` | Yes | Ignored | Best-effort: an unreadable roster or mux protects nothing. |
-| Wrapper cleanup (`for_wrapper_cleanup`) | `Unproven` | Yes | Required | Roster and mux best-effort; task-source failure keeps the tree. |
-| `worktree list` (`for_listing`) | `Unproven` | No | Best-effort | An unreadable task source contributes no loop holders. |
-| `worktree sweep`, `rimz gc` (`for_automatic_gc`) | `Unproven` | No | Required | Roster or task-source failure skips the sweep. |
+| Caller | Occupancy | Own pane exempt | Loop tasks | Team boards | Missing facts |
+| --- | --- | --- | --- | --- | --- |
+| `worktree remove`, `worktree merge` (`for_explicit_removal`) | `ProvenLive` | Yes | Ignored | Ignored | Best-effort: an unreadable roster or mux protects nothing. |
+| Wrapper cleanup, `worktree cleanup PATH`, supervised retry (`for_wrapper_cleanup`) | `Unproven` | Yes | Required | Read at PATH | Roster and mux best-effort; task-source failure keeps the tree. No tree enumeration. |
+| `worktree list` (`for_listing`) | `Unproven` | No | Best-effort | Read at every owned tree | An unreadable task source contributes no loop holders; a failed owned-tree listing contributes no team holders. |
+| `worktree sweep`, `rimz gc` (`for_automatic_gc`) | `Unproven` | No | Required | Read at every owned tree | Roster, task-source, or owned-tree listing failure fails the gather. `gc` skips its worktree area (`list_failed` for listing); `worktree sweep` exits 1 under its protection-facts context. |
+| Cohort relaunch (`ProtectionSet::default()`) | n/a | n/a | Not gathered | Not gathered | No facts gathered. |
+
+Listing and automatic sweeping enumerate owned checkouts with `worktree::discover_owned` before gathering their board pins; the domain inspection then performs its own enumeration. A board read failure protects only that tree, not the whole sweep. The domain takes pins only and never reads boards; explicit removal, merge, and relaunch remain the user's decision.
 
 Unattended reclamation uses `Unproven`, so an agent RimZ cannot prove dead still holds its tree. A person naming one tree has already decided, so `ProvenLive` lets only a running process or an open pane hold it, and a stale session record left by a crash never blocks the command that would retire it.
 
 ### The assessment
 
-`WorktreeState::keep_reasons` returns every `KeepReason` in fixed precedence: `InUse`, `Dirty`, then `Unlanded` or `Unknown`. Empty means removable. `ProtectionSet::holders` names agent handles using the full roster as peers, counts protected panes with no agent, and lists deduplicated loop-task names. A loop holder is `InUse`, rendered as `loop task NAME`; paths use normalized containment, and one holder reached through multiple paths counts once. Listing, sweeping, removal, cleanup, and relaunch use this classifier with their caller-specific facts.
+`WorktreeState::keep_reasons` returns every `KeepReason` in fixed precedence: `InUse`, `Dirty`, then `Unlanded` or `Unknown`. Empty means removable. `ProtectionSet::holders` names agent handles using the full roster as peers, counts protected panes with no agent, and lists deduplicated loop-task and team names. Loop and board holders are `InUse`, rendered as `loop task NAME` then `team NAME`; JSON adds the `teams` array after `loop_tasks`, with `[]` when none. Paths use normalized containment, and one holder reached through multiple paths counts once. Listing, sweeping, removal, cleanup, and relaunch use this classifier with their caller-specific facts.
 
-Sweep reads one protection snapshot before removing candidates. A task booked during the pass can still lose its tree, the same accepted window as an arriving agent; refreshing all holders at each removal is a separate change.
+Sweep reads one protection snapshot before removing candidates. A task booked or board reopened during the pass can still lose its tree, the same accepted window as an arriving agent; refreshing all holders at each removal is a separate change. Wrapper cleanup reads the board after its 300 ms roster grace.
 
 | Verdict | `worktree remove` | Wrapper cleanup | `sweep` and `gc` | Cohort relaunch |
 | --- | --- | --- | --- | --- |

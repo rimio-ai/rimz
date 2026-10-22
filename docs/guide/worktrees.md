@@ -181,11 +181,11 @@ RimZ reclaims a tree only after proving its work landed, so a merged feature cle
 
 What happens when the last agent in a tree exits depends on how it exits, and the three cases differ enough to be worth knowing:
 
-- **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed and has no remaining holders goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not. Another agent, pane, or armed loop task keeps the tree without a prompt.
+- **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed and has no remaining holders goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not. Another agent, pane, armed loop task, or team board short of `Done` keeps the tree without a prompt.
 - **An unattended run finishes.** Same check, same outcomes. This is the path a [scripted `-p` run](./scripting.md) or a [scheduled loop turn](./loops.md) takes, and it is why a fleet that works while you sleep does not leave trees behind.
 - **You quit the agent normally.** Nothing is reclaimed. The pane prints ``rimz: worktree <path> kept; `rimz worktree sweep` reclaims it once its work lands``, then drops to a shell inside the tree so you can commit, push, or look around.
 
-`rimz worktree list` is the status read, and bare `rimz worktree` does the same. `STATE` says `landed`, `unlanded`, or `unknown`, appending ` · dirty` for uncommitted changes. The summary counts what is removable and what is occupied. Agent handles are the live holders that sweeping uses, not ended sessions; a pane with no agent reads `pane`, and a booked loop task reads `loop task NAME`.
+`rimz worktree list` is the status read, and bare `rimz worktree` does the same. `STATE` says `landed`, `unlanded`, or `unknown`, appending ` · dirty` for uncommitted changes. The summary counts what is removable and what is occupied. Agent handles are the live holders that sweeping uses, not ended sessions; a pane with no agent reads `pane`, a booked loop task reads `loop task NAME`, and a holding team board reads `team NAME`.
 
 ```console
 $ rimz worktree list
@@ -211,6 +211,8 @@ landed auth on main
 Merging leaves the tree in place. `rimz worktree sweep` is the routine that takes it away: it removes every marked tree that is clean, proven landed, and has no holders, reports what it reclaimed and why it kept the rest, and previews with `--dry-run`. `rimz gc` runs the same sweep alongside the other maintenance areas. A sweep never forces, so a tree you are still working in survives it.
 
 A follow-up loop booked in a tree keeps it too, even after the last agent exits. Its holder reads `loop task NAME` in listing and sweep reports. Remove or disable the task to release the tree; a pause keeps it, and its deadline releases it. Fan-out and fresh-worktree launches have narrower holds, listed in the [sweep reference](../reference/cli/worktree.md#sweep-landed-worktrees). You can still explicitly `merge` or `remove` a loop-held tree. If task state cannot be read, sweeping removes no trees and says which source needs repair.
+
+A team's board behind the checkout-root `.rimz/team` link also keeps it after everyone stops, until the board reaches `Done`. Listing, sweeping, and `gc` name `team NAME` under `in use`. A board without a stage or one that cannot be read stays protective; a missing board, a dangling link, or a `.rimz` shared through `.worktreelink` does not. Flip the team to `Done` to release it for automatic cleanup, or explicitly `merge` or `remove` the tree. Subdirectory boards and legacy root boards do not hold the checkout.
 
 ```console
 $ rimz worktree sweep
