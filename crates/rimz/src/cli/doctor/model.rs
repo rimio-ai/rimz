@@ -245,6 +245,8 @@ pub(super) struct Mux {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) session_health: Option<Probe<SessionHealth>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) daemon_tab: Option<Probe<DaemonTab>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) duplicate_sessions: Option<Probe<DuplicateSessions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) presence: Option<Presence>,
@@ -470,6 +472,51 @@ pub(super) enum SessionHealth {
     Ok,
     Stuck { fix: String },
     Unresponsive { fix: String },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum DaemonTab {
+    Ok,
+    Repairable {
+        faults: Vec<rimz::daemon_view::DaemonShapeFault>,
+        fix: String,
+    },
+    Misshapen {
+        faults: Vec<rimz::daemon_view::DaemonShapeFault>,
+        fix: String,
+    },
+    Unjudged,
+}
+
+impl From<rimz::daemon_view::DaemonShape> for DaemonTab {
+    fn from(shape: rimz::daemon_view::DaemonShape) -> Self {
+        use rimz::daemon_view::DaemonShape;
+        match shape {
+            DaemonShape::Healthy => Self::Ok,
+            DaemonShape::Repairable { faults } => Self::Repairable {
+                faults,
+                fix: concat!(
+                    "RimZ restarts only the loop watch at its next daemon repair; ",
+                    "close the loop watch pane to do it now, ",
+                    "and RimZ reopens it in the runtime column"
+                )
+                .to_owned(),
+            },
+            DaemonShape::Misshapen { faults } => Self::Misshapen {
+                faults,
+                fix: concat!(
+                    "RimZ leaves the tab as it is: ",
+                    "it repairs only a loop watch spanning beneath both columns; ",
+                    "to rebuild it, close the `rimzd` tab ",
+                    "and run `rimz start` from outside the room, ",
+                    "and the agents keep running"
+                )
+                .to_owned(),
+            },
+            DaemonShape::Unjudged => Self::Unjudged,
+        }
+    }
 }
 
 /// Live sidebar sessions that share this workspace. More than one risks a

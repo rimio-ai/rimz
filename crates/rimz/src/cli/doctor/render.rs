@@ -13,15 +13,17 @@ use crate::cli::render::{
     lsp_state_label, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
+use rimz::daemon_view::DaemonShapeFault;
 use rimz::trust::TrustState;
 
 use super::model::{
-    Accounts, AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport,
-    DoctorState, DuplicateSessions, FolderTrust, Home, HookStatus, Host, LogScope, LoopTasks,
-    MachineConfigHealth, MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow,
-    MuxLog, PluginRow, Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
-    PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth,
-    Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace, ZellijKittyGraphics,
+    Accounts, AgentCounts, AgentRollup, Capabilities, DaemonTab, Diagnostics, DoctorImpact,
+    DoctorReport, DoctorState, DuplicateSessions, FolderTrust, Home, HookStatus, Host, LogScope,
+    LoopTasks, MachineConfigHealth, MachineConfigProblemKind, MessageProblemRow, Messages, Mux,
+    MuxBinaryRow, MuxLog, PluginRow, Presence, PresencePluginRow, PresencePluginStatus,
+    PresencePluginTelemetry, PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room,
+    RoomState, SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace,
+    ZellijKittyGraphics,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -988,6 +990,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(health) = &mux.session_health {
         kv.push("session health", session_health_cell(tally, health));
     }
+    if let Some(tab) = &mux.daemon_tab {
+        kv.push("daemon tab", daemon_tab_cell(tally, tab));
+    }
     if let Some(presence) = &mux.presence {
         kv.push("presence", presence_cell(tally, presence));
     }
@@ -1243,6 +1248,44 @@ fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell
         Probe::Ready(SessionHealth::Unresponsive { fix }) => {
             counted_verdict(tally, Severity::Problem, "live but not responding", fix)
         }
+    }
+}
+
+fn daemon_tab_cell(tally: &mut Tally, tab: &Probe<DaemonTab>) -> Cell {
+    match tab {
+        Probe::Unavailable { error, .. } => unavailable(
+            tally,
+            Severity::Warning,
+            error,
+            "inspect the room with `rimz doctor --json`, then repair the reported multiplexer error",
+        ),
+        Probe::Ready(DaemonTab::Ok) => verdict(Health::Ok, "ok"),
+        Probe::Ready(DaemonTab::Repairable { fix, .. }) => counted_verdict(
+            tally,
+            Severity::Warning,
+            "loop watch spans beneath the content and runtime columns",
+            fix,
+        ),
+        Probe::Ready(DaemonTab::Misshapen { faults, fix }) => {
+            let faults = faults
+                .iter()
+                .map(|fault| match fault {
+                    DaemonShapeFault::ContentSplit => "content column is split",
+                    DaemonShapeFault::ContentNotFullHeight => "content column is not full height",
+                    DaemonShapeFault::RuntimeSplit => "runtime column is split",
+                    DaemonShapeFault::RuntimeNotFullHeight => "runtime column is not full height",
+                    DaemonShapeFault::RuntimeLeftOfContent => {
+                        "runtime column is left of or overlaps content"
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            counted_verdict(tally, Severity::Warning, faults, fix)
+        }
+        Probe::Ready(DaemonTab::Unjudged) => verdict(
+            Health::Neutral,
+            "not judged (a fullscreen or zoomed pane, or the tab changed during the check)",
+        ),
     }
 }
 

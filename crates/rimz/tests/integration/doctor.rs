@@ -2453,6 +2453,7 @@ fn doctor_scopes_room_health_and_presence_to_selected_backend() {
     assert_eq!(mux["room"]["selected_state"]["state"], "absent");
     assert_eq!(mux["room"]["live_on"], serde_json::json!(["zellij"]));
     assert!(mux.get("session_health").is_none(), "{mux}");
+    assert!(mux.get("daemon_tab").is_none(), "{mux}");
     assert_eq!(mux["presence"]["mode"], "not_applicable");
     assert!(
         mux["presence"]["reason"]
@@ -2464,6 +2465,53 @@ fn doctor_scopes_room_health_and_presence_to_selected_backend() {
     assert!(mux.get("capabilities").is_some(), "{mux}");
     assert!(mux.get("binaries").is_some(), "{mux}");
     assert!(mux.get("log").is_some(), "{mux}");
+}
+
+#[test]
+fn doctor_daemon_tab_reports_read_failures_and_omits_a_closed_view() {
+    let env = Env::new();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Absent, StubRoomState::Live);
+    let stub_path = stub_dir.join("tmux");
+    let stub = std::fs::read_to_string(&stub_path).unwrap();
+    let calls = env.home_root.join("daemon-tab-calls");
+    let trace = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\n",
+        shlex::try_quote(calls.to_str().unwrap()).unwrap()
+    );
+    write_executable(&stub_path, &stub.replacen("#!/bin/sh\n", &trace, 1));
+
+    let report = doctor_with_mux(&env, &stub_dir, "--tmux");
+    let mux = &report["mux"]["ready"];
+    assert_eq!(mux["room"]["selected_state"]["state"], "live");
+    assert_eq!(mux["session_health"]["ready"]["state"], "ok");
+    assert!(
+        mux["daemon_tab"]["unavailable"]["error"].is_string(),
+        "{mux}"
+    );
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains(" list-panes "))
+            .count(),
+        1,
+        "{log}"
+    );
+    for verb in ["kill-pane", "split-window", "resize-pane"] {
+        assert!(!log.contains(verb), "doctor must be read-only: {log}");
+    }
+
+    write_executable(
+        &stub_path,
+        &stub.replace(
+            "exit 1\n",
+            "if [ \"${1:-}\" = list-panes ]; then exit 0; fi\nexit 1\n",
+        ),
+    );
+    let report = doctor_with_mux(&env, &stub_dir, "--tmux");
+    assert!(
+        report["mux"]["ready"].get("daemon_tab").is_none(),
+        "{report}"
+    );
 }
 
 #[test]
@@ -2565,6 +2613,7 @@ fn doctor_reports_exited_zellij_room_preflight_health() {
     let mux = &report["mux"]["ready"];
     assert_eq!(mux["room"]["selected_state"]["state"], "exited");
     assert_eq!(mux["session_health"]["ready"]["state"], "stuck");
+    assert!(mux.get("daemon_tab").is_none(), "{mux}");
     assert_eq!(mux["presence"]["mode"], "not_applicable");
 }
 
