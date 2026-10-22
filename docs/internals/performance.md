@@ -128,7 +128,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 | Drain cursor | Two durable cursor publications per applied frame, plus synced truncation and cursor reset when the queue empties | Each publication is a temp file and two fsyncs under the workspace lock; the elected worker applies frames serially in environment-scoped children |
 | Event-log durability | One group `fdatasync` per second per workspace (`LOG_SYNC_INTERVAL`) | Runs on the off-lock tail; cursor and truncation barriers are additional |
 | Snapshot publish | One cache rename per second per workspace | Single-flighted; due after `PUBLISH_INTERVAL` (1 s) or `PUBLISH_BYTE_BUDGET` (64 KiB) of unpublished tail |
-| Wakeup fanout | One heartbeat directory scan plus one datagram per live sidebar | N is live sidebars; the reads are page-cache hot and cost less than the fsync floor |
+| Wakeup fanout | One heartbeat directory scan plus one datagram per distinct room socket | The scan reads one heartbeat per live sidebar, and every attachment of a room host names the same socket, so N datagrams is live room hosts; the reads are page-cache hot and cost less than the fsync floor |
 | Durable file write | Temp file plus two fsyncs (file, parent directory) | Trust grants, the workspace record, hook installs, and the per-frame drain cursor |
 
 ### Everything else

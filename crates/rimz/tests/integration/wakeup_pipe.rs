@@ -49,9 +49,9 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
     run_wakeup_trigger(&rimz_bin, &trace_bin, &fixture);
 
     // The datagram — the channel of record — reaches *both* fresh sidebars on the
-    // session: the walk fans out one datagram per instance, which is what replaced
-    // the old per-session pipe dedup. Each payload is the typed `StoreDelta` event
-    // the renderer folds.
+    // session: their heartbeats name two sockets, and the walk sends one datagram
+    // per distinct socket, which is what replaced the old per-session pipe dedup.
+    // Each payload is the typed `StoreDelta` event the renderer folds.
     assert_store_delta(&fixture.recv_a, "sidebar.a", &fixture.workspace_id);
     assert_store_delta(&fixture.recv_b, "sidebar.b", &fixture.workspace_id);
 
