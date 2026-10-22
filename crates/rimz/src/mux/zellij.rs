@@ -29,6 +29,7 @@ mod tab_owner;
 pub use pane_pid::ZellijPaneResolver;
 pub(crate) use presence::PresenceUpgrade;
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
+pub(crate) use session::PresenceProbe;
 
 #[cfg(feature = "testkit")]
 #[doc(hidden)]

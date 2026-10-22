@@ -28,8 +28,8 @@ use crate::mux::LiveSessions;
 use crate::mux::recovery;
 use crate::mux::zellij::RECONCILE_LIST_TIMEOUT;
 use crate::mux::{
-    MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, SidebarLiveness,
-    SidebarPaneOptions, SidebarWidth, backend_for,
+    MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, SidebarPaneOptions,
+    SidebarWidth, backend_for,
 };
 use crate::proc::ProcInfo;
 use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
@@ -220,8 +220,10 @@ fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
 pub struct ReloadOutcome {
     /// Live sessions reconciled.
     pub sessions: usize,
-    /// Zellij sessions whose presence channel did not publish after converge.
+    /// Zellij sessions whose presence probe was silent or provably stale.
     pub presence_dead: usize,
+    /// Sessions whose structural pass could not acquire the reconcile lock.
+    pub busy: usize,
     /// Zellij sessions whose fresh plugin writer already matches the desired
     /// wasm and load configuration.
     pub plugin_current: usize,
@@ -271,6 +273,7 @@ impl ReloadOutcome {
         let Self {
             sessions,
             presence_dead,
+            busy,
             plugin_current,
             plugin_upgraded,
             plugin_reconciled,
@@ -293,6 +296,7 @@ impl ReloadOutcome {
         } = delta;
         self.sessions += sessions;
         self.presence_dead += presence_dead;
+        self.busy += busy;
         self.plugin_current += plugin_current;
         self.plugin_upgraded += plugin_upgraded;
         self.plugin_reconciled += plugin_reconciled;
@@ -573,17 +577,10 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         outcome.failed += 1;
         return outcome;
     };
-    let Ok(build) = crate::build_id::of_file(&rimz_bin) else {
-        outcome.failed += 1;
-        return outcome;
-    };
     let backend = backend_for(*mux);
-    let mut liveness =
-        current_build_liveness(&session_heartbeats(runtime, *mux, &ws.session_name), &build);
     let mux_config = MultiplexerConfig::from(machine_config);
 
-    if *mux == MuxName::Zellij {
-        let presence_floor_ms = unix_now_ms();
+    let presence_probe = if *mux == MuxName::Zellij {
         if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
             let presence = crate::mux::PresencePluginOptions::from_config(
                 &ws.session_name,
@@ -603,29 +600,32 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                     "sidebar repair: presence plugin ensure failed",
                 );
             }
-            if let Err(err) =
-                crate::mux::ZellijBackend::default().dump_topology_for(&ws.session_name)
-            {
-                tracing::warn!(
-                    session = %ws.session_name,
-                    tags.operation = "sidebar.repair.presence_probe",
-                    error = &err as &dyn std::error::Error,
-                    "sidebar repair: presence topology request failed",
-                );
-            }
         }
-        if crate::mux::ZellijBackend::wait_for_fresh_topology(
+        Some(crate::mux::ZellijBackend::default().probe_presence(
             runtime,
             &ws.session_name,
-            presence_floor_ms,
             RELOAD_PRESENCE_PROBE_TIMEOUT,
-        )
-        .is_none()
-        {
-            outcome.presence_dead += 1;
-            crate::harness::auto_gc::sweep_runtime_claims(runtime);
-            return outcome;
-        }
+        ))
+    } else {
+        None
+    };
+    if let Some(crate::mux::zellij::PresenceProbe::Stale {
+        ghost_panes,
+        produced_at_ms,
+        observed_at_ms,
+        writer,
+    }) = &presence_probe
+    {
+        crate::diag::DiagSink::for_workspace(ws.workspace_id.clone(), &ws.session_name, None).emit(
+            DiagEvent::PresenceRosterStale {
+                session_name: ws.session_name.clone(),
+                ghost_panes: ghost_panes.clone(),
+                produced_at_ms: *produced_at_ms,
+                observed_at_ms: *observed_at_ms,
+                plugin_id: writer.as_ref().map(|writer| writer.plugin_id),
+                loaded_at_ms: writer.as_ref().map(|writer| writer.loaded_at_ms),
+            },
+        );
     }
 
     let width = SidebarWidth::from_config(&machine_config.theme);
@@ -645,37 +645,57 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         resume_tabs: Vec::new(),
         refresh_ms: None,
     };
-    liveness.young_panes = crate::sidebar::young_sidebar_panes(
-        *mux,
-        ws.workspace_id.as_str(),
-        &ws.session_name,
-        jiff::Timestamp::now(),
-    );
-    match backend.reconcile_sidebars(&opts, &liveness) {
-        Ok(report) => {
-            outcome.recovered += report.recovered;
-            outcome.closed += report.closed;
-            outcome.failed += report.failed;
-            outcome.deferred += report.deferred;
-            outcome.redocked += report.redocked;
-            outcome.misdocked += report.misdocked;
-        }
-        Err(err) => {
-            outcome.failed += 1;
-            tracing::warn!(
-                session = %ws.session_name,
-                tags.operation = "sidebar.repair.reconcile",
-                error = &err as &dyn std::error::Error,
-                "sidebar repair: structural pass failed",
-            );
-        }
-    }
+    outcome = reconcile_repair(&ws.session_name, presence_probe.as_ref(), || {
+        crate::sidebar::reconcile_session_sidebars(backend.as_ref(), &opts, Duration::from_secs(60))
+    });
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
     crate::harness::auto_gc::sweep_runtime_claims(runtime);
     outcome
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn reconcile_repair(
+    session: &str,
+    presence: Option<&crate::mux::zellij::PresenceProbe>,
+    reconcile: impl FnOnce() -> Result<
+        Option<crate::mux::SidebarRecovery>,
+        crate::sidebar::SidebarReconcileErr,
+    >,
+) -> ReloadOutcome {
+    let mut outcome = ReloadOutcome {
+        sessions: 1,
+        presence_dead: usize::from(matches!(
+            presence,
+            Some(
+                crate::mux::zellij::PresenceProbe::Silent
+                    | crate::mux::zellij::PresenceProbe::Stale { .. }
+            )
+        )),
+        ..Default::default()
+    };
+    match reconcile() {
+        Ok(Some(report)) => {
+            outcome.recovered = report.recovered;
+            outcome.closed = report.closed;
+            outcome.failed = report.failed;
+            outcome.deferred = report.deferred;
+            outcome.redocked = report.redocked;
+            outcome.misdocked = report.misdocked;
+        }
+        Ok(None) => outcome.busy = 1,
+        Err(err) => {
+            outcome.failed = 1;
+            tracing::warn!(
+                session,
+                tags.operation = "sidebar.repair.reconcile",
+                error = &err as &dyn std::error::Error,
+                "sidebar repair: structural pass failed",
+            );
+        }
+    }
+    outcome
+}
 
 fn record_live_room_bin(
     ws: &KnownWorkspace,
@@ -791,29 +811,6 @@ fn current_build_claims(heartbeats: &[SidebarHeartbeat], build: &str) -> HashSet
         .filter(|hb| hb.build.as_deref() == Some(build))
         .filter_map(|hb| hb.pane_id.clone())
         .collect()
-}
-
-fn current_build_liveness(heartbeats: &[SidebarHeartbeat], build: &str) -> SidebarLiveness {
-    heartbeat_liveness(
-        heartbeats
-            .iter()
-            .filter(|hb| hb.build.as_deref() == Some(build)),
-    )
-}
-
-fn heartbeat_liveness<'a>(
-    heartbeats: impl IntoIterator<Item = &'a SidebarHeartbeat>,
-) -> SidebarLiveness {
-    let mut live = SidebarLiveness::default();
-    for heartbeat in heartbeats {
-        match heartbeat.pane_id.as_ref() {
-            Some(pane) => {
-                live.claimed_panes.insert(pane.clone());
-            }
-            None => live.has_unlocated = true,
-        }
-    }
-    live
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1360,6 +1357,7 @@ mod tests {
         let mut base = ReloadOutcome {
             sessions: 1,
             presence_dead: 2,
+            busy: 4,
             plugin_current: 3,
             plugin_upgraded: 4,
             plugin_reconciled: 18,
@@ -1383,6 +1381,7 @@ mod tests {
         base.merge(ReloadOutcome {
             sessions: 18,
             presence_dead: 19,
+            busy: 5,
             plugin_current: 20,
             plugin_upgraded: 21,
             plugin_reconciled: 35,
@@ -1409,6 +1408,7 @@ mod tests {
             ReloadOutcome {
                 sessions: 19,
                 presence_dead: 21,
+                busy: 9,
                 plugin_current: 23,
                 plugin_upgraded: 25,
                 plugin_reconciled: 53,
@@ -1432,6 +1432,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn presence_health_never_gates_structural_repair() {
+        use crate::mux::zellij::PresenceProbe;
+        for presence in [
+            PresenceProbe::Silent,
+            PresenceProbe::Stale {
+                ghost_panes: vec![],
+                produced_at_ms: 200,
+                observed_at_ms: 100,
+                writer: None,
+            },
+            PresenceProbe::Current,
+        ] {
+            let calls = std::cell::Cell::new(0);
+            let outcome = reconcile_repair("room", Some(&presence), || {
+                calls.set(calls.get() + 1);
+                Ok(Some(crate::mux::SidebarRecovery {
+                    recovered: 2,
+                    ..Default::default()
+                }))
+            });
+            assert_eq!(calls.get(), 1, "{presence:?} must still reconcile");
+            assert_eq!(outcome.recovered, 2);
+            assert_eq!(
+                outcome.presence_dead,
+                usize::from(presence != PresenceProbe::Current)
+            );
+        }
+    }
+
+    #[test]
+    fn repair_counts_lock_contention_separately_from_failure() {
+        let busy = reconcile_repair("room", None, || Ok(None));
+        assert_eq!(busy.busy, 1);
+        assert_eq!(busy.failed, 0);
+        let failed = reconcile_repair("room", None, || {
+            Err(crate::mux::MuxErr::SessionNotFound {
+                session: "room".to_owned(),
+            }
+            .into())
+        });
+        assert_eq!(failed.busy, 0);
+        assert_eq!(failed.failed, 1);
+    }
+
     fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {
         let pane = PaneId::from_parts(MuxName::Tmux, raw);
         let mut hb = SidebarHeartbeat::new(
@@ -1441,19 +1486,6 @@ mod tests {
             "rimz-test",
             std::path::PathBuf::from(format!("/tmp/{raw}.sock")),
             Some(pane),
-        );
-        hb.build = build.map(str::to_owned);
-        hb
-    }
-
-    fn unlocated_heartbeat(build: Option<&str>) -> SidebarHeartbeat {
-        let mut hb = SidebarHeartbeat::new(
-            crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-            crate::SidebarInstanceId::new(),
-            MuxName::Tmux,
-            "rimz-test",
-            std::path::PathBuf::from("/tmp/unlocated.sock"),
-            None,
         );
         hb.build = build.map(str::to_owned);
         hb
@@ -1482,42 +1514,6 @@ mod tests {
         ];
 
         assert_eq!(current_located_count(&heartbeats, "current"), 1);
-    }
-
-    #[test]
-    fn current_build_liveness_excludes_stale_claims() {
-        let heartbeats = vec![
-            heartbeat("%1", Some("current")),
-            heartbeat("%2", Some("old")),
-            heartbeat("%3", None),
-        ];
-
-        let live = current_build_liveness(&heartbeats, "current");
-        assert!(
-            live.claimed_panes
-                .contains(&PaneId::from_parts(MuxName::Tmux, "%1"))
-        );
-        assert!(
-            !live
-                .claimed_panes
-                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
-        );
-        assert!(
-            !live
-                .claimed_panes
-                .contains(&PaneId::from_parts(MuxName::Tmux, "%3"))
-        );
-    }
-
-    #[test]
-    fn current_build_liveness_keeps_unlocated_current() {
-        let heartbeats = vec![
-            unlocated_heartbeat(Some("current")),
-            heartbeat("%2", Some("old")),
-        ];
-        let live = current_build_liveness(&heartbeats, "current");
-
-        assert!(live.has_unlocated);
     }
 
     #[test]

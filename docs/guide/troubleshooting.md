@@ -286,6 +286,8 @@ rimz sidebar repair    # remount a missing, duplicate, wedged, or mis-docked sid
 
 `rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. It does say so, counting the rooms and naming the verb (``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.``), and `rimz reload --repair` runs both operations in order.
 
+On Zellij, a silent or stale presence-plugin warning does not stop repair: it uses Zellij's live pane list. Run `rimz doctor`, then reattach or restart to reload the plugin. A detached session defers pane changes until you attach; a busy repair asks you to re-run after the other pass finishes. The command exits 1 if repair is incomplete, even when other rooms were repaired successfully ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
+
 ### The "Sidebar degraded" banner
 
 A banner such as `⚠ Sidebar degraded for 8s: snapshot failed` means a render could not read a fresh snapshot, usually because the binary moved on disk or the durable state directory vanished mid-write. Nothing is lost: the durable store stays the source of truth, so fixing the underlying cause (reinstall or repoint the binary, confirm the state directory exists) clears the banner on the next good frame.
@@ -317,6 +319,8 @@ rimz doctor --clear     # dismiss diagnostics, incidents, and log records from b
 ```
 
 `rimz reload` is the pane-preserving fix: it re-execs each sidebar in place and leaves every other pane alone, it runs from anywhere, and it leaves stopped sessions stopped. `rimz start` and `rimz attach` print the same warning when a live room still runs a different sidebar build. A sidebar that misses the command's reporting window keeps converging from the durable room record on its own, so run `rimz sidebar repair` only for structural damage; a replacement mounts and proves a current-build heartbeat before the old pane closes.
+
+With `--repair`, an incomplete structural repair exits 1 after reporting every room; the preceding build upgrade stays committed ([repair results](../reference/cli/maintenance.md#repair-sidebars)).
 
 Once the live writers converge, `rimz doctor --clear` records a workspace watermark, so pre-upgrade diagnostics, the last incident, message failures, and multiplexer log records stop appearing without deleting their evidence files.
 

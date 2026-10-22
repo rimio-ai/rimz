@@ -14,6 +14,342 @@ use crate::common::{CommandTimeoutExt, Env};
 
 use super::support::*;
 
+struct RepairRoom {
+    room: LiveZellijSession,
+    env: Env,
+    _stub: TempDir,
+    opts: SidebarPaneOptions,
+    proxy: PathBuf,
+}
+
+impl RepairRoom {
+    fn new(label: &str) -> Self {
+        let room = LiveZellijSession::new(label);
+        let env = Env::new();
+        let (stub_dir, stub) = sidebar_stub_alive_for(120);
+        let mut opts = reconcile_opts(
+            room.name(),
+            "/tmp/unused",
+            &env.project_root,
+            &env.project_root,
+            stub,
+            180,
+        );
+        opts.extra_env.remove("RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT");
+        opts.workspace_id = env.workspace_id.clone();
+        let state =
+            rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
+        opts.runtime = RuntimePaths::for_state_under(&state, room.path());
+        opts.runtime.ensure_dirs().unwrap();
+        publish_room_bin(&env.rimz_home(), &opts);
+        let mut record = rimz::workspace::record::read(&state.workspace_record).unwrap();
+        record.rimz_bin = Some(opts.rimz_bin.clone());
+        record.rimz_build = Some(rimz::build_id::of_file(&opts.rimz_bin).unwrap());
+        rimz::workspace::record::write(&state, &record).unwrap();
+        let proxy = stub_dir.path().join("zellij");
+        let real = which::which("zellij").unwrap();
+        std::fs::write(
+            &proxy,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in *' pipe '*) exit 0 ;; esac\nexec '{}' \"$@\"\n",
+                real.display().to_string().replace('\'', "'\\''")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&proxy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            room,
+            env,
+            _stub: stub_dir,
+            opts,
+            proxy,
+        }
+    }
+
+    fn birth(&self, tabs: &str) {
+        let layout = write_kdl_layout(
+            &self.env.project_root,
+            &self.opts.rimz_bin,
+            "repair.kdl",
+            |cwd, stub| {
+                format!(
+                    "layout {{\n{}\n}}\n",
+                    tabs.replace("CWD", cwd).replace("STUB", stub)
+                )
+            },
+        );
+        birth_kdl_session(&self.room, &self.env.project_root, &layout, "repair CLI");
+    }
+
+    fn repair(&self) -> std::process::Output {
+        self.env
+            .rimz()
+            .args(["sidebar", "repair"])
+            .env("XDG_RUNTIME_DIR", self.room.path())
+            .env("ZELLIJ_SOCKET_DIR", self.room.path().join("zellij"))
+            .env("XDG_CACHE_HOME", self.room.path())
+            .env("RIMZ_ZELLIJ_BIN", &self.proxy)
+            .bounded_output_within(Duration::from_secs(30))
+            .unwrap()
+    }
+
+    fn claim(&self, pane: Option<u64>, instance: &SidebarInstanceId) {
+        write_repair_claim(&self.opts, pane, instance);
+    }
+}
+
+fn write_repair_claim(opts: &SidebarPaneOptions, pane: Option<u64>, instance: &SidebarInstanceId) {
+    let mut heartbeat = SidebarHeartbeat::new(
+        opts.workspace_id.clone(),
+        instance.clone(),
+        MuxName::Zellij,
+        opts.session_name.clone(),
+        opts.runtime.sock_dir.join("repair.sock"),
+        pane.map(|id| PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}"))),
+    );
+    heartbeat.build = Some(rimz::build_id::of_file(&opts.rimz_bin).unwrap());
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &opts.runtime.sidebar_heartbeat_path(instance),
+        &heartbeat,
+    )
+    .unwrap();
+}
+
+fn with_repair_claims<T>(fixture: &RepairRoom, action: impl FnOnce() -> T) -> (T, Option<u64>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let claims = scope.spawn(|| {
+            let mut instances = BTreeMap::new();
+            while !stop.load(Ordering::Relaxed) {
+                if let Ok(snapshot) = list_panes(fixture.room.path(), fixture.room.name()) {
+                    for pane in snapshot.panes.iter().filter(|pane| pane.is_sidebar()) {
+                        let instance = instances
+                            .entry(pane.id)
+                            .or_insert_with(SidebarInstanceId::new);
+                        fixture.claim(Some(pane.id), instance);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            instances.into_keys().next()
+        });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action));
+        stop.store(true, Ordering::Relaxed);
+        let first_pane = claims.join().unwrap();
+        (
+            result.unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            first_pane,
+        )
+    })
+}
+
+#[test]
+fn repair_cli_with_a_silent_plugin_adds_from_live_panes_and_exits_zero() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairsilent");
+    fixture.birth(
+        r#"tab name="work" split_direction="horizontal" {
+    pane cwd=CWD { command "sleep"; args "600"; }
+    pane cwd=CWD { command "sleep"; args "600"; }
+}"#,
+    );
+    let _client = AttachedClient::attach(&fixture.room, 180, 50);
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Recovered 1 sidebar in place."), "{stdout}");
+    assert!(
+        stdout.contains("silent or stale") && stdout.contains("live pane list"),
+        "{stdout}"
+    );
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}\n{:#?}",
+        String::from_utf8_lossy(&output.stderr),
+        expect_list_panes(fixture.room.path(), fixture.room.name())
+    );
+    insta::assert_snapshot!(stdout, @r###"
+    Presence plugin silent or stale in 1 session; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.
+    Recovered 1 sidebar in place.
+    "###);
+    let snapshot = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert_eq!(
+        snapshot
+            .panes
+            .iter()
+            .filter(|pane| pane.is_sidebar())
+            .count(),
+        1
+    );
+    assert_sidebar_is_left_docked(fixture.room.path(), fixture.room.name());
+}
+
+#[test]
+fn repair_cli_defers_a_detached_add_and_exits_one() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairdefer");
+    fixture.birth(r#"tab name="work" { pane cwd=CWD { command "sleep"; args "600"; }; }"#);
+    let output = fixture.repair();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Deferred 1 sidebar repair"), "{stdout}");
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    insta::assert_snapshot!(stdout, @r###"
+    Presence plugin silent or stale in 1 session; repair ran from Zellij's live pane list. Run `rimz doctor`; reattach or restart the session to reload the plugin.
+    Deferred 1 sidebar repair (no attached client); attach and re-run `rimz sidebar repair`.
+    "###);
+    let snapshot = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert_eq!(
+        snapshot.panes.iter().filter(|pane| !pane.is_plugin).count(),
+        1,
+        "{snapshot:#?}"
+    );
+}
+
+#[test]
+fn repair_cli_reports_a_frozen_roster_without_duplicates_or_orphan_tabs() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairfrozen");
+    fixture.birth(
+        r#"
+tab name="ghost" { pane name="rimz-sidebar" cwd=CWD { command STUB; }; }
+tab name="orphan" { pane name="rimz-sidebar" cwd=CWD { command STUB; }; }
+tab name="kept" split_direction="vertical" {
+    pane size="25%" name="rimz-sidebar" cwd=CWD { command STUB; }
+    pane cwd=CWD { command "sleep"; args "600"; }
+}
+tab name="missing" split_direction="horizontal" {
+    pane focus=true cwd=CWD { command "sleep"; args "600"; }
+    pane cwd=CWD { command "sleep"; args "600"; }
+}
+"#,
+    );
+    let mut client = AttachedClient::attach(&fixture.room, 180, 50);
+    let initial = expect_list_panes(fixture.room.path(), fixture.room.name());
+    for tab in ["kept", "missing"] {
+        let work = initial
+            .panes
+            .iter()
+            .find(|pane| pane.tab_name.as_deref() == Some(tab) && !pane.is_sidebar())
+            .unwrap();
+        client.press_alt_until(
+            'l',
+            &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", work.id)),
+            "view each work tab at the attached viewport",
+        );
+    }
+    let before = expect_list_panes(fixture.room.path(), fixture.room.name());
+    let ghost = before
+        .panes
+        .iter()
+        .find(|pane| pane.tab_name.as_deref() == Some("ghost"))
+        .unwrap();
+    let kept = before
+        .panes
+        .iter()
+        .find(|pane| pane.tab_name.as_deref() == Some("kept") && pane.is_sidebar())
+        .unwrap()
+        .id;
+    fixture
+        .room
+        .backend()
+        .close_pane(
+            fixture.room.name(),
+            &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", ghost.id)),
+        )
+        .unwrap();
+    fixture.claim(Some(kept), &SidebarInstanceId::new());
+    // The cache fixture resolves the named workspace under its runtime root.
+    publish_room_bin(fixture.room.path(), &fixture.opts);
+    let _frozen = stale_topology_keepalive(
+        fixture.room.path(),
+        &fixture.opts.workspace_id,
+        fixture.room.name(),
+        before,
+    );
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("silent or stale"), "{stdout}");
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}\n{:#?}",
+        String::from_utf8_lossy(&output.stderr),
+        expect_list_panes(fixture.room.path(), fixture.room.name())
+    );
+    let after = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert_eq!(after.tab_ids().len(), 2, "{after:?}");
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar())
+        .collect();
+    assert_eq!(sidebars.len(), 2, "{after:?}");
+    assert!(
+        sidebars.iter().any(|pane| pane.id == kept),
+        "claimed pane was replaced: {after:?}"
+    );
+    for sidebar in sidebars {
+        assert_eq!(sidebar.pane_x, 0, "{sidebar:?}");
+        assert_eq!(sidebar.pane_y, 0, "{sidebar:?}");
+        assert_eq!(sidebar.pane_rows, 50, "{sidebar:?}");
+        assert!((sidebar.pane_columns as i64 - 45).abs() <= 5, "{sidebar:?}");
+    }
+    let state = rimz::StatePaths::for_project_root_under(
+        &fixture.env.project_root,
+        &fixture.env.rimz_home(),
+    )
+    .unwrap();
+    let log =
+        rimz::diag::DiagSink::under(state.root, state.workspace_id, fixture.room.name(), None)
+            .log_path()
+            .unwrap();
+    let diagnostics = std::fs::read_to_string(log).unwrap();
+    assert!(
+        diagnostics.contains("presence_roster_stale"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn concurrent_attach_reconciles_keep_the_first_mounted_sidebar() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairlock");
+    fixture.birth(r#"tab name="work" { pane cwd=CWD { command "sleep"; args "600"; }; }"#);
+    let _client = AttachedClient::attach(&fixture.room, 180, 50);
+    fixture.claim(Some(999_999), &SidebarInstanceId::new());
+    fixture.room.backend().version().unwrap();
+    let barrier = std::sync::Barrier::new(2);
+    let ((), first_pane) = with_repair_claims(&fixture, || {
+        std::thread::scope(|scope| {
+            let run = || {
+                barrier.wait();
+                let outcome = rimz::sidebar::launch_sidebar_if_needed(
+                    fixture.room.backend(),
+                    &fixture.opts.runtime,
+                    &fixture.opts,
+                    None,
+                );
+                assert_eq!(outcome, rimz::sidebar::SidebarLaunchOutcome::SkippedFresh);
+            };
+            let first = scope.spawn(run);
+            let second = scope.spawn(run);
+            first.join().unwrap();
+            second.join().unwrap();
+        })
+    });
+    let after = expect_list_panes(fixture.room.path(), fixture.room.name());
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar())
+        .map(|pane| pane.id)
+        .collect();
+    assert_eq!(
+        sidebars,
+        [first_pane.expect("a sidebar mounted")],
+        "{after:?}"
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct TerminalState {
     tab_id: u64,

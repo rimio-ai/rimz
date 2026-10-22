@@ -81,6 +81,7 @@ impl RuntimePaths {
             self.lock_path("loop-instances.lock"),
             self.lock_path("message-sweep.lock"),
             self.lock_path("sidebar-launch.lock"),
+            self.sidebar_reconcile_lock(MuxName::Tmux, "session"),
             self.lock_path("snapshot.lock"),
             self.lock_path("pr-state.lock"),
             self.lock_path("diff-stats.lock"),
