@@ -197,7 +197,11 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
                 same_pane: "opening molt successor",
             },
         },
-        || rimz::harness::assist_log::record_tier_fallbacks(batch.identities()),
+        || {
+            if args.agent.is_some() {
+                rimz::harness::assist_log::record_tier_fallbacks(batch.identities());
+            }
+        },
     )?;
     let predecessor = format!(
         "@{}",

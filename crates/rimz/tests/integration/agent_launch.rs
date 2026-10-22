@@ -2042,15 +2042,50 @@ fn molt_refuses_children_unresolved_callers_and_empty_notes_without_appending() 
 #[cfg(unix)]
 #[test]
 fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_placement() {
-    for placement_fails in [false, true] {
+    for (placement_fails, fresh) in [(false, false), (false, true), (true, false), (true, true)] {
         let env = Env::new();
         env.install_agent_hooks("claude");
+        env.install_agent_hooks("codex");
         env.record(&env.project_root);
         std::fs::write(
             env.rimz_home().join("config.toml"),
             "[agents]\nisolation = 'host'\nmax-chain-length = 3\n",
         )
         .unwrap();
+        for kind in ["claude", "codex"] {
+            crate::common::write_definition(&env, "agents", kind, "description: Base", "Base.");
+        }
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\ntier: senior\ntools: [Bash]",
+            "Work.",
+        );
+        crate::common::trust_codex_preflight_hooks(&env);
+        crate::common::trust_codex_project(&env, &env.project_root);
+        crate::common::trust_claude_project(&env, &env.project_root);
+        env.runtime_paths().ensure_dirs().unwrap();
+        env.publish_rate_limits(&rimz::agents::account::RateLimitsCache {
+            entries: [(
+                rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                rimz::agents::account::RateLimitCacheEntry {
+                    limits: rimz::agents::AgentRateLimits {
+                        windows: vec![rimz::agents::RateLimitWindow {
+                            used_percentage: Some(100),
+                            duration_mins: Some(300),
+                            resets_at: Some(
+                                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                            ),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        });
         let launcher = rimz::agents::LaunchedBy {
             kind: AgentKind::new_unchecked("codex"),
             agent_id: "launch_root".into(),
@@ -2058,6 +2093,17 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
         crate::common::wait::register_calling_agent_with_launch(
             &env,
             LaunchParams {
+                profile: Some("worker".into()),
+                tier: Some(Box::new(rimz::agents::TierStamp {
+                    tier: rimz::config::tiers::ModelTier::Senior,
+                    model: "opus[1m]".into(),
+                    used_tier: None,
+                    unbuildable: Vec::new(),
+                    skipped: vec![rimz::agents::TierSkip {
+                        model: "astra".into(),
+                        reason: rimz::agents::TierSkipReason::LoggedOut,
+                    }],
+                })),
                 launch_depth: Some(3),
                 launched_by: Some(Box::new(launcher.clone())),
                 record: Some(Box::new(rimz::agents::LaunchRecord {
@@ -2068,6 +2114,8 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
             },
         );
         let shim = write_env_dump_shim(&env, "claude");
+        write_env_dump_shim(&env, "codex");
+        let shell = write_fake_login_shell(&env, "molt-shell", &[]);
         let workspace = env.resolve_workspace(&env.project_root);
         crate::common::room::seed_live_zellij_room(
             &env.runtime_paths(),
@@ -2080,6 +2128,7 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
             command
                 .args(["--mux", "zellij", "agents", "molt", "continue the work"])
                 .env("PATH", path_with_front(&shim))
+                .env("SHELL", &shell)
                 .env("ZELLIJ_PANE_ID", "1")
                 .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
                 .env(
@@ -2092,6 +2141,9 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 );
+            if fresh {
+                command.args(["--agent", "claude"]);
+            }
             if placement_fails {
                 command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
             }
@@ -2118,10 +2170,21 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
         assert_eq!(successor.first_prompt.as_deref(), Some("continue the work"));
         assert_eq!(
             successor.record.as_ref().unwrap().model.as_deref(),
-            Some("opus[1m]")
+            Some(if fresh { "astra" } else { "opus[1m]" })
         );
+        let stamp = successor.tier.as_ref().unwrap();
+        assert_eq!(stamp.model, if fresh { "astra" } else { "opus[1m]" });
+        assert_eq!(stamp.skipped[0].model, if fresh { "opus" } else { "astra" });
         let stops = rimz::store::idle_stop::read(env.store().paths());
         let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        assert_eq!(
+            assists
+                .iter()
+                .filter(|record| serde_json::to_value(record).unwrap()["assist"] == "tier_fallback")
+                .count(),
+            usize::from(fresh && !placement_fails),
+            "a replayed stamp is not a fresh tier move"
+        );
         assert_eq!(
             assists
                 .iter()
