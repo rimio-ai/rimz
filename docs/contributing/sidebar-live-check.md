@@ -165,6 +165,30 @@ Five checks cover what a unit test cannot:
 
    Expect `Notification test sent: 1`, one send to `host.<digest>.wake.sock`, and a new `bell_ring` decision for each of the three renderer instances. Compare them with `sidebar renderers --json`. Only the reviewer's tab rings: the daemon tab reports `daemon_view` and the unrelated shell tab reports `pane_not_in_view`. Notifications emit terminal control bytes, not a painted banner; a pane capture cannot prove delivery. On both tmux and Zellij, check the per-instance decisions at the consumer, then Look and Capture each tab to confirm it still paints.
 
+## Make one sidebar unresponsive
+
+`rimz sidebar repair` replaces a sidebar whose pane is still listed but which no fresh current-build heartbeat claims. On Zellij that replacement is an anchored split of the old sidebar, and checking it means the new sidebar takes the old one's rectangle while every work pane keeps its own. Making that state takes some care, because the host writes every pane's heartbeat:
+
+- Stopping a `sidebar serve` with SIGSTOP changes nothing, since the host keeps its pane's heartbeat fresh.
+- Killing a `sidebar serve` closes its pane (check 2 above). The repair then adds a sidebar instead of replacing one.
+- Freezing the host stales every heartbeat. A replacement's new `serve` also attaches to that frozen host, so its mount proof (six seconds) never sees a heartbeat. The repair closes the new pane and exits 1.
+
+So freeze the host, keep the other sidebars' heartbeat files fresh by hand for longer than the five-second heartbeat TTL, and thaw the host once the repair has sampled liveness. List the heartbeats with the pane each one claims, take `HOST` from the `ps` line above, and name the files that should stay live:
+
+```sh
+HB="$ROOT/runtime/rimz/ws/<room>/live/heartbeat"
+for f in "$HB"/*.json; do echo "$f $(jq -r .pane_id "$f")"; done
+set -- "$HB/sidebar.<keep-1>.json" "$HB/sidebar.<keep-2>.json"
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-panes -a -j > "$ROOT/tmp/before.json"
+kill -STOP "$HOST"
+for i in 1 2 3 4 5 6 7; do touch "$@"; sleep 1; done
+target/debug/xtask sandbox in "$ROOT" -- "$BIN" --zellij sidebar repair & REPAIR=$!
+sleep 1.5; kill -CONT "$HOST"; wait "$REPAIR"; echo "exit=$?"
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-panes -a -j > "$ROOT/tmp/after.json"
+```
+
+Expect `Recovered 1 sidebar in place.` and `Closed 1 duplicate or unresponsive sidebar.` with exit 0. In `after.json`, the new sidebar has a new terminal id at the old sidebar's `pane_x`, `pane_y`, `pane_columns` and `pane_rows`. Every work pane in every tab matches `before.json`. Run the repair once more: it prints `Sidebar structure is healthy across 1 session.` A daemon tab is worth its own run, since its companions sit beside the content pane. Leaving the host frozen through the repair is the failure case: exit 1, `sidebars could not be repaired`, and no new sidebar pane left behind.
+
 ## First frame of a new tab
 
 A new tab's sidebar seeds its first frame from the warm host's last delivered fold in memory ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. A cold host has no seed and paints the placeholder until its first fold. The seed is projected for the new pane. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the fold's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction. To check the live backend, poll the new pane from the moment the tab opens with one of the scripts below. Save it under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since it needs the room's environment. Each script writes one file per non-blank capture, named by the milliseconds since the tab was opened.
