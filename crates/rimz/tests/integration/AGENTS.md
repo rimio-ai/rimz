@@ -75,7 +75,7 @@ No in-process `MuxBackend` fake exists; a failing multiplexer call is a fake exe
 
 A room born through `zellij-trace` runs no sidebar and never writes a heartbeat itself, so a claimed birth waits out its full six-second sidebar-heartbeat bound unless the fixture publishes one; `common::room::ShimRoom::watch` does.
 
-A supervised attach (`RIMZ_REMOTE_SUPERVISED`) checks session liveness at once and then every 2 s, needs a Live check followed by a Gone check, and a test driving it sets `RIMZ_REMOTE_WATCHDOG_MS` short.
+A supervised attach (`RIMZ_REMOTE_SUPERVISED`) checks session liveness at once and then every 2 s, needs a Live check followed by a Gone check, and a test driving it sets `RIMZ_REMOTE_WATCHDOG_MS` short. A pass that proves the client exiting between checks (`RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT`) keeps the interval long enough for the client to exit before the next check: `remote_attach::supervised_remote_attach_ends_when_the_session_disappears` sets 1000 ms there.
 
 | Double | Reach | Can make fail |
 | --- | --- | --- |
