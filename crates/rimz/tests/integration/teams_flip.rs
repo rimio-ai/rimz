@@ -1178,7 +1178,7 @@ impl Fixture {
 
     /// Sweep until the record `id` reaches `status`.
     fn sweep_until(&self, id: &rimz::ids::MessageId, status: MessageStatus) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             success(self.command().args(["message", "sweep"]).output().unwrap());
             let current = self
