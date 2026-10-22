@@ -1959,7 +1959,18 @@ path = "crates/rimz/src/worktree"
 # discover_owned_cached shares host polling enumeration between conditions and timer firing (+1).
 # discover_checkout and CheckoutDiscoveryErr carry validated checkout discovery into launch compilation (+2).
 # ProtectionSet::insert_team accepts CLI-gathered team-board pins (+1).
-surface-budget = 82
+# CheckoutKind and classify_checkout expose metadata-only room-relative labels (+2).
+surface-budget = 84
+
+[[verdict]]
+kind = "item"
+key = "worktree::CheckoutKind"
+reason = "The CLI distinguishes a room's project and linked checkouts without owning Git metadata parsing."
+
+[[verdict]]
+kind = "item"
+key = "worktree::classify_checkout"
+reason = "List labels reuse the metadata-only primary-checkout resolver without spawning Git per row."
 
 [[verdict]]
 kind = "item"

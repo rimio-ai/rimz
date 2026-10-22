@@ -3,6 +3,69 @@ use registry::{State, StopReason};
 use render::status::{self, StateRole};
 
 #[test]
+fn checkout_labels_use_room_identity_and_linked_metadata_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let linked = dir.path().join("check-kinds");
+    let admin = project.join(".git/worktrees/check-kinds");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir(&linked).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    assert_eq!(checkout_label(&project, &project), "#main");
+    assert_eq!(checkout_label(&linked, &project), "#check-kinds");
+    let marker = rimz::worktree::WorktreeMarker {
+        version: 4,
+        name: "check-kinds".into(),
+        branch: "feat/kinds".into(),
+        base_branch: None,
+        from_pr: None,
+        base_ref: "main".into(),
+        repo_root: project.clone(),
+        worktree_path: linked.clone(),
+        created_at: jiff::Timestamp::now(),
+    };
+    std::fs::write(
+        admin.join("rimz-worktree.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(checkout_label(&linked, &project), "#check-kinds");
+    let other = dir.path().join("other");
+    let other_linked = dir.path().join("other-linked");
+    let other_admin = other.join(".git/worktrees/other-linked");
+    std::fs::create_dir_all(&other_admin).unwrap();
+    std::fs::create_dir(&other_linked).unwrap();
+    std::fs::write(other_admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        other_linked.join(".git"),
+        format!("gitdir: {}\n", other_admin.display()),
+    )
+    .unwrap();
+    let nested = linked.join("nested");
+    std::fs::create_dir_all(nested.join(".git")).unwrap();
+    let child = linked.join("src");
+    std::fs::create_dir(&child).unwrap();
+    let removed = dir.path().join("removed");
+    for root in [&other, &other_linked, &nested, &child, &removed] {
+        assert_eq!(
+            checkout_label(root, &project),
+            render::home_relative_path(root)
+        );
+    }
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let missing = home.join("rimz-lsp-usage-removed-checkout");
+    assert_eq!(
+        checkout_label(&missing, &project),
+        "~/rimz-lsp-usage-removed-checkout"
+    );
+}
+
+#[test]
 fn query_server_names_include_config_and_checkout_rows_only() {
     let config = serde_json::from_value(
         serde_json::json!({"command":["stub"],"extensions":["rs"],"root-markers":[]}),
@@ -304,7 +367,28 @@ fn list_table_orders_and_styles_server_states() {
             }
         })
         .collect();
-    let table = list_table(entries.iter().zip(&readings), 56_000);
+    let table = list_table(
+        entries
+            .iter()
+            .zip(&readings)
+            .enumerate()
+            .map(|(index, (entry, reading))| {
+                let counts = match index {
+                    4 => usage::Counts {
+                        answered: 142,
+                        failed: 3,
+                    },
+                    3 => usage::Counts {
+                        answered: 7,
+                        failed: 0,
+                    },
+                    _ => usage::Counts::default(),
+                };
+                (entry, reading, counts)
+            }),
+        std::path::Path::new("/room"),
+        56_000,
+    );
     let mut stripped = anstream::StripStream::new(Vec::new());
     table.render(&mut stripped).unwrap();
     let text = String::from_utf8(stripped.into_inner()).unwrap();
@@ -316,30 +400,32 @@ fn list_table_orders_and_styles_server_states() {
         rows,
         vec![
             vec![
-                "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "LAST", "LEASES"
+                "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "QUERIES", "LAST",
+                "LEASES"
             ],
             vec![
                 "✓", "ready", "/z", "rust", "2", "KB", "10.2", "KB", "12.3", "KB", "8.2", "KB",
-                "45s", "ago", "0"
+                "142", "(3", "failed)", "45s", "ago", "0"
             ],
             vec![
-                "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "-", "4.1", "KB", "-",
+                "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "-", "4.1", "KB", "0",
+                "-", "0"
+            ],
+            vec![
+                "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "-", "4.1", "KB", "7", "-", "0"
+            ],
+            vec![
+                "·", "not", "started", "/a", "a", "-", "-", "-", "4.1", "KB", "0", "-", "0"
+            ],
+            vec![
+                "·", "dormant:", "idle", "/a", "z", "-", "-", "-", "4.1", "KB", "0", "-", "0"
+            ],
+            vec![
+                "·", "not", "started", "/b", "rust", "-", "-", "-", "4.1", "KB", "0", "-", "0"
+            ],
+            vec![
+                "·", "stopped:", "released", "/d", "rust", "-", "-", "-", "4.1", "KB", "0", "-",
                 "0"
-            ],
-            vec![
-                "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "-", "4.1", "KB", "-", "0"
-            ],
-            vec![
-                "·", "not", "started", "/a", "a", "-", "-", "-", "4.1", "KB", "-", "0"
-            ],
-            vec![
-                "·", "dormant:", "idle", "/a", "z", "-", "-", "-", "4.1", "KB", "-", "0"
-            ],
-            vec![
-                "·", "not", "started", "/b", "rust", "-", "-", "-", "4.1", "KB", "-", "0"
-            ],
-            vec![
-                "·", "stopped:", "released", "/d", "rust", "-", "-", "-", "4.1", "KB", "-", "0"
             ],
         ]
     );
@@ -352,6 +438,7 @@ fn list_table_orders_and_styles_server_states() {
         ("SWAP", "10.2 KB"),
         ("TOTAL", "12.3 KB"),
         ("PEAK", "8.2 KB"),
+        ("QUERIES", "142 (3 failed)"),
         ("LAST", "45s ago"),
         ("LEASES", "0"),
     ] {
@@ -433,12 +520,19 @@ fn list_summarizes_room_memory_needs_alarms_and_folded_reasons() {
     ];
     others[0].project = Some("/other".into());
     others[1].project = Some("/other".into());
+    let mut usage = usage::Snapshot::default();
+    usage.total = usage::Counts {
+        answered: 1204,
+        failed: 12,
+    };
     let render = |all| {
         let mut out = anstream::StripStream::new(Vec::new());
         let samples = std::cell::RefCell::new(std::collections::BTreeSet::new());
         ListView {
             entries: &entries,
             others: &others,
+            project: std::path::Path::new("/project"),
+            usage: &usage,
             all,
             now_ms: 56_000,
             headroom: Some(headroom()),
@@ -479,7 +573,7 @@ fn list_summarizes_room_memory_needs_alarms_and_folded_reasons() {
     );
     assert_eq!(
         lines[0],
-        "1 running: 3.1 MB; 9 GB free (10 GB available + 2 GB swap, 3 GB reserved); a start needs 0 B (python), 5 GB (rust)"
+        "1 running: 3.1 MB; 1204 queries (12 failed); 9 GB free (10 GB available + 2 GB swap, 3 GB reserved); a start needs 0 B (python), 5 GB (rust)"
     );
     assert_eq!(
         lines[1],
@@ -524,9 +618,13 @@ fn list_empty_room_and_unavailable_headroom_have_no_invented_figures() {
         )],
     ] {
         let mut out = Vec::new();
+        let mut usage = usage::Snapshot::default();
+        usage.total.answered = u64::from(entries.is_empty());
         ListView {
             entries: &entries,
             others: &[],
+            project: std::path::Path::new("/project"),
+            usage: &usage,
             all: false,
             now_ms: 0,
             headroom: None,
@@ -537,12 +635,12 @@ fn list_empty_room_and_unavailable_headroom_have_no_invented_figures() {
         if entries.is_empty() {
             assert_eq!(
                 text,
-                "0 running\nno language server registered in this room\n"
+                "0 running; 1 query\nno language server registered in this room\n"
             );
         } else {
             assert_eq!(
                 text,
-                "0 running; a start needs 1 MB (rust)\n1 not running: 1 not started; add --all to list them\n"
+                "0 running; 0 queries; a start needs 1 MB (rust)\n1 not running: 1 not started; add --all to list them\n"
             );
         }
     }
@@ -611,6 +709,10 @@ fn status_orders_details_and_predicts_the_next_query_from_each_state() {
             },
             Some(headroom()),
             5_000_000_000,
+            usage::Counts {
+                answered: 142,
+                failed: 3,
+            },
         )
         .unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
@@ -642,6 +744,7 @@ fn status_orders_details_and_predicts_the_next_query_from_each_state() {
         expected.extend([
             "peak",
             "last query",
+            "queries",
             "editor requests",
             "restarts",
             "leases",
@@ -652,6 +755,7 @@ fn status_orders_details_and_predicts_the_next_query_from_each_state() {
             "server pid",
         ]);
         assert_eq!(keys, expected, "{text}");
+        assert!(text.contains("142 (3 failed)"), "{text}");
         assert!(
             text.contains("10s ago")
                 && text.contains(if row.state.is_running() {
@@ -713,6 +817,7 @@ fn status_predicts_memory_short_or_unknown_for_every_dormant_reason() {
                 rimz::lsp::memory::Reading::default(),
                 headroom,
                 needs,
+                usage::Counts::default(),
             )
             .unwrap();
             let text = String::from_utf8(out.into_inner()).unwrap();

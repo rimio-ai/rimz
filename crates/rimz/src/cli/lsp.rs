@@ -632,9 +632,18 @@ fn query_error(error: QueryErr) -> Result<()> {
     std::process::exit(code)
 }
 
+#[derive(serde::Serialize)]
+struct EntryWithQueries<'a> {
+    #[serde(flatten)]
+    entry: &'a registry::Entry,
+    queries: usage::Counts,
+}
+
 struct ListView<'a> {
     entries: &'a [registry::Entry],
     others: &'a [registry::Entry],
+    project: &'a std::path::Path,
+    usage: &'a usage::Snapshot,
     all: bool,
     now_ms: u64,
     headroom: Option<Headroom>,
@@ -669,6 +678,15 @@ impl ListView<'_> {
                 total.saturating_add(tree_bytes(reading))
             });
             write!(out, ": {}", rimz::utils::size::decimal_bytes(total))?;
+        }
+        let usage::Counts { answered, failed } = self.usage.total;
+        write!(
+            out,
+            "; {answered} {}",
+            if answered == 1 { "query" } else { "queries" }
+        )?;
+        if failed > 0 {
+            write!(out, " ({failed} failed)")?;
         }
         if let Some(headroom) = self.headroom {
             write!(out, "; {headroom}")?;
@@ -733,7 +751,14 @@ impl ListView<'_> {
             .filter(|(entry, _)| self.all || entry.state.is_running() || entry.state.is_alarm())
             .collect();
         if !visible.is_empty() {
-            list_table(visible.into_iter(), self.now_ms).render(out)?;
+            list_table(
+                visible
+                    .into_iter()
+                    .map(|(entry, reading)| (entry, reading, self.usage.for_entry(entry))),
+                self.project,
+                self.now_ms,
+            )
+            .render(out)?;
         }
         if self.all {
             return Ok(());
@@ -789,9 +814,25 @@ fn status(
         &serde_json::json!({"op":"status"}),
         Duration::from_secs(2),
     )?)?;
+    let usage = room_usage(globals, || {
+        let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
+        let workspace =
+            rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
+        Ok(workspace.project_root)
+    })
+    .map(|log| log.read())
+    .unwrap_or_default();
+    let queries = usage.for_entry(&entry);
     let mut out = render::out();
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&entry)?)?;
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&EntryWithQueries {
+                entry: &entry,
+                queries
+            })?
+        )?;
         return Ok(());
     }
     Ok(write_status(
@@ -801,6 +842,7 @@ fn status(
         rimz::lsp::memory::for_entry(&entry),
         host_headroom(),
         rimz::lsp::history::Needs::read().for_entry(&entry),
+        queries,
     )?)
 }
 
@@ -824,6 +866,7 @@ fn write_status(
     memory: rimz::lsp::memory::Reading,
     headroom: Option<Headroom>,
     estimate: u64,
+    queries: usage::Counts,
 ) -> std::io::Result<()> {
     use registry::State;
     let mut facts = render::KeyVals::new();
@@ -904,6 +947,7 @@ fn write_status(
             },
         )),
     );
+    facts.push("queries", render::cell(query_counts(queries)));
     facts.push(
         "editor requests",
         render::cell(entry.request_count.to_string()),
@@ -989,17 +1033,24 @@ fn write_status(
 }
 
 fn list_table<'a>(
-    entries: impl Iterator<Item = (&'a registry::Entry, &'a rimz::lsp::memory::Reading)>,
+    entries: impl Iterator<
+        Item = (
+            &'a registry::Entry,
+            &'a rimz::lsp::memory::Reading,
+            usage::Counts,
+        ),
+    >,
+    project: &std::path::Path,
     now_ms: u64,
 ) -> render::Table {
     use render::status;
     let mut entries: Vec<_> = entries.collect();
-    entries.sort_by_key(|(entry, _)| status::lsp_order(entry));
+    entries.sort_by_key(|(entry, _, _)| status::lsp_order(entry));
     let mut table = render::Table::new([
-        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "LAST", "LEASES",
+        "STATE", "CHECKOUT", "SERVER", "RSS", "SWAP", "TOTAL", "PEAK", "QUERIES", "LAST", "LEASES",
     ])
-    .right(&[3, 4, 5, 6, 7, 8]);
-    for (entry, reading) in entries {
+    .right(&[3, 4, 5, 6, 7, 8, 9]);
+    for (entry, reading, queries) in entries {
         let running = entry.state.is_running();
         let (glyph, style) = render::verdict(status::lsp(&entry.state));
         let [rss, swap, total] = if running {
@@ -1017,7 +1068,7 @@ fn list_table<'a>(
             .max(if running { reading.peak_kb } else { 0 });
         table.row([
             render::cell(format!("{glyph} {}", render::lsp_state_label(&entry.state))).fg(style),
-            render::cell(render::home_relative_path(&entry.root)),
+            render::cell(checkout_label(&entry.root, project)),
             render::cell(&entry.server),
             rss,
             swap,
@@ -1027,6 +1078,7 @@ fn list_table<'a>(
             } else {
                 render::cell(rimz::utils::size::decimal_bytes(peak.saturating_mul(1024)))
             },
+            render::cell(query_counts(queries)),
             entry.last_request_at_ms.map_or_else(
                 || render::cell("-").dash(),
                 |at| {
@@ -1040,6 +1092,22 @@ fn list_table<'a>(
         ]);
     }
     table
+}
+
+fn checkout_label(root: &std::path::Path, project: &std::path::Path) -> String {
+    use rimz::worktree::CheckoutKind;
+    match rimz::worktree::classify_checkout(root, project) {
+        CheckoutKind::Main => "#main".into(),
+        CheckoutKind::Linked(name) => format!("#{}", name.to_string_lossy()),
+        CheckoutKind::Other => render::home_relative_path(root),
+    }
+}
+
+fn query_counts(counts: usage::Counts) -> String {
+    if counts.failed == 0 {
+        return counts.answered.to_string();
+    }
+    format!("{} ({} failed)", counts.answered, counts.failed)
 }
 
 /// Partitions entries into this room and the rest: attach records
@@ -1062,15 +1130,27 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
     let (entries, others) = room_entries(entries, &workspace);
+    let usage = room_usage(globals, || Ok(workspace.project_root.clone()))
+        .map(|log| log.read())
+        .unwrap_or_default();
     let mut out = render::out();
     if json {
-        return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&entries)?));
+        let rows: Vec<_> = entries
+            .iter()
+            .map(|entry| EntryWithQueries {
+                entry,
+                queries: usage.for_entry(entry),
+            })
+            .collect();
+        return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&rows)?));
     }
     let needs = rimz::lsp::history::Needs::read();
     render::finish(
         ListView {
             entries: &entries,
             others: &others,
+            project: &workspace.project_root,
+            usage: &usage,
             all,
             now_ms: rimz::utils::time::unix_now_ms(),
             headroom: host_headroom(),

@@ -1804,6 +1804,27 @@ fn owned_marker(name: &str, path: &Path) -> Result<WorktreeMarker> {
     })
 }
 
+/// A checkout's relationship to a room's project root.
+pub enum CheckoutKind<'a> {
+    Main,
+    Linked(&'a OsStr),
+    Other,
+}
+
+/// Classify an exact checkout using Git metadata, without spawning Git.
+pub fn classify_checkout<'a>(root: &'a Path, project: &Path) -> CheckoutKind<'a> {
+    if root == project {
+        return CheckoutKind::Main;
+    }
+    if root.join(".git").is_file()
+        && linked_worktree(root).is_some_and(|linked| linked.primary == project)
+        && let Some(name) = root.file_name()
+    {
+        return CheckoutKind::Linked(name);
+    }
+    CheckoutKind::Other
+}
+
 /// Read a RimZ marker by following the checkout's `.git` metadata only. This
 /// keeps sidebar projection code off the git subprocess path.
 pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {

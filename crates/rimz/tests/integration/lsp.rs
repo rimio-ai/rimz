@@ -664,6 +664,27 @@ exec "$RIMZ_TEST_REAL_GIT" "$@"
     let usage = rimz::lsp::usage::Log::new(&env.state_path_for(&root));
     assert_eq!(usage.read().total.answered, 2);
     for args in [
+        vec!["lsp", "list", "--json"],
+        vec!["lsp", "list", "--all", "--json"],
+    ] {
+        let output = resolving_once(env.rimz().args(args));
+        let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["queries"], json!({"answered":2,"failed":0}));
+        let entries: Vec<rimz::lsp::registry::Entry> =
+            serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(entries[0].root, root);
+    }
+    let output = env
+        .rimz()
+        .args(["lsp", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["queries"], json!({"answered":2,"failed":0}));
+    let _: rimz::lsp::registry::Entry = serde_json::from_slice(&output.stdout).unwrap();
+    for args in [
         vec!["lsp", "def", "work.py:1:1"],
         vec!["lsp", "def", "work.rs:1"],
     ] {
@@ -694,6 +715,22 @@ exec "$RIMZ_TEST_REAL_GIT" "$@"
             .answered,
         1
     );
+    for verb in ["list", "status"] {
+        let output = env
+            .rimz()
+            .env(rimz::workspace::ENV_PROJECT_ROOT, &pinned)
+            .env(
+                rimz::workspace::ENV_WORKSPACE_ID,
+                rimz::ids::WorkspaceId::from_project_root(&pinned).to_string(),
+            )
+            .args(["lsp", verb, "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let row = if verb == "list" { &value[0] } else { &value };
+        assert_eq!(row["queries"], json!({"answered":1,"failed":0}));
+    }
 
     editor_rpc(&directory, json!({"op":"stop", "reason":"stopped by hand"}));
     env.rimz()
@@ -711,6 +748,11 @@ exec "$RIMZ_TEST_REAL_GIT" "$@"
         .assert()
         .success();
     assert_eq!(usage.read().total.answered, 3);
+    env.rimz().args(["lsp", "list"]).assert().success().stdout(
+        predicates::str::contains("0 running; 3 queries").and(predicates::str::contains(
+            "no language server registered in this room",
+        )),
+    );
 }
 
 #[test]
@@ -791,13 +833,15 @@ fn lsp_list_and_stop_all_stay_in_the_room() {
         let rows: Vec<rimz::lsp::registry::Entry> = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].root, root);
+        let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(rows[0]["queries"], json!({"answered":0,"failed":0}));
     }
     env.rimz()
         .args(["lsp", "list", "--all"])
         .assert()
         .success()
         .stdout(
-            predicates::str::contains("~/project")
+            predicates::str::contains("#main")
                 .and(predicates::str::contains("other-project").not()),
         );
     env.rimz()
