@@ -52,6 +52,31 @@ pub struct Check {
     pub timeout: Option<String>,
 }
 
+pub(super) enum CheckKind<'a> {
+    Run(&'a str),
+    Agent(&'a str),
+}
+
+impl Check {
+    pub(super) fn kind(&self) -> Option<CheckKind<'_>> {
+        match (&self.run, &self.agent) {
+            (Some(run), None) => Some(CheckKind::Run(run)),
+            (None, Some(agent)) => Some(CheckKind::Agent(agent)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn edges(&self) -> BTreeMap<String, String> {
+        let mut edges = self.on.clone();
+        for outcome in ["timeout", "invalid"] {
+            edges
+                .entry(outcome.into())
+                .or_insert_with(|| "@user".into());
+        }
+        edges
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {

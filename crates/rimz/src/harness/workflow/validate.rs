@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 
-use super::spec::{self, WorkflowSpec};
+use super::spec::{self, CheckKind, WorkflowSpec};
 use crate::config::definitions::LoadedDefinitions;
 use serde::Serialize;
 
@@ -112,15 +112,15 @@ pub(super) fn validate_spec(
         if spec.steps.contains_key(node) {
             report.error(&path, "name is also used by a step");
         }
-        if check.run.is_some() == check.agent.is_some() {
+        if check.kind().is_none() {
             report.error(&path, "set exactly one of run or agent");
         }
-        if let Some(run) = &check.run
+        if let Some(CheckKind::Run(run)) = check.kind()
             && let Err(err) = spec::resolve_argv(dir, run)
         {
             report.error(&format!("{path}.run"), err);
         }
-        if check.agent.is_some() && check.prompt_file.is_none() {
+        if matches!(check.kind(), Some(CheckKind::Agent(_))) && check.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
                 "an agent check requires prompt-file",
@@ -147,13 +147,13 @@ pub(super) fn validate_spec(
             );
         }
         report.timeout(&path, check.timeout.as_deref());
-        if check.on.values().any(|target| target == "@wait") && check.timeout.is_none() {
+        let edges = check.edges();
+        if edges.values().any(|target| target == "@wait") && check.timeout.is_none() {
             report.error(
                 &format!("{path}.timeout"),
                 "a waiting check requires timeout",
             );
         }
-        let mut edges = check.on.clone();
         for (outcome, target) in &check.on {
             report.target(spec, &format!("{path}.on.{outcome}"), target);
             if outcome == "timeout" && target == "@wait" {
@@ -177,17 +177,15 @@ pub(super) fn validate_spec(
                 report.warnings.push(issue(&path, format!("judge and step {target} use the same profile {agent}; independence relies on the prompt")));
             }
         }
-        edges
-            .entry("timeout".into())
-            .or_insert_with(|| "@user".into());
-        edges
-            .entry("invalid".into())
-            .or_insert_with(|| "@user".into());
         report.rows.push(NodeRow {
             workflow: name.into(),
             node: node.clone(),
             kind: "check".into(),
-            runner: if check.run.is_some() { "run" } else { "agent" }.into(),
+            runner: match check.kind() {
+                Some(CheckKind::Run(_)) => "run",
+                _ => "agent",
+            }
+            .into(),
             run: check.run.clone(),
             agent: check.agent.clone(),
             do_background: do_background(check.agent.as_deref(), definitions).unwrap_or(false),
@@ -287,11 +285,11 @@ pub(super) fn validate_spec(
         }
     }
     for (node, check) in &spec.checks {
-        if !check.on.values().any(|target| target == "@wait")
+        if !check.edges().values().any(|target| target == "@wait")
             && cycles_to(spec, node, |name| {
                 spec.checks
                     .get(name)
-                    .is_some_and(|check| !check.on.values().any(|target| target == "@wait"))
+                    .is_some_and(|check| !check.edges().values().any(|target| target == "@wait"))
             })
         {
             report.error(&format!("checks.{node}"), "check-only cycle has no @wait");
@@ -429,15 +427,15 @@ fn resolved_edges(
 }
 
 fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -> bool {
-    let mut pending = vec![start];
+    let mut pending = vec![start.to_owned()];
     let mut seen = BTreeSet::new();
     while let Some(node) = pending.pop() {
-        if !seen.insert(node) {
+        if !seen.insert(node.clone()) {
             continue;
         }
-        let targets = if let Some(check) = spec.checks.get(node) {
-            check.on.values().map(String::as_str).collect::<Vec<_>>()
-        } else if let Some(step) = spec.steps.get(node) {
+        let targets = if let Some(check) = spec.checks.get(&node) {
+            check.edges().into_values().collect::<Vec<_>>()
+        } else if let Some(step) = spec.steps.get(&node) {
             [
                 step.then.as_deref(),
                 step.on.asked.as_deref(),
@@ -445,12 +443,13 @@ fn cycles_to(spec: &WorkflowSpec, start: &str, allowed: impl Fn(&str) -> bool) -
             ]
             .into_iter()
             .flatten()
+            .map(str::to_owned)
             .collect()
         } else {
             continue;
         };
         for target in targets {
-            if !allowed(target) {
+            if !allowed(&target) {
                 continue;
             }
             if target == start {

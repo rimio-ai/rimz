@@ -42,7 +42,9 @@ fn command_words(
     digests: &mut BTreeMap<String, String>,
 ) -> Result<Vec<std::ffi::OsString>, String> {
     let check = &spec.checks[&record.node];
-    let run = check.run.as_deref().ok_or("script check needs run")?;
+    let Some(spec::CheckKind::Run(run)) = check.kind() else {
+        return Err("script check needs run".into());
+    };
     let argv = spec::resolve_argv(&record.spec_dir, run).map_err(|e| e.to_string())?;
     // resolve_argv has parsed this exact command successfully.
     let words = shlex::split(run).expect("resolved workflow argv");
@@ -62,8 +64,10 @@ pub(super) fn evaluate(
     spec: &WorkflowSpec,
     record: &RunRecord,
 ) -> Evaluation {
-    if spec.checks[&record.node].agent.is_some() {
-        return judge::evaluate(state, paths, spec, record);
+    match spec.checks[&record.node].kind() {
+        Some(spec::CheckKind::Agent(_)) => return judge::evaluate(state, paths, spec, record),
+        Some(spec::CheckKind::Run(_)) => {}
+        None => return Evaluation::failed("invalid", "check needs exactly one runner"),
     }
     let mut result = Evaluation::failed("invalid", "evaluation interrupted");
     let mut digests = BTreeMap::new();

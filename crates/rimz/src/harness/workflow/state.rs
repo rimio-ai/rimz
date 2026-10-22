@@ -121,12 +121,13 @@ impl Transition<'_> {
             return Ok(());
         }
         let check = &self.spec.checks[&self.record.node];
+        let edges = check.edges();
         let object =
             object.and_then(|object| normalize_object(object, check, self.record.key.as_ref()));
         let (object, outcome, target, reason, origin) = match object {
             Ok(object) => {
                 let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-                let target = check.on[&outcome].clone();
+                let target = edges[&outcome].clone();
                 (
                     object,
                     outcome,
@@ -140,11 +141,7 @@ impl Transition<'_> {
                     json!({"outcome":"invalid", "node":self.record.node, "reason":reason}),
                 ),
                 "invalid".into(),
-                check
-                    .on
-                    .get("invalid")
-                    .cloned()
-                    .unwrap_or_else(|| "@user".into()),
+                edges["invalid"].clone(),
                 ParkReason::Invalid,
                 EvaluationOrigin::Engine,
             ),
@@ -556,11 +553,8 @@ impl Transition<'_> {
         }
         self.abandon_check("timeout");
         let check = &self.spec.checks[&self.record.node];
-        let target = check
-            .on
-            .get("timeout")
-            .map(String::as_str)
-            .unwrap_or("@user");
+        let edges = check.edges();
+        let target = &edges["timeout"];
         self.engine_route(
             "timeout",
             json!({"outcome":"timeout", "node":self.record.node, "timeout":check.timeout}),
@@ -617,7 +611,7 @@ fn normalize_object(
         .and_then(Value::as_str)
         .ok_or("outcome must be a string")?;
     if matches!(outcome, "timeout" | "invalid" | "cap" | "deadline")
-        || !check.on.contains_key(outcome)
+        || !check.edges().contains_key(outcome)
     {
         return Err(format!("reserved or unrouted outcome {outcome:?}"));
     }
