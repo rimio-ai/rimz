@@ -420,7 +420,7 @@ fn launch_and_supervise(
         .transpose()
         .context("reading resumed run before spawning provider")?
         .and_then(|record| resumed_run_follow_ups(request, &record));
-    let _drainer_lease = supervisor::drainer_lease(workspace, isolation)?;
+    let drainer_lease = supervisor::drainer_lease(workspace, isolation)?;
     let provider_terminal = ProviderTerminal::capture();
     let spawned_at = jiff::Timestamp::now();
     let child = command
@@ -507,6 +507,7 @@ fn launch_and_supervise(
         },
         &plan.park_state_file(std::process::id()),
         child,
+        drainer_lease,
         workspace,
     )?;
     settle_after_exit(

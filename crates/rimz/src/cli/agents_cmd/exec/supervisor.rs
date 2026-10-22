@@ -43,6 +43,8 @@ struct ParkState {
     entered_worktree: Option<PathBuf>,
     cwd: PathBuf,
     isolation: rimz::config::Isolation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drainer_lease_fd: Option<i32>,
     workspace: rimz::ResolvedWorkspace,
 }
 
@@ -227,6 +229,7 @@ impl ParkState {
             entered_worktree: startup.entered_worktree.map(Path::to_owned),
             cwd: startup.cwd.to_owned(),
             isolation: startup.isolation,
+            drainer_lease_fd: None,
             workspace: workspace.clone(),
         }
     }
@@ -257,6 +260,7 @@ pub(super) fn park(
     startup: ParkStartup<'_>,
     path: &Path,
     child: Child,
+    drainer_lease: Option<rimz::harness::hook_drain::DrainerLease>,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
     #[cfg(unix)]
@@ -266,7 +270,12 @@ pub(super) fn park(
     {
         use nix::sys::signal::{Signal, raise};
         use std::os::unix::process::CommandExt as _;
-        let handoff = || -> Result<()> {
+        let mut state = state;
+        let handoff = (|| -> Result<()> {
+            state.drainer_lease_fd = drainer_lease
+                .as_ref()
+                .map(rimz::harness::hook_drain::DrainerLease::prepare_handoff)
+                .transpose()?;
             rimz::disk::atomic::write_temp_then_rename_cache(path, &state)
                 .with_context(|| format!("writing park state {}", path.display()))?;
             let _signal_mask = rimz::child_process::CleanupSignalMask::block()?;
@@ -282,8 +291,9 @@ pub(super) fn park(
                 .current_dir(&state.cwd)
                 .exec();
             Err(error).with_context(|| format!("entering park image from {}", path.display()))
-        };
-        if let Err(error) = handoff() {
+        })();
+        drop(drainer_lease);
+        if let Err(error) = handoff {
             let _ = writeln!(crate::cli::render::err(), "rimz: {error:#}");
         }
         let _ = std::fs::remove_file(path);
@@ -298,6 +308,7 @@ pub(super) fn park(
     #[cfg(not(unix))]
     {
         let _ = path;
+        let _drainer_lease = drainer_lease;
         run_loop(state, ProviderChild::Spawned(child), workspace)
     }
 }
@@ -459,7 +470,10 @@ fn run_loop(
     mut child: ProviderChild,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
-    let mut drainer_lease = drainer_lease(workspace, state.isolation)?;
+    let mut drainer_lease =
+        rimz::harness::hook_drain::DrainerLease::handover(state.drainer_lease_fd.take(), || {
+            drainer_lease(workspace, state.isolation)
+        })?;
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&paths)?;
     let diag = rimz::diag::DiagSink::under(

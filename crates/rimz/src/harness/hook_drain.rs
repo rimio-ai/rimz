@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::OnceLock;
@@ -362,6 +362,30 @@ impl DrainerLease {
                 }
             }
         }
+    }
+
+    /// Keep this answered lease open across the next exec and return its inherited fd.
+    pub fn prepare_handoff(&self) -> Result<RawFd, HookDrainErr> {
+        nix::fcntl::fcntl(
+            &self.connection.stream,
+            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+        )
+        .map_err(io::Error::from)?;
+        Ok(self.connection.stream.as_raw_fd())
+    }
+
+    /// Acquire the parked image's answered lease before closing its inherited lease fd.
+    pub fn handover<E>(
+        inherited: Option<RawFd>,
+        acquire: impl FnOnce() -> Result<Option<Self>, E>,
+    ) -> Result<Option<Self>, E> {
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_DRAINER_LEASE_HANDOVER");
+        let lease = acquire();
+        if let Some(fd) = inherited {
+            let _ = nix::unistd::close(fd);
+        }
+        lease
     }
 
     pub fn refresh(&mut self) -> Result<(), HookDrainErr> {

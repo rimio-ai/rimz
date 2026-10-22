@@ -963,7 +963,8 @@ path = "crates/rimz/src/harness"
 # scratch::{board_relative_path, durable_board_path} share receipt and durable board spellings (+2).
 # scratch::holding_team supplies read-only board holds to automatic worktree callers (+1).
 # hook_drain::spawn_refresh_detached shares helper spawn discipline with hooks and resumed wrappers (+1).
-surface-budget = 943
+# hook_drain::DrainerLease::{prepare_handoff, handover} share exec socket mechanics with the CLI (+1).
+surface-budget = 944
 
 [[verdict]]
 kind = "item"
@@ -1004,6 +1005,16 @@ reason = "Reload distinguishes an absent drainer from a completed frame-boundary
 kind = "item"
 key = "harness::hook_drain::spawn_refresh_detached"
 reason = "Lifecycle hooks and resumed wrappers share captured hook environment, fresh null stdio, and detached reaping for RefreshSpawn."
+
+[[verdict]]
+kind = "item"
+key = "harness::hook_drain::DrainerLease::prepare_handoff"
+reason = "The exec wrapper carries only the inherited fd number; the lease owner clears close-on-exec on its owned socket."
+
+[[verdict]]
+kind = "item"
+key = "harness::hook_drain::DrainerLease::handover"
+reason = "The parked wrapper closes its inherited lease only after its own lease attempt, keeping socket mechanics in the lease owner."
 
 [[verdict]]
 kind = "item"
