@@ -47,8 +47,8 @@ pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
 /// The `[agents.teams]` role name an agent launched as, so it answers to
 /// `@<role>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
-/// The `[agents.teams]` team name an agent launched under. Set by the launch
-/// wrapper; read by member CLI calls so in-place teams scope to their channel.
+/// The team name an agent launched under. Set by the launch wrapper, or
+/// cleared when the launch carries no team identity.
 pub const ENV_TEAM: &str = "RIMZ_TEAM";
 /// `1` on a launch whose volatile Environment facts arrive at prompt submit;
 /// cleared on every other launch so a nested launch never inherits it. Read by
@@ -1102,6 +1102,10 @@ fn compile_agent_process_with_extra_env(
     } else {
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
+    }
+    if request.identity.params.team.is_none() {
+        env.remove(ENV_TEAM);
+        unset.insert(ENV_TEAM.to_owned());
     }
     let mut process = CompiledAgentProcess {
         host_skills,

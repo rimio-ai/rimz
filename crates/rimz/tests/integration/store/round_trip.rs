@@ -32,17 +32,34 @@ fn session_role_spend_survives_run_and_room_removal() {
         },
     )
     .unwrap();
+    let team_session = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    session_roles::record(
+        &h.runtime_paths,
+        &SessionRoleRecord {
+            kind: adapter.spec().kind_id(),
+            session: team_session.into(),
+            role: serde_json::from_value(serde_json::json!({
+                "role":"agent", "profile":"plain-profile",
+                "seat":{"team":"forge", "role":"coder"}
+            }))
+            .unwrap(),
+            at,
+        },
+    )
+    .unwrap();
     let cache = h.runtime_paths.shared_spending_cursor_path();
     let transcript = cache.with_file_name(format!("{session}.jsonl"));
     std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     std::fs::write(&transcript, "{\"timestamp\":\"2026-06-01T11:00:00Z\",\"costUSD\":2.0,\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n").unwrap();
+    let team_transcript = cache.with_file_name(format!("{team_session}.jsonl"));
+    std::fs::copy(&transcript, &team_transcript).unwrap();
     std::fs::remove_dir_all(&h.store.paths().root).unwrap();
     assert!(rimz::harness::run::load(h.store.paths(), &run.run_id).is_err());
-    let files = [SpendingFile {
+    let files = [transcript, team_transcript].map(|path| SpendingFile {
         adapter,
         login: rimz::ids::LoginKey::default_for(adapter.spec().kind_id()),
-        path: transcript,
-    }];
+        path,
+    });
     let result = SpendingWalker::new().walk_local(
         &cache,
         &WalkRequest {
@@ -64,6 +81,13 @@ fn session_role_spend_survives_run_and_room_removal() {
             .map(|profile| profile.year.usd),
         Some(2.0)
     );
+    assert!(
+        result.roles.agents.is_empty(),
+        "team seats must leave agents"
+    );
+    let roles = serde_json::to_value(&result.roles).unwrap();
+    assert_eq!(roles["teams"]["forge"]["coder"]["year"]["usd"], 2.0);
+    assert_eq!(roles["teams"]["forge"]["coder"]["year"]["sessions"], 1);
 }
 
 #[test]

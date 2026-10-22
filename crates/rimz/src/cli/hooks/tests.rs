@@ -269,14 +269,39 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
 #[test]
 fn lifecycle_records_pane_roles_for_roots_and_native_children() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
-    use rimz::harness::launch::{ENV_AGENT_PROFILE, ENV_RUN_ID};
+    use rimz::harness::launch::{ENV_AGENT_PROFILE, ENV_AGENT_ROLE, ENV_RUN_ID, ENV_TEAM};
     use rimz::store::run::RunRecord;
-    for (subagent, profile, native_child) in [
-        (Some(true), Some("fast"), false),
-        (Some(true), None, false),
-        (Some(false), Some("peer"), false),
-        (None, None, false),
-        (Some(true), Some("fast"), true),
+    for (subagent, profile, native_child, team, role) in [
+        (Some(true), Some("fast"), false, None, None),
+        (Some(true), None, false, None, None),
+        (Some(false), Some("peer"), false, None, None),
+        (None, None, false, None, None),
+        (Some(true), Some("fast"), true, None, None),
+        (
+            None,
+            Some("plain-profile"),
+            false,
+            Some("forge"),
+            Some("coder"),
+        ),
+        (
+            None,
+            Some("plain-profile"),
+            true,
+            Some("forge"),
+            Some("coder"),
+        ),
+        (None, Some("solo.dotted"), false, None, None),
+        (None, Some("peer"), false, Some("forge"), None),
+        (None, None, false, Some("forge"), None),
+        (None, Some("peer"), false, None, Some("inline")),
+        (
+            Some(true),
+            Some("fast"),
+            false,
+            Some("forge"),
+            Some("coder"),
+        ),
     ] {
         let (_dir, store) = hooks_test_store();
         let adapter = rimz::agents::definition_by_kind("claude").unwrap();
@@ -295,6 +320,12 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
         }
         if let Some(profile) = profile {
             env.insert(ENV_AGENT_PROFILE.into(), profile.into());
+        }
+        if let Some(team) = team {
+            env.insert(ENV_TEAM.into(), team.into());
+        }
+        if let Some(role) = role {
+            env.insert(ENV_AGENT_ROLE.into(), role.into());
         }
         let payload = if native_child {
             serde_json::json!({"session_id":"parent", "agent_id":"child", "agent_type":"review"})
@@ -365,6 +396,20 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
             saved["profile"].as_str(),
             profile.or((subagent == Some(true)).then_some("claude"))
         );
+        if subagent == Some(true) {
+            assert!(saved.get("seat").is_none());
+        } else {
+            assert_eq!(
+                saved["seat"],
+                match team {
+                    Some(team) => serde_json::json!({
+                        "team": team,
+                        "role": role.or(profile).unwrap_or("claude"),
+                    }),
+                    None => serde_json::json!("solo"),
+                }
+            );
+        }
         feed();
         assert_eq!(std::fs::read(&path).unwrap(), before);
         if !native_child {
