@@ -185,7 +185,7 @@ impl Theme {
     /// One lifted cell at the active depth: truecolor rides the gamut-safe
     /// OKLab-L lift (with `truecolor_mod` held), while indexed, `no_color`, and
     /// a colorless `fg` carry `fallback_mod` over the base tone.
-    fn lifted(
+    pub(super) fn lifted(
         &self,
         fg: Option<Color>,
         lift: f32,

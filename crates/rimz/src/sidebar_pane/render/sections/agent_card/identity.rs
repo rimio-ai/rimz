@@ -85,6 +85,8 @@ pub(super) fn agent_lead_cell(
 /// name, then the dim capability tokens (`· model · reasoning · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
+/// The fast-mode bolt follows the model in bold electric, still at rest and
+/// crackling only while running.
 /// The window token is the model's context window (`258k`, `1M`) — the
 /// context-sidecar reading first, the row's carried/default fallback second.
 /// It rides only non-idle cards; idle cards keep model and reasoning configuration but drop the
@@ -131,7 +133,23 @@ pub(super) fn agent_identity_line(
         && let Some(model) = display_model(row)
     {
         left.push(Span::styled(value_seam(theme), theme.muted()));
-        left.push(Span::styled(model, theme.muted()));
+        let bolt = theme.glyph(GlyphRole::CardFast);
+        let model_budget = width.saturating_sub(
+            spans_width(&left)
+                + spans_width(&right)
+                + usize::from(!right.is_empty())
+                + 1
+                + text_width(bolt),
+        );
+        if row.as_agent().is_some_and(|agent| agent.fast) && model_budget > 0 {
+            left.push(Span::styled(ellipsize(&model, model_budget), theme.muted()));
+            left.push(Span::styled(
+                format!(" {bolt}"),
+                fast_mode_style(row_ctx, row, status),
+            ));
+        } else {
+            left.push(Span::styled(model, theme.muted()));
+        }
         if row.as_agent().is_some_and(|card| card.tier_moved) {
             left.push(Span::styled(
                 format!(" {}", theme.glyph(GlyphRole::CardTierMove)),
@@ -159,6 +177,37 @@ pub(super) fn agent_identity_line(
         }
     }
     pin_right(left, right, width)
+}
+
+/// One animation phase in this many flashes a running fast card's bolt.
+const CRACKLE_ONE_IN: u64 = 8;
+/// How far a flash lifts the bolt's tone toward white.
+const CRACKLE_LIFT: f32 = 0.20;
+
+fn fast_mode_style(row_ctx: &RowCtx<'_>, row: &SidebarRow, status: AgentStatus) -> Style {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let theme = row_ctx.theme;
+    let rest = theme.styled(Component::FastMode, Modifier::BOLD);
+    if status != AgentStatus::Running {
+        return rest;
+    }
+    let mut offset = DefaultHasher::new();
+    row.id.hash(&mut offset);
+    let mut spark = DefaultHasher::new();
+    row_ctx
+        .animation_phase
+        .wrapping_add(offset.finish())
+        .hash(&mut spark);
+    if !spark.finish().is_multiple_of(CRACKLE_ONE_IN) {
+        return rest;
+    }
+    theme.lifted(
+        rest.fg,
+        CRACKLE_LIFT,
+        Modifier::BOLD,
+        Modifier::BOLD | Modifier::UNDERLINED,
+    )
 }
 
 fn cost_spans(row_ctx: &RowCtx<'_>, row: &SidebarRow, cost_usd: Option<f64>) -> Vec<Span<'static>> {
