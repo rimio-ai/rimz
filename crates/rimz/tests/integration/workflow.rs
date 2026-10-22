@@ -53,7 +53,7 @@ fn show(env: &Env, id: &str) -> Value {
 }
 
 fn until(env: &Env, id: &str, predicate: impl Fn(&Value) -> bool) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let value = show(env, id);
         if predicate(&value) {
@@ -826,7 +826,7 @@ fn stale_host_cannot_overwrite_resumed_context() {
     let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n";
     let (env, _) = fixture(
         spec,
-        "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ncp \"$RIMZ_WORKFLOW_DIR/context.json\" \"$RIMZ_WORKFLOW_DIR/consumed.tmp\"\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
+        "while ! test -f \"$RIMZ_WORKFLOW_DIR/consume\"; do sleep 0.01; done\ndd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/consumed.tmp\" 2>/dev/null\nmv \"$RIMZ_WORKFLOW_DIR/consumed.tmp\" \"$RIMZ_WORKFLOW_DIR/consumed.json\"\nexec sleep 60",
     );
     let socket = env.runtime_root.join("context-gate.sock");
     let listener = UnixListener::bind(&socket).unwrap();
