@@ -9,9 +9,6 @@ use rimz::ids::{MuxName, WorkspaceId};
 
 use super::{AttachAction, AttachMode, PrintCause, RoomSituation};
 
-// The local recovery panel parks its cursor on the Multiplexer symbol cell;
-// this in-band marker lands there immediately before the mux paints.
-const ATTACH_MARK: &[u8] = b"\x1b[32m\xe2\x9c\x93\x1b[39m";
 // Terminals with alternate scroll enabled convert wheel ticks to arrow keys
 // while the alternate screen has no mouse owner. tmux enters that state while
 // repainting an attaching client, so preserve mode 1007 and bracket the client
@@ -337,7 +334,7 @@ fn launch_attach_command_with_bracket(
         spec,
         &mut stdout,
         stdout_is_terminal,
-        std::env::var_os(rimz::remote::ATTACH_MARK_ENV).as_deref(),
+        std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV).as_deref(),
         bracket_alternate_scroll,
         |_| run_attach_process(&mut command, monitor),
     )
@@ -347,7 +344,7 @@ fn run_attach_command(
     spec: &rimz::mux::CommandSpec,
     stdout: &mut dyn Write,
     stdout_is_terminal: bool,
-    attach_mark: Option<&OsStr>,
+    supervised: Option<&OsStr>,
     bracket_alternate_scroll: bool,
     run: impl FnOnce(&mut dyn Write) -> std::io::Result<AttachOutcome>,
 ) -> Result<AttachOutcome> {
@@ -355,7 +352,10 @@ fn run_attach_command(
         emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_SAVE);
         emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_DISABLE);
     }
-    emit_attach_mark(stdout, attach_mark, stdout_is_terminal);
+    if supervised.is_some_and(|value| !value.is_empty()) {
+        stdout.write_all(rimz::remote::tty::ROOM_OPEN_SENTINEL.as_bytes())?;
+        stdout.flush()?;
+    }
     let status = run(stdout);
     if bracket_alternate_scroll {
         emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_RESTORE);
@@ -472,26 +472,14 @@ fn errno_io(err: nix::errno::Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(err as i32)
 }
 
-fn emit_attach_mark(stdout: &mut dyn Write, mark: Option<&OsStr>, stdout_is_terminal: bool) {
-    if !attach_mark_enabled(mark, stdout_is_terminal) {
-        return;
-    }
-    emit_terminal_bytes(stdout, true, ATTACH_MARK);
-}
-
 fn emit_terminal_bytes(stdout: &mut dyn Write, stdout_is_terminal: bool, bytes: &[u8]) {
     if stdout_is_terminal && stdout.write_all(bytes).is_ok() {
         let _ = stdout.flush();
     }
 }
 
-fn attach_mark_enabled(value: Option<&OsStr>, stdout_is_terminal: bool) -> bool {
-    stdout_is_terminal && value.is_some_and(|value| !value.is_empty())
-}
-
 fn attach_command(spec: &rimz::mux::CommandSpec) -> std::process::Command {
     let mut command = spec.to_command();
-    command.env_remove(rimz::remote::ATTACH_MARK_ENV);
     command.env_remove(rimz::remote::OUTER_SCROLL_BRACKET_ENV);
     command
 }
@@ -562,20 +550,28 @@ mod tests {
     }
 
     #[test]
-    fn attach_marker_requires_a_nonempty_request_and_a_tty() {
-        assert!(attach_mark_enabled(Some(OsStr::new("1")), true));
-        assert!(!attach_mark_enabled(Some(OsStr::new("")), true));
-        assert!(!attach_mark_enabled(None, true));
-        assert!(!attach_mark_enabled(Some(OsStr::new("1")), false));
+    fn room_open_sentinel_requires_a_nonempty_supervised_request_not_a_tty() {
+        let spec = rimz::mux::CommandSpec::new("mux");
+        for supervised in [None, Some(OsStr::new("")), Some(OsStr::new("1"))] {
+            let mut output = Vec::new();
+            run_attach_command(&spec, &mut output, false, supervised, true, |stdout| {
+                stdout.write_all(b"child")?;
+                Ok(AttachOutcome::RoomEnded)
+            })
+            .expect("run piped attach");
+            let expected: &[u8] = if supervised.is_some_and(|value| !value.is_empty()) {
+                b"\x1b]7717;rimz-room-open\x07child"
+            } else {
+                b"child"
+            };
+            assert_eq!(output, expected, "supervised={supervised:?}");
+        }
     }
 
     #[test]
-    fn attach_markers_do_not_reach_the_multiplexer_environment() {
+    fn outer_scroll_marker_does_not_reach_the_multiplexer_environment() {
         let command = attach_command(&rimz::mux::CommandSpec::new("mux"));
 
-        assert!(command.get_envs().any(|(key, value)| {
-            key == OsStr::new(rimz::remote::ATTACH_MARK_ENV) && value.is_none()
-        }));
         assert!(command.get_envs().any(|(key, value)| {
             key == OsStr::new(rimz::remote::OUTER_SCROLL_BRACKET_ENV) && value.is_none()
         }));
@@ -662,21 +658,54 @@ mod tests {
     fn attach_brackets_child_output_and_preserves_its_failure() {
         use std::os::unix::process::ExitStatusExt;
 
+        struct FlushedOutput<'a> {
+            bytes: Vec<u8>,
+            flushes: &'a std::cell::Cell<usize>,
+        }
+
+        impl Write for FlushedOutput<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.write(bytes)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes.set(self.flushes.get() + 1);
+                Ok(())
+            }
+        }
+
         let spec = rimz::mux::CommandSpec::new("sh").args(["-c", "printf child; exit 23"]);
-        let mut output = Vec::new();
-        let status = run_attach_command(&spec, &mut output, true, None, true, |stdout| {
-            stdout.write_all(b"child")?;
-            Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
-                23 << 8,
-            )))
-        })
+        let flushes = std::cell::Cell::new(0);
+        let mut output = FlushedOutput {
+            bytes: Vec::new(),
+            flushes: &flushes,
+        };
+        let status = run_attach_command(
+            &spec,
+            &mut output,
+            true,
+            Some(OsStr::new("1")),
+            true,
+            |stdout| {
+                assert_eq!(
+                    flushes.get(),
+                    3,
+                    "scroll bracket and sentinel flush before mux launch"
+                );
+                stdout.write_all(b"child")?;
+                Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
+                    23 << 8,
+                )))
+            },
+        )
         .expect("child status");
 
         assert_eq!(
-            output,
+            output.bytes,
             [
                 ALTERNATE_SCROLL_SAVE,
                 ALTERNATE_SCROLL_DISABLE,
+                b"\x1b]7717;rimz-room-open\x07",
                 b"child",
                 ALTERNATE_SCROLL_RESTORE,
             ]

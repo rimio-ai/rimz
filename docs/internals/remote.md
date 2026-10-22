@@ -32,7 +32,7 @@ The second split is pure versus process. [`crates/rimz/src/remote/`](../../crate
 
 Five collaborators sit outside the module and run on the remote host or in the sidebar:
 
-- [`cli/room/attach_exec.rs`](../../crates/rimz/src/cli/room/attach_exec.rs) reads the launch variables when the remote `rimz` launches its mux client: it drives the predecessor reap, writes the attach mark and scroll bracket, and runs the session-loss watchdog (`RemoteRoomWatchdog`).
+- [`cli/room/attach_exec.rs`](../../crates/rimz/src/cli/room/attach_exec.rs) reads the launch variables when the remote `rimz` launches its mux client: it drives the predecessor reap, writes the room-open sentinel and scroll bracket, and runs the session-loss watchdog (`RemoteRoomWatchdog`).
 - [`mux/zellij/reap.rs`](../../crates/rimz/src/mux/zellij/reap.rs) retires an orphaned predecessor client.
 - [`cli/room/start_notice.rs`](../../crates/rimz/src/cli/room/start_notice.rs) runs the version-skew gate at room entry.
 - [`sidebar/enrich.rs`](../../crates/rimz/src/sidebar/enrich.rs) folds the link sidecar onto the snapshot, and [`sidebar/notify.rs`](../../crates/rimz/src/sidebar/notify.rs) bounds health episodes.
@@ -87,16 +87,15 @@ The probe stream (`probe_stream_spec` in `link.rs`) repairs `PATH` and execs `ri
 
 The exported environment is the whole channel from client to host. The web prep snippet exports a subset, marked in the last column.
 
-The host strips the eight `RIMZ_*` channel names at mux server birth, so room panes never inherit the remote client's attach context ([birth and repair](./multiplexers.md#the-identity-pin)). `TERM` and `COLORTERM` remain pane capabilities, and the host's launching `rimz start` and attach client keep the channel through attach.
+The host strips the seven `RIMZ_*` channel names at mux server birth, so room panes never inherit the remote client's attach context ([birth and repair](./multiplexers.md#the-identity-pin)). `TERM` and `COLORTERM` remain pane capabilities, and the host's launching `rimz start` and attach client keep the channel through attach.
 
 | Variable | Carries | Web prep |
 | --- | --- | --- |
 | `RIMZ_REMOTE_LINEAGE` | A stable 16-hex identity for this device plus this room, so a replacement attach can retire its own orphan. | no |
-| `RIMZ_REMOTE_SUPERVISED` | Set when the local reconnect supervisor will interpret the session-loss sentinel. | no |
+| `RIMZ_REMOTE_SUPERVISED` | Set when the local reconnect supervisor owns the attach's stdout relay and interprets the session-loss exit. The host writes the private OSC `ESC ] 7717 ; rimz-room-open BEL` once and flushes after its mode-1007 bracket and immediately before launching the mux client, even when stdout is not a terminal or color is off. | no |
 | `RIMZ_REMOTE_CLIENT_VERSION` | The local binary's semantic version, for the skew gate. | yes |
 | `RIMZ_REMOTE_FORCE_VERSION` | Set by `--force-version`, downgrading a minor refusal to a warning. | yes |
-| `RIMZ_REMOTE_RECONNECT` | Set on retry attempts only, selecting the room's unattended posture. | no |
-| `RIMZ_ATTACH_MARK` | Set when a colored connection panel holds the alternate screen, asking the remote RimZ to draw a green check before mux launch. | no |
+| `RIMZ_REMOTE_RECONNECT` | Set on retry attempts only, selecting the room's reconnect posture: no consent questions or repeated lasting notices. | no |
 | `RIMZ_OUTER_SCROLL_BRACKET` | Set on a one-shot attach whose local launcher already owns the alternate-scroll bracket. | no |
 | `RIMZ_CLIENT_SIZE` | Locally probed `<cols>x<rows>`, seeding the sidebar when the remote birth has no pty. | yes |
 | `COLORTERM` | `truecolor` when the local terminal advertises 24-bit color, which SSH does not forward. Web prep always exports it. | yes |
@@ -107,10 +106,10 @@ The host strips the eight `RIMZ_*` channel names at mux server birth, so room pa
 | Plan | When | Snippet |
 | --- | --- | --- |
 | `Keep` | `$TERM` is unset, empty, or one of the 14 names in `term_needs_terminfo_copy`: `xterm`, `xterm-color`, `xterm-16color`, `xterm-256color`, `screen`, `screen-256color`, `tmux`, `tmux-256color`, `vt100`, `vt102`, `vt220`, `ansi`, `linux`, `dumb`. | Nothing. |
-| `Copy` | Any other name, and local `infocmp -x` produced a source. | Export `xterm-256color`, pipe the source through remote `tic -x -`, then export the real name on success. |
+| `Copy` | Any other name, and local `infocmp -x` produced a source. | Export `xterm-256color`, pipe the source through remote `tic -x -` with stdout and stderr discarded, then export the real name on success. |
 | `Downgrade` | Any other name, and no usable `infocmp` source. | Export `xterm-256color`. |
 
-`RIMZ_REMOTE_RECONNECT` matters when debugging a reconnect. `start_attended` in `cli/room/mod.rs` treats a start carrying it as unattended even though `ssh -t` gave it a terminal: hook installation prints its non-interactive notice, the project trust prompt is not offered, the first-run wizard is skipped, and the resume prompt runs silently. A reattach to a live room skips hook detection whatever the posture.
+`RIMZ_REMOTE_RECONNECT` matters when debugging a reconnect. Room entry reads its posture once: `Attended` for terminal stdin without the marker, `NoTerminal` for non-terminal stdin without it, and `Reconnect` whenever the marker is non-empty. Reconnect skips consent questions, the first-run wizard, and the resume prompt. It also skips version warnings and build drift, the non-repository root notice, untrusted-hook warnings, and restricted or undecided folder-trust notices; version refusals and resume, reset, web-daemon, and unresumable reports still print. A reborn room needing hooks keeps the intro and table but says “Not asked on a reconnect — nothing installed or refreshed”, points to `rimz hooks install` in a room pane, and names `rimz doctor` for missing hooks. `NoTerminal` keeps its “No terminal input” notice. A reattach to a live room skips hook detection whatever the posture.
 
 ### Version skew
 
@@ -119,12 +118,12 @@ The gate runs on the host, in `report_version_mismatch_notices`, comparing `RIMZ
 | Skew | Behavior | Exit |
 | --- | --- | --- |
 | `Match` | Silent. | none |
-| `Patch` | Warn and proceed. | none |
-| `Unparseable` | Warn and proceed. | none |
-| `Minor` | Refuse, unless `--force-version` downgrades it to a warning. | `65` (`REMOTE_VERSION_SKEW_EXIT`) |
+| `Patch` | Warn and proceed; silent on reconnect. | none |
+| `Unparseable` | Warn and proceed; silent on reconnect. | none |
+| `Minor` | Refuse, unless `--force-version` downgrades it to a warning (silent on reconnect). | `65` (`REMOTE_VERSION_SKEW_EXIT`) |
 | `Major` | Refuse; `--force-version` does not apply. | `66` (`REMOTE_VERSION_INCOMPATIBLE_EXIT`) |
 
-Both exits reach the local side as fatal verdicts, and `fatal_session_message` names the upgrade fix.
+Both exits reach the local side as fatal verdicts, and `fatal_session_message` names the upgrade fix. Under `RIMZ_REMOTE_SUPERVISED`, the host's refusal names both versions and the minor or major tier without generic setup advice; the local line carries the real target's fix. Without supervision the host keeps the full upgrade advice.
 
 ### Retiring the predecessor client
 
@@ -192,10 +191,7 @@ The handoff keeps the alternate screen and click and wheel mouse reporting alive
 
 The session end decides how the screen is restored. A non-fatal end restores the main screen and mouse mode immediately. A fatal end keeps the remote output visible, appends the failure and a keypress hint, and restores after a key. Ctrl-C and the interactive fallback return to intact pre-panel scrollback.
 
-Two variables coordinate the handoff with the remote RimZ in `cli/room/attach_exec.rs`:
-
-- The supervisor requests `RIMZ_ATTACH_MARK` only when a panel held the alternate screen and color is enabled. Immediately before the mux client launches, the remote writes a green check at the parked cursor; pty ordering puts it ahead of the mux's first paint. A remote that does not read the variable leaves the arrow until the mux renders.
-- A one-shot `--no-reconnect` attach owns the alternate-scroll (mode 1007) save, disable, and restore bracket in the local process and exports `RIMZ_OUTER_SCROLL_BRACKET`, so the remote does not nest a second bracket. Under reconnect supervision the local side sets no bracket, and the remote RimZ owns it.
+A one-shot `--no-reconnect` attach owns the alternate-scroll (mode 1007) save, disable, and restore bracket in the local process and exports `RIMZ_OUTER_SCROLL_BRACKET`, so the remote does not nest a second bracket. Under reconnect supervision the local side sets no bracket, and the remote RimZ owns it.
 
 An attach over a confirmed master pipes and drains SSH stderr so control-client diagnostics cannot paint over the frame. `attach_error_summary` filters direct and shared-connection close notices and maps `mux_client` and control-socket errors to `SSH control connection dropped`; a transport exit with no remaining diagnostic gets the same summary. That cause carries into recovery or the fatal message, and a clean exit prints `rimz: detached from <host>`.
 

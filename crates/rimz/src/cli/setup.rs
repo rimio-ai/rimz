@@ -87,7 +87,12 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     }
     report_remote_template()?;
     report_consensus_copy()?;
-    let hook_intro_rendered = hooks::ensure_detected_agent_hooks(interactive)?;
+    let hook_mode = if interactive {
+        hooks::HookInstallMode::Attended
+    } else {
+        hooks::HookInstallMode::NoTerminal
+    };
+    let hook_intro_rendered = hooks::ensure_detected_agent_hooks(hook_mode)?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
     first_run::run(&config, hook_intro_rendered)?;
     print_line("Run `rimz start` when ready.")?;

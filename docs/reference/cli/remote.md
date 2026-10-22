@@ -61,11 +61,11 @@ The host's `rimz` compares its version with yours before it enters the room:
 
 | Difference | Result |
 | --- | --- |
-| Patch, or a version that does not parse | A warning, then the room. |
-| Minor | Refused. The error tells you to upgrade the older side (`rimz remote setup` upgrades the host) or retry with `--force-version`, which turns the refusal into a warning. |
+| Patch, or a version that does not parse | A warning, then the room; the warning is not repeated on reconnect. |
+| Minor | Refused. The error tells you to upgrade the older side (`rimz remote setup` upgrades the host) or retry with `--force-version`, which turns the refusal into a warning (not repeated on reconnect). |
 | Major | Refused, with the same upgrade fix. `--force-version` does not apply. |
 
-`--force-version` is never saved on an alias.
+On a supervised connection, the host's refusal names both versions and their difference; the following local line supplies the upgrade command for your actual target. Without supervision the host includes the full upgrade advice itself. `--force-version` is never saved on an alias.
 
 ### Port forwarding
 

@@ -73,18 +73,16 @@ pub(crate) const AMBIENT_MUX_ENV: [&str; 5] = [
 ];
 
 /// Marks an SSH attach started by the local reconnect supervisor's retry
-/// loop, so the remote room start uses its unattended posture.
+/// loop, so the remote room start uses its reconnect posture.
 pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
-
-/// Requests the in-band green attach marker from a compatible remote RimZ.
-pub const ATTACH_MARK_ENV: &str = "RIMZ_ATTACH_MARK";
 
 /// Marks a remote room launch whose SSH parent already owns the terminal's
 /// alternate-scroll bracket.
 pub const OUTER_SCROLL_BRACKET_ENV: &str = "RIMZ_OUTER_SCROLL_BRACKET";
 
-/// Marks a remote attach whose local process will interpret reconnect exit
-/// sentinels.
+/// Marks a remote attach whose local supervisor relays stdout and interprets
+/// reconnect exit sentinels. The host writes the room-open sentinel before
+/// launching its multiplexer client.
 pub const REMOTE_SUPERVISED_ENV: &str = "RIMZ_REMOTE_SUPERVISED";
 
 /// Local client version carried to the remote RimZ for launch-time skew
@@ -96,13 +94,12 @@ pub const REMOTE_FORCE_VERSION_ENV: &str = "RIMZ_REMOTE_FORCE_VERSION";
 
 /// Remote launch context removed at server birth, not from attach clients
 /// whose lineage is needed for predecessor reaping.
-pub(crate) const REMOTE_CLIENT_ENV: [&str; 8] = [
+pub(crate) const REMOTE_CLIENT_ENV: [&str; 7] = [
     REMOTE_CLIENT_VERSION_ENV,
     crate::proc::REMOTE_LINEAGE_ENV,
     REMOTE_RECONNECT_ENV,
     REMOTE_SUPERVISED_ENV,
     REMOTE_FORCE_VERSION_ENV,
-    ATTACH_MARK_ENV,
     CLIENT_SIZE_ENV,
     OUTER_SCROLL_BRACKET_ENV,
 ];

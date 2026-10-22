@@ -685,7 +685,6 @@ fn background_session_birth_removes_outer_mux_context() {
         "RIMZ_REMOTE_RECONNECT",
         "RIMZ_REMOTE_SUPERVISED",
         "RIMZ_REMOTE_FORCE_VERSION",
-        "RIMZ_ATTACH_MARK",
         "RIMZ_CLIENT_SIZE",
         "RIMZ_OUTER_SCROLL_BRACKET",
     ]) {

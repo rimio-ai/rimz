@@ -167,7 +167,9 @@ fn recovery_panel_rows_pin_checkpoint_phase_and_handoff_matrix() {
                         for (phase, session, pending) in [
                             (
                                 FooterPhase::Connecting,
-                                if connect == ConnectStage::Initial {
+                                if let Some(error) = &error {
+                                    error.clone()
+                                } else if connect == ConnectStage::Initial {
                                     "connecting…".to_owned()
                                 } else {
                                     "reconnecting…".to_owned()

@@ -583,7 +583,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
             destination_index: 10,
             snippet_contains: &[concat!(
                 "export TERM=xterm-256color; printf '%s\\n' 'ALACRITTY|fake,' | ",
-                "tic -x - 2>/dev/null && export TERM='alacritty'; exec rimz"
+                "tic -x - >/dev/null 2>&1 && export TERM='alacritty'; exec rimz"
             )],
         },
     ] {
@@ -691,7 +691,7 @@ fn ssh_attach_plan_exports_client_size_when_present() {
 }
 
 #[test]
-fn ssh_attach_plan_marks_retries_only() {
+fn ssh_attach_plan_supervises_every_attempt_and_marks_only_reconnects() {
     let plan = attach_plan(
         "dev-box:~/code/query-engine",
         false,
@@ -732,10 +732,6 @@ fn ssh_attach_plan_marks_retries_only() {
             .contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "retry snippet marks an unattended reconnect"
     );
-}
-
-#[test]
-fn ssh_attach_plan_leaves_one_shot_attaches_unsupervised() {
     let plan = SshAttachPlan::new(SshAttachOptions {
         target: parse("dev-box:query-engine"),
         lineage: "0123456789abcdef".to_owned(),
@@ -751,22 +747,7 @@ fn ssh_attach_plan_leaves_one_shot_attaches_unsupervised() {
     let snippet = plan.initial().plain().args.pop().expect("snippet");
     assert!(snippet.contains("export RIMZ_REMOTE_LINEAGE="));
     assert!(!snippet.contains("RIMZ_REMOTE_SUPERVISED"));
-}
-
-#[test]
-fn ssh_attach_attempt_exports_the_render_marker_only_when_requested() {
-    let plan = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
-    let unmarked = plan.retry().plain();
-    let marked = plan.retry().with_mark(true).plain();
-
-    assert!(!unmarked.args.last().unwrap().contains(ATTACH_MARK_ENV));
-    assert!(
-        marked
-            .args
-            .last()
-            .unwrap()
-            .contains("export RIMZ_ATTACH_MARK=1;")
-    );
+    assert!(!snippet.contains(REMOTE_RECONNECT_ENV));
 }
 
 #[test]
