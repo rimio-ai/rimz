@@ -27,8 +27,9 @@ pub fn run(
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
     mode: Mode,
+    usage: Option<&super::usage::Log>,
 ) -> Result<Vec<Result<Report, query::QueryErr>>, query::QueryErr> {
-    let mut context = Context::new(root, entries, servers)?;
+    let mut context = Context::new(root, entries, servers, usage.map(|log| (log, "check")))?;
     Ok(notes
         .iter()
         .map(|notes| check_file(notes, &mut context, mode))
@@ -112,7 +113,15 @@ struct Context<'a> {
     servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
     files: Vec<PathBuf>,
     outlines: BTreeMap<PathBuf, FileOutline>,
-    failures: BTreeMap<String, query::QueryErr>,
+    failures: BTreeMap<String, Failure>,
+    usage: Option<(&'a super::usage::Log, &'static str)>,
+}
+
+/// A server failure replayed for later files in the same call. Only a failed request was a
+/// query, so only its replays record usage; a selection failure never reached the server.
+struct Failure {
+    error: query::QueryErr,
+    asked: bool,
 }
 
 struct FileOutline {
@@ -125,6 +134,7 @@ impl<'a> Context<'a> {
         root: &'a Path,
         entries: &'a [registry::Entry],
         servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
+        usage: Option<(&'a super::usage::Log, &'static str)>,
     ) -> Result<Self, query::QueryErr> {
         let output = crate::proc::git_command(root)
             .args([
@@ -161,6 +171,7 @@ impl<'a> Context<'a> {
             files,
             outlines: BTreeMap::new(),
             failures: BTreeMap::new(),
+            usage,
         })
     }
 
@@ -255,19 +266,45 @@ impl<'a> Context<'a> {
                         })
                 });
                 let server = candidates.next().filter(|_| candidates.next().is_none());
-                if let Some(error) = server
-                    .and_then(|server| self.failures.get(&server.server))
-                    .and_then(query::QueryErr::server_error)
+                if let Some(server) = server
+                    && let Some(failure) = self.failures.get(&server.server)
+                    && let Some(error) = failure.error.server_error()
                 {
-                    return Err(error);
+                    let result = Err(error);
+                    if failure.asked
+                        && let Some((usage, kind)) = self.usage
+                    {
+                        usage.record(server, kind, &result);
+                    }
+                    return result.map(|_| None);
                 }
-                let result = select().and_then(|server| request(&server, path));
-                if let Err(error) = &result
-                    && let Some(error) = error.server_error()
-                    && let Some(server) = server
-                {
-                    self.failures.insert(server.server.clone(), error);
-                }
+                let result = match select() {
+                    Ok(selected) => {
+                        let result = request(&selected, path);
+                        if let Some((usage, kind)) = self.usage {
+                            usage.record(&selected, kind, &result);
+                        }
+                        if let Err(error) = &result
+                            && let Some(error) = error.server_error()
+                        {
+                            let failure = Failure { error, asked: true };
+                            self.failures.insert(selected.server.clone(), failure);
+                        }
+                        result
+                    }
+                    Err(error) => {
+                        if let Some(server) = server
+                            && let Some(error) = error.server_error()
+                        {
+                            let failure = Failure {
+                                error,
+                                asked: false,
+                            };
+                            self.failures.insert(server.server.clone(), failure);
+                        }
+                        Err(error)
+                    }
+                };
                 let query::Output::Answer { result, .. } = result? else {
                     return Err(LspErr::Protocol(
                         "document symbols returned a lookup outcome".into(),

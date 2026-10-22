@@ -2,11 +2,85 @@ use super::*;
 use serde_json::json;
 use std::path::Path;
 
-fn log(dir: &Path) -> Log {
-    Log {
-        path: dir.join("usage.jsonl"),
-        lock: dir.join("usage.lock"),
+#[test]
+fn outcomes_classify_raw_answers_lookup_results_and_failures() {
+    use crate::lsp::query::{Output, QueryErr};
+    let answer = |result| {
+        Ok(Output::Answer {
+            result,
+            document_uri: None,
+        })
+    };
+    for (result, expected) in [
+        (answer(json!(null)), "empty"),
+        (answer(json!([])), "empty"),
+        (answer(json!([1])), "results"),
+        (answer(json!({})), "results"),
+        (
+            Ok(Output::Ambiguous {
+                name: "f".into(),
+                symbols: vec![],
+                unresolved: 0,
+            }),
+            "results",
+        ),
+        (
+            Ok(Output::NotFound {
+                name: "f".into(),
+                symbols: vec![],
+                unresolved: 0,
+            }),
+            "empty",
+        ),
+        (
+            Err(QueryErr::Indexing {
+                server: "rust".into(),
+                seconds: 1,
+            }),
+            "indexing",
+        ),
+        (
+            Err(QueryErr::MemoryShort {
+                root: "/checkout".into(),
+                server: "rust".into(),
+                shortfall: None,
+            }),
+            "memory",
+        ),
+        (
+            Err(QueryErr::MemoryPressure {
+                root: "/checkout".into(),
+                server: "rust".into(),
+            }),
+            "memory",
+        ),
+        (
+            Err(crate::lsp::LspErr::Protocol("broken".into()).into()),
+            "error",
+        ),
+        (
+            Err(QueryErr::Unavailable {
+                root: "/checkout".into(),
+                reason: crate::lsp::query::UnavailableReason::Crashed,
+            }),
+            "error",
+        ),
+    ] {
+        assert_eq!(outcome(&result), expected);
     }
+}
+
+fn log(dir: &Path) -> Log {
+    let workspace = crate::workspace::WorkspaceResolver::resolve(dir, None).unwrap();
+    let paths = StatePaths::for_project_root_under(dir, &dir.join("home")).unwrap();
+    crate::workspace::record::write(
+        &paths,
+        &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+    )
+    .unwrap();
+    let log = Log::new(&paths);
+    std::fs::create_dir_all(log.path.parent().unwrap()).unwrap();
+    log
 }
 
 fn record(root: Option<&Path>, kind: &str, outcome: &str, count: u64) -> Record {

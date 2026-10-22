@@ -15,6 +15,7 @@ fn query_server_names_include_config_and_checkout_rows_only() {
             entry("/elsewhere", "elsewhere", State::Ready),
         ],
         servers: std::collections::BTreeMap::from([("configured".into(), config)]),
+        usage: None,
     };
     let error = context.validate_server(Some("nope")).unwrap_err();
     assert!(error.is::<super::super::usage::UsageError>());

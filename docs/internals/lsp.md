@@ -104,6 +104,18 @@ The owning broker appends one `lsp/history.rs::Record` per server lifetime to ro
 
 Each JSONL row carries Unix `at_ms`, checkout `root`, `server`, query `kind`, and `outcome`. An absent `count` means one. Readers skip malformed lines and count unknown outcomes toward neither answered nor failed. Query kinds and outcomes remain strings so newer values survive an older compactor.
 
+The query client records one result per verb target after server selection succeeds, before rendering or exiting. Kinds are the verb's serialized name (`def`, `refs`, `hover`, `impl`, `callers`, `callees`, `symbols`, `find`), or `show` and `check` for each file outline they ask a server. An outline cached within the command is not another question; a request failure replayed for a second target or file is. Selection failures, replayed or not, an unknown `--server`, missing-column helper outlines, and test-classification enrichment are not recorded. Human calls inside the room count too. Recording errors are debug-only and do not change query output or exit status.
+
+| Raw query result | Outcome | Count |
+| --- | --- | --- |
+| Answer other than null or an empty array; ambiguous lookup (exit 6) | `results` | answered |
+| Null or empty-array answer; name not found (exit 5) | `empty` | answered |
+| Indexing | `indexing` | failed |
+| Memory short or memory pressure | `memory` | failed |
+| Other query error | `error` | failed |
+
+Emptiness is judged before scope and `--no-tests` filtering: a filtered answer remains answered.
+
 Appends take a blocking shared `locks/lsp-usage.lock` around one `O_APPEND` write, without fsync. After the file exceeds 1 MiB, the appender releases its shared hold and tries the exclusive lock without waiting. A busy compactor is skipped. Under the exclusive hold it folds rows by `(root, server, kind, outcome)`, sums counts, retains the latest timestamp, and durably replaces the log. Roots whose directories no longer exist become `null`; their counts remain in the room total, including after their registry rows disappear. Existing roots retain their per-server counts. A checkout recreated at the same path before compaction inherits its counts. A power cut can lose trailing appends, not previously compacted counts.
 
 ## Freshness
@@ -191,6 +203,7 @@ Bounds are eight attached clients, 256 queued requests per client (`-32803` on o
 | --- | --- | --- | --- |
 | Registry entry per key: root/server, broker and server pids/tokens, nonce, state (`dormant`, `starting`, `indexing`, `ready`, or terminal `stopped`), lifetime start/ready times, estimate/settings hash, request count, last request time, peak RSS, restarts, leases, attached editors and open-buffer markers | machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | through lease lifetime and shutdown grace; runtime files do not survive reboot | matching broker process start token retains ownership; a nonce-checked socket serves requests |
 | Cost history | machine-level under the RimZ home, rotating JSONL | durable | append-only |
+| Query usage | caller's room, `records/lsp-usage.jsonl` | room lifetime, independent of registry rows | shared append, exclusive counted compaction |
 | Kills, evictions, refusals, queue timeouts, broker exits, sweeps, and revivals | `diag/` diagnostic records | durable | append-only |
 
 The registry is machine-level rather than per-room because admission budgets one machine's memory across every room on it.

@@ -108,7 +108,8 @@ path = "crates/rimz/src/lsp"
 # query::classification_outline bounds test-classification enrichment separately (+1).
 # usage, usage::{Log, Counts, Snapshot}, Log::{new, read}, and Snapshot::for_entry
 # share one room-scoped usage snapshot across CLI inspection (+7).
-surface-budget = 103
+# usage::Log::record shares outcome classification across verb and outline queries (+1).
+surface-budget = 104
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -7308,6 +7309,11 @@ reason = "CLI queries and inspection share a room-scoped usage log handle."
 kind = "item"
 key = "lsp::usage::Log::new"
 reason = "The CLI constructs a non-creating handle from the participant room's classed paths."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Log::record"
+reason = "Verb targets and show/check outlines use one best-effort outcome classifier."
 
 [[verdict]]
 kind = "item"

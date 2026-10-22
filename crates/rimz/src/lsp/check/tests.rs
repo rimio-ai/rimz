@@ -1,8 +1,100 @@
 use super::*;
 use serde_json::json;
 
+fn usage_room(root: &Path) -> (crate::disk::paths::StatePaths, super::super::usage::Log) {
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).unwrap();
+    let paths =
+        crate::disk::paths::StatePaths::for_project_root_under(root, &root.join("home")).unwrap();
+    crate::workspace::record::write(
+        &paths,
+        &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+    )
+    .unwrap();
+    let log = super::super::usage::Log::new(&paths);
+    (paths, log)
+}
+
+#[test]
+fn outline_usage_counts_each_asked_file_once_and_skips_selection_failures() {
+    for kind in ["show", "check"] {
+        let root = tempfile::tempdir().unwrap();
+        let (paths, usage) = usage_room(root.path());
+        let servers = BTreeMap::from([(
+            "rust".into(),
+            serde_json::from_value(json!({
+                "command":["stub"], "extensions":["rs"], "root-markers":[]
+            }))
+            .unwrap(),
+        )]);
+        let entries: Vec<registry::Entry> = vec![
+            serde_json::from_value(json!({
+                "root":root.path(), "server":"rust", "nonce":"test",
+                "broker_pid":0, "broker_start_token":"unused", "state":"ready",
+                "started_at_ms":0,"estimate_bytes":0,"settings_hash":"",
+                "request_count":0,"peak_rss_kb":0,"leases":[]
+            }))
+            .unwrap(),
+        ];
+        let mut context = Context {
+            checkout: root.path(),
+            entries: &entries,
+            servers: &servers,
+            files: vec![],
+            outlines: BTreeMap::new(),
+            failures: BTreeMap::new(),
+            usage: Some((&usage, kind)),
+        };
+        context
+            .outline_with(
+                Path::new("one.rs"),
+                || Ok(entries[0].clone()),
+                |_, _| {
+                    Ok(query::Output::Answer {
+                        result: json!([]),
+                        document_uri: None,
+                    })
+                },
+            )
+            .unwrap();
+        context
+            .outline_with(
+                Path::new("one.rs"),
+                || panic!("reuse the file outline"),
+                |_, _| panic!("reuse the file outline"),
+            )
+            .unwrap();
+        assert_eq!(usage.read().total.answered, 1);
+        let selections = std::cell::Cell::new(0);
+        for path in ["unselected.rs", "also-unselected.rs"] {
+            context
+                .outline_with(
+                    Path::new(path),
+                    || {
+                        selections.set(selections.get() + 1);
+                        Err(query::QueryErr::Unavailable {
+                            root: root.path().into(),
+                            reason: query::UnavailableReason::Crashed,
+                        })
+                    },
+                    |_, _| panic!("selection failed"),
+                )
+                .err()
+                .unwrap();
+        }
+        assert_eq!(selections.get(), 1, "selection failures are memoized");
+        assert_eq!(usage.read().total.failed, 0);
+        let (path, _) = paths.lsp_usage_paths();
+        let row: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(row["kind"], kind);
+        assert_eq!(row["outcome"], "empty");
+    }
+}
+
 #[test]
 fn outline_requests_stop_after_server_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, usage) = usage_room(root.path());
     let mut servers = BTreeMap::from([(
         "rust".into(),
         serde_json::from_value(json!({
@@ -30,6 +122,7 @@ fn outline_requests_stop_after_server_failure() {
     let entries = [entry, other];
     let mut counts = Vec::new();
     for code in [3, 4, 1, 8, 9] {
+        let before = usage.read().total.failed;
         let mut context = Context {
             checkout: Path::new("/checkout"),
             entries: &entries,
@@ -37,6 +130,7 @@ fn outline_requests_stop_after_server_failure() {
             files: Vec::new(),
             outlines: BTreeMap::new(),
             failures: BTreeMap::new(),
+            usage: Some((&usage, "check")),
         };
         let mut requests = 0;
         let mut errors = Vec::new();
@@ -76,6 +170,7 @@ fn outline_requests_stop_after_server_failure() {
             errors.push(error.to_string());
         }
         assert_eq!(errors[0], errors[1]);
+        assert_eq!(usage.read().total.failed, before + 2);
         counts.push(requests);
         let error = context
             .outline_with(
@@ -108,6 +203,7 @@ fn fix_leaves_the_notes_alone_when_judging_fails() {
         // `gone.txt` is listed but absent, so judging its line anchor fails.
         files: vec!["a.rs".into(), "gone.txt".into()],
         failures: BTreeMap::new(),
+        usage: None,
         outlines: BTreeMap::from([(
             "a.rs".into(),
             FileOutline {
@@ -149,6 +245,7 @@ fn fix_reports_inside_hints_without_rewriting_them() {
         servers: &servers,
         files: vec!["a.rs".into()],
         failures: BTreeMap::new(),
+        usage: None,
         outlines: BTreeMap::from([(
             "a.rs".into(),
             FileOutline {
@@ -237,6 +334,7 @@ fn rewrite_in(
         servers: &servers,
         files: files.iter().map(|(path, ..)| path.into()).collect(),
         failures: BTreeMap::new(),
+        usage: None,
         outlines: files
             .into_iter()
             .filter_map(|(path, nodes, dirty)| {
@@ -1010,10 +1108,17 @@ fn external_only_report_needs_no_server_or_checkout_path() {
     let notes = root.path().join("notes.md");
     let text = "o/r@v1:absent.rs::f (~12)";
     std::fs::write(&notes, format!("`{text}`")).unwrap();
-    let report = run(&[notes], root.path(), &[], &BTreeMap::new(), Mode::Check)
-        .unwrap()
-        .remove(0)
-        .unwrap();
+    let report = run(
+        &[notes],
+        root.path(),
+        &[],
+        &BTreeMap::new(),
+        Mode::Check,
+        None,
+    )
+    .unwrap()
+    .remove(0)
+    .unwrap();
     assert_eq!(report.exit_code(), 0);
     let rendered = report.render(false).unwrap();
     assert_eq!(rendered.lines().count(), 1);
@@ -1059,10 +1164,17 @@ fn exact_ignored_paths_resolve_without_joining_suffix_matches() {
         "`plan-notes.md:~2`\n`tracked.md:~2`\n`plan-notes.md:~99`\n`absent.md:~1`\n`notes.md:~1`\n",
     )
     .unwrap();
-    let report = run(&[notes], root.path(), &[], &BTreeMap::new(), Mode::Check)
-        .unwrap()
-        .remove(0)
-        .unwrap();
+    let report = run(
+        &[notes],
+        root.path(),
+        &[],
+        &BTreeMap::new(),
+        Mode::Check,
+        None,
+    )
+    .unwrap()
+    .remove(0)
+    .unwrap();
     assert_eq!(
         report
             .anchors
