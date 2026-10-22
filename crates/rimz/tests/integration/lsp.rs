@@ -771,10 +771,16 @@ fn lsp_stop_acknowledges_alarms_and_explains_empty_selections() {
     broker.wait().unwrap();
 }
 
+enum StatusReply {
+    Entry(State),
+    NotAnEntry,
+    Closed,
+}
+
 fn scripted_lsp_stop(
     env: &Env,
     before: State,
-    after: Option<State>,
+    after: StatusReply,
     args: &[&str],
 ) -> (std::process::Output, Vec<String>) {
     use std::os::unix::net::UnixListener;
@@ -844,12 +850,13 @@ fn scripted_lsp_stop(
                         json!({"ok": true, "nonce": entry.nonce})
                     }
                     "status" => match &after {
-                        Some(state) => {
+                        StatusReply::Entry(state) => {
                             let mut current = entry.clone();
                             current.state = state.clone();
                             serde_json::to_value(current).unwrap()
                         }
-                        None => json!({"nonce": entry.nonce}),
+                        StatusReply::NotAnEntry => json!({"nonce": entry.nonce}),
+                        StatusReply::Closed => continue,
                     },
                     _ => panic!("unexpected scripted broker operation: {op}"),
                 };
@@ -876,7 +883,8 @@ fn lsp_stop_fails_when_an_alarm_is_still_recorded() {
             reason: Some(StopReason::MemoryPressure),
             since_ms: 100,
         };
-        let (output, requests) = scripted_lsp_stop(&env, alarm.clone(), Some(alarm), &args);
+        let (output, requests) =
+            scripted_lsp_stop(&env, alarm.clone(), StatusReply::Entry(alarm), &args);
         output.assert().code(1).stdout("").stderr(format!(
             "error: rust ({}): not acknowledged, still dormant: memory pressure while its broker finishes stopping the server (run rimz lsp stop again in a second)\n",
             root.display()
@@ -891,7 +899,7 @@ fn lsp_stop_fails_when_a_running_row_has_crashed() {
     let (output, requests) = scripted_lsp_stop(
         &env,
         State::Ready,
-        Some(State::Dormant {
+        StatusReply::Entry(State::Dormant {
             reason: Some(StopReason::Crashed),
             since_ms: 100,
         }),
@@ -916,7 +924,7 @@ fn lsp_stop_fails_when_a_non_alarm_row_has_crashed() {
             reason: Some(StopReason::Idle),
             since_ms: 50,
         },
-        Some(State::Dormant {
+        StatusReply::Entry(State::Dormant {
             reason: Some(StopReason::Crashed),
             since_ms: 100,
         }),
@@ -933,23 +941,25 @@ fn lsp_stop_fails_when_a_non_alarm_row_has_crashed() {
 }
 
 #[test]
-fn lsp_stop_keeps_acknowledgment_when_status_is_unparseable() {
-    let env = Env::new();
-    let root = env.project_root.canonicalize().unwrap();
-    let (output, requests) = scripted_lsp_stop(
-        &env,
-        State::Dormant {
-            reason: Some(StopReason::MemoryPressure),
-            since_ms: 100,
-        },
-        None,
-        &["lsp", "stop"],
-    );
-    output.assert().success().stdout(format!(
-        "acknowledged rust ({}), was dormant: memory pressure\n",
-        root.display()
-    ));
-    assert_eq!(requests, ["hello", "stop", "status"]);
+fn lsp_stop_keeps_acknowledgment_when_status_is_unreadable() {
+    for after in [StatusReply::NotAnEntry, StatusReply::Closed] {
+        let env = Env::new();
+        let root = env.project_root.canonicalize().unwrap();
+        let (output, requests) = scripted_lsp_stop(
+            &env,
+            State::Dormant {
+                reason: Some(StopReason::MemoryPressure),
+                since_ms: 100,
+            },
+            after,
+            &["lsp", "stop"],
+        );
+        output.assert().success().stdout(format!(
+            "acknowledged rust ({}), was dormant: memory pressure\n",
+            root.display()
+        ));
+        assert_eq!(requests, ["hello", "stop", "status"]);
+    }
 }
 
 #[test]
