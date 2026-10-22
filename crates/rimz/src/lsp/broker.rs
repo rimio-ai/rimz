@@ -110,6 +110,7 @@ struct Model {
     transport: Option<Arc<Transport>>,
     request_phase: RequestPhase,
     start_requested: bool,
+    retiring: bool,
     refusal_epoch: u64,
     stop_epoch: u64,
     refusal: Option<super::admission::Shortfall>,
@@ -123,6 +124,11 @@ struct Model {
 enum RequestPhase {
     Serving,
     Closing,
+}
+
+enum Exit {
+    Stopped(StopReason),
+    Retired,
 }
 
 impl Shared {
@@ -151,6 +157,13 @@ impl Shared {
 }
 
 impl Model {
+    fn should_retire(&self) -> bool {
+        self.retiring
+            && matches!(self.entry.state, State::Dormant { .. })
+            && !self.start_requested
+            && self.entry.attached.is_empty()
+    }
+
     fn stop(&mut self, reason: StopReason) {
         // A hand stop acknowledges an alarm once serve has recorded the
         // lifetime's end (it clears the transport under the lock it reads the
@@ -203,7 +216,8 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     });
     let mut details = json!({"broker_pid": std::process::id(), "leases": leases});
     match &result {
-        Ok(Ok(reason)) => details["reason"] = json!(reason),
+        Ok(Ok(Exit::Stopped(reason))) => details["reason"] = json!(reason),
+        Ok(Ok(Exit::Retired)) => details["reason"] = json!("retired"),
         Ok(Err(error)) => details["error"] = json!(error.to_string()),
         Err(payload) => {
             let message = payload
@@ -227,10 +241,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     }
 }
 
-fn serve_inner(
-    request: &mut ServeRequest,
-    exit_shared: &mut Option<Arc<Shared>>,
-) -> Result<StopReason> {
+fn serve_inner(request: &mut ServeRequest, exit_shared: &mut Option<Arc<Shared>>) -> Result<Exit> {
     let root = std::fs::canonicalize(&request.root)?;
     request.root = root.clone();
     if request.config.command.is_empty() {
@@ -329,6 +340,7 @@ fn serve_inner(
             transport: None,
             request_phase: RequestPhase::Serving,
             start_requested: false,
+            retiring: false,
             refusal_epoch: 0,
             stop_epoch: 0,
             refusal: None,
@@ -372,7 +384,12 @@ fn serve_inner(
                     tracing::warn!(%error, "cannot publish the terminal stop");
                 }
                 shared.changed.notify_all();
-                break reason;
+                break Exit::Stopped(reason);
+            }
+            if model.should_retire() {
+                model.request_phase = RequestPhase::Closing;
+                shared.changed.notify_all();
+                break Exit::Retired;
             }
             if !eager && !model.start_requested {
                 let remaining = (last_housekeeping + Duration::from_secs(5))
@@ -390,7 +407,6 @@ fn serve_inner(
                 shared.tick(b'W');
                 continue;
             }
-            model.start_requested = false;
         }
         let admitted = prepare_start(&shared, request, eager)?;
         eager = false;
@@ -435,16 +451,26 @@ fn serve_inner(
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
     };
-    let _ = shared.router.send(router::RouterEvent::Close(reason));
+    // Retirement has no attached editors to receive the router's stop reason.
+    let close_reason = match reason {
+        Exit::Stopped(reason) => reason,
+        Exit::Retired => StopReason::Released,
+    };
+    let _ = shared.router.send(router::RouterEvent::Close(close_reason));
     let _ = router.join();
     // Before the registry lock: the main thread holds no lock while it waits on a socket.
     let abandoned = shared.requests.drain(Duration::from_secs(5));
     if abandoned > 0 {
         tracing::warn!(abandoned, "broker exits with requests unanswered");
     }
-    let _lock = registry::lock()?;
-    drop(_socket);
-    std::fs::remove_dir_all(directory)?;
+    match reason {
+        Exit::Stopped(_) => {
+            let _lock = registry::lock()?;
+            drop(_socket);
+            std::fs::remove_dir_all(directory)?;
+        }
+        Exit::Retired => drop(_socket),
+    }
     Ok(reason)
 }
 
@@ -962,6 +988,7 @@ mod tests {
             transport: None,
             request_phase: RequestPhase::Serving,
             start_requested: false,
+            retiring: false,
             refusal_epoch: 0,
             stop_epoch: 0,
             refusal: None,
@@ -970,6 +997,39 @@ mod tests {
             dormant_ms: None,
             watch_due: None,
         }
+    }
+
+    #[test]
+    fn retirement_waits_for_dormancy_without_start_or_editor() {
+        let dormant = dormant_model(None).entry.state;
+        let cases = [
+            (true, dormant.clone(), false, false),
+            (false, dormant.clone(), false, false),
+            (true, State::Starting, false, false),
+            (true, State::Indexing, false, false),
+            (true, State::Ready, false, false),
+            (true, dormant.clone(), true, false),
+            (true, dormant.clone(), false, true),
+            (true, dormant, true, true),
+        ];
+        assert_eq!(
+            cases.map(|(retiring, state, start_requested, attached)| {
+                let mut model = dormant_model(None);
+                model.retiring = retiring;
+                model.entry.state = state;
+                model.start_requested = start_requested;
+                if attached {
+                    model.entry.attached.push(registry::AttachedEditor {
+                        pid: 1,
+                        name: None,
+                        since_ms: 0,
+                        open: Vec::new(),
+                    });
+                }
+                model.should_retire()
+            }),
+            [true, false, false, false, false, false, false, false]
+        );
     }
 
     #[test]

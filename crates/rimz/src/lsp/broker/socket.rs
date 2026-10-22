@@ -75,6 +75,7 @@ enum Operation {
     },
     Hello,
     Status,
+    Retire,
     Lease {
         launch_id: Option<LaunchId>,
         pid: u32,
@@ -298,7 +299,10 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
     }
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     if model.request_phase == RequestPhase::Closing
-        && !matches!(operation, Operation::Hello | Operation::Status)
+        && !matches!(
+            operation,
+            Operation::Hello | Operation::Status | Operation::Retire
+        )
     {
         return Err(LspErr::Protocol("broker is shutting down".into()));
     }
@@ -308,6 +312,15 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
             return Ok(json!({"state": model.entry.state, "elapsed_ms": shared.elapsed()}));
         }
         Operation::Status => return Ok(serde_json::to_value(&model.entry)?),
+        Operation::Retire => {
+            model.retiring = true;
+            let exiting = model.request_phase == RequestPhase::Closing || model.should_retire();
+            if exiting {
+                model.request_phase = RequestPhase::Closing;
+            }
+            shared.changed.notify_all();
+            return Ok(json!({"ok": true, "exiting": exiting}));
+        }
         Operation::Lease {
             launch_id,
             pid,
@@ -345,6 +358,11 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
     let _: QueryRequest = serde_json::from_value(json!({"method": method, "params": params}))?;
     let deadline = Instant::now() + Duration::from_millis(wait_ms.min(110_000));
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    if model.request_phase == RequestPhase::Closing
+        && !matches!(model.entry.state, State::Stopped { .. })
+    {
+        return Err(LspErr::Protocol("broker is shutting down".into()));
+    }
     let refusal_epoch = model.refusal_epoch;
     let stop_epoch = model.stop_epoch;
     shared
@@ -472,10 +490,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn query_at_consumer_never_returns_empty_results_while_indexing() {
-        let entry: Entry = serde_json::from_value(json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "indexing", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
-        let shared = Shared {
+    fn shared(state: State) -> Shared {
+        let mut entry: Entry = serde_json::from_value(json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "indexing", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
+        entry.state = state;
+        Shared {
             policy: Default::default(),
             settings: Arc::new(Mutex::new(super::super::Settings {
                 kind: crate::config::LspServerKind::Generic,
@@ -490,6 +508,7 @@ mod tests {
                 transport: None,
                 request_phase: RequestPhase::Serving,
                 start_requested: false,
+                retiring: false,
                 refusal_epoch: 0,
                 stop_epoch: 0,
                 refusal: None,
@@ -505,7 +524,49 @@ mod tests {
             requests: Requests::default(),
             #[cfg(feature = "testkit")]
             ticks: Mutex::new(None),
-        };
+        }
+    }
+
+    #[test]
+    fn stopped_query_keeps_its_reason_while_closing() {
+        let shared = shared(State::Stopped {
+            reason: StopReason::CheckoutRemoved,
+            at_ms: 0,
+        });
+        shared.model.lock().unwrap().request_phase = RequestPhase::Closing;
+        assert_eq!(
+            query(&shared, "workspace/symbol", json!({"query": "symbol"}), 0)
+                .map_err(|error| error.to_string()),
+            Ok(json!({"error": {"code": -32003, "message": "checkout removed"}}))
+        );
+    }
+
+    #[test]
+    fn retire_while_closing_acknowledges_exit_idempotently() {
+        for state in [
+            State::Dormant {
+                since_ms: 0,
+                reason: None,
+            },
+            State::Stopped {
+                reason: StopReason::CheckoutRemoved,
+                at_ms: 0,
+            },
+        ] {
+            let shared = shared(state);
+            shared.model.lock().unwrap().request_phase = RequestPhase::Closing;
+            for _ in 0..2 {
+                assert_eq!(
+                    respond(Operation::Retire, &shared).map_err(|error| error.to_string()),
+                    Ok(json!({"ok": true, "exiting": true}))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn query_at_consumer_never_returns_empty_results_while_indexing() {
+        let shared = shared(State::Indexing);
         let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 1).unwrap();
         assert!(response.get("indexing").is_some());
         assert!(response.get("result").is_none());
@@ -545,6 +606,17 @@ mod tests {
             shared.model.lock().unwrap().start_requested,
             "dormant query must ask main thread to start"
         );
+        {
+            let mut model = shared.model.lock().unwrap();
+            model.request_phase = RequestPhase::Closing;
+            model.start_requested = false;
+        }
+        assert!(
+            query(&shared, "workspace/symbol", json!({"query": "symbol"}), 0).is_err(),
+            "a query cannot restart a broker after its retirement decision"
+        );
+        assert!(!shared.model.lock().unwrap().start_requested);
+        shared.model.lock().unwrap().request_phase = RequestPhase::Serving;
         let shared = Arc::new(shared);
         let waiting = shared.clone();
         let query_thread = std::thread::spawn(move || {

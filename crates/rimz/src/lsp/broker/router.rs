@@ -270,7 +270,6 @@ impl Router {
                 since_ms,
             },
         );
-        drop(model);
         self.next_client += 1;
         self.connections.insert(
             id,
@@ -287,6 +286,8 @@ impl Router {
             name: None,
             since_ms,
         });
+        model.entry.attached = self.clients.attached();
+        drop(model);
         self.actions(shared, actions)?;
         Ok(id)
     }
@@ -358,6 +359,9 @@ impl Router {
                         )?;
                     }
                     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+                    if model.request_phase == RequestPhase::Closing {
+                        continue;
+                    }
                     model.entry.attached = self.clients.attached();
                     model.entry.editor_check_on_save = check_on_save;
                     if let Err(error) = registry::publish(&model.entry) {
@@ -435,6 +439,7 @@ mod tests {
                 transport: None,
                 request_phase: RequestPhase::Serving,
                 start_requested: false,
+                retiring: false,
                 refusal_epoch: 0,
                 stop_epoch: 0,
                 refusal: None,
