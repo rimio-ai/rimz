@@ -1050,12 +1050,9 @@ impl MuxBackend for TmuxBackend {
                     mounted.insert(pane.raw().to_owned());
                     Ok(ReconcileAddOutcome::Verified)
                 } else {
-                    Err(MuxErr::Command {
-                        program: "tmux".to_owned(),
-                        args: "split-window".to_owned(),
-                        stderr: format!(
-                            "sidebar pane `{pane}` mounted in window `{window}` without a current-build heartbeat"
-                        ),
+                    Err(MuxErr::SidebarMountUnproven {
+                        pane: format!("pane `{pane}`"),
+                        view: format!("window `{window}`"),
                     })
                 }
             },

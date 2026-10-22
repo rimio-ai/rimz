@@ -1819,13 +1819,9 @@ impl MuxBackend for ZellijBackend {
                         self.cleanup_failed_add(opts, raw_id);
                     }
                 }) {
-                    return Err(MuxErr::Command {
-                        program: "zellij".to_owned(),
-                        args: "new-pane".to_owned(),
-                        stderr: format!(
-                            "sidebar {} mounted in tab {tab_id} without a current-build heartbeat",
-                            added.pane
-                        ),
+                    return Err(MuxErr::SidebarMountUnproven {
+                        pane: added.pane.to_string(),
+                        view: format!("tab {tab_id}"),
                     });
                 }
                 if !replacing.is_empty() {

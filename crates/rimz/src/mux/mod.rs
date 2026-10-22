@@ -182,6 +182,10 @@ pub enum MuxErr {
         args: String,
         stderr: String,
     },
+    /// A repair's new sidebar pane mounted, but its process published no
+    /// current-build heartbeat before the mount-proof deadline.
+    #[error("sidebar {pane} mounted in {view} but published no current-build heartbeat within 6 s")]
+    SidebarMountUnproven { pane: String, view: String },
     #[error(
         "Zellij can't create this room's IPC socket: the path is {len} bytes and the AF_UNIX limit here is {limit}.\n    {}\nPoint Zellij at a shorter socket directory and re-run rimz:\n\n    export ZELLIJ_SOCKET_DIR=/tmp/zellij\n\nAdd the export to your shell profile to make it permanent. `rimz doctor` reports the socket headroom.",
         path.display()
