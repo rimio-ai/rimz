@@ -33,4 +33,4 @@ Workflow record and journal codecs live in `workflow.rs`; the harness owns every
 
 ## Tests
 
-Durability behaviour — CAS round trips, torn-record recovery, rotation, the write path — lives in [`tests/integration/store/`](../../tests/integration/store/); pure reducer and helper tests stay in-module. Time is fixed-epoch in fixtures.
+Durability behaviour — CAS round trips, torn-record recovery, rotation, the write path — lives in [`tests/integration/store/`](../../tests/integration/store/); pure reducer and helper tests stay in-module. Time is fixed-epoch in fixtures, except lifecycle events a test reads back through `Store::snapshot()`: the snapshot reaps pidless rows idle past three hours, so those stamps stay near now.
