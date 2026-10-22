@@ -3483,6 +3483,76 @@ fn lost_stub_broker(
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn lsp_retire_during_admission_wait_keeps_the_started_server_usable() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.project_root.join("lib.rs"), "fn work() {}\n").unwrap();
+    let (mut broker, directory, _) = start_stub_broker(&env, env.project_root.clone());
+    let admission_path = directory.parent().unwrap().join("admission.lock");
+    let admission = rimz::disk::lock::WorkspaceLock::acquire(&admission_path).unwrap();
+    let querying = directory.clone();
+    let first = std::thread::spawn(move || {
+        editor_rpc(
+            &querying,
+            json!({"op":"query", "method":"workspace/symbol", "params":{"query":"work"}, "wait_ms":8000}),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !std::fs::read_dir(format!("/proc/{}/fd", broker.id()))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|path| path == admission_path))
+    {
+        assert!(Instant::now() < deadline, "broker never entered admission");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let retiring = editor_rpc(&directory, json!({"op":"retire"}));
+    drop(admission);
+    let answered = first.join().unwrap();
+    assert_eq!(retiring["ok"], true, "{retiring}");
+    assert_eq!(retiring["exiting"], false, "{retiring}");
+    assert!(answered["result"].is_array(), "{answered}");
+    let second = editor_rpc(
+        &directory,
+        json!({"op":"query", "method":"workspace/symbol", "params":{"query":"work"}, "wait_ms":8000}),
+    );
+    assert!(second["result"].is_array(), "{second}");
+    let holder = env.agent_owner_pid();
+    assert_eq!(
+        editor_rpc(
+            &directory,
+            json!({"op":"lease", "pid":holder, "start_token":rimz::proc::process_start_token(holder).unwrap()})
+        )["ok"],
+        true
+    );
+    let previous = editor_rpc(&directory, json!({"op":"status"}));
+    assert_eq!(previous["state"], "ready");
+    assert!(broker.try_wait().unwrap().is_none());
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop", "reason":"stopped by hand"}))["ok"],
+        true
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while broker.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "marked broker did not retire after stopping"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let exits = lsp_records(&env, "broker_exited");
+    assert_eq!(exits.len(), 1, "{exits:?}");
+    assert_eq!(exits[0]["details"]["reason"], "retired");
+    assert!(!directory.join("sock").exists());
+    let kept: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("entry.json")).unwrap()).unwrap();
+    assert_eq!(kept["broker_pid"], previous["broker_pid"]);
+    assert_eq!(kept["leases"], previous["leases"]);
+    assert!(kept["state"].get("dormant").is_some(), "{kept}");
+}
+
+#[test]
 fn lsp_attach_adopts_lost_broker_leases() {
     let env = Env::new();
     let (directory, _, previous) = lost_stub_broker(&env);
