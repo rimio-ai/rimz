@@ -71,7 +71,8 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let snapshot = ctx.alive_snapshot()?;
     let cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let mut tracker = agents_cmd::StopTracker::default();
+    let stops = agents_cmd::stop_resolved(&ctx, globals, &snapshot, &cohort.members)?;
+    let still_running = stops.iter().any(|stop| stop.root_still_running());
     let mut failed = false;
     let mut out = render::out();
     writeln!(
@@ -81,10 +82,9 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
         cohort.members.len(),
         if cohort.members.len() == 1 { "" } else { "s" }
     )?;
-    for agent in cohort.members.iter().copied() {
+    for (agent, stop) in cohort.members.iter().copied().zip(stops) {
         let label = rimz::address::agent_handle(agent, &peers, true);
-        failed |= agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker)?
-            .report(&mut out, &label)?;
+        failed |= stop.report(&mut out, &label)?;
     }
     if failed {
         std::process::exit(1);
@@ -101,14 +101,19 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
         && stage.name != rimz::config::DONE_STAGE
     {
         let target = format!("{team}#{}", cohort.channel);
-        let resume = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
+        let resume = if still_running {
+            String::new()
+        } else {
+            let command = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
+            format!(" Resume: {command} ·")
+        };
         let release = super::super::usage::shell_command([
             "rimz", "teams", "flip", &target, "Done", "<note>",
         ]);
         let stage = stage.name;
         writeln!(
             out,
-            "board at {stage}; the checkout stays held. Resume: {resume} · release: {release}"
+            "board at {stage}; the checkout stays held.{resume} release: {release}"
         )?;
     }
     Ok(())

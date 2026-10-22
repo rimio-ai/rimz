@@ -1000,7 +1000,6 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     }
     let runs = rimz::harness::run::list(ctx.store.paths())?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let mut tracker = agents_cmd::StopTracker::default();
     let mut out = render::out();
     // Prepare the whole fleet before any cancellation wakes a child reporter.
     let (children, errors) =
@@ -1010,10 +1009,10 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
         let label = rimz::address::agent_handle(child, &peers, true);
         writeln!(out, "error {label}: {err:#}")?;
     }
-    for child in children {
+    let stops = agents_cmd::stop_resolved(&ctx, globals, &snapshot, &children)?;
+    for (child, stop) in children.into_iter().zip(stops) {
         let label = rimz::address::agent_handle(child, &peers, true);
-        failed |= agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker)?
-            .report(&mut out, &label)?;
+        failed |= stop.report(&mut out, &label)?;
     }
     if failed {
         std::process::exit(1);

@@ -287,9 +287,17 @@ fn stop_receipt_names_the_cohort_and_held_board() {
         }
         fixture.live_panes(&["terminal_3"]);
         std::fs::write(fixture.board(), BOARD).unwrap();
+        let audit = fixture
+            .env
+            .store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap();
+        let owner = audit.agents[0].runtime_owner.as_ref().unwrap().pid;
+        let started = Instant::now();
         let receipt = success(
             fixture
                 .command()
+                .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "100")
                 .args(["teams", "stop", "forge#feature-team"])
                 .output()
                 .unwrap(),
@@ -298,14 +306,20 @@ fn stop_receipt_names_the_cohort_and_held_board() {
             receipt.starts_with("stopped forge#feature-team (1 member)\n"),
             "{receipt}"
         );
+        assert!(receipt.contains("stopped @coder"), "{receipt}");
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(
+            receipt.contains(&format!(
+                "@coder#feature-team: pane closed, but its process {owner} is still running; \
+                 a resume refuses until it exits"
+            )),
+            "{receipt}"
+        );
         assert!(
             receipt.contains("board at Build; the checkout stays held"),
             "{receipt}"
         );
-        assert!(
-            receipt.contains("rimz teams resume 'forge#feature-team'"),
-            "{receipt}"
-        );
+        assert!(!receipt.contains("rimz teams resume"), "{receipt}");
         assert!(
             receipt.contains("rimz teams flip 'forge#feature-team' Done"),
             "{receipt}"
@@ -317,11 +331,63 @@ fn stop_receipt_names_the_cohort_and_held_board() {
 fn stop_receipt_resume_command_reopens_the_unregistered_cohort() {
     let fixture = Fixture::new();
     fixture.unregistered(false);
+    let mut resume = fixture.launch_command();
     fixture.live_panes(&["terminal_3"]);
     std::fs::write(fixture.board(), BOARD).unwrap();
+    let mut owner = Command::new("cat")
+        .env("HOME", &fixture.env.home_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    fixture
+        .env
+        .store()
+        .attach_agent_pane(
+            &AgentKind::new_unchecked("claude"),
+            &"launch_coder".into(),
+            Some(&"launch_coder".into()),
+            &Default::default(),
+            &workspace.session_name,
+            &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "launch_coder",
+                owner.id(),
+            ),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let audit = fixture
+        .env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    assert_eq!(
+        rimz::store::runtime::agent_liveness(&audit.agents[0]),
+        rimz::store::runtime::AgentLiveness::Live { pid: owner.id() }
+    );
+    let trace = fixture.trace.clone();
+    let release = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !std::fs::read_to_string(&trace)
+            .unwrap_or_default()
+            .contains("close-pane")
+        {
+            assert!(Instant::now() < deadline, "stop never closed the pane");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        drop(owner.stdin.take());
+        owner.wait().unwrap();
+    });
     let receipt = success(
         fixture
             .command()
+            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "10000")
             .args(["teams", "stop", "forge#feature-team"])
             .output()
             .unwrap(),
@@ -335,33 +401,13 @@ fn stop_receipt_resume_command_reopens_the_unregistered_cohort() {
         .unwrap();
     let args = shlex::split(command).unwrap();
     assert_eq!(args[0], "rimz");
-    // The trace mux closes no process; model the wrapper's exit before resuming.
-    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
-    let mut ended =
-        AgentLifecycleObservation::new(Some("launch_coder".into()), LifecycleSignal::Ended);
-    ended.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
-        rimz::pane::RuntimeOwnerKind::Agent,
-        "launch_coder",
-        u32::MAX,
-        None,
-    ));
-    fixture
-        .env
-        .store()
-        .append_event(&EventEnvelope::agent_lifecycle(
-            workspace.workspace_id,
-            &workspace.session_name,
-            "claude",
-            "AgentEnded",
-            &ended,
-        ))
-        .unwrap();
     fixture.live_panes(&[]);
-    let receipt = success(fixture.launch_command().args(&args[1..]).output().unwrap());
+    let receipt = success(resume.args(&args[1..]).output().unwrap());
     assert!(
         receipt.starts_with("resuming forge in #feature-team"),
         "{receipt}"
     );
+    release.join().unwrap();
 }
 
 #[test]

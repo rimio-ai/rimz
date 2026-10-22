@@ -308,6 +308,7 @@ impl Env {
             .env("HOME", &self.home_root)
             .env("SHELL", "/bin/sh")
             .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "50")
             .env("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0")
             // Room start probes browser access best-effort. Keep the suite off
             // the developer's real ttyd; web tests replace this with the trace fixture.
@@ -343,6 +344,7 @@ impl Env {
         cmd.env("HOME", &self.home_root);
         cmd.env("SHELL", "/bin/sh");
         cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+        cmd.env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "50");
         cmd.env("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0");
         cmd.env("RIMZ_TTYD_BIN", self.home_root.join("missing-ttyd"));
         cmd.env_remove("ENV");

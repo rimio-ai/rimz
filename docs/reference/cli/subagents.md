@@ -260,9 +260,11 @@ rimz subagents stop --all
 
 `stop` cancels the caller's named live children, or every live child with `--all`, and prints `stopped @<name>` for each. A child that fails to stop prints `error @<name>: <reason>`, and the command exits `1` after trying the rest. With no live child it fails with `this agent has no live subagents to stop`.
 
+After closing the whole set, `stop` waits up to 3 seconds total for the closed agents' processes to exit. On return, each closed agent's process is no longer live, or stdout names its address and pid and says a resume refuses until it exits. A still-running process does not change the exit status.
+
 Stopping declines the child's result: it leaves the fleet report as described [above](#the-fleet-report). The canceled run stays in the record, so `wait` still reads it. A `--keep` pane also closes when its parent ends or Ctrl-C is pressed in the pane; Ctrl-C does not decline the answer. `rimz gc` does not reclaim it.
 
-A successful stop ends the child's card even if its pane was already gone, so a later [parent message](#follow-up-messages) resumes it or names why it cannot resume.
+A successful stop ends the child's card even if its pane was already gone, so a later [parent message](#follow-up-messages) resumes it or names why it cannot resume. If the stop named a still-running process, wait for it to exit before resuming.
 
 Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops its live children first, `--keep` children included.
 
