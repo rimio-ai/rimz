@@ -1,11 +1,12 @@
 use super::*;
 use crate::cli::doctor::model::{
-    AccountRow, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, LoopTimer,
-    MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue,
-    OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
+    AccountRow, DaemonTab, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
+    LoopTimer, MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries,
+    MuxLogIssue, OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
     PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps,
     ZellijKittyGraphics,
 };
+use rimz::daemon_view::{DaemonShape, DaemonShapeFault};
 use rimz::ids::MuxName;
 
 fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Result<()>) -> String {
@@ -493,6 +494,7 @@ fn mux_fixture() -> Mux {
         socket: Some("/run/user/1001/rimz/tmux/server".to_owned()),
         legacy_session: None,
         session_health: None,
+        daemon_tab: None,
         duplicate_sessions: None,
         presence: None,
         topology_writer: None,
@@ -1127,6 +1129,202 @@ fn mux_section_shows_backend_socket() {
     assert!(out.contains("MULTIPLEXER"), "{out}");
     // The RimZ-owned endpoint, not the user's default server.
     assert!(out.contains("/run/user/1001/rimz/tmux/server"), "{out}");
+    assert!(!out.contains("daemon tab"), "{out}");
+}
+
+fn daemon_tab_report(tab: Probe<DaemonTab>) -> (String, Tally) {
+    let mux = Mux {
+        daemon_tab: Some(tab),
+        ..mux_fixture()
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| {
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
+    });
+    (out, tally)
+}
+
+#[test]
+fn daemon_tab_healthy_is_ok_without_a_fix() {
+    let (out, tally) = daemon_tab_report(Probe::Ready(DaemonShape::Healthy.into()));
+    assert!(out.contains("daemon tab"), "{out}");
+    assert!(out.contains("✓ ok"), "{out}");
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty(), "{out}");
+    assert!(!out.contains("fix:"), "{out}");
+}
+
+#[test]
+fn daemon_tab_repairable_warns_and_names_the_loop_only_repair() {
+    let (out, tally) = daemon_tab_report(Probe::Ready(
+        DaemonShape::Repairable {
+            faults: vec![
+                DaemonShapeFault::ContentNotFullHeight,
+                DaemonShapeFault::RuntimeSplit,
+            ],
+        }
+        .into(),
+    ));
+    assert!(out.contains("daemon tab"), "{out}");
+    assert!(
+        out.contains("loop watch spans beneath the content and runtime columns"),
+        "{out}"
+    );
+    assert_eq!(tally.warns.len(), 1, "{out}");
+    assert!(tally.alarms.is_empty(), "{out}");
+    assert!(out.contains("! 1 warning in MULTIPLEXER"), "{out}");
+    let fix = out.split_once("fix:").expect("repair has a fix").1;
+    for text in [
+        "RimZ restarts only the loop watch at its next daemon repair",
+        "close the loop watch pane to do it now",
+        "RimZ reopens it in the runtime column",
+    ] {
+        assert!(fix.contains(text), "{out}");
+    }
+}
+
+#[test]
+fn daemon_tab_misshapen_warns_with_faults_and_the_tab_rebuild() {
+    let (out, tally) = daemon_tab_report(Probe::Ready(
+        DaemonShape::Misshapen {
+            faults: vec![
+                DaemonShapeFault::ContentSplit,
+                DaemonShapeFault::ContentNotFullHeight,
+                DaemonShapeFault::RuntimeSplit,
+                DaemonShapeFault::RuntimeNotFullHeight,
+                DaemonShapeFault::RuntimeLeftOfContent,
+            ],
+        }
+        .into(),
+    ));
+    assert!(out.contains("daemon tab"), "{out}");
+    for text in [
+        "content column is split",
+        "content column is not full height",
+        "runtime column is split",
+        "runtime column is not full height",
+        "runtime column is left of or overlaps content",
+    ] {
+        assert!(out.contains(text), "{out}");
+    }
+    assert_eq!(tally.warns.len(), 1, "{out}");
+    assert!(tally.alarms.is_empty(), "{out}");
+    assert!(out.contains("! 1 warning in MULTIPLEXER"), "{out}");
+    let fix = out.split_once("fix:").expect("misshapen tab has a fix").1;
+    for text in [
+        "RimZ leaves the tab as it is",
+        "only a loop watch spanning beneath both columns",
+        "close the `rimzd` tab and run `rimz start` from outside the room",
+        "the agents keep running",
+    ] {
+        assert!(fix.contains(text), "{out}");
+    }
+    assert!(!fix.contains("rimz reset"), "{out}");
+}
+
+#[test]
+fn daemon_tab_unjudged_is_an_uncounted_note() {
+    let (out, tally) = daemon_tab_report(Probe::Ready(DaemonShape::Unjudged.into()));
+    assert!(out.contains("daemon tab"), "{out}");
+    for text in [
+        "not judged",
+        "fullscreen or zoomed pane",
+        "tab changed during the check",
+    ] {
+        assert!(out.contains(text), "{out}");
+    }
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty(), "{out}");
+    assert!(!out.contains("fix:"), "{out}");
+}
+
+#[test]
+fn daemon_tab_read_failure_renders_like_session_health() {
+    let (out, tally) = daemon_tab_report(Probe::Unavailable {
+        error: "pane query failed".to_owned(),
+        diagnosis: None,
+    });
+    assert!(out.contains("daemon tab"), "{out}");
+    assert!(out.contains("unavailable (pane query failed)"), "{out}");
+    let mut session_tally = Tally::default();
+    session_health_cell(
+        &mut session_tally,
+        &Probe::Unavailable {
+            error: "pane query failed".to_owned(),
+            diagnosis: None,
+        },
+    );
+    assert_eq!(tally.warns.len(), 1, "{out}");
+    assert!(tally.alarms.is_empty(), "{out}");
+    assert_eq!(tally.warns[0].fix, session_tally.warns[0].fix);
+}
+
+#[test]
+fn daemon_tab_json_pins_every_state_and_omits_an_absent_row() {
+    use serde_json::json;
+    for (tab, expected) in [
+        (
+            Probe::Ready(DaemonShape::Healthy.into()),
+            json!({"ready": {"state": "ok"}}),
+        ),
+        (
+            Probe::Ready(
+                DaemonShape::Repairable {
+                    faults: vec![
+                        DaemonShapeFault::ContentNotFullHeight,
+                        DaemonShapeFault::RuntimeSplit,
+                    ],
+                }
+                .into(),
+            ),
+            json!({"ready": {
+                "state": "repairable",
+                "faults": ["content_not_full_height", "runtime_split"],
+                "fix": "RimZ restarts only the loop watch at its next daemon repair; close the loop watch pane to do it now, and RimZ reopens it in the runtime column"
+            }}),
+        ),
+        (
+            Probe::Ready(
+                DaemonShape::Misshapen {
+                    faults: vec![
+                        DaemonShapeFault::ContentSplit,
+                        DaemonShapeFault::ContentNotFullHeight,
+                        DaemonShapeFault::RuntimeSplit,
+                        DaemonShapeFault::RuntimeNotFullHeight,
+                        DaemonShapeFault::RuntimeLeftOfContent,
+                    ],
+                }
+                .into(),
+            ),
+            json!({"ready": {
+                "state": "misshapen",
+                "faults": ["content_split", "content_not_full_height", "runtime_split", "runtime_not_full_height", "runtime_left_of_content"],
+                "fix": "RimZ leaves the tab as it is: it repairs only a loop watch spanning beneath both columns; to rebuild it, close the `rimzd` tab and run `rimz start` from outside the room, and the agents keep running"
+            }}),
+        ),
+        (
+            Probe::Ready(DaemonShape::Unjudged.into()),
+            json!({"ready": {"state": "unjudged"}}),
+        ),
+        (
+            Probe::Unavailable {
+                error: "pane query failed".to_owned(),
+                diagnosis: None,
+            },
+            json!({"unavailable": {"error": "pane query failed"}}),
+        ),
+    ] {
+        let mux = Mux {
+            daemon_tab: Some(tab),
+            ..mux_fixture()
+        };
+        assert_eq!(serde_json::to_value(mux).unwrap()["daemon_tab"], expected);
+    }
+    assert!(
+        serde_json::to_value(mux_fixture())
+            .unwrap()
+            .get("daemon_tab")
+            .is_none()
+    );
 }
 
 #[test]

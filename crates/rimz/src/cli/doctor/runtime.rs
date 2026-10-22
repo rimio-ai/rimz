@@ -171,6 +171,7 @@ pub(super) fn collect_mux(
         socket: None,
         legacy_session: None,
         session_health: None,
+        daemon_tab: None,
         duplicate_sessions: None,
         presence: None,
         topology_writer: None,
@@ -213,6 +214,25 @@ pub(super) fn collect_mux(
         ) {
             report.session_health =
                 Some(collect_session_health(backend.as_ref(), &ws.session_name));
+        }
+        if matches!(
+            ownership.selected_state(),
+            rimz::room::session::BackendRoomState::Live
+        ) && matches!(
+            &report.session_health,
+            Some(model::Probe::Ready(model::SessionHealth::Ok))
+        ) {
+            report.daemon_tab = match rimz::daemon_view::inspect_daemon_shape(
+                backend.as_ref(),
+                &ws.session_name,
+                &ws.workspace_id,
+            ) {
+                Ok(shape) => shape.map(|shape| model::Probe::Ready(shape.into())),
+                Err(error) => Some(model::Probe::Unavailable {
+                    error: error.to_string(),
+                    diagnosis: None,
+                }),
+            };
         }
         report.duplicate_sessions = Some(collect_duplicate_sessions(ws, mux));
         report.presence = Some(collect_presence(ws, mux, &ownership));
