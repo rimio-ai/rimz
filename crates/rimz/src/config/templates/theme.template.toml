@@ -237,6 +237,7 @@
 ## wait_timer = "◷"
 ## wait_signal = "⌁"
 ## parked_bg = "⋯"
+## tier_move = "↪"
 
 [theme.glyphs.unicode.process]
 ## cpu = "C"
@@ -368,6 +369,7 @@
 ## wait_timer = "󰔟"
 ## wait_signal = "󱜠"
 ## parked_bg = "⋯"
+## tier_move = "↪"
 
 [theme.glyphs.nerd_font.process]
 ## cpu = ""

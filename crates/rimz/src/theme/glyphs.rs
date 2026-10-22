@@ -107,6 +107,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardWaitTimer, "◷", Some("\u{f051f}")),
     glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
     glyph!(CardParkedBg, "⋯", None),
+    glyph!(CardTierMove, "↪", None),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),
     glyph!(ProcessIo, "⇅", Some("\u{f09f}")),

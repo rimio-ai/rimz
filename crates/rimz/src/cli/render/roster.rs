@@ -9,6 +9,7 @@ pub(crate) struct RosterRow {
     pub handle: String,
     pub kind: String,
     pub model: Option<String>,
+    pub tier: Option<rimz::agents::TierStamp>,
     pub leader: bool,
 }
 
@@ -73,11 +74,19 @@ impl Roster {
         for row in &self.rows {
             let handle = format!("@{:<handle_width$}", row.handle);
             let kind = format!("{:<kind_width$}", row.kind);
-            let model = row.model.as_deref().unwrap_or("-");
+            let mut model = row.model.as_deref().unwrap_or("-").to_owned();
+            if let Some(tier) = row.tier.as_ref().filter(|tier| tier.moved()) {
+                let passes = tier
+                    .passes()
+                    .map(|pass| pass.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                model.push_str(&format!(" ({}; {passes})", tier.tier));
+            }
             let model = if row.leader {
                 format!("{model:<model_width$}  <- leader")
             } else {
-                model.to_owned()
+                model
             };
             writeln!(
                 w,
@@ -132,18 +141,21 @@ mod tests {
                 handle: "planner".to_owned(),
                 kind: "claude".to_owned(),
                 model: Some("fable".to_owned()),
+                tier: None,
                 leader: true,
             },
             RosterRow {
                 handle: "coder".to_owned(),
                 kind: "codex".to_owned(),
                 model: Some("gpt-6-astra".to_owned()),
+                tier: None,
                 leader: false,
             },
             RosterRow {
                 handle: "reviewer".to_owned(),
                 kind: "claude".to_owned(),
                 model: None,
+                tier: None,
                 leader: false,
             },
         ])
@@ -155,6 +167,41 @@ mod tests {
             String::from_utf8(output.into_inner()).unwrap(),
             "  @planner    claude  fable        <- leader\n  @coder      codex   gpt-6-astra\n  @reviewer   claude  -\n"
         );
+    }
+
+    #[test]
+    fn roster_names_every_tier_pass_only_when_moved() {
+        let mut stamp: rimz::agents::TierStamp = serde_json::from_value(serde_json::json!({
+            "tier": "senior", "model": "astra",
+            "unbuildable": [{"model": "opus", "error": "enable the skill"}],
+            "skipped": [{"model": "fable", "reason": "logged_out"}]
+        }))
+        .unwrap();
+        for moved in [true, false] {
+            if !moved {
+                stamp.unbuildable.clear();
+                stamp.skipped.clear();
+            }
+            let mut output = anstream::StripStream::new(Vec::new());
+            Roster::new(vec![RosterRow {
+                handle: "coder".into(),
+                kind: "codex".into(),
+                model: Some("astra".into()),
+                tier: Some(stamp.clone()),
+                leader: true,
+            }])
+            .render(&mut output)
+            .unwrap();
+            let text = String::from_utf8(output.into_inner()).unwrap();
+            assert_eq!(
+                text,
+                if moved {
+                    "@coder   codex  astra (senior; opus: not buildable; fable: logged out)  <- leader\n"
+                } else {
+                    "@coder   codex  astra  <- leader\n"
+                }
+            );
+        }
     }
 
     #[test]

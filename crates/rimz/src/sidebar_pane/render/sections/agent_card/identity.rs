@@ -132,6 +132,12 @@ pub(super) fn agent_identity_line(
     {
         left.push(Span::styled(value_seam(theme), theme.muted()));
         left.push(Span::styled(model, theme.muted()));
+        if row.as_agent().is_some_and(|card| card.tier_moved) {
+            left.push(Span::styled(
+                format!(" {}", theme.glyph(GlyphRole::CardTierMove)),
+                theme.muted(),
+            ));
+        }
         if row_ctx.tier == Tier::L2
             && let Some(reasoning) = display_reasoning(row)
         {

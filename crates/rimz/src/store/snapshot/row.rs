@@ -382,6 +382,9 @@ pub struct AgentCard {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Tier routing passed an earlier entry at launch ([`crate::agents::TierStamp::moved`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tier_moved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// The agent's display handle — the team role it launched as (`planner`,
@@ -494,6 +497,7 @@ impl Default for AgentCard {
             user_turn_started_at: None,
             description: None,
             model: None,
+            tier_moved: false,
             effort: None,
             handle: None,
             team: None,
@@ -557,6 +561,7 @@ impl AgentCard {
             user_turn_started_at: agent.user_turn_started_at,
             description: agent.description.clone(),
             model: agent.model.clone(),
+            tier_moved: agent.tier.as_ref().is_some_and(|tier| tier.moved()),
             effort: agent.effort.clone(),
             handle: agent
                 .role

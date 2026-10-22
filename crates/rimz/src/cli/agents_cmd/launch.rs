@@ -218,9 +218,11 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
-    if !args.launch.cohort.continue_cohort
-        && args.launch.resume.as_ref().is_none_or(Option::is_none)
-    {
+    // A bare `--resume` opens the provider's picker on the freshly routed layout;
+    // `--continue` and an exact id replay recorded posture instead.
+    let fresh_launch = !args.launch.cohort.continue_cohort
+        && args.launch.resume.as_ref().is_none_or(Option::is_none);
+    if fresh_launch {
         machine_config.agents.startup_relaunch_wait()?;
     }
     let default_lane = if loop_task.is_some() {
@@ -245,6 +247,17 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let mut matching_overrides = args.launch.overrides.clone();
     matching_overrides.agent = None;
     matching_overrides.tier = None;
+    let print_warning = |warning: &rimz::harness::plan::LaunchFinalizeWarning| {
+        if !fresh_launch
+            && matches!(
+                warning,
+                rimz::harness::plan::LaunchFinalizeWarning::TierMoved { .. }
+            )
+        {
+            return Ok(());
+        }
+        writeln!(std::io::stderr(), "{warning}")
+    };
     let FinalizedLaunch {
         profiles: _,
         resolved,
@@ -275,7 +288,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     .inspect_err(|err| {
         if let Some(err) = err.downcast_ref::<rimz::harness::plan::LaunchFinalizeError>() {
             for warning in err.warnings() {
-                let _ = writeln!(std::io::stderr(), "{warning}");
+                let _ = print_warning(warning);
             }
         }
     })?;
@@ -283,7 +296,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
         args.launch.spec = Some(spec);
     }
     for warning in &warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
+        print_warning(warning)?;
     }
     let ResolvedLaunch {
         teams,
@@ -1749,6 +1762,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
             handle: receipt_label(handle, identity),
             kind: identity.kind.as_str().to_owned(),
             model: identity.launch.model.clone(),
+            tier: identity.launch.tier.as_deref().cloned(),
             leader: team.is_some() && receipt.leader_index == Some(index),
         })
         .collect();

@@ -96,6 +96,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `◔ 8m` | an age, never a duration. The face rounds down to completed quarters of the scale (eighths with Nerd Font), with a minimum first face. The full face appears only at the ceiling, then becomes `◉` past it: the provider's prompt-cache lifetime for a card's own age, `stalled_after_secs` for child quiet, and an hour for waits. |
 | `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1M` | the model's context window size |
+| `↪` beside the model | tier routing passed over an earlier entry; `rimz agents show @<handle>` names the tier and every reason. The default mark is the same in both glyph sets (`card.tier_move`). |
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
 | `C 34%` `M 512M` `⇅ 8M/s` | a working process row's CPU, resident memory, and I/O rate |
@@ -307,7 +308,27 @@ A waiting description selects the first sentence ending in `?`, or the whole ask
 
 Before expiry the card reads `◷ cache expires in 8m`, in the clock's yellow-to-orange-to-red tone; minutes round up, with `in 1m` at the lifetime boundary. After expiry it reads `◉ cache expired · ◍ ~$1.40 to re-warm`: the notice uses the muted expired-cache tone, the seam stays muted, and the estimate uses the cache-write tone. Below 46 columns these become `◷ expires in 8m` and `◉ expired · ◍ ~$1.40`. The estimate rounds to two significant figures, keeping cents below $10 and whole dollars above; an unknown price or a figure below half a cent leaves only the expired notice. There is no cache line while calm, held warm, or without a known lifetime. Like stats, it stays on previously selected held cards and shows on every engaged card under `expanded` density, including teammates.
 
-On a narrow sidebar the identity line drops the reasoning token first, then the model and window, and keeps the handle. The window size shows on non-idle cards only. At 46 columns or wider, every context meter reserves a fixed five-cell age cluster after its percent, blank until five minutes quiet. Below 46 columns the meter keeps its full bar and the age moves to the right of the selected or held card's stats line. Selected, resting, fresh, and compact meters all use the same slot, keeping their bars and percentages aligned.
+On a narrow sidebar the identity line drops the reasoning token first, then the model and window, and keeps the handle. A tier move adds `↪` beside the model at 32 columns and wider; below 32 columns it drops with the model. The window size shows on non-idle cards only. At 46 columns or wider, every context meter reserves a fixed five-cell age cluster after its percent, blank until five minutes quiet. Below 46 columns the meter keeps its full bar and the age moves to the right of the selected or held card's stats line. Selected, resting, fresh, and compact meters all use the same slot, keeping their bars and percentages aligned.
+
+This 46-column [rendered frame](../../crates/rimz/src/sidebar_pane/render/snapshots/rimz__sidebar_pane__render__tests__tier_move_card.snap) shows a tier move beside the model:
+
+```text
+ ⌘ query-engine
+
+ ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                    $0.00
+ ────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0        ⢿ 0   ☾ 0   ○ 1
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌○ codex · astra ↪                           ▐
+▌  route the work                            ▐
+ ────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+
+                                   ? for help
+```
 
 On the selected or held card's stats line (every engaged card under `expanded` density), a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
 

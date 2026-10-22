@@ -11,6 +11,48 @@ use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[test]
+fn finalized_launch_warns_once_per_moved_cell_with_full_passes() {
+    let stamp: crate::agents::TierStamp = serde_json::from_value(serde_json::json!({
+        "tier": "senior", "model": "astra",
+        "unbuildable": [{"model": "opus", "error": "user-only skill; enable model invocation"}],
+        "skipped": [{"model": "fable", "reason": "logged_out"}]
+    }))
+    .unwrap();
+    let mut moved = preset_cell("codex", &[], Some("astra"), None);
+    let Cell::Agent(cell) = &mut moved else {
+        unreachable!()
+    };
+    cell.launch.role = Some("coder".into());
+    cell.launch.tier = Some(Box::new(stamp.clone()));
+    let mut layout = LayoutSpec::single(moved.clone());
+    layout.columns[0].rows.push(moved);
+    let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+    assert_eq!(warnings.len(), 2, "one warning per moved cell");
+    for warning in warnings {
+        assert_eq!(
+            warning.to_string(),
+            "warning: `coder` tier senior chose astra; passed opus: not buildable: user-only skill; enable model invocation; fable: logged out"
+        );
+    }
+    for tier in [
+        None,
+        Some(Box::new(crate::agents::TierStamp {
+            skipped: Vec::new(),
+            unbuildable: Vec::new(),
+            ..stamp.clone()
+        })),
+    ] {
+        let mut layout = LayoutSpec::single(preset_cell("codex", &[], Some("astra"), None));
+        layout.agent_cells_mut().next().unwrap().launch.tier = tier;
+        assert!(
+            finalize(&mut layout, &Default::default(), &[])
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn finalized_launch_stamps_verbatim_record() {
     let mut layout = LayoutSpec::single(preset_cell("claude", &[], Some("opus[1m]"), Some("high")));
     finalize(&mut layout, &Default::default(), &[]).unwrap();

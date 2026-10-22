@@ -137,6 +137,7 @@ glyph_roles! {
         CardWaitTimer => "wait_timer",
         CardWaitSignal => "wait_signal",
         CardParkedBg => "parked_bg",
+        CardTierMove => "tier_move",
     }
     "process" {
         ProcessCpu => "cpu",

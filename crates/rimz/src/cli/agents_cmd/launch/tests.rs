@@ -2,6 +2,40 @@ use super::*;
 use rimz::store::run::ReportTo;
 
 #[test]
+fn launch_receipt_carries_moved_stamp_to_the_roster() {
+    let mut identity = launch_identity("codex", "coder");
+    identity.launch.model = Some("astra".into());
+    identity.launch.tier = Some(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "tier": "senior", "model": "astra",
+            "unbuildable": [{"model": "opus", "error": "enable the skill"}]
+        }))
+        .unwrap(),
+    ));
+    let identities = [identity];
+    let mut output = anstream::StripStream::new(Vec::new());
+    write_launch_receipt(
+        &mut output,
+        &LaunchReceipt {
+            team: None,
+            channel: None,
+            cwd: Path::new("/repo"),
+            identities: &identities,
+            handles: &["coder".into()],
+            leader_index: None,
+            terminal_width: 100,
+            hints: false,
+        },
+    )
+    .unwrap();
+    let text = String::from_utf8(output.into_inner()).unwrap();
+    assert!(
+        text.contains("astra (senior; opus: not buildable)"),
+        "{text}"
+    );
+}
+
+#[test]
 fn held_checkout_guidance_names_the_board_command() {
     let hold = rimz::harness::resume::TeamHold {
         team: "forge".into(),

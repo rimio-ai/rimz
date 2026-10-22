@@ -607,6 +607,12 @@ fn tier_same_pane_records_assist_before_exec() {
 
 #[cfg(unix)]
 #[test]
+fn tier_picker_launch_warns_like_a_fresh_launch() {
+    assert_tier_launch("fallback", "same-pane-picker");
+}
+
+#[cfg(unix)]
+#[test]
 fn tier_cohort_resume_records_only_fresh_seat_assists() {
     assert_tier_launch("fallback", "resume");
 }
@@ -656,6 +662,7 @@ fn lane_resume_seat_refilled_failed_tab_stays_pending() {
 #[cfg(unix)]
 fn assert_tier_launch(routing: &str, surface: &str) {
     let unbuildable = surface == "subagent-unbuildable";
+    let same_pane = surface.starts_with("same-pane");
     let interactive = !surface.starts_with("subagent");
     let lane = surface.starts_with("lane");
     let resume = surface.starts_with("resume") || lane;
@@ -939,6 +946,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     command
         .args(match surface {
             "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
+            "same-pane-picker" => vec!["--mux", "zellij", "agents", "preview", "--resume"],
             _ if resume && !lane => vec!["--mux", "zellij", "agents", "duo", "--continue"],
             _ if lane => vec!["--mux", "zellij", "agents", "resume", "#restore"],
             _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
@@ -990,7 +998,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         let output = command.bounded_output();
         launched.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            surface == "same-pane"
+            same_pane
                 || output.as_ref().unwrap().status.success()
                     == !(failed_tab || surface == "lane-unhooked"),
             "{}",
@@ -999,6 +1007,31 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         output
     })
     .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let moves: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.contains("tier senior chose"))
+        .collect();
+    assert_eq!(
+        moves.len(),
+        usize::from(!resume && (routing == "fallback" || unbuildable)),
+        "{surface}: {stderr}"
+    );
+    if let Some(line) = moves.first() {
+        assert!(line.contains("astra"), "{line}");
+        assert!(
+            line.contains(if interactive { "preview" } else { "worker" }),
+            "{line}"
+        );
+        if unbuildable {
+            assert!(
+                line.contains("opus: not buildable:") && line.contains("user-only"),
+                "{line}"
+            );
+        } else {
+            assert!(line.contains("opus: exhausted"), "{line}");
+        }
+    }
     if lane && refilled {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -1081,7 +1114,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
                     && payload.launch.profile.as_deref()
                         == Some(if resume {
                             "duo.writer"
-                        } else if surface == "same-pane" {
+                        } else if same_pane {
                             "preview"
                         } else {
                             "worker"
