@@ -12,7 +12,7 @@ mod reminder;
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -40,6 +40,7 @@ use crate::agents::{
 #[cfg(test)]
 use crate::config::TaskCheck;
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec};
+use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
@@ -418,7 +419,7 @@ pub struct TaskFire<'a> {
     condition: Option<super::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
     started: Instant,
-    run_lock: Option<RunLockGuard>,
+    run_lock: Option<Lease>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
     throttle_host: Arc<dyn throttle::Host>,
     /// Ctrl-C heard from before the check on, for the hold to inherit.
@@ -962,7 +963,7 @@ impl<'a> TaskFire<'a> {
             }
             Err(err) => return Err(err),
         };
-        match acquire_run_lock(&path, self.task.kind())? {
+        match acquire_run_lock_file(&path, Some(self.task.kind()))? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
                 Ok(None)
@@ -2358,16 +2359,6 @@ fn append_stopped_record(
     run_log::record_stopped(root, &record, kind);
 }
 
-struct RunLockGuard {
-    file: File,
-}
-
-impl Drop for RunLockGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunLockInfo {
     pub pid: u32,
@@ -2383,29 +2374,13 @@ struct RunLockMetadata {
 }
 
 enum RunLockAttempt {
-    Acquired(RunLockGuard),
+    Acquired(Lease),
     Held(Option<RunLockInfo>),
 }
 
 pub enum RunLockState {
     Available,
     Held(Option<RunLockInfo>),
-}
-
-fn acquire_run_lock(path: &Path, kind: TaskKind) -> Result<RunLockAttempt> {
-    let parent = path
-        .parent()
-        .context("loop run lock path has no runtime parent")?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("creating loop task runtime for `{}`", path.display()))?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
-    acquire_run_lock_file(file, path, Some(kind))
 }
 
 /// One listing of a root's `locks/`, with every run lock in it probed once.
@@ -2506,20 +2481,10 @@ fn held_run_lock(name: &str, root: &Path) -> Result<Option<(PathBuf, Option<RunL
 }
 
 fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RunLockState::Available);
-        }
-        Err(err) => {
-            return Err(err).with_context(|| format!("opening loop run lock `{}`", path.display()));
-        }
-    };
-    probe_run_lock_file(file, path)
+    match probe(path).with_context(|| format!("probing loop run lock `{}`", path.display()))? {
+        LeaseState::Free => Ok(RunLockState::Available),
+        LeaseState::Held(body) => Ok(RunLockState::Held(read_run_lock_info(&body))),
+    }
 }
 
 fn run_lock_path(file: &str, entry: &TaskEntry) -> Result<PathBuf> {
@@ -2608,53 +2573,24 @@ fn wait_for_process_exit(pid: u32, grace: Duration) -> bool {
     true
 }
 
-fn acquire_run_lock_file(
-    mut file: File,
-    path: &Path,
-    kind: Option<TaskKind>,
-) -> Result<RunLockAttempt> {
-    match crate::disk::lock::try_lock_file(&mut file, path) {
-        Ok(()) => {
-            let info = RunLockInfo {
-                pid: std::process::id(),
-                started_at: Timestamp::now(),
-            };
-            // Runtime scratch needs no fsync and stays on the locked fd:
-            // renaming an atomic replacement would detach the advisory lock.
-            file.set_len(0)
-                .with_context(|| format!("truncating loop run lock `{}`", path.display()))?;
-            file.rewind()
-                .with_context(|| format!("rewinding loop run lock `{}`", path.display()))?;
-            serde_json::to_writer(&mut file, &RunLockMetadata { holder: info, kind })
-                .with_context(|| format!("writing loop run lock `{}`", path.display()))?;
-            file.flush()
-                .with_context(|| format!("flushing loop run lock `{}`", path.display()))?;
-            Ok(RunLockAttempt::Acquired(RunLockGuard { file }))
-        }
-        Err(std::fs::TryLockError::WouldBlock) => {
-            Ok(RunLockAttempt::Held(read_run_lock_info(&mut file)))
-        }
-        Err(err) => Err(std::io::Error::from(err))
-            .with_context(|| format!("locking loop run lock `{}`", path.display())),
+fn acquire_run_lock_file(path: &Path, kind: Option<TaskKind>) -> Result<RunLockAttempt> {
+    match claim(path, |file| {
+        let info = RunLockInfo {
+            pid: std::process::id(),
+            started_at: Timestamp::now(),
+        };
+        serde_json::to_writer(file, &RunLockMetadata { holder: info, kind })
+            .map_err(std::io::Error::other)
+    })
+    .with_context(|| format!("locking loop run lock `{}`", path.display()))?
+    {
+        LeaseAttempt::Acquired(guard) => Ok(RunLockAttempt::Acquired(guard)),
+        LeaseAttempt::Held(body) => Ok(RunLockAttempt::Held(read_run_lock_info(&body))),
     }
 }
 
-fn probe_run_lock_file(mut file: File, path: &Path) -> Result<RunLockState> {
-    match crate::disk::lock::try_lock_file(&mut file, path) {
-        Ok(()) => Ok(RunLockState::Available),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            Ok(RunLockState::Held(read_run_lock_info(&mut file)))
-        }
-        Err(err) => Err(std::io::Error::from(err))
-            .with_context(|| format!("probing loop run lock `{}`", path.display())),
-    }
-}
-
-fn read_run_lock_info(file: &mut File) -> Option<RunLockInfo> {
-    let mut payload = Vec::new();
-    file.read_to_end(&mut payload)
-        .ok()
-        .and_then(|_| serde_json::from_slice(&payload).ok())
+fn read_run_lock_info(body: &[u8]) -> Option<RunLockInfo> {
+    serde_json::from_slice(body).ok()
 }
 
 pub struct CheckOutcome {
