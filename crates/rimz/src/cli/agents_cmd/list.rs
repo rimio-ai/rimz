@@ -228,7 +228,7 @@ fn render_projected_agents_table(
                 render::cell(report.description.as_deref().unwrap_or("-"))
                     .fg(render::palette::muted()),
             );
-            table.card(agent_row(report, now), detail);
+            table.card(agent_row(report, now, &glyph), detail);
         }
     }
     table.render(w)
@@ -423,10 +423,18 @@ fn list_channel_filter_for_current(
     }
 }
 
-fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell> {
+fn agent_row(
+    agent: &AgentReportEntry,
+    now: jiff::Timestamp,
+    glyph: &impl Fn(GlyphRole) -> String,
+) -> Vec<render::Cell> {
     let model = agent.model.label.as_deref().unwrap_or("-");
     let model = if model == "-" {
         render::cell(model).dash()
+    } else if agent.model.fast {
+        render::cell(model)
+            .fg(render::palette::muted())
+            .suffix(glyph(GlyphRole::CardFast), render::palette::electric())
     } else {
         render::cell(model).fg(render::palette::muted())
     };
@@ -583,12 +591,54 @@ mod tests {
         let mut table = render::Table::new([
             "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "SEEN",
         ]);
-        table.row(agent_row(&report, jiff::Timestamp::UNIX_EPOCH));
+        table.row(agent_row(
+            &report,
+            jiff::Timestamp::UNIX_EPOCH,
+            &theme_glyphs(&ThemeConfig::default()),
+        ));
         let mut out = anstream::StripStream::new(Vec::new());
         table.render(&mut out).unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
         assert!(text.contains("81k"), "{text}");
         assert!(!text.contains("3M"), "{text}");
+    }
+
+    #[test]
+    fn fast_model_cell_uses_the_resolved_glyph_without_marking_missing_models() {
+        for theme in [
+            ThemeConfig::default(),
+            ThemeConfig {
+                style: Some(rimz::config::ThemeStyle::Modern),
+                ..Default::default()
+            },
+            toml::from_str("[glyphs.unicode.card]\nfast = '++'").unwrap(),
+        ] {
+            let glyph = theme_glyphs(&theme);
+            let bolt = glyph(GlyphRole::CardFast);
+            for fast in [true, false] {
+                for model in [Some("gpt-6.1-sol"), None] {
+                    let mut state = test_agent("fast");
+                    state.model = model.map(str::to_owned);
+                    state.context = Some(rimz::agents::AgentContext {
+                        fast: Some(fast),
+                        ..Default::default()
+                    });
+                    let mut report = entry(AgentStatus::Idle);
+                    report.model = model_report(&state);
+                    let mut table = render::Table::new(["MODEL"]);
+                    table.row([agent_row(&report, jiff::Timestamp::UNIX_EPOCH, &glyph).remove(4)]);
+                    let mut out = anstream::StripStream::new(Vec::new());
+                    table.render(&mut out).unwrap();
+                    let text = String::from_utf8(out.into_inner()).unwrap();
+                    let expected = match (model, fast) {
+                        (Some(_), true) => format!("GPT 6.1 Sol {bolt}"),
+                        (Some(_), false) => "GPT 6.1 Sol".to_owned(),
+                        (None, _) => "-".to_owned(),
+                    };
+                    assert_eq!(text.lines().last().unwrap().trim(), expected);
+                }
+            }
+        }
     }
 
     #[test]

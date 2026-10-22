@@ -4,6 +4,22 @@ fn agent(id: &str) -> AgentState {
     rimz::testkit::agent_state("codex", id, Timestamp::UNIX_EPOCH)
 }
 
+#[test]
+fn model_fast_is_typed_and_keeps_the_label_glyph_free() {
+    let mut state = agent("fast");
+    state.model = Some("gpt-6.1-sol".into());
+    state.effort = Some("xhigh".into());
+    for fast in [true, false] {
+        state.context = Some(rimz::agents::AgentContext {
+            fast: Some(fast),
+            ..Default::default()
+        });
+        let report = serde_json::to_value(model_report(&state)).unwrap();
+        assert_eq!(report["fast"], fast);
+        assert_eq!(report["label"], "GPT 6.1 Sol@xhigh");
+    }
+}
+
 fn card_row(card: AgentCard) -> SidebarRow {
     SidebarRow {
         checkout: None,

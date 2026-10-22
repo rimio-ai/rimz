@@ -30,6 +30,7 @@ expression: report
     "model": {
       "id": null,
       "effort": null,
+      "fast": false,
       "label": null
     },
     "context": {

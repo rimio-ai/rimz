@@ -94,6 +94,7 @@ impl From<&OpenAsk> for AskReport {
 pub(super) struct ModelReport {
     pub id: Option<String>,
     pub effort: Option<String>,
+    pub fast: bool,
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<rimz::agents::TierStamp>>,
@@ -567,6 +568,7 @@ pub(super) fn model_report(agent: &AgentState) -> ModelReport {
     ModelReport {
         id,
         effort,
+        fast: agent.fast_mode(),
         label,
         tier: agent.tier.clone(),
     }

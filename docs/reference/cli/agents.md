@@ -608,7 +608,7 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
-| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. |
+| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. Fast mode adds a bold electric bolt after the label (`ϟ`, or the configured `card.fast` glyph). The `show` header uses the same suffix. |
 | `CTX` | Context-window fill. |
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
 | `SEEN` | Time since the agent was last seen active. |
@@ -640,7 +640,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `hibernation` | `frozen_at`, `step`, and cumulative `reclaimed_bytes`; present whenever a hibernation record exists, regardless of displayed status. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
-| `model` | `id`, `effort`, and the rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
+| `model` | `id`, `effort`, `fast` (always a boolean), and the glyph-free rendered `label`. Tier-routed agents also carry `tier`: the launch stamp with `tier`, chosen `model`, optional `used_tier`, and nonempty `skipped` (usage reasons) and `unbuildable` (`model`, full `error`) lists. The stamp is omitted for an unstamped agent. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). |
 | `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | Registration, turn-start, activity, and observation timestamps. |
