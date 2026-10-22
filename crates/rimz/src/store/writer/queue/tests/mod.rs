@@ -16,6 +16,10 @@ use crate::{RuntimePaths, StatePaths};
 /// A durable store over a disposable root, plus the queue-shaped readers every
 /// test in this module needs. Derefs to `Store` so call sites read as the
 /// public API they exercise.
+///
+/// Lifecycle events a test reads back through `Store::snapshot()` are stamped
+/// within 3 h of `Timestamp::now()`: `SidebarSnapshot::reap_stale_sessions`
+/// drops pidless rows idle past `GHOST_SESSION_TTL_SECS`.
 struct Queue {
     _dir: tempfile::TempDir,
     store: Store,
