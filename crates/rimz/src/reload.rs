@@ -1,13 +1,15 @@
-//! Durable room-build upgrade and structural repair orchestration.
+//! Durable room-build upgrade, broker retirement, and structural repair orchestration.
 //!
-//! `rimz reload` stages the installed binary, writes it as each live room's
+//! `rimz reload` stages the invoking binary, writes it as each live room's
 //! durable target, restarts running hook drainers, nudges supervisors,
 //! hash-gates Zellij plugin convergence, and reports the bounded convergence
 //! window without changing terminal panes.
 //! `rimz sidebar repair` is the independent structural close/add pass. Held
 //! `rimz stats --refresh` dashboards are signalled to re-exec in place before
 //! workspace enumeration, so standalone dashboards reload even when no rooms
-//! exist. A workspace whose session is gone has its stale runtime files and
+//! exist. Outdated language-server brokers retire against the PATH build,
+//! without interrupting servers or dropping leases, before room enumeration.
+//! A workspace whose session is gone has its stale runtime files and
 //! leftover daemons swept. Every step is best-effort: a hiccup on one workspace
 //! is logged and never blocks the rest.
 
@@ -250,6 +252,14 @@ pub struct ReloadOutcome {
     pub dead_swept: usize,
     /// `rimz stats --refresh` dashboards signalled to re-exec onto the new build.
     pub stats_reloaded: usize,
+    /// Outdated language-server brokers retired without interrupting a server.
+    pub brokers_retired: usize,
+    /// Outdated brokers marked to leave after their server stops.
+    pub brokers_marked: usize,
+    /// Brokers too old to mark and not safe to kill now.
+    pub brokers_kept: usize,
+    /// Live brokers not checked because the installed build could not be read.
+    pub brokers_unchecked: usize,
     /// Hook drainers stopped for replacement on the room's current build.
     pub drainers_restarted: usize,
     /// Hook drainers whose frame-boundary stop failed.
@@ -286,6 +296,10 @@ impl ReloadOutcome {
             reaped,
             dead_swept,
             stats_reloaded,
+            brokers_retired,
+            brokers_marked,
+            brokers_kept,
+            brokers_unchecked,
             drainers_restarted,
             drainers_stop_failed,
             failed,
@@ -309,6 +323,10 @@ impl ReloadOutcome {
         self.reaped += reaped;
         self.dead_swept += dead_swept;
         self.stats_reloaded += stats_reloaded;
+        self.brokers_retired += brokers_retired;
+        self.brokers_marked += brokers_marked;
+        self.brokers_kept += brokers_kept;
+        self.brokers_unchecked += brokers_unchecked;
         self.drainers_restarted += drainers_restarted;
         self.drainers_stop_failed += drainers_stop_failed;
         self.failed += failed;
@@ -319,12 +337,18 @@ impl ReloadOutcome {
     }
 }
 
-/// Publish the installed build as durable intent and nudge every live sidebar
-/// toward it without changing pane structure.
+/// Publish the invoking build as durable intent and nudge every live sidebar
+/// toward it without changing pane structure. Retire outdated language-server
+/// brokers without interrupting their servers or dropping leases.
 pub fn reload_user_sidebars() -> Result<ReloadOutcome, StageBuildErr> {
     let staged = stage_current_build()?;
+    let brokers = crate::lsp::retire::run();
     let mut outcome = ReloadOutcome {
         stats_reloaded: recovery::reload_stats_dashboards().len(),
+        brokers_retired: brokers.retired,
+        brokers_marked: brokers.marked,
+        brokers_kept: brokers.kept,
+        brokers_unchecked: brokers.unchecked,
         ..ReloadOutcome::default()
     };
     let (live_targets, dead_swept) = live_targets(true);
@@ -1370,6 +1394,10 @@ mod tests {
             reaped: 11,
             dead_swept: 12,
             stats_reloaded: 13,
+            brokers_retired: 1,
+            brokers_marked: 2,
+            brokers_kept: 3,
+            brokers_unchecked: 4,
             drainers_restarted: 2,
             drainers_stop_failed: 3,
             failed: 14,
@@ -1394,6 +1422,10 @@ mod tests {
             reaped: 28,
             dead_swept: 29,
             stats_reloaded: 30,
+            brokers_retired: 5,
+            brokers_marked: 6,
+            brokers_kept: 7,
+            brokers_unchecked: 8,
             drainers_restarted: 4,
             drainers_stop_failed: 5,
             failed: 31,
@@ -1421,6 +1453,10 @@ mod tests {
                 reaped: 39,
                 dead_swept: 41,
                 stats_reloaded: 43,
+                brokers_retired: 6,
+                brokers_marked: 8,
+                brokers_kept: 10,
+                brokers_unchecked: 12,
                 drainers_restarted: 6,
                 drainers_stop_failed: 8,
                 failed: 45,
