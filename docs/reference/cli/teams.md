@@ -76,7 +76,7 @@ rimz teams show forge --json
 | Target | Reports |
 | --- | --- |
 | `<team>` | The definition, then a table of the team's live cohorts. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
-| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort's lane is `<dir>/<team>`; `main`, the project directory's name, and the root path select none, and a miss under any of them prints as `#main`. |
+| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it exits 1 and names the live lanes, or the resume command when none are live. A root-checkout cohort launched without `--channel` has lane `<dir>/<team>`; `main`, the project directory's name, and the root path select none, and a miss under any of them prints as `#main`. |
 | `'#<lane>'`, or `-w <lane>` alone | For every team live in that lane, defined or not, its lane block then its definition. With none it prints `no live team in #<lane>` and exits 0. |
 
 Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
@@ -307,7 +307,7 @@ rimz teams stop forge -w feat-rate-limits
 
 After a successful stop, a pending board keeps an existing checkout held. The receipt names its stage and prints the addressed resume and `flip ... Done` release commands. Stopping does not finish the board: until it reaches `Done`, agent-exit cleanup, `worktree sweep`, and `gc` keep a RimZ-owned checkout ([worktree sweep](./worktree.md#sweep-landed-worktrees)), while an explicit `worktree remove` still removes it.
 
-Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name and for a root-checkout cohort is `<dir>/<team>`, where `<dir>` is the project directory's name (`forge#api/forge`); `main` does not select a root-checkout cohort. Branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. With no live cohort, the error suggests `rimz teams resume <team>`.
+Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#lane` or `-w NAME` selects by the recorded lane, which for a named-worktree cohort is its worktree name and for a root-checkout cohort launched without `--channel` is `<dir>/<team>`, where `<dir>` is the project directory's name (`forge#api/forge`); `main` does not select such a cohort. Branch-style names such as `feat/rate-limits` also match the dashed lane `feat-rate-limits`. A recorded lane takes precedence over the checkout's name. With no live cohort, the error suggests `rimz teams resume <team>`.
 
 ## Wait for a cohort to finish
 

@@ -12,7 +12,7 @@ A scene never filters on `AgentStatus::is_attention()` itself, and never classif
 
 ## One described address shape
 
-Each scene names its target one way and says so in help. Agents take `@handle[#channel]`, and their root lane spells `#main`. A team cohort is `team#lane` (`forge#feat-x`); a root-checkout cohort's lane is `<dir>/<team>` (`forge#api/forge`), never `#main`. Every verb that acts on one cohort takes that positional, and a flag that selects the same thing (`-w NAME`) is described as the same selection rather than as a second address. Help prints the positional's meaning, not a bare metavariable.
+Each scene names its target one way and says so in help. Agents take `@handle[#channel]`, and their root lane spells `#main`. A team cohort is `team#lane` (`forge#feat-x`); a root-checkout cohort launched without `--channel` has lane `<dir>/<team>` (`forge#api/forge`), not `#main`. Every verb that acts on one cohort takes that positional, and a flag that selects the same thing (`-w NAME`) is described as the same selection rather than as a second address. Help prints the positional's meaning, not a bare metavariable.
 
 ## Wrong input exits 1, a bad command line exits 2
 
