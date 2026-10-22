@@ -27,7 +27,7 @@ fn frame() -> HookIngress {
 }
 
 fn seed(paths: &StatePaths, frame: &HookIngress) -> u64 {
-    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let lock = SharedAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     append(paths, frame, &lock).unwrap()
 }
 
@@ -35,7 +35,7 @@ fn seed(paths: &StatePaths, frame: &HookIngress) -> u64 {
 fn frames_round_trip_with_resumable_byte_offsets() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
-    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let lock = SharedAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     let first = frame();
     let second = frame();
     let first_end = append(&paths, &first, &lock).unwrap();
@@ -74,7 +74,7 @@ fn concurrent_appenders_keep_frames_complete_and_uninterleaved() {
                 let barrier = &barrier;
                 scope.spawn(move || {
                     barrier.wait();
-                    let lock = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
+                    let lock = SharedAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
                     append(paths, frame, &lock).unwrap();
                 })
             })
@@ -344,7 +344,7 @@ fn truncation_waits_for_an_ingress_append_and_keeps_its_frame() {
     };
     write_cursor(&paths, &cursor, &workspace).unwrap();
     drop(workspace);
-    let ingress = IngressAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
+    let ingress = SharedAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     let second = frame();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (finished_tx, finished_rx) = mpsc::channel();

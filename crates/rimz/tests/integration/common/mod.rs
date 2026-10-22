@@ -65,7 +65,7 @@ pub(crate) fn append_frame(
 ) -> (rimz::store::ingress::HookIngress, u64) {
     let store = env.store();
     let lock =
-        rimz::disk::lock::IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+        rimz::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
     let end = rimz::store::ingress::append(store.paths(), &frame, &lock).unwrap();
     (frame, end)
 }

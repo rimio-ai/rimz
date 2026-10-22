@@ -1340,7 +1340,7 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
 }
 
 fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, applied: bool) {
-    use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use crate::disk::lock::{SharedAppendLock, WorkspaceLock};
     use crate::ids::EventId;
     use crate::store::ingress::{self, HookDrainCursor, HookIngress};
 
@@ -1365,7 +1365,7 @@ fn check_ingress_hold(body: MessageBody, frame_secs: i64, other_kind: bool, appl
         env: Default::default(),
     };
     let end = {
-        let lock = IngressAppendLock::acquire(&q.inner.paths.hook_ingress_lock).unwrap();
+        let lock = SharedAppendLock::acquire(&q.inner.paths.hook_ingress_lock).unwrap();
         ingress::append(&q.inner.paths, &frame, &lock).unwrap()
     };
     let lock = WorkspaceLock::acquire(&q.inner.paths.workspace_lock).unwrap();

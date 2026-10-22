@@ -1200,7 +1200,7 @@ mod runs {
         };
         {
             let lock =
-                rimz::disk::lock::IngressAppendLock::acquire(&store.paths().hook_ingress_lock)
+                rimz::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)
                     .unwrap();
             rimz::store::ingress::append(store.paths(), &frame, &lock).unwrap();
         }

@@ -111,7 +111,7 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
     let held_path = &paths.hook_ingress_lock;
     let locks = held_path.parent().unwrap();
     let free_path = locks.join("free.lock");
-    let held = crate::disk::lock::IngressAppendLock::acquire(held_path).unwrap();
+    let held = crate::disk::lock::SharedAppendLock::acquire(held_path).unwrap();
     let runtime = RuntimePaths::for_state_under(&paths, temp.path());
     let room_path = runtime.room_lock();
     let room = crate::disk::lock::RoomLock::hold(&room_path).unwrap();

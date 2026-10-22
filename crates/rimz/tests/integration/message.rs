@@ -7710,7 +7710,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
 
 #[test]
 fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
-    use rimz::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use rimz::disk::lock::{SharedAppendLock, WorkspaceLock};
     use rimz::store::ingress::{self, HookIngress};
 
     let env = Env::new();
@@ -7781,7 +7781,7 @@ fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
         env: captured,
     };
     {
-        let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+        let lock = SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
         ingress::append(store.paths(), &frame, &lock).unwrap();
     }
     let window = std::time::Duration::from_millis(500);

@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic;
-use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+use crate::disk::lock::{SharedAppendLock, WorkspaceLock};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, EventId};
 
@@ -111,7 +111,7 @@ impl Default for HookDrainCursor {
 pub fn append(
     paths: &StatePaths,
     frame: &HookIngress,
-    _lock: &IngressAppendLock,
+    _lock: &SharedAppendLock,
 ) -> Result<u64, EventLogErr> {
     event_log::append(&paths.hook_ingress_log, frame)?;
     log_len(paths)
