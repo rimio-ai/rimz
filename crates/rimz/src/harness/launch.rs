@@ -1103,9 +1103,16 @@ fn compile_agent_process_with_extra_env(
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
     }
-    if request.identity.params.team.is_none() {
-        env.remove(ENV_TEAM);
-        unset.insert(ENV_TEAM.to_owned());
+    // A launch carries exactly its own team and role, never its caller's.
+    let params = &request.identity.params;
+    for (key, absent) in [
+        (ENV_TEAM, params.team.is_none()),
+        (ENV_AGENT_ROLE, params.role.is_none()),
+    ] {
+        if absent {
+            env.remove(key);
+            unset.insert(key.to_owned());
+        }
     }
     let mut process = CompiledAgentProcess {
         host_skills,

@@ -1244,11 +1244,12 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
 }
 
 #[test]
-fn a_launch_without_a_team_does_not_inherit_its_callers_team() {
-    let inherited = env(&[(ENV_TEAM, "caller-team")]);
+fn a_launch_carries_only_its_own_team_and_role() {
+    let inherited = env(&[(ENV_TEAM, "caller-team"), (ENV_AGENT_ROLE, "caller-role")]);
     for (team, role) in [
         (None, None),
         (None, Some("inline")),
+        (Some("forge"), None),
         (Some("forge"), Some("coder")),
     ] {
         let mut invocation = request(
@@ -1279,7 +1280,7 @@ fn a_launch_without_a_team_does_not_inherit_its_callers_team() {
             let command = process.login_shell_argv(&argv(&[
                 "/bin/sh",
                 "-c",
-                "printf '%s' \"${RIMZ_TEAM-unset}\"",
+                "printf '%s/%s' \"${RIMZ_TEAM-unset}\" \"${RIMZ_AGENT_ROLE-unset}\"",
             ]));
             let output = Command::new(&command[0])
                 .args(&command[1..])
@@ -1294,12 +1295,9 @@ fn a_launch_without_a_team_does_not_inherit_its_callers_team() {
             );
             assert_eq!(
                 String::from_utf8(output.stdout).unwrap(),
-                team.unwrap_or("unset"),
+                format!("{}/{}", team.unwrap_or("unset"), role.unwrap_or("unset")),
                 "{shell}"
             );
-            if let Some(role) = role {
-                assert_eq!(process.env[ENV_AGENT_ROLE], role);
-            }
         }
     }
 }
