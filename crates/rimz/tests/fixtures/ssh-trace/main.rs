@@ -15,6 +15,7 @@
 //! receives `SIGCONT`, exercising the launcher's job-control mirror.
 //! `$RIMZ_TEST_SSH_STDOUT` supplies the visible attach's remote output.
 //! `$RIMZ_TEST_SSH_STDERR` supplies the visible attach's diagnostic output.
+//! `$RIMZ_TEST_SSH_LATE_OUTPUT` keeps stdout open in a descendant for three seconds.
 //! `$RIMZ_TEST_SSH_EXEC_ARGV` runs tab-separated argv with inherited stdio in
 //! place of the visible attach's stdin-recording and sleep behavior. Without
 //! an exit plan, the shim propagates that command's status like OpenSSH.
@@ -102,6 +103,18 @@ fn main() {
             .write_all(stderr.as_bytes())
             .expect("write attach stderr");
         stream.flush().expect("flush attach stderr");
+    }
+    if env::var_os("RIMZ_TEST_SSH_LATE_OUTPUT").is_some() {
+        #[expect(
+            clippy::zombie_processes,
+            reason = "the fixture exits immediately; the orphan deliberately retains stdout for the drain-bound test"
+        )]
+        std::process::Command::new("sh")
+            .args(["-c", "sleep 3; printf LATE-OLD-ATTACH"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("hold attach stdout after exit");
     }
 
     if let Ok(argv) = env::var("RIMZ_TEST_SSH_EXEC_ARGV") {

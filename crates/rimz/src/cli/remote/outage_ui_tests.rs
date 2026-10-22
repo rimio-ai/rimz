@@ -42,38 +42,6 @@ fn rows_share_one_centered_block_left_edge() {
 }
 
 #[test]
-fn failure_rows_hold_the_error_fix_and_recent_warnings() {
-    let details = [
-        "remote path: workspace/missing".to_owned(),
-        "fix alias".to_owned(),
-    ];
-    let logs = (1..=7)
-        .map(|index| format!("warning {index}"))
-        .collect::<Vec<_>>();
-
-    let rows = failure_rows("remote path does not exist", &details, &logs);
-    let text = rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>();
-
-    assert_eq!(text[0], "✗ remote path does not exist");
-    assert_eq!(text[1..3], details);
-    assert_eq!(
-        text[3..8],
-        [
-            "⚠  warning 3",
-            "⚠  warning 4",
-            "⚠  warning 5",
-            "⚠  warning 6",
-            "⚠  warning 7",
-        ]
-    );
-    assert_eq!(text[9], "press any key to exit");
-    assert!(rows[0].bold);
-    assert_eq!(rows[0].color, Color::Red);
-    assert!(rows[3..8].iter().all(|row| row.dim));
-    assert!(rows[9].dim);
-}
-
-#[test]
 fn recovery_panel_rows_pin_checkpoint_phase_and_handoff_matrix() {
     use rimz::remote::reachability::DialPlan;
     use rimz::remote::recovery::{HandoffStage, internet_probe_from_env};

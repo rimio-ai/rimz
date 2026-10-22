@@ -1367,7 +1367,8 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 176
+# RelayEvent, StreamScreen, RelayScanner and its stream/query methods (+9).
+surface-budget = 185
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -1899,7 +1900,8 @@ surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
-surface-budget = 17 # In-process terminal handoff releases capture and hook ownership.
+# TerminalModeGuard::restore_modes_keep_capture and into_captured_logs defer relay log replay (+2).
+surface-budget = 19 # In-process terminal handoff releases capture and hook ownership.
 
 [[module]]
 path = "crates/rimz/src/uninstall.rs"
@@ -2827,6 +2829,66 @@ reason = "Classifier and thresholds are remote policy over a store-owned tier; s
 kind = "item"
 key = "remote::tty::ROOM_OPEN_SENTINEL"
 reason = "Shared host/local attach protocol: the CLI host writes it before the mux client and the local stdout relay consumes it."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayEvent"
+reason = "The CLI relay acts on pure scanner boundaries before forwarding their bytes."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::StreamScreen"
+reason = "Screen-aware terminal cleanup distinguishes main, alternate and lost host state."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner"
+reason = "The CLI owns SSH I/O; its bounded streaming parser stays in the process-free remote library."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::feed"
+reason = "The CLI consumes one host byte at a time and acts before emitting the returned bytes."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::finish"
+reason = "A bounded drain must release incomplete host escapes before terminal cleanup."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::screen"
+reason = "The CLI only leaves the host alternate screen when stream evidence requires it."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::entered_alternate"
+reason = "The CLI disarms the panel guard once the host has taken screen ownership."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::room_opened"
+reason = "The CLI fatal report distinguishes failures before and after the room-open boundary."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::at_line_start"
+reason = "The CLI frames separators and session end lines without overwriting prior text."
+
+[[verdict]]
+kind = "item"
+key = "remote::tty::RelayScanner::unpainted_tail"
+reason = "The CLI replays only text when a held panel outlives an unpainted mux client."
+
+[[verdict]]
+kind = "item"
+key = "tui::TerminalModeGuard::restore_modes_keep_capture"
+reason = "The CLI relay steps off its panel without letting later tracing logs overwrite the room."
+
+[[verdict]]
+kind = "item"
+key = "tui::TerminalModeGuard::into_captured_logs"
+reason = "The CLI relay replays captured logs only after returning to the main screen and restoring termios."
 
 [[verdict]]
 kind = "pass-through"

@@ -20,11 +20,12 @@ The second split is pure versus process. [`crates/rimz/src/remote/`](../../crate
 | [`remote/forward.rs`](../../crates/rimz/src/remote/forward.rs) | Listener parsing from procfs, the `PortSync` diff state, and the forward and cancel argv. |
 | [`remote/web.rs`](../../crates/rimz/src/remote/web.rs) | Web prep, tunnel, and control-forward argv; local relay port selection. |
 | [`remote/setup.rs`](../../crates/rimz/src/remote/setup.rs) | The `rimz remote setup` installer snippet. |
-| [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, the DSR status-reply scanner, and the emulator reset string. |
+| [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, the DSR status-reply and supervised-output scanners, and the emulator reset string. |
 | [`remote/version.rs`](../../crates/rimz/src/remote/version.rs) | Client/host version-skew classification. |
 | [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) | The clap surface, alias resolution, and the print, one-shot, and supervise fork. |
 | [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, local notifications, and the `LinkSupervisor` shared by terminal attaches and web tunnels. |
 | [`cli/remote/outage_ui.rs`](../../crates/rimz/src/cli/remote/outage_ui.rs) | The alternate-screen connection panel and its plain-line fallback. |
+| [`cli/remote/relay.rs`](../../crates/rimz/src/cli/remote/relay.rs) | Per-attach stdout relay, bounded output drain, scrollback framing, and screen-aware handoff cleanup. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, the local auth relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service and listener sampling. |
 | [`cli/remote/tty.rs`](../../crates/rimz/src/cli/remote/tty.rs) | `TtyGuard`: local termios snapshot, restore, reply fence, and emulator reset. |
@@ -189,7 +190,13 @@ A batch-mode master cannot answer a password, two-factor, or host-key prompt. On
 
 The handoff keeps the alternate screen and click and wheel mouse reporting alive from panel to multiplexer. When the master is confirmed, the panel turns its checkpoints green and animates the yellow Multiplexer `attaching…` row for the rest of the minimum display. The final frame freezes that row with an arrow, parks the cursor on its symbol cell, and releases raw input without leaving the alternate screen or dropping mouse capture. The attached multiplexer paints directly over that frame, and residual scroll momentum stays a mouse event instead of becoming an arrow key.
 
-The session end decides how the screen is restored. A non-fatal end restores the main screen and mouse mode immediately. A fatal end keeps the remote output visible, appends the failure and a keypress hint, and restores after a key. Ctrl-C and the interactive fallback return to intact pre-panel scrollback.
+Every supervised attach pipes SSH stdout through a local relay, including the interactive fallback and connections too fast to show a panel. Before the host's room-open sentinel or its first alternate-screen entry, printable text, CR, LF, or TAB releases the held panel. The relay writes a timestamped separator with the target as typed, then the host bytes on the main screen. This text remains selectable in scrollback. Subsequent attaches add `reconnected` to the separator; redirected stdout receives no separator.
+
+The separator is `── <target> · <HH:MM>[ · reconnected] ` padded with `─` to 48 cells or the terminal width, whichever is narrower. A target too wide for the terminal is cut at a cell boundary and ends in `…`, so the time and the reconnect mark always show. It starts at column zero and ends with CRLF. Its colour comes from the CLI rule palette, plain under `NO_COLOR`.
+
+On a silent connect, the relay strips the private room-open sentinel and draws a green ✓ at the panel's parked cursor (panel and colour only). The multiplexer takes over without a main-screen flash. Escape-only output is held in order up to 16 KiB; overflow surfaces it like speech. The sentinel ends the speech watch. Text after it is retained as an 8 KiB escape-free tail until the first alternate-screen entry, so a multiplexer that fails before painting has its error replayed on the main screen rather than lost with the panel.
+
+Every session ending first drains SSH pipe reads to EOF or a 200ms deadline. That bound does not cover synchronous stdout writes: a consumer that stops reading can block the relay, as it blocked SSH when stdout was inherited. Next the relay restores termios and resolves the panel guard's terminal modes without flushing captured logs. If the host never entered the alternate screen the guard restores its modes; otherwise it is disarmed without writing terminal modes. The relay's tracked screen determines whether a separate alternate-screen leave is needed. Emulator cleanup preserves the cursor while resetting the scroll region. Captured logs then replay to stderr on the main screen, starting at column 0, before any unpainted mux tail and the local end line; a CRLF is supplied wherever those writes leave an unfinished line. Fatal failures return immediately with their error in scrollback, without waiting for input. A local relay failure kills SSH and fails the connect instead of reconnecting.
 
 A one-shot `--no-reconnect` attach owns the alternate-scroll (mode 1007) save, disable, and restore bracket in the local process and exports `RIMZ_OUTER_SCROLL_BRACKET`, so the remote does not nest a second bracket. Under reconnect supervision the local side sets no bracket, and the remote RimZ owns it.
 
@@ -213,6 +220,8 @@ An attach over a confirmed master pipes and drains SSH stderr so control-client 
 
 A session counts as established once its link probe receives the first ack, once a master (initial or recovery) is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). Living past the gatetime is also the evidence that the multiplexer attach ran instead of failing at launch. `ReconnectState` preserves establishment across sessions, and `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
+An unknown fatal status names `ssh to <host>` when the attach was not established or died by signal. Otherwise it names `rimz on <host>`, adding `before the room opened` unless the relay saw the sentinel or an alternate-screen entry. Known version, path, and install failures retain their specific fixes. The local report does not repeat the host's last stdout line.
+
 ### The session-loss watchdog
 
 Both tmux and Zellij can exit `0` when their attached session is destroyed, exactly as for a detach, so the exit code alone cannot tell the two apart. When `RIMZ_REMOTE_SUPERVISED` is set, the remote RimZ runs `RemoteRoomWatchdog` beside the mux client:
@@ -235,7 +244,7 @@ The fence has three bounds:
 - When stderr is not a terminal, the query cannot be written, and RimZ drains until 250ms of quiet (`SETTLE_QUIET`) and flushes. Ctrl-C ends this quiet-window drain at once; during a fence it is discarded like any other byte.
 - Keystrokes typed during an outage are discarded, because no session owns them.
 
-Exit paths and the initial attach never drain, preserving type-ahead for the shell that regains the terminal. Every session end writes `EMULATOR_RESET` after releasing or holding its handoff screen, so mouse, focus, paste, and alternate-screen restoration never depends on the child's cleanup. While a full-screen guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame; the panel renders their cleaned tail, and restore replays the original bytes to stderr. The live `backend::tmux::remote_reconnect` integration suite exercises the fence against a real query-producing tmux client.
+Exit paths and the initial attach never drain terminal input, preserving type-ahead for the shell that regains the terminal. Every session end writes `EMULATOR_RESET` after draining host output and resolving the panel guard's terminal modes. The reset disables mouse, focus and paste reporting without an unconditional alternate-screen leave or cursor move. While a panel guard owns the terminal, the tracing writer buffers warnings instead of writing through the frame. When the connect showed a panel, the relay retains that log capture for the whole session, even after host speech steps off the panel, and replays the captured bytes to stderr only after termios restoration, any alternate-screen leave and `EMULATOR_RESET`. A connection that lands inside the grace shows no panel and captures nothing, so its warnings write live through the multiplexer's frame. The live `backend::tmux::remote_reconnect` integration suite exercises the fence against a real query-producing tmux client.
 
 ## Reconnect pacing and reachability
 
@@ -280,7 +289,7 @@ The panel has four rows, one per pipeline stage. Network rows hold their last se
 
 Exactly one row animates: the Internet row while waiting for the network, the SSH session row while a master connects, and the last row after confirmation. The active phase, countdown, and final OpenSSH stderr line fold into that row, while a dim header carries the attempt number, elapsed time, and `Ctrl-C stops`. Initial wording says `Connecting`, recovery says `Connection lost`. The block is centered with left-aligned rows and fixed label columns.
 
-Once shown, the panel stays at least 1.5s (`RECOVERY_MIN_DISPLAY`), so a fast reconnect spends the remaining hold on the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, mark, or handoff frame. A fatal failure before attach replaces the panel with the error, its fix, and up to five captured warning lines, then holds until a key. A fatal failure after handoff appends its error and keypress hint without repainting. Restore returns to the main screen before the CLI prints the error again, so it lands in scrollback.
+Once shown, the panel stays at least 1.5s (`RECOVERY_MIN_DISPLAY`), so a fast reconnect spends the remaining hold on the attaching animation instead of flashing. A connection that lands inside the grace never shows a panel, local ✓, or handoff frame. Fatal failures release the panel and return their error and fix directly to scrollback. Host startup text is surfaced by the relay before that local report.
 
 Ctrl-C is polled as a terminal event in raw mode while the panel owns the terminal: it kills a pending master, restores the terminal, and stops the supervisor. Once SSH owns the terminal, OpenSSH reports a remote command interrupted by Ctrl-C as status 255 plus `Killed by signal 2.`, which `attach_interrupted` recognizes before transport classification.
 
