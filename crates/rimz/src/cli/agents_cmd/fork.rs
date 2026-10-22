@@ -661,6 +661,7 @@ mod tests {
             tier: rimz::config::tiers::ModelTier::Senior,
             model: "gpt-6-astra".to_owned(),
             used_tier: None,
+            unbuildable: Vec::new(),
             skipped: Vec::new(),
         }));
 

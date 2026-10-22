@@ -305,7 +305,7 @@ impl Resolver<'_> {
                 .walk(
                     tier,
                     &preference,
-                    |kind| renders.contains_key(kind),
+                    |kind| exclusions.get(kind).map(String::as_str),
                     |_, _| None::<()>,
                 )
                 .map_err(|error| {
@@ -321,7 +321,7 @@ impl Resolver<'_> {
                         ),
                     )
                 })?;
-            // The walk only selects a family whose complete render succeeded.
+            // The probe loop rendered or excluded every table family, and the walk passes the excluded ones.
             let mut selected = renders[&pick.kind].clone();
             selected.model = Some(pick.model.clone());
             selected.effort = fm.effort.clone().or_else(|| {

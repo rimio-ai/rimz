@@ -349,6 +349,7 @@ fn tier_stamp(model: &str) -> Box<crate::agents::TierStamp> {
         tier: crate::config::tiers::ModelTier::Senior,
         model: model.to_owned(),
         used_tier: None,
+        unbuildable: Vec::new(),
         skipped: Vec::new(),
     })
 }

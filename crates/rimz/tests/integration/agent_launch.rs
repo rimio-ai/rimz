@@ -3696,6 +3696,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
                                 tier: rimz::config::tiers::ModelTier::Senior,
                                 model: "claude-fable-5-1".to_owned(),
                                 used_tier: Some(rimz::config::tiers::ModelTier::Principal),
+                                unbuildable: Vec::new(),
                                 skipped: vec![rimz::agents::TierSkip {
                                     model: "astra".to_owned(),
                                     reason: rimz::agents::TierSkipReason::LoggedOut,
@@ -4336,6 +4337,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             tier: rimz::config::tiers::ModelTier::Junior,
             model: "gpt-6-sol".into(),
             used_tier: None,
+            unbuildable: Vec::new(),
             skipped: Vec::new(),
         }));
         resume.identity.params.mode = Some(rimz::agents::PermissionMode::Yolo);

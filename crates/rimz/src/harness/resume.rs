@@ -2774,6 +2774,7 @@ pub fn restore_routed_cells(
                 tier,
                 model,
                 used_tier: None,
+                unbuildable: Vec::new(),
                 skipped,
             }));
             if let Some(adapter) = find_definition(kind.as_str()) {

@@ -161,9 +161,8 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         profile: String,
-        tier: rimz::config::tiers::ModelTier,
-        model: String,
-        skipped: Vec<rimz::agents::TierSkip>,
+        #[serde(flatten)]
+        stamp: rimz::agents::TierStamp,
     },
     #[serde(rename = "auto_redeem")]
     Redeem {
@@ -706,15 +705,20 @@ impl AssistEvent {
                 tier,
                 model,
                 skipped,
+                unbuildable,
             } => Self::TierFallback {
                 at: record.at,
                 kind,
                 agent_id,
                 label,
                 profile,
-                tier,
-                model,
-                skipped,
+                stamp: rimz::agents::TierStamp {
+                    tier,
+                    model,
+                    used_tier: None,
+                    skipped,
+                    unbuildable,
+                },
             },
             Assist::AutoRedeem {
                 kind,
@@ -1264,16 +1268,12 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             to,
             ..
         } => format!("{time} {kind} alias {alias} now resolves to {to} (was {from})"),
-        AssistEvent::TierFallback {
-            profile,
-            model,
-            skipped,
-            ..
-        } => {
-            let first = skipped
-                .first()
-                .map(|skip| format!("{} → {model} ({})", skip.model, skip.reason))
-                .unwrap_or_else(|| model.clone());
+        AssistEvent::TierFallback { profile, stamp, .. } => {
+            let first = stamp
+                .passes()
+                .next()
+                .map(|pass| format!("{} → {} ({})", pass.model, stamp.model, pass.reason))
+                .unwrap_or_else(|| stamp.model.clone());
             format!("{time} ↘ {profile}: {first}")
         }
         AssistEvent::Redeem {

@@ -1143,6 +1143,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
                 tier: crate::config::tiers::ModelTier::Senior,
                 model: "claude-model".to_owned(),
                 used_tier: None,
+                unbuildable: Vec::new(),
                 skipped: Vec::new(),
             })),
             agent: "claude".to_owned(),

@@ -305,6 +305,10 @@ struct ExplainReport<'a> {
     tier: Option<rimz::config::tiers::ModelTier>,
     #[serde(skip_serializing_if = "<[rimz::agents::TierSkip]>::is_empty")]
     tier_skipped: &'a [rimz::agents::TierSkip],
+    #[serde(skip_serializing_if = "<[rimz::agents::TierUnbuildable]>::is_empty")]
+    tier_unbuildable: &'a [rimz::agents::TierUnbuildable],
+    #[serde(skip)]
+    tier_stamp: Option<&'a rimz::agents::TierStamp>,
     effort: Option<&'a str>,
     fast: bool,
     budget: Option<&'a str>,
@@ -567,6 +571,11 @@ impl<'a> ExplainReport<'a> {
                 .tier
                 .as_ref()
                 .map_or(&[], |stamp| stamp.skipped.as_slice()),
+            tier_unbuildable: params
+                .tier
+                .as_ref()
+                .map_or(&[], |stamp| stamp.unbuildable.as_slice()),
+            tier_stamp: params.tier.as_deref(),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
                 callable: request.skills.as_deref(),
@@ -752,11 +761,10 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
                 report.model.unwrap_or("provider default")
             )),
         );
-        for skipped in report.tier_skipped {
-            plan.push(
-                "skipped",
-                render::cell(format!("{}: {}", skipped.model, skipped.reason)),
-            );
+        if let Some(stamp) = report.tier_stamp {
+            for pass in stamp.passes() {
+                plan.push("skipped", render::cell(format!("{pass:#}")));
+            }
         }
     }
     plan.push("budget", render::cell(report.budget.unwrap_or("no cap")));

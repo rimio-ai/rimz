@@ -79,6 +79,55 @@ pub struct TierStamp {
     pub used_tier: Option<crate::config::tiers::ModelTier>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<TierSkip>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unbuildable: Vec<TierUnbuildable>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierUnbuildable {
+    pub model: String,
+    pub error: String,
+}
+
+pub struct TierPass<'a> {
+    pub model: &'a str,
+    pub reason: String,
+    error: Option<&'a str>,
+}
+
+impl std::fmt::Display for TierPass<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.model, self.reason)?;
+        if f.alternate()
+            && let Some(error) = self.error
+        {
+            write!(f, ": {error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl TierStamp {
+    /// Whether the walk passed any entry ahead of the chosen model.
+    pub fn moved(&self) -> bool {
+        !self.unbuildable.is_empty() || !self.skipped.is_empty()
+    }
+
+    /// Build passes, then usage passes; alternate display includes full build errors.
+    pub fn passes(&self) -> impl Iterator<Item = TierPass<'_>> {
+        self.unbuildable
+            .iter()
+            .map(|pass| TierPass {
+                model: &pass.model,
+                reason: "not buildable".to_owned(),
+                error: Some(&pass.error),
+            })
+            .chain(self.skipped.iter().map(|pass| TierPass {
+                model: &pass.model,
+                reason: pass.reason.to_string(),
+                error: None,
+            }))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -565,6 +614,57 @@ mod tests {
     use serde_json::json;
 
     use super::{AgentUsageSummary, payload_has_context_observation};
+
+    #[test]
+    fn tier_passes_share_move_detection_and_short_and_full_descriptions() {
+        let wire = serde_json::json!({
+            "tier": "senior", "model": "fable",
+            "unbuildable": [{"model": "opus", "error": "drop the user-only skill"}],
+            "skipped": [{"model": "astra", "reason": "logged_out"}]
+        });
+        let mut stamp: super::TierStamp = serde_json::from_value(wire.clone()).unwrap();
+        assert!(stamp.moved());
+        assert_eq!(
+            stamp
+                .passes()
+                .map(|pass| pass.to_string())
+                .collect::<Vec<_>>(),
+            ["opus: not buildable", "astra: logged out"]
+        );
+        assert_eq!(
+            stamp
+                .passes()
+                .map(|pass| format!("{pass:#}"))
+                .collect::<Vec<_>>(),
+            [
+                "opus: not buildable: drop the user-only skill",
+                "astra: logged out"
+            ]
+        );
+        assert_eq!(serde_json::to_value(&stamp).unwrap(), wire);
+        stamp.skipped.clear();
+        assert!(stamp.moved());
+        stamp.unbuildable.clear();
+        assert!(!stamp.moved());
+        assert!(stamp.passes().next().is_none());
+        assert!(
+            serde_json::to_value(&stamp)
+                .unwrap()
+                .get("unbuildable")
+                .is_none()
+        );
+
+        #[derive(serde::Deserialize)]
+        struct OldStamp {
+            tier: crate::config::tiers::ModelTier,
+            model: String,
+            skipped: Vec<super::TierSkip>,
+        }
+        let old: OldStamp = serde_json::from_value(wire).unwrap();
+        assert_eq!(old.tier, stamp.tier);
+        assert_eq!(old.model, stamp.model);
+        assert_eq!(old.skipped.len(), 1);
+    }
 
     #[test]
     fn context_observation_evidence_is_presence_based() {

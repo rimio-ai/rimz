@@ -79,6 +79,7 @@ pub(super) struct TierPick<R> {
     pub model: String,
     pub used_tier: Option<ModelTier>,
     pub skipped: Vec<(String, R)>,
+    pub unbuildable: Vec<agents::TierUnbuildable>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -217,15 +218,16 @@ impl TierConfig {
         })
     }
 
-    pub(super) fn walk<R>(
+    pub(super) fn walk<'a, R>(
         &self,
         tier: ModelTier,
         preference: &TierPreference,
-        eligible: impl Fn(&str) -> bool,
+        unbuildable: impl Fn(&str) -> Option<&'a str>,
         mut unavailable: impl FnMut(&str, &str) -> Option<R>,
     ) -> Result<TierPick<R>, TierError> {
         let mut first = None;
         let mut skipped = Vec::new();
+        let mut build_passes = Vec::new();
         for (candidate_tier, row) in self.rows.range(tier..) {
             let mut entries: Vec<_> = row.iter().collect();
             entries.sort_by_key(|model| {
@@ -244,11 +246,22 @@ impl TierConfig {
             });
             for model in entries {
                 let kind = agents::definition_model_kind(model).expect("validated tier model");
-                if !eligible(kind) {
+                if let Some(error) = unbuildable(kind) {
+                    build_passes.push(agents::TierUnbuildable {
+                        model: model.clone(),
+                        error: error.to_owned(),
+                    });
                     continue;
                 }
                 let used_tier = (*candidate_tier != tier).then_some(*candidate_tier);
-                first.get_or_insert_with(|| (kind.to_owned(), model.clone(), used_tier));
+                first.get_or_insert_with(|| {
+                    (
+                        kind.to_owned(),
+                        model.clone(),
+                        used_tier,
+                        build_passes.len(),
+                    )
+                });
                 if self.routing == Routing::Fallback
                     && let Some(reason) = unavailable(kind, model)
                 {
@@ -260,15 +273,18 @@ impl TierConfig {
                     model: model.clone(),
                     used_tier,
                     skipped,
+                    unbuildable: build_passes,
                 });
             }
         }
-        if let Some((kind, model, used_tier)) = first {
+        if let Some((kind, model, used_tier, build_pass_count)) = first {
+            build_passes.truncate(build_pass_count);
             return Ok(TierPick {
                 kind,
                 model,
                 used_tier,
                 skipped: Vec::new(),
+                unbuildable: build_passes,
             });
         }
         Err(TierError(format!(
@@ -282,6 +298,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn walk_records_only_unbuildable_entries_ahead_of_the_pick() {
+        for (routing, spent) in [
+            (Routing::Fallback, false),
+            (Routing::Fallback, true),
+            (Routing::Off, true),
+        ] {
+            let table = TierConfig {
+                routing,
+                ..Default::default()
+            };
+            let pick = table
+                .walk(
+                    ModelTier::Senior,
+                    &TierPreference::default(),
+                    |kind| (kind == "claude").then_some("drop the user-only skill"),
+                    |_, _| spent.then_some("spent"),
+                )
+                .unwrap();
+            assert_eq!(pick.model, "astra");
+            assert_eq!(
+                pick.unbuildable,
+                vec![agents::TierUnbuildable {
+                    model: "opus".into(),
+                    error: "drop the user-only skill".into(),
+                }]
+            );
+            assert!(pick.skipped.is_empty());
+            let pick = table
+                .walk(
+                    ModelTier::Senior,
+                    &TierPreference {
+                        family: Some("codex".into()),
+                        ..Default::default()
+                    },
+                    |kind| (kind == "claude").then_some("drop the user-only skill"),
+                    |_, _| spent.then_some("spent"),
+                )
+                .unwrap();
+            assert_eq!(pick.model, "astra");
+            assert!(
+                pick.unbuildable.is_empty(),
+                "later exclusions are not moves: {pick:?}"
+            );
+        }
+    }
+
+    #[test]
     fn exact_preference_leaves_the_remaining_entries_in_list_order() {
         let table: TierConfig =
             toml::from_str("junior = []\nsenior = ['astra', 'opus', 'sonnet']").unwrap();
@@ -293,7 +356,7 @@ mod tests {
             .walk(
                 ModelTier::Senior,
                 &preference,
-                |_| true,
+                |_| None,
                 |_, model| (model == "opus").then_some("spent"),
             )
             .unwrap();
@@ -313,7 +376,7 @@ mod tests {
                 model: model.map(str::to_owned),
                 family: family.map(str::to_owned),
             };
-            let pick = table.walk(tier, &preference, |_| true, |_, _| None::<()>);
+            let pick = table.walk(tier, &preference, |_| None, |_, _| None::<()>);
             assert!(pick.is_ok(), "walk must choose {expected}: {pick:?}");
             assert_eq!(pick.unwrap().model, expected);
         }
@@ -322,7 +385,7 @@ mod tests {
             .walk(
                 ModelTier::Senior,
                 &preference,
-                |kind| kind == "codex",
+                |kind| (kind != "codex").then_some("cannot build Claude"),
                 |_, _| None::<()>,
             )
             .unwrap();
@@ -333,7 +396,7 @@ mod tests {
             .walk(
                 ModelTier::Senior,
                 &preference,
-                |_| true,
+                |_| None,
                 |_, model| (model != "fable").then_some("spent"),
             )
             .unwrap();
@@ -344,7 +407,7 @@ mod tests {
             .walk(
                 ModelTier::Senior,
                 &preference,
-                |_| true,
+                |_| None,
                 |_, _| Some("spent"),
             )
             .unwrap();
@@ -352,7 +415,12 @@ mod tests {
         assert!(pick.skipped.is_empty());
         assert!(
             table
-                .walk(ModelTier::Senior, &preference, |_| false, |_, _| None::<()>)
+                .walk(
+                    ModelTier::Senior,
+                    &preference,
+                    |_| Some("cannot build"),
+                    |_, _| None::<()>
+                )
                 .is_err()
         );
         let mut off = table;
@@ -361,7 +429,7 @@ mod tests {
             .walk(
                 ModelTier::Senior,
                 &preference,
-                |_| true,
+                |_| None,
                 |_, _| Some("spent"),
             )
             .unwrap();
@@ -432,7 +500,7 @@ mod tests {
                     model: None,
                     family: Some(family.to_owned()),
                 },
-                |_| true,
+                |_| None,
                 |_, _| None::<()>,
             )
         };
