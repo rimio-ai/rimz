@@ -249,7 +249,6 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         &args,
         &plan,
         &effective,
-        &machine.tiers,
         bwrap.as_deref(),
         warnings,
         action_note,
@@ -381,7 +380,6 @@ impl<'a> ExplainReport<'a> {
         args: &'a ExplainArgs,
         plan: &'a LaunchPlan,
         effective: &LaunchAgents,
-        tiers: &rimz::config::tiers::TierConfig,
         bwrap: Option<&'a Path>,
         mut warnings: Vec<String>,
         action_note: Option<String>,
@@ -545,19 +543,15 @@ impl<'a> ExplainReport<'a> {
             model: params.model.as_deref(),
             tier: if let Some(stamp) = &params.tier {
                 Some(stamp.tier)
-            } else if args.target.starts_with('@') || routed_profile.is_none() {
-                None
-            } else if let Some(model) = args
-                .overrides
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
+            } else if args.target.starts_with('@')
+                || routed_profile.is_none()
+                || args
+                    .overrides
+                    .model
+                    .as_deref()
+                    .is_some_and(|model| !model.trim().is_empty())
             {
-                tiers.tier_for_model(
-                    rimz::agents::definition_model_kind(model).unwrap_or(request.kind.as_str()),
-                    model,
-                )
+                None
             } else {
                 args.overrides.tier.or_else(|| {
                     routed_profile

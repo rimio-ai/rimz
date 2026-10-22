@@ -12,7 +12,8 @@
 # codex = false                        # ensure the per-user Codex remote-control daemon when installed
 
 # Model lists are ordered by preference; written lists replace defaults.
-# Routing skips unavailable models at launch; off keeps the load-time choice.
+# Only tier: routes; concrete model: and --model run exactly as named.
+# Routing skips usage-unavailable tier entries; off still records build passes.
 # [tiers]
 # routing = "fallback"
 # principal = ["fable"]

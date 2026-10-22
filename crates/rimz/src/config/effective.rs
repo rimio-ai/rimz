@@ -129,6 +129,7 @@ pub struct LaunchAgents {
 
 impl LaunchAgents {
     /// Overlay a fresh launch without changing the memoized machine profiles.
+    /// Explicit tiers walk the table; concrete models select their family's render without routing.
     /// Returns whether rendered definitions consumed the family request. Finalization applies model overrides only to cells without a routed stamp.
     #[expect(
         clippy::too_many_arguments,
@@ -155,9 +156,16 @@ impl LaunchAgents {
             return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
         }
         let model_kind = model.and_then(crate::agents::definition_model_kind);
-        let model_tier = model_kind
-            .zip(model)
-            .and_then(|(kind, model)| table.tier_for_model(kind, model));
+        if let (Some(model_kind), Some(model), Some(family)) = (model_kind, model, family) {
+            let base = agents_spec::resolve_profile(family, self.profiles_for(scope))
+                .map_err(|error| super::tiers::TierError(error.to_string()))?;
+            if base.kind.as_str() != model_kind {
+                return Err(super::tiers::TierError(format!(
+                    "--agent {family} runs on {} but --model {model} runs on {model_kind}; choose the same family",
+                    base.kind,
+                )));
+            }
+        }
         let targets = launched_profile
             .map(str::trim)
             .map(|name| {
@@ -223,33 +231,57 @@ impl LaunchAgents {
                 let Some(mut renders) = profile.definition_renders.clone() else {
                     continue;
                 };
-                let targeted = targets
+                let target = targets
                     .iter()
-                    .any(|(scope, target, _)| *scope == profile_scope && target == name);
-                if targeted && model.is_some() && model_tier.is_none() {
+                    .find(|(scope, target, _)| *scope == profile_scope && target == name);
+                let targeted = target.is_some();
+                if let (Some((_, _, role)), Some(model)) = (target, model) {
+                    if let Some(kind) = model_kind
+                        && let Some(error) = renders.exclusions.get(kind)
+                    {
+                        return Err(super::tiers::TierError(format!(
+                            "{role}: model '{model}' ({kind}) cannot run this definition: {error}"
+                        )));
+                    }
+                    if let Some(kind) = model_kind
+                        && let Some(render) = renders.renders.get(kind)
+                    {
+                        let mut selected = render.clone();
+                        selected.model = Some(model.to_owned());
+                        selected.effort = renders.effort.clone().or_else(|| {
+                            crate::agents::definition_defaults(kind, Some(model))
+                                .effort
+                                .map(str::to_owned)
+                        });
+                        selected.model_tier = None;
+                        selected.tier_stamp = None;
+                        consumed |=
+                            family.is_none_or(|family| renders.renders.contains_key(family));
+                        selected.definition_renders = Some(renders);
+                        *profile = selected;
+                        continue;
+                    }
                     profile.model_tier = None;
                     profile.tier_stamp = None;
                     continue;
                 }
                 let requested = targeted
-                    .then_some(tier.or(model_tier))
+                    .then_some(tier)
                     .flatten()
                     .or_else(|| profile.model_tier.as_ref().map(|route| route.tier));
                 let Some(requested) = requested else {
                     continue;
                 };
-                let preference =
-                    if targeted && (tier.is_some() || model.is_some() || family.is_some()) {
-                        super::tiers::TierPreference {
-                            model: model.map(str::to_owned),
-                            family: model_kind
-                                .or(family)
-                                .map(str::to_owned)
-                                .or_else(|| renders.preference.family.clone()),
-                        }
-                    } else {
-                        renders.preference.clone()
-                    };
+                let preference = if targeted && (tier.is_some() || family.is_some()) {
+                    super::tiers::TierPreference {
+                        model: None,
+                        family: family
+                            .map(str::to_owned)
+                            .or_else(|| renders.preference.family.clone()),
+                    }
+                } else {
+                    renders.preference.clone()
+                };
                 let pick = table.walk(
                     requested,
                     &preference,

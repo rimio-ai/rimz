@@ -3260,7 +3260,7 @@ fn explain_prints_the_plan_without_side_effects() {
         .get_output()
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain JSON");
-    assert_eq!(report["tier"], "principal");
+    assert!(report.get("tier").is_none());
     assert!(report.get("reentry").is_none());
     let artifact = std::path::Path::new(report["prompt"]["artifact"].as_str().unwrap());
     assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
@@ -3306,7 +3306,8 @@ fn explain_prints_the_plan_without_side_effects() {
         "name": report["name"], "launch_id": report["launch_id"], "cwd": report["cwd"],
         "profile": report["profile"], "mode": report["mode"], "model": report["model"],
         "effort": report["effort"], "skills": report["skills"], "program": report["program"],
-        "shell": report["argv"][0], "prompt": report["prompt"], "sandbox": report["sandbox"]
+        "shell": report["argv"][0], "prompt": report["prompt"], "sandbox": report["sandbox"],
+        "tier": report["tier"]
     });
     assert_eq!(protocol["shell"], "/bin/sh");
     protocol["shell"] = "<shell>".into();
@@ -3370,7 +3371,8 @@ fn explain_prints_the_plan_without_side_effects() {
           }
         }
       },
-      "target": "worker"
+      "target": "worker",
+      "tier": null
     }
     "#
     );
@@ -3421,7 +3423,7 @@ fn explain_prints_the_plan_without_side_effects() {
         serde_json::json!(["--model opus", "--yolo", "-- --foo"])
     );
     assert_eq!(overridden["model"], "opus");
-    assert_eq!(overridden["tier"], "senior");
+    assert!(overridden.get("tier").is_none());
     assert_eq!(overridden["mode"], "yolo");
     let argv = overridden["provider_argv"].as_array().unwrap();
     assert!(
@@ -3523,7 +3525,7 @@ fn explain_prints_the_plan_without_side_effects() {
         (
             "worker",
             " codex ",
-            "claude",
+            "codex",
             serde_json::json!(["worker", "claude", "codex"]),
         ),
         (
@@ -3563,12 +3565,10 @@ fn explain_prints_the_plan_without_side_effects() {
         let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(report["kind"], kind);
         assert_eq!(report["profile"]["chain"], chain);
-        if agent_override == "fast" {
-            assert!(
-                report.get("tier").is_none(),
-                "a profile rebase does not route"
-            );
-        }
+        assert!(
+            report.get("tier").is_none(),
+            "a concrete profile rebase does not route"
+        );
     }
     let settings_body = r#"{"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}}"#;
     let settings = env.home_root.join("settings.json");

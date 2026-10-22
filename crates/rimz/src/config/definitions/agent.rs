@@ -273,12 +273,7 @@ impl Resolver<'_> {
             .as_deref()
             .map(str::parse::<ModelTier>)
             .transpose()
-            .map_err(|error| DefinitionErr::new(path, error.to_string()))?
-            .or_else(|| {
-                fm.model
-                    .as_deref()
-                    .and_then(|model| self.scope.tiers.tier_for_model(&profile.agent, model))
-            });
+            .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
         let mut renders = BTreeMap::new();
         let mut exclusions = BTreeMap::new();
         for (_, kind, model) in self.scope.tiers.entries(ModelTier::Intern) {
@@ -335,7 +330,18 @@ impl Resolver<'_> {
             });
             selected
         } else {
-            self.finish(name, fm.clone(), profile)?
+            self.finish(name, fm.clone(), profile)
+                .map_err(|mut error| {
+                    if let Some(tier) = fm.model.as_deref().and_then(|model| {
+                        agents::definition_model_kind(model)
+                            .and_then(|kind| self.scope.tiers.tier_for_model(kind, model))
+                    }) {
+                        error.message.push_str(&format!(
+                            "; use `tier: {tier}` to allow another model or family"
+                        ));
+                    }
+                    error
+                })?
         };
         profile.definition_renders = Some(DefinitionRenders {
             preference: preference.clone(),

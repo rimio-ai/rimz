@@ -24,6 +24,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     for (name, runtime) in [
         ("principal", "tier: principal"),
         ("exact", "agent: claude\nmodel: claude-future"),
+        ("concrete", "model: opus"),
         ("other", "tier: principal"),
         ("codex-worker", "agent: codex\ntier: junior"),
     ] {
@@ -77,6 +78,53 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             error: "drop the user-only skill".into(),
         }]
     );
+    let error = excluded
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("worker"),
+            None,
+            Some("opus"),
+            None,
+            |_, _| None,
+        )
+        .unwrap_err();
+    for fragment in ["worker", "opus", "claude", "drop the user-only skill"] {
+        assert!(error.to_string().contains(fragment), "{error}");
+    }
+    let mut exact = launch.clone();
+    exact
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("exact"),
+            None,
+            Some("astra"),
+            None,
+            |_, _| Some(crate::agents::TierSkipReason::LoggedOut),
+        )
+        .unwrap();
+    let selected = &exact.profiles.0["exact"];
+    assert_eq!(selected.agent, "codex");
+    assert_eq!(selected.model.as_deref(), Some("astra"));
+    assert!(selected.model_tier.is_none());
+    assert!(selected.tier_stamp.is_none());
+    for family in ["codex", "codex-worker"] {
+        let error = exact
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("exact"),
+                None,
+                Some("opus"),
+                Some(family),
+                |_, _| None,
+            )
+            .unwrap_err();
+        for fragment in ["--agent", family, "opus", "claude", "codex"] {
+            assert!(error.to_string().contains(fragment), "{error}");
+        }
+    }
     launch
         .route(
             &machine.tiers,
@@ -124,7 +172,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         launch.profiles.0["other"].model,
         machine.agents.profiles.0["other"].model
     );
-    for name in ["principal", "exact", "claude"] {
+    for name in ["principal", "exact", "concrete", "claude"] {
         assert!(
             launch
                 .route(
@@ -206,7 +254,34 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             wire["tier"]["skipped"][0]["reason"],
             serde_json::to_value(reason).unwrap()["reason"]
         );
+        let cell = crate::harness::spec::resolve_profile("concrete", &launch.profiles).unwrap();
+        assert_eq!(cell.kind.as_str(), "claude");
+        assert_eq!(cell.launch.model.as_deref(), Some("opus"));
+        assert!(cell.launch.tier.is_none());
+        assert!(launch.profiles.0["concrete"].model_tier.is_none());
     }
+    let mut concrete = load_with_roots(&machine, project.path(), root.path()).unwrap();
+    assert!(
+        !concrete
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("concrete"),
+                None,
+                None,
+                Some("codex"),
+                |_, _| None,
+            )
+            .unwrap()
+    );
+    let cell = crate::harness::spec::resolve_profile_rebased(
+        "concrete",
+        Some("codex"),
+        &concrete.profiles,
+    )
+    .unwrap();
+    assert_eq!(cell.kind.as_str(), "codex");
+    assert!(cell.launch.tier.is_none());
     for routing in [
         super::super::tiers::Routing::Fallback,
         super::super::tiers::Routing::Off,
@@ -361,16 +436,13 @@ fn team_cli_models_route_each_markdown_role() {
         .unwrap();
         let cells: Vec<_> = layout.agent_cells().collect();
         for (index, cell) in cells.iter().enumerate() {
-            let codex = spent || index == 1;
+            let codex = model.is_none() && index == 1;
             assert_eq!(cell.kind.as_str(), if codex { "codex" } else { "claude" });
             assert_eq!(
                 cell.launch.model.as_deref(),
                 Some(if codex { "astra" } else { "opus" })
             );
-            assert_eq!(
-                cell.launch.tier.as_ref().unwrap().tier,
-                super::super::tiers::ModelTier::Senior
-            );
+            assert_eq!(cell.launch.tier.as_ref().map(|stamp| stamp.tier), tier);
         }
     }
     machine
@@ -432,8 +504,9 @@ fn team_cli_models_route_each_markdown_role() {
     )
     .unwrap();
     let cells: Vec<_> = layout.agent_cells().collect();
-    assert_eq!(cells[0].launch.model.as_deref(), Some("astra"));
+    assert_eq!(cells[0].launch.model.as_deref(), Some("opus"));
     assert_eq!(cells[1].launch.model.as_deref(), Some("opus"));
+    assert!(cells[0].launch.tier.is_none());
     assert!(cells[1].launch.tier.is_none());
 }
 

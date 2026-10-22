@@ -220,6 +220,34 @@ fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
 }
 
 #[test]
+fn listed_concrete_model_refuses_its_unbuildable_family_with_a_tier_hint() {
+    let root = fixture();
+    std::fs::remove_file(root.path().join("agents/claude.md")).unwrap();
+    definition(
+        root.path(),
+        "agents/exact.md",
+        "model: opus\ntools: [Bash]",
+        "Work.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("exact"));
+    let error = loaded
+        .errors
+        .iter()
+        .find(|error| error.path.ends_with("agents/exact.md"))
+        .unwrap();
+    for fragment in ["claude", "base is missing", "claude.md", "tier: senior"] {
+        assert!(error.message.contains(fragment), "{error}");
+    }
+}
+
+#[test]
 fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
     for (parent, child, kind, model) in [
         (
@@ -271,7 +299,13 @@ fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
         let profile = &loaded.agent_profiles.0["child"];
         assert_eq!(profile.agent, kind, "{child}");
         assert_eq!(profile.model, Some(model.to_owned()), "{child}");
-        assert!(profile.model_tier.is_some(), "{child}");
+        assert_eq!(
+            profile.model_tier.is_some(),
+            child.contains("tier:"),
+            "{child}"
+        );
+        assert!(profile.tier_stamp.is_none());
+        assert!(profile.definition_renders.is_some());
     }
 }
 
@@ -460,6 +494,10 @@ fn model_tiers_are_identity_migrations() {
         let loaded = clean(root.path());
         let a = &loaded.agent_profiles.0["concrete"];
         let b = &loaded.agent_profiles.0["tiered"];
+        assert!(a.model_tier.is_none());
+        assert!(a.tier_stamp.is_none());
+        assert!(a.definition_renders.is_some());
+        assert!(b.model_tier.is_some());
         assert_eq!(
             (&a.agent, &a.model, &a.effort, &a.args),
             (&b.agent, &b.model, &b.effort, &b.args)
@@ -1610,10 +1648,14 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
     );
     let loaded = load_checked(root.path());
     assert!(loaded.agent_profiles.0.contains_key("worker"));
-    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-    let judge = &loaded.agent_profiles.0["probe.judge"];
-    assert_eq!(judge.agent, "claude");
-    assert!(judge.definition_renders.as_ref().unwrap().exclusions["codex"].contains("user-only"));
+    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+    let error = &loaded.errors[0];
+    assert!(error.path.ends_with("teams/probe.md"), "{error}");
+    for fragment in ["codex", "user-only", "tier: senior", "drop it from"] {
+        assert!(error.message.contains(fragment), "{error}");
+    }
+    assert!(!loaded.agent_profiles.0.contains_key("probe.judge"));
+    assert!(loaded.teams.0.is_empty());
     std::fs::remove_file(root.path().join("skills/work/agents/openai.yaml")).unwrap();
     std::fs::remove_file(root.path().join("skills/reflect/SKILL.md")).unwrap();
     let loaded = load_checked(root.path());
