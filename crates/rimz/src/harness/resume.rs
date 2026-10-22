@@ -8,9 +8,10 @@
 //! per prior root agent, so the next birth can recover where the user left off
 //! instead of empty.
 //!
-//! Planning stays pure over supplied rollups and filesystem predicates. One
+//! Recovery planning stays pure over supplied rollups and filesystem predicates. One
 //! ordered recovery plan and materializer serve room rebirth and explicit lane
-//! resume; the mux still receives only compiled tabs.
+//! resume; the mux still receives only compiled tabs. Explicit named-team resume
+//! also reads pending boards when no prior member matches.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -1948,27 +1949,12 @@ fn plan_team_restore_tabs(
             continue;
         };
         let mut cohort = if fresh {
-            CohortResumePlan {
-                spec: cohort_spec_label(&cells, Some(&team)),
-                lane_label: lane_label(Some(newest), newest.channel().as_deref(), &cwd),
-                matching_lanes: 1,
-                seeds: vec![CohortSeed::Fresh; cells.len()],
-                cwd: Some(cwd.clone()),
-                channel: newest.channel(),
-                fresh: cells
-                    .iter()
-                    .map(|cell| {
-                        build_label(cell.kind.as_str(), newest.lane_label().as_deref(), &cwd)
-                    })
-                    .collect(),
-                launch_group: None,
-                refilled: BTreeSet::new(),
-            }
+            fresh_cohort_plan(&cells, &team, newest, &cwd, newest.channel())
         } else {
             let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
             // A cohort with a member born under another account plans no tab; its
             // members fall through to the flat planner, which skips them visibly.
-            let Ok(cohort) = plan_cohort_resume(
+            let Ok(cohort) = plan_cohort_members(
                 &group_agents,
                 logins,
                 catalog,
@@ -2403,11 +2389,78 @@ fn candidate_room_channel(
 /// `cells` is the launch layout's agent cells in display order. `team` is the
 /// named-team spec, when the launch resolved one. The caller supplies liveness
 /// and worktree existence so the matching rules stay pure and testable.
+/// A named team with no matching member reopens every seat fresh at its newest
+/// checkout held by a pending board.
 #[expect(
     clippy::too_many_arguments,
     reason = "the resume planners' shared inputs, borrowed from two different callers"
 )]
 pub fn plan_cohort_resume(
+    agents: &[AgentState],
+    logins: &RoomAccounts,
+    catalog: &LoginCatalog,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+    cells: &[CohortCell],
+    team: Option<&str>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> Result<CohortResumePlan, CohortResumeErr> {
+    let plan = plan_cohort_members(
+        agents,
+        logins,
+        catalog,
+        liveness,
+        cells,
+        team,
+        &worktree_exists,
+        session_backed,
+    );
+    if !matches!(&plan, Err(CohortResumeErr::NothingToResume { .. })) {
+        return plan;
+    }
+    let Some(team) = team else {
+        return plan;
+    };
+    let held = crate::address::launch_occupants(agents.iter().filter(|agent| {
+        agent.parent_agent_id.is_none()
+            && !agent.agent_id.is_empty()
+            && agent.team.as_deref() == Some(team)
+    }))
+    .into_iter()
+    .filter_map(|agent| {
+        let checkout = Path::new(agent.lane_path()?);
+        if !worktree_exists(checkout) {
+            return None;
+        }
+        let hold = inspect_team_hold(agents, checkout)?;
+        (hold.team == team && matches!(&hold.reason, TeamHoldReason::BoardStage(_)))
+            .then_some((agent, hold))
+    })
+    .min_by(|(left, _), (right, _)| {
+        newest_cmp(
+            left.last_activity,
+            left.agent_id.as_str(),
+            right.last_activity,
+            right.agent_id.as_str(),
+        )
+    });
+    let Some((newest, hold)) = held else {
+        return plan;
+    };
+    Ok(fresh_cohort_plan(
+        cells,
+        team,
+        newest,
+        &hold.checkout,
+        Some(hold.channel),
+    ))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the resume planners' shared inputs, borrowed from two different callers"
+)]
+fn plan_cohort_members(
     agents: &[AgentState],
     logins: &RoomAccounts,
     catalog: &LoginCatalog,
@@ -2547,6 +2600,29 @@ pub fn plan_cohort_resume(
         launch_group,
         refilled,
     })
+}
+
+fn fresh_cohort_plan(
+    cells: &[CohortCell],
+    team: &str,
+    newest: &AgentState,
+    cwd: &Path,
+    channel: Option<String>,
+) -> CohortResumePlan {
+    CohortResumePlan {
+        spec: cohort_spec_label(cells, Some(team)),
+        lane_label: lane_label(Some(newest), channel.as_deref(), cwd),
+        matching_lanes: 1,
+        seeds: vec![CohortSeed::Fresh; cells.len()],
+        cwd: Some(cwd.to_owned()),
+        channel,
+        fresh: cells
+            .iter()
+            .map(|cell| build_label(cell.kind.as_str(), newest.lane_label().as_deref(), cwd))
+            .collect(),
+        launch_group: None,
+        refilled: BTreeSet::new(),
+    }
 }
 
 /// Overrides applied after durable posture replay, before stamping the next

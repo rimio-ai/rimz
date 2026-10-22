@@ -825,6 +825,33 @@ fn held_team_can_resume_before_done() {
 }
 
 #[test]
+fn unregistered_team_board_hold_refuses_launch() {
+    assert_launch_focus(
+        &["teams", "solo", "-w", "review"],
+        true,
+        "hold-board-unregistered",
+    );
+}
+
+#[test]
+fn unregistered_team_board_hold_refuses_channel_launch() {
+    assert_launch_focus(
+        &["teams", "solo", "--channel", "review"],
+        true,
+        "hold-channel-board-unregistered",
+    );
+}
+
+#[test]
+fn unregistered_board_held_team_resumes_every_member_fresh() {
+    assert_launch_focus(
+        &["teams", "resume", "duo", "-w", "review"],
+        true,
+        "hold-resume-unregistered",
+    );
+}
+
+#[test]
 fn channel_hold_refuses_live_launch() {
     assert_launch_focus(
         &["teams", "solo", "--channel", "review"],
@@ -1097,6 +1124,8 @@ fn assert_launch_focus(args: &[&str], agent: bool, action: &str) {
 }
 
 fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version: &str) {
+    let unregistered = action.ends_with("-unregistered");
+    let action = action.strip_suffix("-unregistered").unwrap_or(action);
     let env = Env::new();
     if agent {
         crate::common::trust_claude_project(&env, &env.project_root);
@@ -1229,7 +1258,9 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         } else {
             env.project_root.clone()
         };
-        let session_id = if hold || action == "cohort" {
+        let session_id = if unregistered {
+            "launch_unregistered"
+        } else if hold || action == "cohort" {
             "held-session"
         } else {
             "provider-session"
@@ -1258,15 +1289,38 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         if hold && !live_hold {
             observation.runtime_owner = None;
         }
-        env.store()
-            .append_event(&EventEnvelope::agent_lifecycle(
+        let event = if unregistered {
+            EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: session_id.into(),
+                    launch_id: Some(session_id.into()),
+                    agent_name: "held".into(),
+                    agent_name_explicit: true,
+                    launch: observation.launch.clone(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: observation.worktree_path.clone(),
+                    worktree_branch: Some("review".into()),
+                    prompt: None,
+                    description: None,
+                },
+            )
+        } else {
+            EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
                 "claude",
                 "test",
                 &observation,
-            ))
-            .unwrap();
+            )
+        };
+        env.store().append_event(&event).unwrap();
         if hold && !live_hold {
             env.store()
                 .append_event(&EventEnvelope::agent_lifecycle(
@@ -1427,6 +1481,24 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             );
         }
         return;
+    }
+    if unregistered && action == "hold-resume" {
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(receipt.matches("started fresh").count(), 2, "{receipt}");
+        assert!(!receipt.contains("nothing to resume"), "{receipt}");
+        let checkout =
+            rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
+                .unwrap();
+        assert!(
+            std::fs::read_to_string(checkout.join(".rimz/team/blackboard.md"))
+                .unwrap()
+                .contains("Stage: Build")
+        );
     }
     let action = if hold { "new-tab" } else { action };
     assert!(
