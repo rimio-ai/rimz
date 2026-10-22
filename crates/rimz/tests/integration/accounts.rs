@@ -981,6 +981,144 @@ fn accounts_add_history_writes_only_that_field() {
 }
 
 #[test]
+fn accounts_add_inline_history_updates_config_and_links() {
+    for (kind, history_dirs) in [
+        ("claude", &["projects"][..]),
+        ("codex", &["sessions", "archived_sessions"][..]),
+    ] {
+        let env = Env::new();
+        succeeded(&accounts(&env, &["add", kind, "team-1"]));
+        let config = env.rimz_home().join("config.toml");
+        let home = env.rimz_home().join("accounts").join(kind).join("team-1");
+        let seed = format!(
+            "[accounts.{kind}]\nteam-2 = {{}}\n# team one\nteam-1 = {{ history = \"shared\" }}   # hand\n"
+        );
+        std::fs::write(&config, seed).unwrap();
+        for entry in history_dirs {
+            assert!(
+                home.join(entry).is_symlink(),
+                "missing shared {kind} {entry}"
+            );
+        }
+        let args = ["add", kind, "team-1", "--history", "standalone"];
+        let output = accounts(&env, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = format!(
+            "[accounts.{kind}]\nteam-2 = {{}}\n\n# team one\n[accounts.{kind}.team-1]   # hand\nhistory = \"standalone\"\n"
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), expected);
+        let rows: Value =
+            serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == format!("{kind}@team-1"))
+            .unwrap();
+        assert_eq!(row["history"], "standalone");
+        for entry in history_dirs {
+            assert!(
+                std::fs::symlink_metadata(home.join(entry)).is_err(),
+                "{kind} {entry} was not unlinked"
+            );
+        }
+        succeeded(&accounts(&env, &args));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), expected);
+    }
+}
+
+#[test]
+fn accounts_add_inline_label_sets_and_clears_the_field() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    for (name, fields, label, expected_fields) in [
+        (
+            "team-1",
+            "history = \"shared\"",
+            "work",
+            "history = \"shared\"\nlabel = \"work\"\n",
+        ),
+        ("team-2", "label = \"work\"", "", ""),
+    ] {
+        std::fs::write(
+            &config,
+            format!("[accounts.codex]\n# account\n{name} = {{ {fields} }} # hand\n"),
+        )
+        .unwrap();
+        let output = accounts(&env, &["add", "codex", name, "--label", label]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            format!(
+                "[accounts.codex]\n\n# account\n[accounts.codex.{name}] # hand\n{expected_fields}"
+            )
+        );
+        let rows: Value =
+            serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+        assert!(
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["account"] == format!("codex@{name}")),
+            "{rows}"
+        );
+    }
+}
+
+#[test]
+fn accounts_add_rejected_config_edit_keeps_history_links() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    let config = env.rimz_home().join("config.toml");
+    let home = env.rimz_home().join("accounts/claude/work");
+    let history = home.join("projects");
+    let target = std::fs::read_link(&history).unwrap();
+    let seed = "[accounts.claude.work]\n[agents.commands]\n'bad/name' = 'echo invalid'\n";
+    std::fs::write(&config, seed).unwrap();
+    succeeded(&accounts(&env, &["list", "--json"]));
+    let output = accounts(&env, &["add", "claude", "work", "--history", "standalone"]);
+    assert_eq!(output.status.code(), Some(1));
+    let error = failed(&output);
+    assert!(error.contains("invalid command name `bad/name`"), "{error}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), seed);
+    assert!(
+        history.is_symlink(),
+        "a rejected edit must not unlink shared history: {error}"
+    );
+    assert_eq!(std::fs::read_link(&history).unwrap(), target);
+}
+
+#[test]
+fn accounts_add_rejected_config_edit_never_creates_a_home() {
+    for label in ["work", ""] {
+        let env = Env::new();
+        let config = env.rimz_home().join("config.toml");
+        let home = env.rimz_home().join("accounts/codex/team-1");
+        let seed = "[accounts.codex.team-1]\nlabel = 'work'\n[agents.commands]\n'bad/name' = 'echo invalid'\n";
+        std::fs::write(&config, seed).unwrap();
+        succeeded(&accounts(&env, &["list", "--json"]));
+        assert!(!home.exists());
+        let output = accounts(&env, &["add", "codex", "team-1", "--label", label]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), seed);
+        assert!(
+            !home.exists(),
+            "a rejected label edit must not create the home"
+        );
+    }
+}
+
+#[test]
 fn accounts_add_label_sets_rewrites_preserves_and_clears_only_the_label() {
     let env = Env::new();
     let config = env.rimz_home().join("config.toml");
