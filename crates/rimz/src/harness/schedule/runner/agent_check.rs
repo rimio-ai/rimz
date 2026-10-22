@@ -1,13 +1,47 @@
 //! A loop judge's complete launch path, bounded process edge, and verdict record.
 
+use std::cell::{Cell, RefCell};
+
 use super::*;
 use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest};
 use crate::config::Judge;
 use crate::harness::headless::HeadlessProfile;
-pub(super) use crate::harness::headless::{ProcessErr, execute};
+pub(super) use crate::harness::headless::ProcessErr;
 use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest};
 use crate::harness::launch_plan::LaunchPlan;
 use crate::harness::schedule::run_log::JudgeRecord;
+
+pub(super) fn execute(
+    adapter: &crate::agents::AgentDefinition,
+    plan: &LaunchPlan,
+    _request: &HeadlessRequest,
+    timeout: Duration,
+    interrupted: &dyn Fn() -> bool,
+) -> Result<crate::proc::BoundedOutput, ProcessErr> {
+    let signals = RefCell::new(CheckSignals::new(&[signal_hook::consts::SIGTERM])?);
+    let group = Cell::new(None);
+    let terminated = Cell::new(false);
+    let poll = || {
+        for _ in signals.borrow_mut().pending() {
+            terminated.set(true);
+            if let Some(pid) = group.get() {
+                let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
+            }
+        }
+        // The bounded driver kills on interruption. After SIGTERM, let the
+        // check exit itself, bounded only by its original timeout.
+        interrupted() || (terminated.get() && group.get().is_none())
+    };
+    let output =
+        crate::harness::headless::admit(adapter, plan)?.execute_hosted(timeout, &poll, |pid| {
+            group.set(Some(pid));
+            Ok(())
+        })?;
+    if terminated.get() {
+        return Err(ProcessErr::Io(std::io::ErrorKind::Interrupted.into()));
+    }
+    Ok(output)
+}
 
 struct CheckFiles(PathBuf);
 
@@ -239,6 +273,7 @@ pub(super) fn run(
             code: None,
             timed_out,
             interrupted,
+            terminated: false,
             output,
         },
         record,

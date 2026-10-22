@@ -1032,7 +1032,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     if let Some(backlog) = &view.backlog
         && !backlog.triggers.is_empty()
     {
-        let text = if view.entry.overlap == Some(rimz::config::OverlapPolicy::Queue) {
+        let mut text = if view.entry.overlap == Some(rimz::config::OverlapPolicy::Queue) {
             format!(
                 "queue {}/{} · next runs when the active run ends",
                 backlog.triggers.len(),
@@ -1049,6 +1049,11 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             }
             text
         };
+        if let Some(mark) = &backlog.stopping
+            && mark.cause == schedule::backlog::StopCause::Replace
+        {
+            text.push_str(&format!(" · stopping pid {}", mark.pid));
+        }
         writeln!(out, "  {}", ui::paint(ui::palette::muted(), &text))?;
     }
     if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {

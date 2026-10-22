@@ -162,6 +162,7 @@ fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
     use rimz::harness::schedule::runner::{TaskFireFinished, TaskFireNotice};
 
     let finished = |result, notice| TaskFireFinished {
+        replace_holder: None,
         record: LoopRunRecord::new("test", result, LoopRunMode::Manual, 0),
         presentation: LoopRunPresentation::default(),
         transition: RunTransition::Recorded,

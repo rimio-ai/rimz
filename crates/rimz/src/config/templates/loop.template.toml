@@ -41,7 +41,7 @@
 ## prompt = "check CI on the release PR"
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
-## overlap = "coalesce"                # busy triggers: skip (default), coalesce (newest), queue, replace (currently coalesces)
+## overlap = "coalesce"                # busy triggers: skip (default), coalesce (newest), queue, replace (stop for newest)
 ## # overlap-limit = 10                # only with overlap = "queue"; at least 1
 ## mode = "auto"                       # auto, ask, or yolo
 ## account = "work"                    # named provider account every fire runs on; unset follows the room

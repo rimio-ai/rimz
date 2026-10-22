@@ -800,6 +800,13 @@ fn execute_attempt(
             .context("binding run socket")?,
         )
     };
+    let _termination = waiter
+        .as_ref()
+        .filter(|_| request.loop_task.is_some())
+        .map(|waiter| {
+            rimz::harness::schedule::runner::cancel_run_on_sigterm(waiter.cancellation().clone())
+        })
+        .transpose()?;
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
     if let Some(turn) = &request.throttle_turn {
         turn.report_launch(&prepared.workspace.workspace_id, &launch_identity.agent_id);
@@ -885,11 +892,20 @@ fn verify_phase(
         };
         let status = supervised::output::verify_status_label(&verify);
         let reprompt = rimz::harness::prompt_compose::verify_reprompt(cmd, &status, &verify.output);
+        let _termination = request
+            .loop_task
+            .as_ref()
+            .map(|_| {
+                rimz::harness::schedule::runner::cancel_run_on_sigterm(
+                    waiter.waiter.cancellation().clone(),
+                )
+            })
+            .transpose()?;
         record = match rimz::harness::run::settle_verify(
             prepared.store.paths(),
             &record.run_id,
             verify,
-            waiter.waiter.cancellation().is_requested(),
+            outcome.terminated() || waiter.waiter.cancellation().is_requested(),
             max_attempts,
         )? {
             VerifyStep::Settled(settled) => {

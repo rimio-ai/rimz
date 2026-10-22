@@ -37,6 +37,79 @@ fn seed_backlog(root: &Path) {
 }
 
 #[test]
+fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
+    for contents in ["not json", r#"{"version":2,"tasks":{}}"#] {
+        for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
+            for overlap in [
+                None,
+                Some(OverlapPolicy::Skip),
+                Some(OverlapPolicy::Coalesce),
+                Some(OverlapPolicy::Queue),
+                Some(OverlapPolicy::Replace),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                record_room(root.path()).unwrap();
+                let paths = StatePaths::for_project_root(root.path()).unwrap();
+                let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+                let name = "unreadable-backlog-agent";
+                let mut fire = TaskFire::new(
+                    name,
+                    LoadedTask::new(
+                        name,
+                        TaskEntry {
+                            root: root.path().to_owned(),
+                            agent: Some("claude".into()),
+                            prompt: Some("work".into()),
+                            every: Some("1h".into()),
+                            overlap,
+                            ..Default::default()
+                        },
+                        catalog::TaskSource::Config,
+                    ),
+                    &catalog,
+                    mode,
+                    false,
+                    Timestamp::now(),
+                    Arc::new(MachineConfig::default()),
+                    None,
+                    CheckEcho::Capture,
+                    Instant::now(),
+                )
+                .unwrap();
+                fire.prepare_run_lock(false).unwrap();
+                let path = backlog::path(&paths);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, contents).unwrap();
+                let result = fire.reconcile_backlog();
+                if mode == LoopRunMode::Scheduled
+                    && overlap.unwrap_or_default() != OverlapPolicy::Skip
+                {
+                    assert!(
+                        result.is_err(),
+                        "a retaining scheduled fire must stay strict"
+                    );
+                    continue;
+                }
+                assert!(
+                    matches!(result, Ok(None)),
+                    "an unrelated unreadable backlog must not cause an errored strike: {mode:?}, {overlap:?}"
+                );
+                let done = fire.record_terminal_with(
+                    LoopRunResult::Completed,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::None,
+                    None,
+                    |_| {},
+                );
+                assert_eq!(done.record.result, LoopRunResult::Completed);
+                assert_eq!(done.transition, RunTransition::Recorded);
+                assert!(!super::super::strikes::load().contains_key(&fire.task.key(name)));
+            }
+        }
+    }
+}
+
+#[test]
 fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
     for after_admission in [false, true] {
         let root = tempfile::tempdir().unwrap();
@@ -82,6 +155,95 @@ fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
         );
         assert_eq!(fire.waiting_trigger().arrived_at.as_second(), 2);
         assert_eq!(fire.absorbed, 1);
+    }
+}
+
+#[test]
+fn cold_runtime_holder_is_visible_without_a_room_record() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    let path = runtime.lock_path(run_lock_file_name("pending", None));
+    let RunLockAttempt::Acquired(_guard) =
+        acquire_run_lock_file(&path, Some(TaskKind::Routine)).unwrap()
+    else {
+        panic!("fixture takes lock")
+    };
+    assert!(
+        matches!(
+            RunLocks::list(root.path())
+                .unwrap()
+                .state("pending")
+                .unwrap(),
+            RunLockState::Held(_)
+        ),
+        "stop must find a cold runtime-only holder"
+    );
+    assert!(in_flight_run("pending", root.path()).unwrap().is_some());
+    assert!(
+        !paths.workspace_record.exists(),
+        "lookup must not birth a room"
+    );
+}
+
+#[test]
+fn stop_marks_retype_the_holder_once_and_three_replacements_disable() {
+    for cause in [backlog::StopCause::Stop, backlog::StopCause::Replace] {
+        let root = tempfile::tempdir().unwrap();
+        record_room(root.path()).unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        for strike in 1..=3 {
+            let mut fire = backlog_fire(root.path(), &catalog);
+            fire.prepare_run_lock(false).unwrap();
+            let (_, Some(info)) = held_run_lock("pending", root.path()).unwrap().unwrap() else {
+                panic!("holder is recorded")
+            };
+            let mut locked = LockedBacklog::acquire(&paths).unwrap();
+            locked
+                .record
+                .tasks
+                .entry("pending".into())
+                .or_default()
+                .stopping = Some(backlog::StopMark {
+                pid: info.pid,
+                started_at: info.started_at,
+                cause,
+            });
+            locked.save().unwrap();
+            drop(locked);
+            let done = fire.record_terminal_with(
+                LoopRunResult::Canceled,
+                LoopRunPresentation::default(),
+                TaskFireNotice::None,
+                None,
+                |_| {},
+            );
+            assert_eq!(
+                done.record.result,
+                if cause == backlog::StopCause::Replace {
+                    LoopRunResult::Replaced
+                } else {
+                    LoopRunResult::Canceled
+                }
+            );
+            assert_eq!(
+                done.record.error.as_deref(),
+                Some(if cause == backlog::StopCause::Replace {
+                    "replaced by a newer trigger"
+                } else {
+                    "stopped by rimz loop stop"
+                })
+            );
+            assert!(
+                !backlog::load(&paths).unwrap().tasks.contains_key("pending"),
+                "the recording runner must clear its mark"
+            );
+            assert_eq!(
+                done.transition == RunTransition::AutoDisabled { strikes: 3 },
+                cause == backlog::StopCause::Replace && strike == 3
+            );
+        }
     }
 }
 
@@ -1048,13 +1210,15 @@ fn wait_for_run_lock_release_observes_guard_drop() {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
+    let holder = Some(guard.info);
     let releaser = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
         drop(guard);
     });
 
     assert!(
-        wait_for_run_lock_release_path(&path, Duration::from_secs(1)).expect("wait for release")
+        wait_for_run_lock_release_path(&path, holder, Duration::from_secs(1))
+            .expect("wait for release")
     );
     releaser.join().expect("release thread");
 }
@@ -1083,6 +1247,7 @@ fn check_polarity_truth_table() {
         passed,
         timed_out,
         interrupted: false,
+        terminated: false,
         output: String::new(),
         code,
     };
@@ -1486,15 +1651,15 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     let error = fire
         .prepare(&mut |_| bail!("room unavailable"))
         .unwrap_err();
-    assert_eq!(
-        fire.finish_error(&error).record.result,
-        LoopRunResult::Errored
-    );
     let mut overlap = make_fire(entry.clone());
     assert!(
         matches!(overlap.prepare(&mut |_| panic!("lock refuses before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
     );
     drop(overlap);
+    assert_eq!(
+        fire.finish_error(&error).record.result,
+        LoopRunResult::Errored
+    );
     drop(fire);
     let mut expired = make_fire(TaskEntry {
         deadline: Some(Timestamp::UNIX_EPOCH),
