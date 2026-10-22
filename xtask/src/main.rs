@@ -96,13 +96,13 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "hooks",
-        summary: "Install the tracked git hooks (pre-commit fmt, invariants, conform, docs-links gate).",
-        runs: "git config core.hooksPath .githooks",
+        summary: "Install the tracked git hooks (pre-commit staged fmt, invariants, conform, docs-links gate).",
+        runs: "git config core.hooksPath .githooks; the hook runs cargo xtask fmt --staged, invariants, atlas conform --ratchet, and docs-links",
     },
     TaskInfo {
         name: "fmt",
         summary: "Check Rust formatting.",
-        runs: "cargo fmt --all -- --check",
+        runs: "cargo xtask fmt: cargo fmt --all -- --check; cargo xtask fmt --staged: check staged Rust index copies; on refusal, format only their working copies without re-staging",
     },
     TaskInfo {
         name: "lint",
@@ -306,6 +306,7 @@ fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
         "test"
+            | "fmt"
             | "stress"
             | "prune"
             | "install-system"
@@ -364,9 +365,13 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "brew-formula" => brew::brew_formula(root),
         "hooks" => hooks::install(root),
         "prune" => prune::run(root, args),
-        "fmt" => gates::fmt(root),
+        "fmt" => match args {
+            [] => gates::fmt(root),
+            [arg] if arg == "--staged" => hooks::fmt_staged(root),
+            _ => bail!("usage: cargo xtask fmt [--staged]"),
+        },
         // Standalone `lint` is the per-commit signal, so it checks formatting
-        // first, as the pre-commit hook does, and runs only the all-feature
+        // across the whole tree first, and runs only the all-feature
         // clippy pass; the composite stacks run `fmt` as their own step and
         // call `gates::lint` for every feature shape.
         "lint" => gates::fmt(root).and_then(|()| gates::lint_all_features(root)),

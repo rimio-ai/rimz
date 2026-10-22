@@ -6,12 +6,11 @@
 # `cargo xtask gate` and CI. Install with `cargo xtask hooks`; bypass a single
 # commit with `git commit --no-verify`.
 
-# Formatting: on failure, apply `cargo fmt --all` to the working tree but do not
-# re-stage it, so a partially staged file never gains unstaged hunks silently.
-if ! cargo xtask fmt; then
-	cargo fmt --all
+# Formatting: judge staged Rust index copies, rewrite only refused files' working
+# copies, and never re-stage, so partially staged files never gain hunks silently.
+if ! cargo xtask fmt --staged; then
 	echo >&2
-	echo "pre-commit: code was not formatted — ran \`cargo fmt --all\`; review the diff, re-stage, and commit again." >&2
+	echo "pre-commit: staged Rust files above were not formatted; only their working copies were formatted where possible, nothing was re-staged. Review the diff, re-stage, and commit again." >&2
 	exit 1
 fi
 

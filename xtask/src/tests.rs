@@ -210,6 +210,45 @@ fn check_is_a_first_class_no_arg_task() {
 }
 
 #[test]
+fn fmt_accepts_whole_tree_and_staged_modes() {
+    assert!(task_info("fmt").is_some());
+    assert_eq!(
+        parse_args(&args(&["fmt"])).unwrap(),
+        Action::Run {
+            task: "fmt",
+            args: &[],
+        },
+    );
+    let argv = args(&["fmt", "--staged"]);
+    let parsed = parse_args(&argv);
+    assert!(parsed.is_ok(), "staged mode must be accepted: {parsed:?}");
+    assert_eq!(
+        parsed.unwrap(),
+        Action::Run {
+            task: "fmt",
+            args: &argv[1..],
+        },
+    );
+}
+
+#[test]
+fn fmt_rejects_unknown_or_extra_arguments() {
+    for argv in [
+        args(&["--anything-else"]),
+        args(&["--staged", "--anything-else"]),
+        args(&["--staged", "--staged"]),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let err = dispatch("fmt", &argv, root.path()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("usage: cargo xtask fmt [--staged]"),
+            "invalid fmt arguments must give usage: {err:#}"
+        );
+    }
+}
+
+#[test]
 fn stress_is_registered_as_a_task_that_takes_arguments() {
     assert!(task_info("stress").is_some());
     assert!(task_accepts_args("stress"));
