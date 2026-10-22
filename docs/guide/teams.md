@@ -84,7 +84,7 @@ Two siblings ship beside forge and work exactly the same way. `mill` leads with 
 
 A team is one line of work, so the room treats it as one. The sidebar names the group with `· forge`, keeps its members in one contiguous block with a single derived state, and lets one member asking for you lift the whole block ([the sidebar guide](./sidebar.md#teams-read-as-one)).
 
-`rimz teams list` opens with who needs you, including a stage owner who is not live, then lists live cohorts in attention order with stage and activity ages. Definitions with no live cohort share a trailing line. A live copy is a cohort, and its address is `team#worktree`:
+`rimz teams list` opens with who needs you, including a stage owner who is not live, then lists live cohorts in attention order with stage and activity ages. Definitions with no live cohort share a trailing line. A live copy is a cohort, and its address is `team#channel`. For a team launched with `-w NAME`, that channel is its worktree's name:
 
 ```sh
 rimz teams list                         # every definition, and every cohort now live
@@ -121,7 +121,7 @@ The header uses the sidebar's team verdict: one member waiting on you reads `blo
 
 The sidebar draws the same stage as a line under the worktree header, with the current stage, how long the run has been in it, and a click that takes you to the role that owns it ([the agent cards](./sidebar.md#the-agent-cards)). At `Done` its clock switches to the whole run's total and stops.
 
-Four verbs drive a live cohort, each acting on the cohort in your current worktree unless you name one with `team#worktree` or `-w NAME`:
+Four verbs drive a live cohort. Each uses your current channel, or the only live cohort; when several are live elsewhere it stops and lists their channels. Name one with `team#channel` or `-w NAME`:
 
 ```sh
 rimz teams focus forge     # jump to the member that needs attention
@@ -220,13 +220,13 @@ Run the same named-worktree launch command twice and RimZ reads the state before
 
 ```sh
 rimz teams resume forge                  # reopen the team's newest closed cohort
-rimz teams resume forge#feat-rate-limits # reopen the one in that worktree
+rimz teams resume forge#feat-rate-limits # reopen the one on that channel
 rimz teams forge -w feat-rate-limits --fresh
 ```
 
 `resume` keeps each member's conversation, identity, working directory, and channel. It rereads the current profile and replays the saved model, effort, and agent base over it. It refuses while a matching member is still live. A team stopped before its members opened conversations can still resume while its unfinished board holds the checkout: every member starts fresh there, keeping the board and channel.
 
-Name the worktree whenever the team has run in more than one. A prompt can ride along: `rimz teams resume forge 'Continue from the board'` queues your message to the leader after reopening. Model and effort overrides become the saved settings for later relaunches; an in-session `/model` switch is not carried, so restate it with `--model` on resume to keep it. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
+Name the channel whenever the team has run in more than one place. Use the address from `teams list` or the stop receipt: it also works for a root-checkout team's `<dir>/forge` channel, named for your project directory, or a custom `--channel` name. Without an address, `resume` uses your current linked worktree, or the newest match in the room when you stand at the project root. A prompt can ride along: `rimz teams resume forge 'Continue from the board'` queues your message to the leader after reopening. Model and effort overrides become the saved settings for later relaunches; an in-session `/model` switch is not carried, so restate it with `--model` on resume to keep it. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
 
 `fresh` starts new sessions in the same checkout when you want the work but not the conversations. The branch and uncommitted changes stay. It keeps the linked run and its memory files only when that run belongs to the same team and its board is not at `Done`; the new members see which files exist. Otherwise it links a new, empty run without changing the old archive. `resume` keeps the linked run only when it belongs to this team, including at `Done`, so members can continue a follow-up by flipping out of `Done`. Otherwise it restores this team's newest archived run for the same checkout, or opens a new one if none exists. `fresh` never restores an unlinked archive.
 

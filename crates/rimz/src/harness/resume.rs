@@ -641,7 +641,9 @@ pub enum CohortRelaunchState {
         leader: Option<AgentSessionId>,
         members: Vec<AgentSessionId>,
     },
-    Closed,
+    Closed {
+        channel: Option<String>,
+    },
 }
 
 /// One named-team tab selected for restore and awaiting launch materialization.
@@ -3029,11 +3031,23 @@ pub fn inspect_cohort_relaunch(
     }
 
     let present = members
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|agent| cohort_member_is_present(agent))
         .collect::<Vec<_>>();
     if present.is_empty() {
-        return CohortRelaunchState::Closed;
+        let channel = members
+            .iter()
+            .min_by(|left, right| {
+                newest_cmp(
+                    left.last_activity,
+                    left.agent_id.as_str(),
+                    right.last_activity,
+                    right.agent_id.as_str(),
+                )
+            })
+            .and_then(|agent| agent.channel());
+        return CohortRelaunchState::Closed { channel };
     }
     let leader = leader_index.and_then(|index| {
         let member = match (team, cells.get(index).and_then(|cell| cell.role.as_deref())) {

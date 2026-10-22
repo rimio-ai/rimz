@@ -314,6 +314,158 @@ fn stop_receipt_names_the_cohort_and_held_board() {
 }
 
 #[test]
+fn stop_receipt_resume_command_reopens_the_unregistered_cohort() {
+    let fixture = Fixture::new();
+    fixture.unregistered(false);
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = success(
+        fixture
+            .command()
+            .args(["teams", "stop", "forge#feature-team"])
+            .output()
+            .unwrap(),
+    );
+    let command = receipt
+        .lines()
+        .find_map(|line| {
+            line.split_once("Resume: ")
+                .and_then(|(_, tail)| tail.split_once(" · release: ").map(|(command, _)| command))
+        })
+        .unwrap();
+    let args = shlex::split(command).unwrap();
+    assert_eq!(args[0], "rimz");
+    // The trace mux closes no process; model the wrapper's exit before resuming.
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    let mut ended =
+        AgentLifecycleObservation::new(Some("launch_coder".into()), LifecycleSignal::Ended);
+    ended.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "launch_coder",
+        u32::MAX,
+        None,
+    ));
+    fixture
+        .env
+        .store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            "claude",
+            "AgentEnded",
+            &ended,
+        ))
+        .unwrap();
+    fixture.live_panes(&[]);
+    let receipt = success(fixture.launch_command().args(&args[1..]).output().unwrap());
+    assert!(
+        receipt.starts_with("resuming forge in #feature-team"),
+        "{receipt}"
+    );
+}
+
+#[test]
+fn team_resume_resolves_a_root_named_lane_without_git() {
+    assert_resume_lane("project/forge");
+}
+
+#[test]
+fn team_resume_resolves_a_lane_outside_the_worktree_charset() {
+    assert_resume_lane("my.repo/forge");
+}
+
+#[test]
+fn team_resume_resolves_a_lane_with_spaces() {
+    assert_resume_lane("my repo/forge");
+}
+
+#[test]
+fn team_resume_matches_the_custom_lane_not_the_linked_checkout_name() {
+    assert_custom_lane_resume(true);
+}
+
+#[test]
+fn team_resume_lists_the_board_held_lane_of_an_unregistered_cohort() {
+    assert_custom_lane_resume(false);
+}
+
+fn assert_custom_lane_resume(registered: bool) {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let fixture = Fixture::new();
+    crate::common::git::init_repo(&fixture.env.project_root);
+    let checkout =
+        rimz::worktree::worktree_path(&fixture.env.project_root, &Default::default(), "review")
+            .unwrap();
+    crate::common::git::git(
+        &fixture.env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "review",
+            checkout.to_str().unwrap(),
+        ],
+    );
+    if registered {
+        fixture.register(&checkout);
+        fixture.ended_at_checkout("claude", "coder", "triage", &checkout);
+    } else {
+        fixture.seed_member("claude", "coder", "coder", None, "triage", &checkout);
+    }
+    std::fs::write(checkout.join(".rimz/team/blackboard.md"), BOARD).unwrap();
+    let output = fixture
+        .launch_command()
+        .args(["teams", "resume", "forge#review"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout={}\nstderr={stderr}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(stderr.contains("#triage"), "{stderr}");
+    let receipt = success(
+        fixture
+            .launch_command()
+            .args(["teams", "resume", "forge#triage"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        receipt.starts_with("resuming forge in #triage"),
+        "{receipt}"
+    );
+}
+
+fn assert_resume_lane(lane: &str) {
+    let fixture = Fixture::new();
+    fixture.seed_member(
+        "claude",
+        "coder",
+        "coder",
+        None,
+        lane,
+        &fixture.env.project_root,
+    );
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = success(
+        fixture
+            .launch_command()
+            .args(["teams", "resume", &format!("forge#{lane}")])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        receipt.starts_with(&format!("resuming forge in #{lane}")),
+        "{receipt}"
+    );
+}
+
+#[test]
 fn addressed_flip_releases_a_stopped_unregistered_cohort() {
     finish_unregistered_board(true);
 }
@@ -349,6 +501,36 @@ fn finish_unregistered_board(addressed: bool) {
         rimz::harness::resume::inspect_team_hold(&audit.agents, &fixture.env.project_root)
             .is_none()
     );
+}
+
+#[test]
+fn released_unregistered_cohort_resume_names_a_launch_not_the_failed_lane() {
+    let fixture = Fixture::new();
+    fixture.unregistered(true);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    success(
+        fixture
+            .command()
+            .args(["teams", "flip", "forge#feature-team", "Done", "Abandoned."])
+            .output()
+            .unwrap(),
+    );
+    for target in ["forge#feature-team", "forge", "forge#typo"] {
+        let output = fixture
+            .launch_command()
+            .args(["teams", "resume", target])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "nothing to resume for `{target}`; launch with `rimz teams forge`"
+            )),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("retry with"), "{stderr}");
+    }
 }
 
 #[test]
@@ -805,6 +987,36 @@ impl Fixture {
         command
     }
 
+    fn launch_command(&self) -> Command {
+        let shim = crate::common::write_env_dump_shim(&self.env, "claude");
+        let shell = crate::common::write_fake_login_shell(&self.env, "test-sh", &[]);
+        std::fs::write(
+            self.env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        crate::common::room::seed_live_zellij_room(
+            &self.env.runtime_paths(),
+            &workspace.session_name,
+            Vec::new(),
+        );
+        let mut command = self.command();
+        command
+            .env("PATH", crate::common::path_with_front(&shim))
+            .env("SHELL", shell)
+            .env(
+                "RIMZ_TEST_AGENT_ENV_DUMP",
+                self.env.home_root.join("agent-env"),
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]");
+        command
+    }
+
     fn seed(&self, role: &str, parent: Option<&str>) {
         self.seed_member(
             "claude",
@@ -1032,6 +1244,16 @@ impl Fixture {
     }
 
     fn ended_in(&self, kind: &str, role: &str, channel: &str) -> AgentSessionId {
+        self.ended_at_checkout(kind, role, channel, &self.env.project_root)
+    }
+
+    fn ended_at_checkout(
+        &self,
+        kind: &str,
+        role: &str,
+        channel: &str,
+        checkout: &Path,
+    ) -> AgentSessionId {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         let session = AgentSessionId::from(format!("sess-{role}"));
         for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
@@ -1043,7 +1265,7 @@ impl Fixture {
                 channel: Some(channel.to_owned()),
                 ..Default::default()
             };
-            observation.worktree_path = Some(self.env.project_root.display().to_string());
+            observation.worktree_path = Some(checkout.display().to_string());
             observation.worktree_branch = Some(channel.to_owned());
             self.env
                 .store()

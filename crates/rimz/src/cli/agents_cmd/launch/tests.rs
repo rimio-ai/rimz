@@ -905,6 +905,268 @@ fn resume_worktree_scope_treats_bare_worktree_flag_as_unnamed() {
     assert_eq!(scope.as_deref(), Some(worktree));
 }
 
+#[test]
+fn team_resume_without_rows_names_a_team_launch() {
+    for lane in [None, Some("project/forge")] {
+        let error = team_resume_error(
+            rimz::harness::resume::CohortResumeErr::NothingToResume {
+                spec: "forge".into(),
+            },
+            "forge",
+            lane,
+            &[],
+            &[],
+            &rimz::config::TeamsConfig::default(),
+            |_| true,
+            rimz::store::runtime::agent_liveness,
+        )
+        .to_string();
+        let address = lane.map_or_else(|| "forge".to_owned(), |lane| format!("forge#{lane}"));
+        assert_eq!(
+            error,
+            format!("nothing to resume for `{address}`; launch with `rimz teams forge`")
+        );
+        assert!(
+            !error.contains("--continue") && !error.contains("rimz agents"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn team_resume_lists_other_existing_lanes() {
+    let mut member = test_agent("sess-forge");
+    member.team = Some("forge".into());
+    member.channel = Some("project/forge".into());
+    member.worktree_path = Some("/repo".into());
+    let mut removed = member.clone();
+    removed.channel = Some("removed".into());
+    removed.worktree_path = Some("/removed".into());
+    let error = team_resume_error(
+        rimz::harness::resume::CohortResumeErr::NothingToResume {
+            spec: "forge".into(),
+        },
+        "forge",
+        Some("typo"),
+        &[],
+        &[member.clone(), member, removed],
+        &rimz::config::TeamsConfig::default(),
+        |path| path == Path::new("/repo"),
+        rimz::store::runtime::agent_liveness,
+    )
+    .to_string();
+    assert!(
+        error.starts_with("nothing to resume for `forge#typo`;"),
+        "{error}"
+    );
+    assert!(error.contains("cohorts are in #project/forge"), "{error}");
+    assert!(
+        error.contains("`rimz teams resume 'forge#project/forge'`"),
+        "{error}"
+    );
+    assert!(!error.contains("removed"), "{error}");
+    assert!(
+        !error.contains("--continue") && !error.contains("rimz agents"),
+        "{error}"
+    );
+}
+
+#[test]
+fn team_resume_retries_only_configured_teams_in_the_typed_lane() {
+    let mut member = test_agent("sess-other");
+    member.team = Some("other".into());
+    member.role = Some("coder".into());
+    member.channel = Some("feature-team".into());
+    member.worktree_path = Some("/repo".into());
+    member.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    let mut plain = test_agent("sess-plain");
+    plain.worktree_path = Some("/repo".into());
+    let mut teams = rimz::config::TeamsConfig::default();
+    teams.0.insert("other".into(), Default::default());
+    let mut reviewer = member.clone();
+    reviewer.agent_id = "sess-reviewer".into();
+    reviewer.role = Some("reviewer".into());
+    for lane in [None, Some("feature-team")] {
+        let error = team_resume_error(
+            rimz::harness::resume::CohortResumeErr::NothingToResume {
+                spec: "forge".into(),
+            },
+            "forge",
+            lane,
+            &[plain.clone(), member.clone(), reviewer.clone()],
+            &[],
+            &teams,
+            |_| true,
+            rimz::store::runtime::agent_liveness,
+        )
+        .to_string();
+        let retry = lane.map_or(
+            "`rimz teams resume other`",
+            |_| "`rimz teams resume 'other#feature-team'`",
+        );
+        assert!(error.contains("resumable here: other"), "{error}");
+        assert!(!error.contains("other, other"), "{error}");
+        assert!(error.contains(retry), "{error}");
+        assert!(!error.contains("codex"), "{error}");
+        assert!(
+            !error.contains("--continue") && !error.contains("rimz agents"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn team_resume_still_live_names_focus_and_stop_for_the_typed_address() {
+    for lane in [None, Some("my repo/forge")] {
+        let error = team_resume_error(
+            rimz::harness::resume::CohortResumeErr::MembersStillLive {
+                labels: vec!["@coder".into()],
+            },
+            "forge",
+            lane,
+            &[],
+            &[],
+            &rimz::config::TeamsConfig::default(),
+            |_| true,
+            rimz::store::runtime::agent_liveness,
+        )
+        .to_string();
+        let address = lane.map_or_else(|| "forge".to_owned(), |lane| format!("forge#{lane}"));
+        assert!(
+            error.starts_with(&format!("cannot resume `{address}`; still live: @coder;")),
+            "{error}"
+        );
+        for verb in ["focus", "stop"] {
+            let command = crate::cli::usage::shell_command(["rimz", "teams", verb, &address]);
+            assert!(error.contains(&format!("`{command}`")), "{error}");
+        }
+        assert!(
+            !error.contains("--continue") && !error.contains("rimz agents"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn team_resume_keeps_account_refusals() {
+    let error = team_resume_error(
+        rimz::harness::resume::CohortResumeErr::LoginMismatch(
+            rimz::harness::resume::RelaunchLoginErr::Account {
+                message: "use `rimz accounts use claude work`".into(),
+            },
+        ),
+        "forge",
+        Some("review"),
+        &[],
+        &[],
+        &rimz::config::TeamsConfig::default(),
+        |_| true,
+        rimz::store::runtime::agent_liveness,
+    );
+    assert_eq!(error.to_string(), "use `rimz accounts use claude work`");
+}
+
+#[test]
+fn team_resume_does_not_suggest_covered_provisional_or_live_lanes() {
+    use rimz::store::runtime::AgentLiveness;
+
+    let mut closed = test_agent("closed");
+    closed.team = Some("forge".into());
+    closed.channel = Some("feature-team".into());
+    closed.worktree_path = Some("/repo".into());
+    closed.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    let provisional = AgentState {
+        agent_id: "launch_unregistered".into(),
+        ..closed.clone()
+    };
+    let live = AgentState {
+        agent_id: "live".into(),
+        ended_at: None,
+        ..closed.clone()
+    };
+    let failures = [
+        (
+            "typed lane's own rows",
+            Some("feature/team"),
+            vec![closed.clone()],
+            vec![closed.clone()],
+        ),
+        (
+            "room scope already covered every lane",
+            None,
+            vec![closed.clone()],
+            vec![closed.clone()],
+        ),
+        (
+            "provisional-only lane",
+            Some("typo"),
+            vec![],
+            vec![provisional],
+        ),
+        (
+            "live lane also has an old ended member",
+            Some("typo"),
+            vec![],
+            vec![closed, live],
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(label, lane, agents, room_agents)| {
+        let error = team_resume_error(
+            rimz::harness::resume::CohortResumeErr::NothingToResume {
+                spec: "forge".into(),
+            },
+            "forge",
+            lane,
+            &agents,
+            &room_agents,
+            &Default::default(),
+            |_| true,
+            |agent| match agent.agent_id.as_str() {
+                "live" => AgentLiveness::Live { pid: 1 },
+                _ => AgentLiveness::Unknown,
+            },
+        )
+        .to_string();
+        let address = lane.map_or_else(|| "forge".to_owned(), |lane| format!("forge#{lane}"));
+        let expected = format!("nothing to resume for `{address}`; launch with `rimz teams forge`");
+        (error != expected).then_some((label, error))
+    })
+    .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn agents_resume_refusal_wording_stays_in_the_agents_scene() {
+    use rimz::harness::resume::CohortResumeErr;
+    for (err, expected) in [
+        (
+            CohortResumeErr::NothingToResume {
+                spec: "claude".into(),
+            },
+            "nothing to resume for `claude` in worktree `review`; launch without `--continue`",
+        ),
+        (
+            CohortResumeErr::MembersStillLive {
+                labels: vec!["@coder".into()],
+            },
+            "cannot resume `claude` in worktree `review`; still live: @coder; close them first or drop `--continue`",
+        ),
+        (
+            CohortResumeErr::SessionNotResumable {
+                label: "@coder".into(),
+            },
+            "cannot continue `claude` in worktree `review`; @coder has no resumable session; use `rimz agents claude --resume` to choose a provider session, or `rimz agents claude` to launch fresh",
+        ),
+    ] {
+        assert_eq!(
+            cohort_resume_error(err, "claude", Some("review"), &[], &Default::default())
+                .to_string(),
+            expected
+        );
+    }
+}
+
 fn test_agent(id: &str) -> AgentState {
     rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
 }
