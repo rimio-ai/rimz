@@ -4,10 +4,64 @@ expression: value
 ---
 {
   "$defs": {
+    "Case": {
+      "additionalProperties": false,
+      "properties": {
+        "for": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Key"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "when": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "when",
+        "outcome"
+      ],
+      "type": "object"
+    },
     "Check": {
       "additionalProperties": false,
       "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/Case"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "else": {
           "type": [
             "string",
             "null"
@@ -21,6 +75,12 @@ expression: value
           "type": "object"
         },
         "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
           "type": [
             "string",
             "null"
@@ -83,6 +143,22 @@ expression: value
         }
       },
       "type": "object"
+    },
+    "Key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
     },
     "ScopeKind": {
       "enum": [

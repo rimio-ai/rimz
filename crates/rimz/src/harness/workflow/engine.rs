@@ -79,7 +79,8 @@ pub fn create(
         &machine.tiers,
         machine.harness.auto_compact,
     );
-    let report = super::validate::validate_spec(&spec_dir, &name, &spec, &definitions);
+    let report =
+        super::validate::validate_spec(&spec_dir, &name, &spec, &definitions, Some(&roots.project));
     if !report.errors.is_empty() {
         return Err(WorkflowErr::Refused(
             report
@@ -389,7 +390,9 @@ fn prepare(
         persist(&t, &guard)?;
         return Ok(Decision::Again);
     }
-    if t.record.recheck_at.is_some_and(|at| at > t.now) {
+    if t.record.recheck_at.is_some_and(|at| at > t.now)
+        && !t.record.wait.as_ref().is_some_and(|wait| wait.is_hold())
+    {
         if let Some(wait) = &mut t.record.wait {
             wait.last = t.now;
             wait.count += 1;

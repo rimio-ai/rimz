@@ -111,7 +111,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
-        Command::Validate { dir, json } => validate(dir, json),
+        Command::Validate { dir, json } => validate(dir, json, globals),
     }
 }
 
@@ -140,7 +140,13 @@ fn start(
     } else {
         name
     };
-    let report = workflow::validate(&dir, &paths::workflows_dir(), &definitions());
+    let project_root = validation_root(globals);
+    let report = workflow::validate(
+        &dir,
+        &paths::workflows_dir(),
+        &definitions(),
+        project_root.as_deref(),
+    );
     if !report.errors.is_empty() {
         bail!(
             "{}",
@@ -202,6 +208,33 @@ pub(super) fn waiting(record: &RunRecord) -> Option<String> {
     record.wait.as_ref().map(|w| {
         let zone = jiff::tz::TimeZone::system();
         let detail = match w.outcome.as_str() {
+            "hold" => {
+                let hold = paths::StatePaths::for_project_root(&record.project_root)
+                    .ok()
+                    .and_then(|state| workflow::load(&state.workflow(&record.id).home).ok())
+                    .and_then(|spec| {
+                        spec.checks
+                            .get(&w.node)
+                            .and_then(|check| {
+                                w.case.and_then(|index| check.cases.get(index as usize))
+                            })
+                            .and_then(|case| case.hold.clone())
+                    })
+                    .unwrap_or_else(|| "?".into());
+                let elapsed = jiff::Timestamp::now()
+                    .duration_since(w.first)
+                    .as_secs()
+                    .max(0) as u64;
+                format!(
+                    "holding {} {}/{hold}",
+                    w.detail.as_deref().unwrap_or("—"),
+                    render::age_label(elapsed)
+                )
+            }
+            "unknown" => w
+                .detail
+                .as_ref()
+                .map_or_else(|| "unknown".into(), |detail| format!("unknown: {detail}")),
             "window" => w
                 .detail
                 .as_ref()
@@ -464,7 +497,22 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
     Ok(())
 }
 
-fn validate(dir: Option<PathBuf>, json: bool) -> Result<()> {
+fn validation_root(globals: &super::GlobalFlags) -> Option<PathBuf> {
+    let workspace =
+        rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok()?;
+    let recorded = paths::StatePaths::for_project_root(&workspace.project_root)
+        .ok()
+        .is_some_and(|state| rimz::workspace::record::read(&state.workspace_record).is_ok());
+    if globals.root.is_none()
+        && workspace.root_class == rimz::workspace::RootClass::Directory
+        && !recorded
+    {
+        return None;
+    }
+    Some(workspace.project_root)
+}
+
+fn validate(dir: Option<PathBuf>, json: bool, globals: &super::GlobalFlags) -> Result<()> {
     let home = paths::workflows_dir();
     let dirs = if let Some(dir) = dir {
         vec![dir]
@@ -488,9 +536,10 @@ fn validate(dir: Option<PathBuf>, json: bool) -> Result<()> {
         dirs
     };
     let loaded = definitions();
+    let project_root = validation_root(globals);
     let mut report = Validation::default();
     for dir in dirs {
-        let result = workflow::validate(&dir, &home, &loaded);
+        let result = workflow::validate(&dir, &home, &loaded, project_root.as_deref());
         report.rows.extend(result.rows);
         report.errors.extend(result.errors);
         report.warnings.extend(result.warnings);
@@ -505,7 +554,11 @@ fn validate(dir: Option<PathBuf>, json: bool) -> Result<()> {
                 render::cell(&row.workflow),
                 render::cell(&row.node),
                 render::cell(&row.kind),
-                render::cell(row.run.as_deref().or(row.agent.as_deref()).unwrap_or("—")),
+                render::cell(match row.runner.as_str() {
+                    "condition" => "condition",
+                    "run" => row.run.as_deref().unwrap_or("—"),
+                    _ => row.agent.as_deref().unwrap_or("—"),
+                }),
                 render::cell(if row.agent.is_none() {
                     "—"
                 } else if row.do_background {

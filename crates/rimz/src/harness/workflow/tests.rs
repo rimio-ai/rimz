@@ -103,6 +103,7 @@ impl AttemptHost for FakeHost {
 }
 
 mod attempts;
+mod conditions;
 
 #[test]
 fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
@@ -339,7 +340,7 @@ fn validation_rejects_each_invalid_spec() {
     for (label, text, path) in cases {
         let (home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), text).unwrap();
-        let report = validate(&dir, home.path(), &LoadedDefinitions::default());
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
         if !report
             .errors
             .iter()
@@ -362,7 +363,7 @@ fn validation_refuses_judges_without_a_headless_launch() {
         ),
     )
     .unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default());
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
     assert!(
         report
             .errors
@@ -380,7 +381,7 @@ fn validation_resolves_edges_and_warns_about_judge_independence() {
         "agent = 'claude'\nprompt-file = 'prompts/build.md'\nwindow = '5h.left>=42 && 7d.left>=10'",
     );
     fs::write(dir.join("workflow.toml"), text).unwrap();
-    let report = validate(&dir, home.path(), &LoadedDefinitions::default());
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
     assert!(
@@ -417,6 +418,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
         &dir.join("checks/.."),
         home.path(),
         &LoadedDefinitions::default(),
+        None,
     );
     assert!(
         report.errors.is_empty(),
@@ -425,7 +427,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
     assert!(report.rows.iter().all(|row| row.workflow == "example"));
     let outside = tempfile::tempdir().unwrap();
     assert!(
-        !validate(&dir, outside.path(), &LoadedDefinitions::default())
+        !validate(&dir, outside.path(), &LoadedDefinitions::default(), None)
             .errors
             .is_empty()
     );
@@ -437,7 +439,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
     )
     .unwrap();
     assert!(
-        validate(&dir, home.path(), &LoadedDefinitions::default())
+        validate(&dir, home.path(), &LoadedDefinitions::default(), None)
             .errors
             .iter()
             .any(|issue| issue.path == "steps.build.prompt-file")
@@ -452,7 +454,7 @@ fn validation_confines_directories_and_symlinks_and_reports_broken_profiles() {
         .failed
         .insert("broken".into(), [dir.join("broken.md")].into());
     assert!(
-        validate(&dir, home.path(), &definitions)
+        validate(&dir, home.path(), &definitions, None)
             .errors
             .iter()
             .any(|issue| issue.message.contains("broken definition"))

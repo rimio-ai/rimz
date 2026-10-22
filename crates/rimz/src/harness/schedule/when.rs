@@ -209,10 +209,15 @@ impl<'a> ForgeKey<'a> {
 impl CiSource {
     /// Explain an absent forge reading without changing condition truth.
     pub fn unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
-        let key = ForgeKey::parse(key)?;
-        if key.read(&self.0, scope).is_some() {
+        if ForgeKey::parse(key)?.read(&self.0, scope).is_some() {
             return None;
         }
+        self.probe_unread_reason(key, scope)
+    }
+
+    /// Explain a missing forge reading from the probe, ignoring retained facts.
+    pub(crate) fn probe_unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
+        let key = ForgeKey::parse(key)?;
         let path = scope.to_string_lossy();
         let Some(repo) = self.0.path_repos.get(path.as_ref()) else {
             return Some(UnreadReason::NotChecked);
@@ -528,6 +533,30 @@ pub struct WhenError {
 }
 
 impl WhenExpr {
+    /// Three-valued truth for workflow cases; unread leaves remain unknown.
+    pub fn truth(&self, readings: &BTreeMap<String, Option<String>>) -> Option<bool> {
+        fn truth(node: &Node, readings: &BTreeMap<String, Option<String>>) -> Option<bool> {
+            match node {
+                Node::Term(term) => readings
+                    .get(&term.key)
+                    .and_then(|reading| reading.as_deref())
+                    .map(|reading| term.matches(Some(reading))),
+                Node::Not(node) => truth(node, readings).map(|value| !value),
+                Node::And(left, right) => match (truth(left, readings), truth(right, readings)) {
+                    (Some(false), _) | (_, Some(false)) => Some(false),
+                    (Some(true), Some(true)) => Some(true),
+                    _ => None,
+                },
+                Node::Or(left, right) => match (truth(left, readings), truth(right, readings)) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
+                },
+            }
+        }
+        truth(&self.0, readings)
+    }
+
     pub(super) fn condition_count(
         &self,
         readings: &[(String, Option<String>)],

@@ -10,6 +10,7 @@ use super::{WorkflowSpec, spec, state::Transition};
 use crate::disk::paths::{StatePaths, WorkflowPaths};
 use crate::store::workflow::{self, RunRecord, RunState};
 
+mod condition;
 mod judge;
 
 pub(super) struct Evaluation {
@@ -66,6 +67,11 @@ pub(super) fn evaluate(
 ) -> Evaluation {
     match spec.checks[&record.node].kind() {
         Some(spec::CheckKind::Agent(_)) => return judge::evaluate(state, paths, spec, record),
+        Some(spec::CheckKind::Condition) => {
+            let mut result = Evaluation::failed("invalid", "condition evaluation interrupted");
+            result.object = condition::evaluate(state, &spec.checks[&record.node], record);
+            return result;
+        }
         Some(spec::CheckKind::Run(_)) => {}
         None => return Evaluation::failed("invalid", "check needs exactly one runner"),
     }

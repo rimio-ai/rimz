@@ -16,7 +16,8 @@ mod validate;
 pub(crate) use engine::rename_task;
 pub use engine::{WorkflowErr, advance, cancel, create, resume, wake, wake_run};
 pub use spec::{
-    Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load, schema,
+    Case, Check, Header, HeaderEdges, ScopeKind, SpecErr, Step, StepEdges, WorkflowSpec, load,
+    schema,
 };
 pub use validate::{Edge, Issue, NodeRow, Validation, validate};
 

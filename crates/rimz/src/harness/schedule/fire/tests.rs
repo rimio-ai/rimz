@@ -1,7 +1,10 @@
 use super::super::catalog::TaskSource;
 use super::super::tests::{seconds_before, zdt};
 use super::*;
+
 use crate::config::TaskEntry;
+
+mod holds;
 
 const NAME: &str = "task";
 

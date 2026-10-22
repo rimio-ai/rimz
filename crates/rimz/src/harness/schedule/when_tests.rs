@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn workflow_truth_uses_kleene_logic_without_turning_unread_into_false() {
+    let and = WhenExpr::parse(&["pr=merged && ci=passed".into()]).unwrap();
+    let or = WhenExpr::parse(&["pr=merged || ci=passed".into()]).unwrap();
+    let not = WhenExpr::parse(&["!pr=merged".into()]).unwrap();
+    for (left, right, conjunction, disjunction) in [
+        (Some(true), Some(true), Some(true), Some(true)),
+        (Some(true), Some(false), Some(false), Some(true)),
+        (Some(true), None, None, Some(true)),
+        (Some(false), Some(true), Some(false), Some(true)),
+        (Some(false), Some(false), Some(false), Some(false)),
+        (Some(false), None, Some(false), None),
+        (None, Some(true), None, Some(true)),
+        (None, Some(false), Some(false), None),
+        (None, None, None, None),
+    ] {
+        let readings = BTreeMap::from([
+            (
+                "pr".into(),
+                left.map(|yes| if yes { "merged" } else { "open" }.into()),
+            ),
+            (
+                "ci".into(),
+                right.map(|yes| if yes { "passed" } else { "failed" }.into()),
+            ),
+        ]);
+        assert_eq!(and.truth(&readings), conjunction, "AND {left:?}, {right:?}");
+        assert_eq!(or.truth(&readings), disjunction, "OR {left:?}, {right:?}");
+        assert_eq!(not.truth(&readings), left.map(|yes| !yes));
+    }
+}
+
+#[test]
 fn scope_checkout_keys_include_nested_terms_but_not_named_branches_or_windows() {
     for (input, key) in [
         ("pr=merged", Some("pr")),
