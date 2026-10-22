@@ -2889,7 +2889,8 @@ fn inspect_hold(
     matches: impl Fn(&AgentState) -> bool,
 ) -> Option<TeamHold> {
     let members = crate::address::launch_occupants(agents.iter().filter(|agent| {
-        cohort_admits(agent, crate::store::runtime::agent_liveness)
+        agent.parent_agent_id.is_none()
+            && !agent.agent_id.is_empty()
             && agent.team.is_some()
             && agent.lane_path().is_some()
             && matches(agent)
