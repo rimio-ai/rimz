@@ -16,6 +16,7 @@ use super::usage::UsageError;
 use super::{GlobalFlags, agents_cmd};
 
 const TEAM_ADDRESS_HELP: &str = "Team, or team#lane for one cohort. Without a lane: the cohort in your current lane, else the team's only live cohort";
+const TEAM_RESUME_HELP: &str = "Team, or team#lane for one cohort. Without a lane: the team's newest closed cohort, in your linked worktree when you stand in one, else anywhere in the room";
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -124,7 +125,7 @@ struct TeamLaunchArgs {
 #[derive(Debug, Args)]
 struct ResumeArgs {
     #[arg(
-        help = TEAM_ADDRESS_HELP,
+        help = TEAM_RESUME_HELP,
         value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]

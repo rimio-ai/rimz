@@ -443,6 +443,21 @@ fn all_team_launch_doorways_parse_the_same_cohort_payload() {
 }
 
 #[test]
+fn resume_help_names_the_newest_closed_cohort_not_the_live_one() {
+    let help = |verb| {
+        TeamsHarness::try_parse_from(["rimz", verb, "--help"])
+            .unwrap_err()
+            .to_string()
+    };
+    let resume = help("resume");
+    assert!(resume.contains("newest closed cohort"), "{resume}");
+    assert!(resume.contains("linked worktree"), "{resume}");
+    assert!(!resume.contains("only live cohort"), "{resume}");
+    let stop = help("stop");
+    assert!(stop.contains("only live cohort"), "{stop}");
+}
+
+#[test]
 fn fused_team_lane_feeds_the_canonical_worktree_argument() {
     let show = parse_teams(&["rimz", "show", "forge#feat-x"]);
     let stop = parse_teams(&["rimz", "stop", "forge#feat-x"]);
