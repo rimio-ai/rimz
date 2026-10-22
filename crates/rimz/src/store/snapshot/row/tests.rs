@@ -6,6 +6,23 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
+fn card_fast_projects_live_precedence_and_omits_standard() {
+    let mut agent = AgentState::stub("codex", "session", AgentStatus::Idle);
+    agent.record = Some(Box::new(crate::agents::LaunchRecord {
+        fast: true,
+        ..Default::default()
+    }));
+    let card = AgentCard::from_agent(&agent, row_time());
+    assert_eq!(serde_json::to_value(card).unwrap()["fast"], true);
+    agent.context = Some(crate::agents::AgentContext {
+        fast: Some(false),
+        ..Default::default()
+    });
+    let card = AgentCard::from_agent(&agent, row_time());
+    assert!(serde_json::to_value(card).unwrap().get("fast").is_none());
+}
+
+#[test]
 fn card_open_ask_round_trips_and_follows_display_status() {
     let mut value = serde_json::to_value(AgentCard::default()).unwrap();
     assert!(value.get("ask_detail").is_none());
@@ -597,6 +614,7 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         model_id: None,
         model_display_name: None,
         effort: None,
+        fast: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,

@@ -976,6 +976,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
         model_id: Some("gpt-5".to_owned()),
         model_display_name: Some("GPT-5".to_owned()),
         effort: Some("high".to_owned()),
+        fast: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,

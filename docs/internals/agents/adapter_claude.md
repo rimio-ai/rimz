@@ -208,7 +208,7 @@ The byte cursor, duplicate window, and sums are stored together, so steady refre
 
 ### Rich context
 
-Claude runs its configured `statusLine` command on every render and pipes it a JSON blob ([schema](../../externals/agent-adapter/claude-reference.md#statusline-json)). Install points `statusLine` at `rimz statusline feed --source claude`, and [`observe_context`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) parses the blob into `AgentContext` and runs the turn-death and turn-interruption scans over the transcript tail.
+Claude runs its configured `statusLine` command on every render and pipes it a JSON blob ([schema](../../externals/agent-adapter/claude-reference.md#statusline-json)). Install points `statusLine` at `rimz statusline feed --source claude`, and [`observe_context`](../../../crates/rimz/src/agents/adapters/claude/statusline.rs) parses the blob into `AgentContext` and runs the turn-death and turn-interruption scans over the transcript tail. `fast_mode` supplies the live `AgentContext.fast` reading, including explicit off; older payloads that omit it leave the badge on its launch fallback.
 
 A user who already has a `statusLine` keeps it: install wraps the original command, which receives the same JSON, and RimZ forwards its stdout and exit code, so the rendered line is unchanged. The original is stored verbatim under `_rimz_wrapped` and restored on uninstall. The wrap is a security surface: the consent prompt summarizes both statusline wraps, the install diff shows them in full, and the wrapped child's stdio is fully piped. The inline goldens in `statusline.rs` pin the field shapes.
 

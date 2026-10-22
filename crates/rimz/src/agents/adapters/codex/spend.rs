@@ -168,6 +168,10 @@ pub(crate) fn parse_codex_spend(
     }
 }
 
+pub(super) fn live_fast_mode(fold: &LocalSpendFold) -> Option<bool> {
+    fold.cursor.state_as::<CodexSpendState>().fast
+}
+
 /// Detect a pre-counter live fold that needs one cold replay after upgrade.
 pub(super) fn live_fold_needs_token_counter_backfill(fold: &LocalSpendFold) -> bool {
     fold.total_usd > 0.0

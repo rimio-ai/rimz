@@ -358,6 +358,8 @@ The `fast` profile and role field asks the provider for its fast mode (priority 
 
 A definition that sets `fast: true` on a kind without a switch fails at load with the fix. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
+The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, or Codex's latest `thread_settings_applied` service tier. An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp, RimZ falls back to the launch record; a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
+
 ### Launch-prompt replacement
 
 The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) replace the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent.

@@ -1241,6 +1241,53 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
 }
 
 #[test]
+fn refresh_transcript_context_tracks_fast_toggles_across_resumed_folds() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
+    let path_string = path.to_string_lossy().into_owned();
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+    )
+    .unwrap();
+    let mut prior = None;
+    for tier in [None, Some("priority"), Some("default")] {
+        if let Some(tier) = tier {
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap(),
+                "{}",
+                json!({"type": "event_msg", "payload": {
+                    "type": "thread_settings_applied", "thread_settings": {"service_tier": tier}
+                }})
+            )
+            .unwrap();
+        }
+        let refresh = refresh_transcript_context(
+            "sess-1",
+            None,
+            Some(&path_string),
+            None,
+            prior.as_ref(),
+            &pricing_cache_path,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            refresh.context.fast,
+            tier.map_or(crate::agents::FieldPatch::Keep, |tier| {
+                crate::agents::FieldPatch::Set(tier == "priority")
+            }),
+            "tier={tier:?}"
+        );
+        prior = refresh.spend_fold.into_set();
+    }
+}
+
+#[test]
 fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");

@@ -1112,6 +1112,14 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// Prefer the provider's live fast-mode reading over the launch setting.
+    pub fn fast_mode(&self) -> bool {
+        self.context
+            .as_ref()
+            .and_then(|context| context.fast)
+            .unwrap_or_else(|| self.record.as_ref().is_some_and(|record| record.fast))
+    }
+
     /// Superseded predecessors and non-standing successors yield their role seat.
     pub(crate) fn yields_molt_seat(&self) -> bool {
         (self.molted_from.is_some() && !molt_stands(self)) || self.molt_superseded
