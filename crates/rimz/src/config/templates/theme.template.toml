@@ -238,6 +238,7 @@
 ## wait_signal = "⌁"
 ## parked_bg = "⋯"
 ## tier_move = "↪"
+## fast = "ϟ"
 
 [theme.glyphs.unicode.process]
 ## cpu = "C"
@@ -370,6 +371,7 @@
 ## wait_signal = "󱜠"
 ## parked_bg = "⋯"
 ## tier_move = "↪"
+## fast = ""
 
 [theme.glyphs.nerd_font.process]
 ## cpu = ""

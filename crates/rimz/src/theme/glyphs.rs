@@ -108,6 +108,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(CardTierMove, "↪", None),
+    glyph!(CardFast, "ϟ", Some("\u{f0e7}")),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),
     glyph!(ProcessIo, "⇅", Some("\u{f09f}")),
@@ -359,6 +360,9 @@ mod tests {
     /// override rather than a copy of the Unicode glyph it replaces.
     #[test]
     fn catalog_rows_are_ordered_complete_and_renderable() {
+        let fast = GlyphRole::from_namespaced("card", "fast");
+        assert_eq!(fast.map(unicode_glyph), Some("ϟ"));
+        assert_eq!(fast.and_then(nerd_font_glyph), Some("\u{f0e7}"));
         assert_eq!(unicode_glyph(GlyphRole::StatusSleeping), "\u{263e}");
         assert_eq!(
             nerd_font_glyph(GlyphRole::StatusSleeping),
@@ -455,6 +459,10 @@ mod tests {
             ("Variation Selectors", '\u{fe00}'..='\u{fe0f}'),
         ];
         const EXCEPTIONS: &[(char, &str)] = &[
+            (
+                'ϟ',
+                "Greek and Coptic; DejaVu Sans/Mono, FreeSerif, Liberation",
+            ),
             (
                 '⟲',
                 "Supplemental Arrows-A; DejaVu Sans, FreeMono, Apple Symbols",

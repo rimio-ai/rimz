@@ -1,8 +1,8 @@
 //! Layer 2 — palette resolution: the scheme's raw tones (Layer 1) derived
 //! into the depth-resolved semantic slots the renderer paints, plus the
-//! heat/calm ramps and the derived expense and expired-cache tones. Component
-//! tokens (Layer 3) and the Theme facade read these slots; this is the one
-//! place depth quantization and slot overrides are applied.
+//! heat/calm ramps and the derived expense, electric, and expired-cache
+//! tones. Component tokens (Layer 3) and the Theme facade read these slots;
+//! this is the one place depth quantization and slot overrides are applied.
 
 use crate::agents::context::PaceReading;
 use crate::config::{
@@ -46,6 +46,10 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 /// cache, not the full bar's live red.
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
+/// Raise `accent`'s OKLab lightness for the fast-mode bolt: the data glyphs'
+/// hue, a step brighter so the bolt reads as charged.
+const ELECTRIC_LIFT: f32 = 0.10;
+
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
@@ -66,6 +70,9 @@ pub struct Palette {
     /// and the stale line's age; derived, not a tunable slot.
     pub(crate) cache_expired: Tone,
     pub(crate) accent: Tone,
+    /// The fast-mode bolt's tone, `accent` a step brighter; derived, not a
+    /// tunable slot.
+    electric: Tone,
     pub(crate) cool: Tone,
     pub(crate) meta: Tone,
     pub(crate) body: Tone,
@@ -158,6 +165,13 @@ impl Palette {
             expense,
             cache_expired,
             accent: slot(theme.accent, tones.accent),
+            electric: rgb_color(
+                oklab::lift_lightness(
+                    derived_rgb_slot(theme.accent, tones.accent, &raw),
+                    ELECTRIC_LIFT,
+                ),
+                depth,
+            ),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),
             body: slot(theme.body, tones.body),
@@ -242,6 +256,9 @@ impl Palette {
     }
     pub fn accent(&self) -> Tone {
         self.accent
+    }
+    pub fn electric(&self) -> Tone {
+        self.electric
     }
     pub fn cool(&self) -> Tone {
         self.cool
