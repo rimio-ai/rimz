@@ -1265,6 +1265,8 @@ pub trait MuxBackend: Send + Sync {
     /// live target: the room override verbatim, otherwise the configured
     /// percentage capped at `max_cols`. One best-effort pass: the first failed
     /// verdict stops execution and counts it and every remaining one as failed.
+    /// Zellij keeps completed counts on post-execution read failures, adds one
+    /// failure, and still attempts focus restoration before returning the report.
     /// Unlike [`Self::open_sidebar`], this never deletes or recreates the session.
     fn reconcile_sidebars(
         &self,

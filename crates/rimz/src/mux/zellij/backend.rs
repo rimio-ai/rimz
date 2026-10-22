@@ -1819,10 +1819,14 @@ impl MuxBackend for ZellijBackend {
                         self.cleanup_failed_add(opts, raw_id);
                     }
                 }) {
-                    return Err(output_error(format!(
-                        "sidebar {} mounted in tab {tab_id} without a current-build heartbeat",
-                        added.pane
-                    )));
+                    return Err(MuxErr::Command {
+                        program: "zellij".to_owned(),
+                        args: "new-pane".to_owned(),
+                        stderr: format!(
+                            "sidebar {} mounted in tab {tab_id} without a current-build heartbeat",
+                            added.pane
+                        ),
+                    });
                 }
                 if !replacing.is_empty() {
                     replacements.push((tab_id, added.pane, replacing.to_vec()));
@@ -1837,6 +1841,7 @@ impl MuxBackend for ZellijBackend {
             },
             |pane| self.close_pane(&opts.session_name, pane),
         );
+        let mut post_execution_error = None;
         for (tab_id, pane, old) in replacements {
             if failure
                 .as_ref()
@@ -1844,11 +1849,17 @@ impl MuxBackend for ZellijBackend {
             {
                 continue;
             }
-            let after = self.structural_geometry_listing(
+            let after = match self.structural_geometry_listing(
                 &opts.session_name,
                 &opts.workspace_id,
                 &viewed_tabs,
-            )?;
+            ) {
+                Ok(after) => after,
+                Err(error) => {
+                    post_execution_error = Some(error);
+                    break;
+                }
+            };
             if after
                 .panes
                 .iter()
@@ -1860,7 +1871,12 @@ impl MuxBackend for ZellijBackend {
             let Some(raw_id) = parse_zellij_raw(&pane) else {
                 continue;
             };
-            repair_sidebar_geometry(self, opts, tab_id, raw_id, &viewed_tabs, &mut report)?;
+            if let Err(error) =
+                repair_sidebar_geometry(self, opts, tab_id, raw_id, &viewed_tabs, &mut report)
+            {
+                post_execution_error = Some(error);
+                break;
+            }
         }
         if detached {
             tracing::info!(
@@ -1878,8 +1894,19 @@ impl MuxBackend for ZellijBackend {
                 "sidebar repair aborted; leaving remaining views unchanged",
             );
         }
-        if let Some(restoration) = restoration {
-            restore_client_view(self, opts, restoration, &viewed_tabs)?;
+        if let Some(restoration) = restoration
+            && let Err(error) = restore_client_view(self, opts, restoration, &viewed_tabs)
+        {
+            post_execution_error.get_or_insert(error);
+        }
+        if let Some(error) = post_execution_error {
+            report.failed += 1;
+            tracing::warn!(
+                session = %opts.session_name,
+                tags.operation = "zellij.reconcile.post_execution",
+                error = &error as &dyn std::error::Error,
+                "sidebar repair encountered a post-execution read failure",
+            );
         }
         Ok(report)
     }
