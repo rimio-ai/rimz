@@ -269,7 +269,7 @@ fn companion_step(
 }
 
 impl ZellijBackend {
-    fn supports_no_focus(&self) -> bool {
+    pub(super) fn supports_no_focus(&self) -> bool {
         self.version()
             .ok()
             .as_deref()
@@ -1757,90 +1757,78 @@ impl MuxBackend for ZellijBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
-        // Zellij docks the sidebar left only at session birth, but a left pane
-        // can still be reached in a live session: close a stray sidebar by id,
-        // or mount one through a stable tab id before moving it left and sizing
-        // it to the tab's live target. This never rebirths the session, so
-        // working panes survive.
-        let listing = self.topology_listing(
-            Some(&opts.session_name),
-            None,
-            Some(&opts.workspace_id),
-            live.topology_floor_ms,
-            RECONCILE_LIST_TIMEOUT,
-        )?;
-        let panes = listing.panes;
-        let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
-        let plan = super::super::plan_reconcile(&views, live);
-        let planned_closes = plan.close_panes();
-        let added_views = plan.add_views();
-        let replaced_views: HashSet<_> = views
-            .iter()
-            .filter(|view| !view.sidebar_panes.is_empty() && added_views.contains(&view.view))
-            .map(|view| view.view.clone())
-            .collect();
-        // Kept sidebars (not planned for closing) whose geometry sits off the
-        // layout's dock — the residue of a mis-mounted add — converge in place
-        // this pass, renderer untouched.
-        let width_floor = live.topology_floor_ms;
-        let off_spec = off_spec_sidebars(&panes, &planned_closes, width_floor.map(|_| opts.target));
-        if plan.is_empty() && off_spec.is_empty() {
-            return Ok(SidebarRecovery::default());
-        }
-
-        // Structural repair is scoped to the attached client view. Hidden tabs
-        // have no RimZ focus state and repair themselves when later viewed.
-        let restoration = self
+        let client_view = self
             .client_view(ClientFocusOptions {
                 session_name: Some(opts.session_name.clone()),
                 command_timeout: Some(RECONCILE_LIST_TIMEOUT),
             })
-            .ok()
-            .and_then(|view| client_restoration_target(&panes, &view));
+            .unwrap_or_default();
+        let mut panes = self
+            .structural_geometry_listing(&opts.session_name, &opts.workspace_id, &HashSet::new())?
+            .panes;
+        let viewed_tabs: HashSet<u64> = client_view
+            .clients
+            .iter()
+            .filter_map(|client| {
+                let id = ZellijPaneId::try_from(&client.pane_id).ok()?;
+                panes
+                    .iter()
+                    .find(|pane| pane.native_id() == id)?
+                    .stable_tab_id
+            })
+            .collect();
+        for pane in &mut panes {
+            pane.tab_viewed = pane
+                .stable_tab_id
+                .is_some_and(|id| viewed_tabs.contains(&id));
+        }
+        let restoration = client_restoration_target(&panes, &client_view);
+        let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
+        let plan = super::super::plan_reconcile(&views, live);
+        let planned_closes = plan.close_panes();
+        let off_spec = off_spec_sidebars(&panes, &planned_closes, Some(opts.target));
+        if plan.is_empty() && off_spec.is_empty() {
+            return Ok(SidebarRecovery::default());
+        }
 
         let mut report = SidebarRecovery::default();
-        // In-place adds and geometry moves both need an attached client: a
-        // detached session's screen thread drops the mount while the spawned
-        // serve pair keeps running, so adding there only leaks (the closes
-        // above are safe detached). An unanswerable probe reads detached —
-        // deferring one run is recoverable, a leaked pair is not. tmux splits
-        // fine detached, so the gate is Zellij-internal.
+        // A detached screen can drop the mount while leaving its serve pair
+        // alive. Closes remain safe, but adds and geometry actions must defer.
         let detached = (plan.has_adds() || !off_spec.is_empty())
             && !self.session_has_attached_client(&opts.session_name);
         if !detached {
-            for (tab_position, raw_id) in &off_spec {
-                repair_sidebar_geometry(
-                    self,
-                    opts,
-                    *tab_position,
-                    *raw_id,
-                    width_floor,
-                    &mut report,
-                );
+            for (tab_id, raw_id) in &off_spec {
+                repair_sidebar_geometry(self, opts, *tab_id, *raw_id, &viewed_tabs, &mut report)?;
             }
-        }
-        if detached {
+        } else {
             report.deferred += off_spec.len();
         }
         let build = sidebar_build_identity(opts)?;
+        let mut replacements = Vec::new();
         let failure = execute_reconcile_plan(
             plan,
             &mut report,
             detached,
-            |view| {
-                let tab_position = view.parse::<u64>().map_err(|err| {
-                    output_error(format!("invalid sidebar tab position `{view}`: {err}"))
+            |view, replacing| {
+                let tab_id = view.parse::<u64>().map_err(|err| {
+                    output_error(format!("invalid sidebar tab id `{view}`: {err}"))
                 })?;
-                let added = self.add_sidebar_to_tab(opts, tab_position, width_floor)?;
+                let added = self.add_sidebar_to_tab(opts, tab_id, replacing, &viewed_tabs)?;
                 if !prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
                     if let Some(raw_id) = parse_zellij_raw(&added.pane) {
                         self.cleanup_failed_add(opts, raw_id);
                     }
                 }) {
                     return Err(output_error(format!(
-                        "sidebar {} mounted in tab {tab_position} without a current-build heartbeat",
+                        "sidebar {} mounted in tab {tab_id} without a current-build heartbeat",
                         added.pane
                     )));
+                }
+                if !replacing.is_empty() {
+                    replacements.push((tab_id, added.pane, replacing.to_vec()));
+                    // The new pane cannot own the dock until its old neighbour
+                    // closes. Account for its final geometry after execution.
+                    return Ok(ReconcileAddOutcome::Verified);
                 }
                 Ok(match added.dock {
                     DockOutcome::Docked => ReconcileAddOutcome::Verified,
@@ -1849,29 +1837,30 @@ impl MuxBackend for ZellijBackend {
             },
             |pane| self.close_pane(&opts.session_name, pane),
         );
-        if !detached && failure.is_none() && !replaced_views.is_empty() {
-            let floor = Some(crate::utils::time::unix_now_ms());
-            match self.topology_listing(
-                Some(&opts.session_name),
-                None,
-                Some(&opts.workspace_id),
-                floor,
-                RECONCILE_LIST_TIMEOUT,
-            ) {
-                Ok(after) => {
-                    for (tab, pane) in off_spec_sidebars(&after.panes, &[], Some(opts.target)) {
-                        if replaced_views.contains(&tab.to_string()) {
-                            repair_sidebar_geometry(self, opts, tab, pane, floor, &mut report);
-                        }
-                    }
-                }
-                Err(err) => tracing::warn!(
-                    session = %opts.session_name,
-                    tags.operation = "zellij.reconcile.geometry_after_close",
-                    error = &err as &dyn std::error::Error,
-                    "sidebar replacement geometry unavailable after closing old panes",
-                ),
+        for (tab_id, pane, old) in replacements {
+            if failure
+                .as_ref()
+                .is_some_and(|failure| failure.view == tab_id.to_string())
+            {
+                continue;
             }
+            let after = self.structural_geometry_listing(
+                &opts.session_name,
+                &opts.workspace_id,
+                &viewed_tabs,
+            )?;
+            if after
+                .panes
+                .iter()
+                .any(|pane| old.contains(&PaneId::from(pane.native_id())))
+            {
+                report.misdocked += 1;
+                continue;
+            }
+            let Some(raw_id) = parse_zellij_raw(&pane) else {
+                continue;
+            };
+            repair_sidebar_geometry(self, opts, tab_id, raw_id, &viewed_tabs, &mut report)?;
         }
         if detached {
             tracing::info!(
@@ -1890,7 +1879,7 @@ impl MuxBackend for ZellijBackend {
             );
         }
         if let Some(restoration) = restoration {
-            restore_client_view(self, opts, restoration);
+            restore_client_view(self, opts, restoration, &viewed_tabs)?;
         }
         Ok(report)
     }
@@ -2182,7 +2171,7 @@ pub(super) fn reconcile_pane(pane: &PaneTopologyPane) -> Option<ReconcilePane> {
     }
     let role = ReconcilePaneRole::from_evidence(is_sidebar_pane(pane), is_daemon_host_pane(pane));
     Some(ReconcilePane {
-        view: pane.tab_position.to_string(),
+        view: pane.stable_tab_id?.to_string(),
         pane_id: PaneId::from(pane.native_id()),
         role,
     })
@@ -2200,7 +2189,7 @@ pub(super) fn off_spec_sidebars(
         .filter(|pane| !closing.contains(&pane.id))
         .filter(|pane| !tab_fullscreen_active(panes, pane.tab_position))
         .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width_target))
-        .map(|pane| (pane.tab_position, pane.id))
+        .filter_map(|pane| Some((pane.stable_tab_id?, pane.id)))
         .collect()
 }
 
@@ -2213,21 +2202,21 @@ fn parse_zellij_raw(pane: &PaneId) -> Option<u64> {
 fn repair_sidebar_geometry(
     backend: &ZellijBackend,
     opts: &SidebarPaneOptions,
-    tab_position: u64,
+    tab_id: u64,
     raw_id: u64,
-    width_floor: Option<u64>,
+    viewed_tabs: &HashSet<u64>,
     report: &mut SidebarRecovery,
-) {
-    let floor = backend.converge_sidebar_geometry(opts, tab_position, raw_id, width_floor);
+) -> Result<()> {
+    let changed = backend.converge_sidebar_geometry(opts, tab_id, raw_id, viewed_tabs)?;
     match backend.sidebar_dock_outcome(
         &opts.session_name,
         &opts.workspace_id,
-        tab_position,
+        tab_id,
         raw_id,
-        floor,
-    ) {
+        viewed_tabs,
+    )? {
         DockOutcome::Docked => {
-            if floor.is_some() {
+            if changed {
                 report.redocked += 1;
             }
         }
@@ -2235,6 +2224,7 @@ fn repair_sidebar_geometry(
             report.misdocked += 1;
         }
     }
+    Ok(())
 }
 
 fn client_restoration_target(
@@ -2255,7 +2245,7 @@ fn client_restoration_target(
         .iter()
         .find(|pane| pane.id == *viewed && pane.is_live_terminal())?;
     Some((
-        pane.tab_position,
+        pane.stable_tab_id?,
         (!is_sidebar_pane(pane)).then_some(pane.id),
     ))
 }
@@ -2264,31 +2254,34 @@ fn restore_client_view(
     backend: &ZellijBackend,
     opts: &SidebarPaneOptions,
     restoration: (u64, Option<u64>),
-) {
-    let Ok(panes) = backend.topology_panes_for_workspace(
-        &opts.session_name,
-        &opts.workspace_id,
-        None,
-        RECONCILE_LIST_TIMEOUT,
-    ) else {
-        return;
+    viewed_tabs: &HashSet<u64>,
+) -> Result<()> {
+    let panes = backend
+        .structural_geometry_listing(&opts.session_name, &opts.workspace_id, viewed_tabs)?
+        .panes;
+    let (tab_id, preferred) = restoration;
+    let Some(tab_position) = panes
+        .iter()
+        .find(|pane| pane.stable_tab_id == Some(tab_id))
+        .map(|pane| pane.tab_position)
+    else {
+        return Ok(());
     };
-    let (tab_position, preferred) = restoration;
     let work = preferred
         .filter(|id| {
             panes.iter().any(|pane| {
                 pane.id == *id
-                    && pane.tab_position == tab_position
+                    && pane.stable_tab_id == Some(tab_id)
                     && pane.is_live_terminal()
                     && !is_sidebar_pane(pane)
             })
         })
         .or_else(|| super::raw_pane::leftmost_live_work_pane(&panes, tab_position));
     let Some(work) = work else {
-        return;
+        return Ok(());
     };
     let Ok(runtime) = backend.runtime_paths_for_workspace(opts.workspace_id.clone()) else {
-        return;
+        return Ok(());
     };
     let pane = PaneId::from(ZellijPaneId::Terminal(work));
     let _ = execute_focus_restoration(
@@ -2302,6 +2295,7 @@ fn restore_client_view(
             delay: super::FOCUS_RESTORE_RETRY_DELAY,
         },
     );
+    Ok(())
 }
 
 pub(super) fn execute_focus_restoration(

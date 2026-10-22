@@ -39,7 +39,7 @@ Start and detached start request the view. Shared room birth prepares and probes
 
 ## How managed panes are identified
 
-Managed panes are matched by their launch command. A pane id cannot serve: Zellij pane ids are positional and get reused. The foreground command cannot serve either, because a content supervisor or the Claude host puts a child in the foreground. A pane listing offers three strings per pane, and `matching_managed_panes` accepts a pane in the `rimzd` view when any one of them matches a marker:
+Managed panes are matched by their launch command. A pane id identifies a live pane, not its managed role, and Zellij's terminal id space restarts with each server. The foreground command cannot serve alone either, because a content supervisor or the Claude host puts a child in the foreground. A pane listing offers three strings per pane, and `matching_managed_panes` accepts a pane in the `rimzd` view when any one of them matches a marker:
 
 | String | Zellij | tmux |
 | --- | --- | --- |

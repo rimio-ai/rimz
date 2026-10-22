@@ -582,7 +582,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         current_build_liveness(&session_heartbeats(runtime, *mux, &ws.session_name), &build);
     let mux_config = MultiplexerConfig::from(machine_config);
 
-    let topology_floor_ms = if *mux == MuxName::Zellij {
+    if *mux == MuxName::Zellij {
         let presence_floor_ms = unix_now_ms();
         if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
             let presence = crate::mux::PresencePluginOptions::from_config(
@@ -626,11 +626,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
             crate::harness::auto_gc::sweep_runtime_claims(runtime);
             return outcome;
         }
-        Some(presence_floor_ms)
-    } else {
-        None
-    };
-    liveness.topology_floor_ms = topology_floor_ms;
+    }
 
     let width = SidebarWidth::from_config(&machine_config.theme);
     let target = crate::mux::width_target::resolve(runtime, width, None);

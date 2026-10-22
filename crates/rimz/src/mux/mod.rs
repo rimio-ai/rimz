@@ -1260,12 +1260,12 @@ pub trait MuxBackend: Send + Sync {
     /// panes (those `live` does not claim) and re-add one if none survived; in an
     /// orphan sidebar-only view (no working pane, no daemon host) close every
     /// sidebar pane so a wedged renderer that never self-closed collapses with its
-    /// view; leave the daemon view alone. All in place, without disturbing working
-    /// panes. In-place adds and repairs size to each view's live target: the
-    /// room override verbatim, otherwise the configured percentage capped at
-    /// `max_cols`. One best-effort pass: a view whose add fails is
-    /// logged and skipped, never retried, never a session rebirth. Unlike
-    /// [`Self::open_sidebar`], this never deletes or recreates the session.
+    /// view. Views with daemon hosts are occupied too. All in place, without
+    /// disturbing working panes. In-place adds and repairs size to each view's
+    /// live target: the room override verbatim, otherwise the configured
+    /// percentage capped at `max_cols`. One best-effort pass: the first failed
+    /// verdict stops execution and counts it and every remaining one as failed.
+    /// Unlike [`Self::open_sidebar`], this never deletes or recreates the session.
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,

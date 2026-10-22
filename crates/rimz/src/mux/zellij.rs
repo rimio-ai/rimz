@@ -186,7 +186,7 @@ const SIDEBAR_LAYOUT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Ceiling on how long an in-place sidebar add waits for its `new-pane` to
 /// mount.
 const MOUNT_POLL_TIMEOUT: Duration = Duration::from_secs(2);
-const MOUNT_POLL_STEP: Duration = Duration::from_millis(50);
+const MOUNT_POLL_STEP: Duration = Duration::from_millis(150);
 
 /// Bundle reported by `rimz doctor` when the active backend is Zellij.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -589,10 +589,9 @@ impl ZellijBackend {
     /// out of the log a reader is scanning for real faults, and the tab this
     /// call would have chosen is the one a fresh attach opens on anyway.
     ///
-    /// The probe reads attachment the way the sidebar add path does, from
-    /// clients focused on a terminal pane. A client parked on a zellij plugin
-    /// UI therefore reads detached and keeps the focus it chose, which costs a
-    /// courtesy the user is not watching for.
+    /// The probe considers clients focused on a terminal pane. A client parked
+    /// on a zellij plugin UI therefore reads detached and keeps the focus it
+    /// chose, which costs a courtesy the user is not watching for.
     pub(super) fn go_to_lead_tab(&self, session: &str) -> Result<()> {
         if self.focused_terminal_client_ids(session).is_empty() {
             return Ok(());

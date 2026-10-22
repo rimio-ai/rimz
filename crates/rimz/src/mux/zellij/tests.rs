@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 #[cfg(unix)]
 fn socket_listing_fixture(reply: &str) -> (tempfile::TempDir, ZellijBackend, PathBuf) {
@@ -1313,7 +1314,7 @@ fn terminal_pane(
         is_floating: false,
         tab_position,
         tab_viewed: true,
-        stable_tab_id: None,
+        stable_tab_id: Some(tab_position),
         tab_name: Some("work".to_owned()),
         pane_columns: Some(pane_columns),
         pane_x: Some(pane_x),
@@ -1341,6 +1342,7 @@ fn fullscreen_tabs_hold_sidebar_geometry_reconcile() {
 #[test]
 fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
     let mut sidebar = terminal_pane(1, 4, 20, 0, crate::pane::SIDEBAR_CHROME_TITLE);
+    sidebar.stable_tab_id = Some(40);
     sidebar.is_held = true;
     let mut named_daemon = terminal_pane(2, 5, 80, 20, "host");
     named_daemon.tab_name = Some(crate::pane::VIEW_NAME.to_owned());
@@ -1358,6 +1360,7 @@ fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
         reconcile_pane(&work).expect("exited work pane remains structural"),
     ];
     assert_eq!(mapped[0].role, ReconcilePaneRole::Sidebar);
+    assert_eq!(mapped[0].view, "40", "repair keys must survive tab removal");
     assert_eq!(mapped[1].role, ReconcilePaneRole::DaemonHost);
     assert_eq!(mapped[2].role, ReconcilePaneRole::DaemonHost);
     assert_eq!(mapped[3].role, ReconcilePaneRole::Working);
@@ -2325,7 +2328,7 @@ exit 1
 
 #[cfg(unix)]
 #[test]
-fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
+fn reconcile_sidebars_requires_a_live_listing_before_any_mutation() {
     let room = TestRoom::new();
     let produced_at_ms = unix_now_ms();
     room.write_cache(
@@ -2337,7 +2340,7 @@ fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
             terminal_pane(2, 0, 150, 50, "work"),
         ],
     );
-    let (_temp, shim) = zellij_shim("#!/bin/sh\nexit 1\n");
+    let (temp, shim) = support::failing_roster_shim();
     let backend = room.backend(&shim);
     let live = SidebarLiveness {
         claimed_panes: [PaneId::from_parts(
@@ -2345,13 +2348,42 @@ fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
             "terminal_1",
         )]
         .into(),
-        topology_floor_ms: Some(produced_at_ms.saturating_add(1)),
         ..SidebarLiveness::default()
     };
 
     backend
         .reconcile_sidebars(&room.sidebar_options(200), &live)
-        .expect_err("a repair pass cannot judge geometry from pre-floor topology");
+        .expect_err("a cached roster cannot license structural repair");
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert!(
+        !log.contains("new-pane") && !log.contains("close-pane"),
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_rejects_a_terminal_without_a_stable_tab_id() {
+    let room = TestRoom::new();
+    room.write_cache(9_999_999_999_999, None, None, vec![]);
+    let (temp, shim) = support::pane_roster_shim(r#"[{"id":7,"tab_position":1,"title":"work"}]"#);
+    let result = room
+        .backend(&shim)
+        .reconcile_sidebars(&room.sidebar_options(240), &SidebarLiveness::default());
+    assert!(
+        result.is_err_and(|err| err.to_string().contains("stable tab id")),
+        "unreadable live tab identities must fail the pass"
+    );
+    let log = shim_log(&temp);
+    assert!(
+        !log.contains("new-pane") && !log.contains("close-pane"),
+        "{log}"
+    );
 }
 
 #[cfg(unix)]
@@ -2365,15 +2397,16 @@ fn reconcile_sidebars_defers_detached_adds_and_geometry_repairs() {
         None,
         None,
         vec![
-            terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
-            terminal_pane(2, 0, 50, 150, "work"),
+            terminal_pane(1, 0, 50, 150, "rimz-sidebar"),
+            terminal_pane(2, 0, 150, 0, "work"),
             terminal_pane(3, 1, 200, 0, "work"),
         ],
     );
-    let (temp, shim) = support::logging_shim();
+    let (temp, shim) = support::pane_roster_shim(
+        r#"[{"id":1,"tab_id":0,"tab_position":0,"pane_columns":50,"pane_x":150,"title":"rimz-sidebar"},{"id":2,"tab_id":0,"tab_position":0,"pane_columns":150,"pane_x":0,"title":"work"},{"id":3,"tab_id":1,"tab_position":1,"pane_columns":200,"pane_x":0,"title":"work"}]"#,
+    );
     let live = SidebarLiveness {
         claimed_panes: [PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")].into(),
-        topology_floor_ms: Some(produced_at_ms),
         ..Default::default()
     };
     let mut opts = room.sidebar_options(200);
@@ -2399,37 +2432,374 @@ fn reconcile_sidebars_defers_detached_adds_and_geometry_repairs() {
 
 #[cfg(unix)]
 #[test]
-fn floorless_reconcile_skips_width_only_repairs() {
+fn reconcile_judges_width_only_on_live_client_viewed_tabs() {
+    for viewed in [false, true] {
+        let room = TestRoom::new();
+        room.write_cache(
+            unix_now_ms(),
+            Some(1),
+            None,
+            vec![
+                terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
+                terminal_pane(2, 0, 50, 150, "work"),
+            ],
+        );
+        let (temp, shim) = zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n'; {client}; exit 0 ;;
+  *" action list-panes --all --json "*)
+    cols=150; if [ -f "$dir/resized" ]; then cols=50; fi
+    printf '[{{"id":1,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":0,"title":"rimz-sidebar"}},{{"id":2,"tab_id":40,"tab_position":0,"pane_columns":%s,"pane_x":%s,"title":"work"}},{{"id":2,"is_plugin":true,"tab_id":40,"tab_position":0,"title":"bar"}},{{"id":3,"is_plugin":true,"tab_id":99,"tab_position":1,"title":"other-tab"}}]\n' "$cols" "$((200 - cols))" "$cols"; exit 0 ;;
+  *" action resize decrease right --pane-id terminal_1 "*) touch "$dir/resized"; exit 0 ;;
+esac
+exit 0
+"#,
+            client = if viewed {
+                "printf '1 plugin_2 bar\\n'"
+            } else {
+                "printf '1 plugin_3 other-tab\\n'"
+            }
+        ));
+        let backend = room.backend(&shim);
+        let live = SidebarLiveness {
+            claimed_panes: [PaneId::from_parts(
+                crate::ids::MuxName::Zellij,
+                "terminal_1",
+            )]
+            .into(),
+            ..SidebarLiveness::default()
+        };
+
+        let report = backend
+            .reconcile_sidebars(
+                &{
+                    let mut opts = room.sidebar_options(200);
+                    opts.rimz_bin = shim;
+                    opts
+                },
+                &live,
+            )
+            .expect("live structural reconcile");
+
+        assert_eq!(
+            report,
+            crate::mux::SidebarRecovery {
+                redocked: usize::from(viewed),
+                ..Default::default()
+            },
+            "viewed={viewed}: {report:?}"
+        );
+        let log = shim_log(&temp);
+        assert_eq!(
+            command_count(&log, "action resize"),
+            usize::from(viewed),
+            "{log}"
+        );
+        assert!(
+            !log.contains("new-pane") && !log.contains("close-pane"),
+            "{log}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_dock_outcome_does_not_assume_unreadable_or_unknown_geometry_is_docked() {
+    use super::sidebar::DockOutcome;
+    let room = TestRoom::new();
+    for panes in [
+        None,
+        Some(r#"[{"id":1,"tab_id":40,"tab_position":0,"title":"rimz-sidebar"}]"#),
+    ] {
+        let (_temp, shim) =
+            panes.map_or_else(support::failing_roster_shim, support::pane_roster_shim);
+        let outcome = room.backend(&shim).sidebar_dock_outcome(
+            "rimz-test",
+            &room.workspace_id,
+            40,
+            1,
+            &HashSet::new(),
+        );
+        if panes.is_some() {
+            assert_eq!(outcome.expect("readable live list"), DockOutcome::Misdocked);
+        } else {
+            assert!(outcome.is_err(), "a failed live read must fail the pass");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_counts_unknown_dock_geometry_as_misdocked_not_redocked() {
+    let room = TestRoom::new();
+    let mut sidebar = terminal_pane(1, 1, 60, 0, "rimz-sidebar");
+    sidebar.pane_x = None;
+    sidebar.pane_columns = None;
+    room.write_cache(
+        9_999_999_999_999,
+        None,
+        None,
+        vec![sidebar, terminal_pane(2, 1, 180, 60, "work")],
+    );
+    let (_temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_2 work\n' ;;
+  *" action list-panes --all --json "*) printf '[{"id":1,"tab_id":1,"tab_position":1,"title":"rimz-sidebar"},{"id":2,"tab_id":1,"tab_position":1,"title":"work","pane_columns":180,"pane_x":60}]\n' ;;
+esac
+exit 0
+"#,
+    );
+    let mut opts = room.sidebar_options(240);
+    opts.rimz_bin = shim.clone();
+    let live = SidebarLiveness {
+        claimed_panes: [PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")].into(),
+        ..Default::default()
+    };
+    let report = room
+        .backend(&shim)
+        .reconcile_sidebars(&opts, &live)
+        .expect("unknown geometry report");
+    assert_eq!(report.misdocked, 1, "{report:?}");
+    assert_eq!(report.redocked, 0, "no action succeeded: {report:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_add_cleans_new_sidebars_that_never_mount_live() {
     let room = TestRoom::new();
     room.write_cache(
-        unix_now_ms(),
-        Some(1),
+        9_999_999_999_999,
+        None,
+        None,
+        vec![terminal_pane(7, 1, 240, 0, "work")],
+    );
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":0,"pane_columns":240}'
+    if [ -f "$dir/spawned" ]; then printf ',{"id":9,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","is_held":true}'; fi
+    printf ']\n'; exit 0 ;;
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_7\n'; exit 0 ;;
+  *" action close-pane --pane-id terminal_9 "*) rm "$dir/spawned"; exit 0 ;;
+esac
+exit 0
+"#,
+    );
+    let result =
+        room.backend(&shim)
+            .add_sidebar_to_tab(&room.sidebar_options(240), 1, &[], &HashSet::new());
+    assert!(result.is_err(), "a held sidebar never mounted: {result:?}");
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action close-pane --pane-id terminal_9"),
+        2,
+        "each missed mount must be cleaned: {log}"
+    );
+    assert!(
+        !log.contains("close-pane --pane-id terminal_7"),
+        "a cross-talk hint is not cleanup authority: {log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_keeps_stable_add_target_after_an_orphan_tab_closes() {
+    let room = TestRoom::new();
+    room.write_cache(
+        9_999_999_999_999,
+        None,
         None,
         vec![
-            terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
-            terminal_pane(2, 0, 50, 150, "work"),
+            terminal_pane(8, 1, 240, 0, "rimz-sidebar"),
+            terminal_pane(7, 2, 240, 0, "work"),
         ],
     );
-    let (temp, shim) = zellij_shim("#!/bin/sh\nexit 1\n");
-    let backend = room.backend(&shim);
-    let live = SidebarLiveness {
-        claimed_panes: [PaneId::from_parts(
-            crate::ids::MuxName::Zellij,
-            "terminal_1",
-        )]
-        .into(),
-        ..SidebarLiveness::default()
-    };
-
-    let report = backend
-        .reconcile_sidebars(&room.sidebar_options(200), &live)
-        .expect("floorless structural reconcile");
-
-    assert_eq!(report, crate::mux::SidebarRecovery::default());
-    assert!(
-        shim_log(&temp).is_empty(),
-        "an unproven viewport must not trigger a width action",
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n'; exit 0 ;;
+  *" action close-pane --pane-id terminal_8 "*) touch "$dir/closed"; exit 0 ;;
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
+  *" action list-panes --all --json "*)
+    pos=2; if [ -f "$dir/closed" ]; then pos=1; fi
+    printf '['
+    if [ ! -f "$dir/closed" ]; then printf '{"id":8,"tab_id":10,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":240},'; fi
+    x=0; if [ -f "$dir/spawned" ]; then
+      x=60; printf '{"id":9,"tab_id":40,"tab_position":%s,"title":"rimz-sidebar","pane_x":0,"pane_columns":60},' "$pos"
+    fi
+    printf '{"id":7,"tab_id":40,"tab_position":%s,"title":"work","pane_x":%s,"pane_columns":%s}]\n' "$pos" "$x" "$((240 - x))"; exit 0 ;;
+esac
+exit 0
+"#,
     );
+    let mut opts = room.sidebar_options(240);
+    opts.rimz_bin = shim.clone();
+    opts.extra_env.insert(
+        "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+        "1".to_owned(),
+    );
+    let report = room
+        .backend(&shim)
+        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .expect("reconcile");
+    let log = shim_log(&temp);
+    assert!(
+        log.contains("action new-pane --tab-id 40"),
+        "tab positions must not steer the Add: {log}"
+    );
+    assert_eq!(report.recovered, 1, "{report:?}: {log}");
+    assert_eq!(report.closed, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_replacement_anchors_only_supported_docked_wide_panes() {
+    for (version, cols, x, anchored) in [
+        ("0.45.1", 60, 0, true),
+        ("0.44.3", 60, 0, false),
+        ("0.45.1", 8, 0, false),
+        ("0.45.1", 60, 180, false),
+    ] {
+        let room = TestRoom::new();
+        let work_x = if x == 0 { cols } else { 0 };
+        room.write_cache(
+            9_999_999_999_999,
+            None,
+            None,
+            vec![
+                terminal_pane(8, 1, cols, x, "rimz-sidebar"),
+                terminal_pane(7, 1, 240 - cols, work_x, "work"),
+            ],
+        );
+        let (temp, shim) = zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0"); printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij {version}\n'; exit 0; fi
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n'; exit 0 ;;
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
+  *" action close-pane --pane-id terminal_9 "*) rm "$dir/spawned"; exit 0 ;;
+  *" action list-panes --all --json "*)
+    printf '[{{"id":8,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":{x},"pane_columns":{cols}}},{{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":{work_x},"pane_columns":{work_cols}}}'
+    if [ -f "$dir/spawned" ]; then printf ',{{"id":9,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","is_held":true}}'; fi
+    printf ']\n'; exit 0 ;;
+esac
+exit 0
+"#,
+            work_cols = 240 - cols
+        ));
+        let mut opts = room.sidebar_options(240);
+        opts.rimz_bin = shim.clone();
+        let report = room
+            .backend(&shim)
+            .reconcile_sidebars(&opts, &SidebarLiveness::default())
+            .expect("repair report");
+        let log = shim_log(&temp);
+        let adds: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("action new-pane "))
+            .collect();
+        assert_eq!(
+            adds.len(),
+            if anchored { 1 } else { 2 },
+            "anchored misses must not fall back: {log}"
+        );
+        assert!(
+            adds.iter().all(|line| if anchored {
+                line.contains("pane=8 ")
+                    && line.contains("--direction right --no-focus")
+                    && !line.contains("--tab-id")
+            } else {
+                line.contains("new-pane --tab-id 1") && !line.contains("--direction")
+            }),
+            "{log}"
+        );
+        assert!(
+            adds.iter()
+                .all(|line| line.contains("--name rimz-sidebar --borderless true --close-on-exit")),
+            "{log}"
+        );
+        assert_eq!(
+            command_count(&log, "close-pane --pane-id terminal_9"),
+            adds.len(),
+            "{log}"
+        );
+        assert!(
+            !log.contains("close-pane --pane-id terminal_8"),
+            "an unverified replacement must not close the old pane: {log}"
+        );
+        assert_eq!(report.failed, 1, "{report:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn completed_replacement_is_verified_even_when_a_later_add_fails() {
+    let room = TestRoom::new();
+    room.write_cache(
+        9_999_999_999_999,
+        None,
+        None,
+        vec![
+            terminal_pane(8, 1, 60, 0, "rimz-sidebar"),
+            terminal_pane(7, 1, 180, 60, "work"),
+            terminal_pane(17, 2, 240, 0, "work"),
+        ],
+    );
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n'; exit 0 ;;
+  *" action new-pane --tab-id 2 "*) exit 1 ;;
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
+  *" action close-pane --pane-id terminal_8 "*) touch "$dir/closed"; exit 0 ;;
+  *" action resize decrease right --pane-id terminal_9 "*) touch "$dir/resized"; exit 0 ;;
+  *" action list-panes --all --json "*)
+    printf '['
+    if [ ! -f "$dir/closed" ]; then
+      old_cols=60; if [ -f "$dir/spawned" ]; then old_cols=30; fi
+      printf '{"id":8,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s},' "$old_cols"
+    fi
+    work_x=60
+    if [ -f "$dir/spawned" ]; then
+      x=30; cols=30
+      if [ -f "$dir/closed" ]; then x=0; cols=150; work_x=150; fi
+      if [ -f "$dir/resized" ]; then cols=60; work_x=60; fi
+      printf '{"id":9,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":%s,"pane_columns":%s},' "$x" "$cols"
+    fi
+    printf '{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":%s,"pane_columns":%s},{"id":17,"tab_id":2,"tab_position":2,"title":"work","pane_x":0,"pane_columns":240}]\n' "$work_x" "$((240 - work_x))"; exit 0 ;;
+esac
+exit 0
+"#,
+    );
+    let mut opts = room.sidebar_options(240);
+    opts.rimz_bin = shim.clone();
+    opts.extra_env.insert(
+        "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+        "1".to_owned(),
+    );
+    let report = room
+        .backend(&shim)
+        .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        .expect("repair report");
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "resize decrease right --pane-id terminal_9"),
+        1,
+        "completed Replace must still be checked: {report:?}: {log}"
+    );
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.redocked, 1);
+    assert_eq!(report.misdocked, 0);
 }
 
 #[cfg(unix)]
@@ -2685,10 +3055,11 @@ dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/resize-count"; attempts=
 printf '%s\n' "$*" >> "$log"
 if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
-  *" --name rimz:dump_topology "*)
+  *" action list-panes --all --json "*|*" --name rimz:dump_topology "*)
     count=$(cat "$state" 2>/dev/null || printf 0); cols=$(({initial} + count * {step})); work=$(({view} - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    printf '[{{"id":8,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$work"
     exit 0 ;;
   *" action resize {direction} right --pane-id terminal_8 "*)
     attempt=$(cat "$attempts" 2>/dev/null || printf 0); attempt=$((attempt + 1)); printf '%s\n' "$attempt" > "$attempts"
@@ -2713,7 +3084,9 @@ exit 0
             pinned: true,
         },
     };
-    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width, 1, 8, None);
+    let resized = backend
+        .converge_sidebar_widths_stepwise(&width, 1, 8, None, &HashSet::from([1]))
+        .expect("live width repair");
     assert!(resized, "{name}: expected resize");
     let log = shim_log(&temp);
     assert_eq!(
@@ -2725,13 +3098,9 @@ exit 0
         "{name}:\n{log}"
     );
     let final_cols = backend
-        .topology_panes_for_workspace(
-            "rimz-test",
-            &room.workspace_id,
-            floor,
-            crate::mux::zellij::RECONCILE_LIST_TIMEOUT,
-        )
+        .structural_geometry_listing("rimz-test", &room.workspace_id, &HashSet::from([1]))
         .expect("final topology")
+        .panes
         .into_iter()
         .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
@@ -2790,7 +3159,7 @@ dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/resize-count"
 printf '%s\n' "$*" >> "$log"
 if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
-  *" --name rimz:dump_topology "*)
+  *" action list-panes --all --json "*|*" --name rimz:dump_topology "*)
     count=$(cat "$state" 2>/dev/null || printf 0)
     case "$count" in
 {geometry_cases}      *) cols={last} ;;
@@ -2798,6 +3167,7 @@ case " $* " in
     work=$((213 - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    printf '[{{"id":8,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$work"
     exit 0 ;;
   *" action resize increase right --pane-id terminal_8 "*)
     count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
@@ -2823,8 +3193,8 @@ exit 0
     };
 
     let resized = backend
-        .converge_sidebar_widths_stepwise(&width, 1, 8, None)
-        .1;
+        .converge_sidebar_widths_stepwise(&width, 1, 8, None, &HashSet::from([1]))
+        .expect("live width repair");
     assert_eq!(
         resized,
         expected_increase + expected_decrease > 0,
@@ -2896,7 +3266,7 @@ case " $* " in
     count=$(cat "$state" 2>/dev/null || printf 0); cols=$((171 - count * 19)); if [ "$cols" -lt 72 ]; then cols=72; fi
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"rimz-sidebar","pane_x":0,"pane_columns":72}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_viewed":true,"title":"zsh","pane_x":72,"pane_columns":308}}]}}\n' "$now" > "{cache}"
-    printf '[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$((380 - cols))"; exit 0 ;;
+    printf '[{{"id":8,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_id":1,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$((380 - cols))"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_8 "*)
     count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; exit 0 ;;
 esac
@@ -2919,8 +3289,8 @@ exit 0
     };
     assert!(
         backend
-            .converge_sidebar_widths_stepwise(&width, 1, 8, None)
-            .1
+            .converge_sidebar_widths_stepwise(&width, 1, 8, None, &HashSet::from([1]))
+            .expect("live width repair")
     );
     let log = shim_log(&temp);
     assert_eq!(
@@ -2972,9 +3342,9 @@ case " $* " in
     while [ "$i" -lt 7 ]; do
       if [ "$i" -ge "$slot" ]; then x=$(((i + 1) * 140)); else x=$((i * 140)); fi
       if [ "$i" -gt 0 ]; then printf ','; fi
-      printf '{"id":%s,"is_plugin":false,"tab_position":1,"pane_columns":140,"pane_x":%s,"title":"zsh"}' "$((i + 1))" "$x"; i=$((i + 1))
+      printf '{"id":%s,"is_plugin":false,"tab_id":1,"tab_position":1,"pane_columns":140,"pane_x":%s,"title":"zsh"}' "$((i + 1))" "$x"; i=$((i + 1))
     done
-    printf ',{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar"}]\n' "$cols" "$sidebar_x"; exit 0 ;;
+    printf ',{"id":8,"is_plugin":false,"tab_id":1,"tab_position":1,"pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar"}]\n' "$cols" "$sidebar_x"; exit 0 ;;
   *" action move-pane left --pane-id terminal_8 "*) count=$(cat "$moves" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$moves"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_8 "*) : > "$resized"; exit 0 ;;
 esac
@@ -2982,7 +3352,9 @@ exit 1
 "#,
     );
     let backend = room.backend(&shim);
-    backend.converge_sidebar_geometry(&room.sidebar_options(1120), 1, 8, Some(0));
+    backend
+        .converge_sidebar_geometry(&room.sidebar_options(1120), 1, 8, &HashSet::from([1]))
+        .expect("live dock repair");
     let log = shim_log(&temp);
     let lines: Vec<_> = log.lines().collect();
     let moves: Vec<_> = lines
@@ -2997,7 +3369,7 @@ exit 1
     assert_eq!(moves.len(), 7, "{log}");
     assert!(resize > *moves.last().expect("moves"), "{log}");
     let listing = backend
-        .structural_geometry_listing("rimz-test", &room.workspace_id, None)
+        .structural_geometry_listing("rimz-test", &room.workspace_id, &HashSet::from([1]))
         .expect("final geometry");
     assert_eq!(
         listing
@@ -3017,14 +3389,15 @@ fn redock_stops_on_authoritative_no_progress() {
         r#"#!/bin/sh
 dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
-  *" action list-panes --all --json "*) printf '[{"id":1,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar"}]\n'; exit 0 ;;
+  *" action list-panes --all --json "*) printf '[{"id":1,"is_plugin":false,"tab_id":1,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh"},{"id":2,"is_plugin":false,"tab_id":1,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh"},{"id":8,"is_plugin":false,"tab_id":1,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar"}]\n'; exit 0 ;;
   *" action move-pane left --pane-id terminal_8 "*) exit 0 ;;
 esac
 exit 1
 "#,
     );
     room.backend(&shim)
-        .converge_sidebar_geometry(&room.sidebar_options(270), 1, 8, Some(0));
+        .converge_sidebar_geometry(&room.sidebar_options(270), 1, 8, &HashSet::from([1]))
+        .expect("live dock repair");
     let log = shim_log(&temp);
     assert_eq!(command_count(&log, "action move-pane left"), 1, "{log}");
     assert!(!log.contains("action resize"), "{log}");
@@ -3096,10 +3469,12 @@ exit 0
         cache = room.runtime.lane_path("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
-    if let Err(err) = room
-        .backend(&shim)
-        .add_sidebar_to_tab(&room.sidebar_options(120), 1, Some(0))
-    {
+    if let Err(err) = room.backend(&shim).add_sidebar_to_tab(
+        &room.sidebar_options(120),
+        1,
+        &[],
+        &HashSet::from([1]),
+    ) {
         panic!("retry add: {err}\n{}", shim_log(&temp));
     }
     let log = shim_log(&temp);

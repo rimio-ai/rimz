@@ -858,7 +858,7 @@ fn start_warns_about_saved_untrusted_on_birth_and_reattach() {
             String::new()
         };
         let trace = env.project_root.join("restricted-start.log");
-        let _room = ShimRoom::watch(&env, &trace);
+        let _room = (!live).then(|| ShimRoom::watch(&env, &trace));
         let mut command = env.rimz();
         configure_actionable_hooks(&mut command, &env, &bin, &trace, &sessions);
         let output = command
@@ -962,7 +962,6 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     );
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let live_trace = live.project_root.join("zellij-live.log");
-    let _live_room = ShimRoom::watch(&live, &live_trace);
     let mut live_command = live.rimz();
     configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
     let live_output = live_command.bounded_output().expect("run live-room start");

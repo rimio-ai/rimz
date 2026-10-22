@@ -323,7 +323,8 @@ pub(super) fn repairable_nested_work_pane_ids(
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
 /// column band, or — when `width_target` is proven — outside the nearest-width
-/// tolerance for its live per-view target. Unknown geometry never reads off-spec.
+/// tolerance for its live per-view target. Unknown geometry needs verification,
+/// not an assumption that the pane is docked.
 pub(super) fn sidebar_geometry_off_spec(
     pane: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
@@ -331,7 +332,7 @@ pub(super) fn sidebar_geometry_off_spec(
     width_target: Option<crate::mux::SidebarTarget>,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
-        return false;
+        return true;
     };
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
         || width_target.is_some_and(|target| {
