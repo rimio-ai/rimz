@@ -204,6 +204,7 @@ fn seed_spending_history(
                     thread_id: Some(format!("thread-{index}")),
                     is_sidechain: false,
                     has_speed: false,
+                    fast: false,
                     model: Some("gpt-5.4".to_owned()),
                     rolled: false,
                     timing: None,

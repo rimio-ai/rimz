@@ -45,6 +45,7 @@ impl EffortTokens {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SlotEffort {
+    pub fast: bool,
     pub tokens: EffortTokens,
     pub cost_usd: Option<f64>,
     pub timed_ms: u64,
@@ -55,6 +56,7 @@ impl SlotEffort {
     pub fn add_assign(&mut self, other: Self) {
         self.tokens.add_assign(other.tokens);
         self.cost_usd = sum_optional_cost(self.cost_usd, other.cost_usd);
+        self.fast |= other.fast;
         self.timed_ms = self.timed_ms.saturating_add(other.timed_ms);
         self.timed_output = self.timed_output.saturating_add(other.timed_output);
     }
@@ -235,6 +237,7 @@ fn fold_tagged_entries<'a>(
 }
 
 fn absorb_entry(effort: &mut SlotEffort, entry: &CachedEntry) {
+    effort.fast |= entry.fast;
     effort.tokens.absorb_entry(entry);
     effort.cost_usd = sum_optional_cost(
         effort.cost_usd,
@@ -263,6 +266,7 @@ mod tests {
     #[test]
     fn fold_preserves_timing_for_total_model_and_child() {
         let mut first = entry("first", 10, 0.25);
+        first.fast = true;
         first.timing = Some(ResponseTiming {
             ms: 2_000,
             output: 100,
@@ -284,12 +288,14 @@ mod tests {
             assert_eq!((effort.timed_ms, effort.timed_output), (6_000, 400));
             assert_eq!(effort.tokens.input, 60);
             assert_eq!(effort.cost_usd, Some(0.75));
+            assert!(effort.fast);
         }
     }
 
     #[test]
     fn slot_effort_merges_all_dimensions_with_saturation() {
         let mut effort = SlotEffort {
+            fast: false,
             tokens: EffortTokens {
                 input: 10,
                 output: 2,
@@ -301,6 +307,7 @@ mod tests {
             timed_output: 100,
         };
         effort.add_assign(SlotEffort {
+            fast: true,
             tokens: effort.tokens,
             cost_usd: Some(0.5),
             timed_ms: 4_000,
@@ -316,6 +323,7 @@ mod tests {
             }
         );
         assert_eq!(effort.cost_usd, Some(0.75));
+        assert!(effort.fast);
         assert_eq!((effort.timed_ms, effort.timed_output), (6_000, 400));
         effort.add_assign(SlotEffort {
             tokens: EffortTokens {
@@ -390,6 +398,28 @@ mod tests {
         );
         assert_eq!(effort.cost_usd, Some(0.25));
         assert_eq!(breakdown.models[&None], effort);
+    }
+
+    #[test]
+    fn fast_follows_the_kept_duplicate_not_any_replay() {
+        for fast in [false, true] {
+            let mut kept = entry("same", 10, 0.25);
+            kept.message_id = kept.dedup_key.take();
+            kept.fast = fast;
+            kept.timing = Some(ResponseTiming {
+                ms: 2_000,
+                output: 100,
+            });
+            let mut replay = kept.clone();
+            replay.fast = !fast;
+            replay.timing = None;
+            for entries in [[&kept, &replay], [&replay, &kept]] {
+                let breakdown = fold_tagged_entries(entries.map(|entry| (entry, None)));
+                assert_eq!(breakdown.total.fast, fast);
+                assert_eq!(breakdown.models[&None].fast, fast);
+                assert_eq!(breakdown.total.tokens.input, 10);
+            }
+        }
     }
 
     #[test]

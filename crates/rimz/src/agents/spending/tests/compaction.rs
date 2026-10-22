@@ -55,12 +55,14 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     });
     let mut old_project_same_bucket = cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old-project");
     old_project_same_bucket.model = Some("claude-opus-4-8".to_owned());
+    old_project_same_bucket.fast = true;
     old_project_same_bucket.timing = Some(ResponseTiming {
         ms: 4_000,
         output: 300,
     });
     let mut old_other = cached_entry(NOW_SECS - 60 * 86_400, 3.0, "old-other");
     old_other.model = Some("claude-sonnet-4-6".to_owned());
+    old_other.fast = true;
     let mut recent = cached_entry(NOW_SECS - RAW_RETAIN_SECS + 86_400, 4.0, "recent");
     recent.model = Some("claude-opus-4-8".to_owned());
     let expired_rollup_ts = NOW_SECS - 400 * 86_400;
@@ -109,6 +111,15 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
         compute_scoped_tally(&files, &cache, &scope, NOW_SECS, &HeadlineSpec::default());
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
+
+    let rolled = cache
+        .files
+        .values()
+        .flat_map(|file| &file.entries)
+        .filter(|entry| entry.rolled)
+        .collect::<Vec<_>>();
+    assert_eq!(rolled.len(), 2);
+    assert!(rolled.iter().all(|entry| entry.fast));
 
     let after_counted = dedup_cached_entries(&files, &cache).into_counted();
     assert_eq!(
@@ -183,6 +194,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
+        fast: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
         timing: None,
@@ -236,6 +248,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
+        fast: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
         timing: None,

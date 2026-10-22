@@ -355,6 +355,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         thread_id: Some("thread-1".to_owned()),
         is_sidechain: true,
         has_speed: true,
+        fast: true,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: true,
         timing: None,
@@ -373,6 +374,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
+        fast: false,
         model: Some("gpt-5-codex".to_owned()),
         rolled: false,
         timing: None,
@@ -395,6 +397,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         [
           {
             "d": true,
+            "f": true,
             "h": "thread-1",
             "i": 10,
             "l": "claude-opus-4-8",
@@ -461,4 +464,19 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         serde_json::from_value::<FileCacheEntry>(file_value).unwrap(),
         file
     );
+}
+
+#[test]
+fn cached_entry_copies_fast_from_the_priced_split() {
+    for fast in [true, false] {
+        let entry = CachedEntry::new(
+            123,
+            1.0,
+            &crate::agents::pricing::TokenSplit {
+                fast,
+                ..Default::default()
+            },
+        );
+        assert_eq!(entry.fast, fast);
+    }
 }

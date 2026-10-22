@@ -159,6 +159,7 @@ mod tests {
             thread_id: thread_id.map(ToOwned::to_owned),
             is_sidechain: false,
             has_speed: false,
+            fast: false,
             model: None,
             rolled: false,
             timing: None,

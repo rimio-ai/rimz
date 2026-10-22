@@ -112,7 +112,7 @@ Three version constants gate schema changes:
 
 | Constant | Current version | Bump when | Effect |
 | --- | --- | --- | --- |
-| `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 27: Codex priority-tier pricing | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
+| `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 28: per-entry fast-mode flag | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
 | `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 21: team-role tallies separate from solo agent profiles, with active-time and message effort windows | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 8: calendar-day tally window | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 

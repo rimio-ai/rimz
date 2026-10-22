@@ -22,7 +22,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 8;
+const ATTRIBUTION_SCHEMA: u8 = 9;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 /// Estimated active seconds by provider session.
@@ -139,6 +139,7 @@ pub struct AttributionMember {
     pub provider: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub fast: bool,
     pub presence: Presence,
     pub me: bool,
     pub launch_ordinal: Option<u32>,
@@ -609,6 +610,7 @@ fn member(
         messages,
         tokens: total.tokens,
         cost_usd: total.cost_usd,
+        fast: total.fast,
         subagents,
         models: model_stats(models.clone()),
     };

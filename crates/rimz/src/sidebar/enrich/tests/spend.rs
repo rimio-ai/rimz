@@ -138,6 +138,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
                 thread_id: None,
                 is_sidechain: false,
                 has_speed: false,
+                fast: false,
                 model: None,
                 rolled: false,
                 timing: None,
