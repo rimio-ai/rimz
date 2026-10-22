@@ -470,6 +470,15 @@ impl StatePaths {
         Class::Locks.path_under(&self.root).join(name)
     }
 
+    pub(crate) fn lsp_usage_paths(&self) -> (PathBuf, PathBuf) {
+        (
+            Class::Records
+                .path_under(&self.root)
+                .join("lsp-usage.jsonl"),
+            self.lock_path("lsp-usage.lock"),
+        )
+    }
+
     /// The named-channel record no code reads or writes any more; `rimz gc`
     /// removes one an older build left.
     pub(crate) fn retired_channels_record(&self) -> PathBuf {

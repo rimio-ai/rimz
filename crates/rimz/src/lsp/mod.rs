@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod query;
 pub mod registry;
 mod server;
+pub mod usage;
 
 #[derive(Debug)]
 pub struct NamedItem {

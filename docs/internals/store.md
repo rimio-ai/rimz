@@ -111,6 +111,7 @@ records/pending-recovery.json                 lost agents awaiting the user's re
 records/idle-stop.json                        pending `agents stop --when-idle` requests, one per session
 records/last-death.json                       last incident
 records/budget.fleet.json                     standing fleet override, raise, or disable
+records/lsp-usage.jsonl                       counted language-server query history
 audit/transcript/<bucket-start>.jsonl         chat transcript, 7-day buckets
 audit/messages/<bucket-start>.jsonl           terminal messages, same bucket rule
 audit/crashes/<utc-ts>/                       mux forensics
@@ -139,7 +140,7 @@ locks/*.lock                                 room, workspace, publish, subagent-
                                              message-sweep, sidebar-launch, snapshot,
                                              topology-writer, authoritative-pane-probe, focus-anchor,
                                              pr-state, diff-stats, budget.fleet, hook-drainer,
-                                             hook-drainer-spawn, hook-ingress, and sidecar locks
+                                             hook-drainer-spawn, hook-ingress, lsp-usage, and sidecar locks
 workspace.json                               room record, layout: 2
 rimz                                         stable room executable
 ```
@@ -164,6 +165,7 @@ This page owns the log, the caches derived from it, and the workspace record. Th
 | `owned/workflows/` | [workflow.md](./harness/workflow.md#storage-and-isolation-boundary) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
+| `records/lsp-usage.jsonl` | [lsp.md](./lsp.md#query-usage) |
 | `tmp/`, `shared/`, `owned/agents/` | [sandbox.md](./sandbox.md#temp-units) |
 | Audit diagnostics | [diagnostics.md](./diagnostics.md) |
 | Rebirth records and crash archives | [Session death](#session-death) below |
@@ -350,7 +352,7 @@ Mutations that replace, cut, or forget the active log run `Store::commit_boundar
 
 ### Write classes
 
-Every disk write falls into one of five classes, and one line sorts them: **durable records and cold metadata fsync; hot appends and disposable caches do not.** A cache rebuilds, and a group sync or an audit tolerance bounds what an append can lose.
+Every disk write falls into one of nine classes, and one line sorts them: **durable records and cold metadata fsync; hot appends and disposable caches do not.** A cache rebuilds, and a group sync or an audit tolerance bounds what an append can lose.
 
 | Class | Files | Discipline | After a power cut |
 | --- | --- | --- | --- |
@@ -361,6 +363,7 @@ Every disk write falls into one of five classes, and one line sorts them: **dura
 | Framed logs | `log/events.log.jsonl`, `log/hook-ingress.log.jsonl` | Appends use one CRC-framed `write()` per record or ordered batch, including each staged hook lifecycle batch, without per-record fsync. The event log's off-lock tail issues a group `fdatasync` at most once a second, and rotation syncs before the rename. The ingress codec itself has no group-sync tail. | Intact through the last sync. The trailing window can be lost, and the frame CRC detects corruption. Event-log repair truncates it; the drainer truncates an unterminated ingress tail and skips corrupt terminated rows with diagnostic evidence. |
 | Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `out/<reader>/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
 | Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort records exception, not rebuildable history. | Caches rebuild or refresh; loss of the roster's latest write can narrow recovery. |
+| Usage appends | `records/lsp-usage.jsonl` | One `O_APPEND` write under a shared append lock, no fsync. Compaction tries the exclusive lock without waiting and durably replaces counted rows. | Trailing appends can be lost; compacted counts survive. Malformed rows are skipped. |
 | Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `workspace.json`, `records/agents-carryover.json`, `records/loop-instances.json`, `records/idle-stop.json`, `records/hook-drain.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
 
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else; it matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.

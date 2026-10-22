@@ -91,6 +91,7 @@ workspace store         ~/.rimz/ws/<basename>-<hex>/
   every room flock lives in locks/, never cleared by reset or teardown
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
+  records/lsp-usage.jsonl retains room-scoped query counts across broker restarts
   owned/workflows/<run-id>/ holds workflow records, sealed specs and journals;
   its work/ subtree is the node-writable workflow directory
 
