@@ -76,7 +76,6 @@ fn wait_backoff_cannot_hide_an_unfired_deadline() {
     t.finish_check(
         1,
         Ok(json!({"outcome":"pending","recheck_at":"2099-01-01T00:00:00Z"})),
-        BTreeMap::new(),
         None,
     )
     .unwrap();
@@ -109,12 +108,12 @@ fn result_cas_routes_current_sequence_and_stale_results_write_nothing() {
     };
     let original = transition.record.clone();
     transition
-        .finish_check(2, Ok(json!({"outcome":"ok"})), BTreeMap::new(), None)
+        .finish_check(2, Ok(json!({"outcome":"ok"})), None)
         .unwrap();
     assert_eq!(transition.record, original);
     assert!(transition.entries.is_empty());
     transition
-        .finish_check(1, Ok(json!({"outcome":"ok"})), BTreeMap::new(), None)
+        .finish_check(1, Ok(json!({"outcome":"ok"})), None)
         .unwrap();
     assert_eq!(
         transition.record.state,
@@ -124,7 +123,7 @@ fn result_cas_routes_current_sequence_and_stale_results_write_nothing() {
     let terminal = transition.record.clone();
     let entries = transition.entries.clone();
     transition
-        .finish_check(1, Ok(json!({"outcome":"ok"})), BTreeMap::new(), None)
+        .finish_check(1, Ok(json!({"outcome":"ok"})), None)
         .unwrap();
     assert_eq!(transition.record, terminal);
     assert_eq!(transition.entries, entries);

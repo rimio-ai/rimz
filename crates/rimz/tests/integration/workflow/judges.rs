@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
+use sha2::Digest;
 
 pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
     let reset = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(2);
@@ -70,6 +71,11 @@ done
     assert!(reason.ends_with("upgrade Codex"), "{reason}");
     let value = settled(&env, id, "parked");
     assert_eq!(value["record"]["park"]["reason"], "check");
+    let evaluations = events(&value, "evaluation");
+    assert!(
+        evaluations.iter().all(|row| row["digests"] == json!({})),
+        "a refused judge never spawned: {evaluations:#?}"
+    );
     let calls = fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
     assert!(!calls.is_empty());
     assert!(calls.lines().all(|call| call == "--version"), "{calls}");
@@ -77,6 +83,7 @@ done
 
 #[test]
 fn judge_process_objects_retry_limit_and_dead_host_policy() {
+    let digest = hex::encode(sha2::Sha256::digest(b"Build it"));
     for mode in ["object", "file", "missing", "limited", "dead-host"] {
         let (env, _) = fixture(
             &format!(
@@ -192,6 +199,14 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 );
                 assert_eq!(workflow_diagnostics(&env, "workflow_rerun").len(), 1);
             }
+        }
+        let evaluations = events(&show(&env, id), "evaluation");
+        for evaluation in &evaluations {
+            assert_eq!(
+                evaluation["digests"],
+                json!({"prompt.md": digest}),
+                "{mode}: {evaluations:#?}"
+            );
         }
     }
 }

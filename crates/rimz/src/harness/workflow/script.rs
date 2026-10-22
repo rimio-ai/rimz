@@ -14,7 +14,6 @@ mod judge;
 
 pub(super) struct Evaluation {
     pub object: Result<Value, String>,
-    pub digests: BTreeMap<String, String>,
     pub stderr_tail: Option<String>,
     pub failure: &'static str,
     pub limited: Option<workflow::Limited>,
@@ -25,7 +24,6 @@ impl Evaluation {
     fn failed(failure: &'static str, reason: &str) -> Self {
         Self {
             object: Err(reason.into()),
-            digests: BTreeMap::new(),
             stderr_tail: None,
             failure,
             limited: None,
@@ -68,7 +66,8 @@ pub(super) fn evaluate(
         return judge::evaluate(state, paths, spec, record);
     }
     let mut result = Evaluation::failed("invalid", "evaluation interrupted");
-    let argv = match command_words(record, spec, &mut result.digests) {
+    let mut digests = BTreeMap::new();
+    let argv = match command_words(record, spec, &mut digests) {
         Ok(argv) => argv,
         Err(err) => {
             result.object = Err(err);
@@ -86,15 +85,22 @@ pub(super) fn evaluate(
             &state.workspace_id,
             &record.project_root,
         ));
-    let output = with_child(state, paths, spec, record, |interrupted, spawned| {
-        crate::proc::run_bounded_output_hosted(
-            &mut command,
-            Duration::from_secs(u32::MAX.into()),
-            interrupted,
-            spawned,
-        )
-        .map_err(|error| error.to_string())
-    });
+    let output = with_child(
+        state,
+        paths,
+        spec,
+        record,
+        digests,
+        |interrupted, spawned| {
+            crate::proc::run_bounded_output_hosted(
+                &mut command,
+                Duration::from_secs(u32::MAX.into()),
+                interrupted,
+                spawned,
+            )
+            .map_err(|error| error.to_string())
+        },
+    );
     match output {
         Ok(output) => {
             result.stderr_tail = Some(
@@ -122,6 +128,7 @@ fn with_child(
     paths: &WorkflowPaths,
     spec: &WorkflowSpec,
     record: &RunRecord,
+    digests: BTreeMap<String, String>,
     execute: impl FnOnce(
         &dyn Fn() -> bool,
         &mut dyn FnMut(u32) -> std::io::Result<()>,
@@ -169,14 +176,12 @@ fn with_child(
     execute(&interrupted, &mut |pid| {
         let mut current = workflow::load(paths).map_err(std::io::Error::other)?;
         // The lock prevents another transition between admission and publication.
-        current
-            .attempt
-            .as_mut()
-            .expect("admitted live attempt")
-            .child = Some(workflow::HostChild {
+        let attempt = current.attempt.as_mut().expect("admitted live attempt");
+        attempt.child = Some(workflow::HostChild {
             pid,
             start: crate::proc::process_start_token(pid),
         });
+        attempt.digests = digests.clone();
         workflow::write(paths, &current, guard.as_ref().expect("spawn lock held"))
             .map_err(std::io::Error::other)?;
         guard.take();

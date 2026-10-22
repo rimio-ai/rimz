@@ -558,7 +558,6 @@ fn evaluation(
     super::super::script::Evaluation {
         object,
         failure,
-        digests: Default::default(),
         stderr_tail: None,
         limited: None,
         cost_usd: Some(0.1),
@@ -676,19 +675,30 @@ fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_parks() {
 #[test]
 fn abandoned_checks_record_engine_origin() {
     for outcome in ["canceled", "timeout"] {
-        let (spec, paths, record) = judge_fixture();
-        let mut t = super::super::state::Transition {
-            now: record.entered_at,
-            record,
-            spec: &spec,
-            paths: &paths,
-            entries: Vec::new(),
-        };
-        t.abandon_check(outcome);
-        let entry = serde_json::to_value(&t.entries[0]).unwrap();
-        assert_eq!(entry["event"], "evaluation");
-        assert_eq!(entry["outcome"], outcome);
-        assert_eq!(entry["origin"], "engine");
+        for published in [false, true] {
+            let (spec, paths, mut record) = judge_fixture();
+            let attempt = record.attempt.as_mut().unwrap();
+            if published {
+                attempt.digests.insert("judge.md".into(), "digest".into());
+                attempt.retry = Some(json!({"outcome":"died", "reason":"no object"}));
+            }
+            let digests = attempt.digests.clone();
+            let retry = attempt.retry.clone();
+            let mut t = super::super::state::Transition {
+                now: record.entered_at,
+                record,
+                spec: &spec,
+                paths: &paths,
+                entries: Vec::new(),
+            };
+            t.abandon_check(outcome);
+            let entry = serde_json::to_value(&t.entries[0]).unwrap();
+            assert_eq!(entry["event"], "evaluation");
+            assert_eq!(entry["outcome"], outcome);
+            assert_eq!(entry["origin"], "engine");
+            assert_eq!(entry["digests"], json!(digests));
+            assert_eq!(entry["retry"], json!(retry));
+        }
     }
 }
 
@@ -702,8 +712,7 @@ fn invalid_checks_record_engine_origin_and_legacy_rows_default_to_check() {
         paths: &paths,
         entries: Vec::new(),
     };
-    t.finish_check(1, Err("bad JSON".into()), Default::default(), None)
-        .unwrap();
+    t.finish_check(1, Err("bad JSON".into()), None).unwrap();
     let mut entry = serde_json::to_value(&t.entries[0]).unwrap();
     assert_eq!(entry["event"], "evaluation");
     assert_eq!(entry["origin"], "engine");

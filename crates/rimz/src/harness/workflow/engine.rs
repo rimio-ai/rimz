@@ -318,7 +318,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             {
                 t.finish_judge(seq, result)?
             } else {
-                t.finish_check(seq, result.object, result.digests, result.stderr_tail)?;
+                t.finish_check(seq, result.object, result.stderr_tail)?;
                 false
             };
             if retry {
@@ -332,19 +332,8 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             }
         } else {
             for entry in &mut t.entries {
-                if let JournalEvent::Evaluation {
-                    digests,
-                    cost_usd,
-                    retry,
-                    ..
-                } = &mut entry.event
-                {
-                    *digests = result.digests.clone();
+                if let JournalEvent::Evaluation { cost_usd, .. } = &mut entry.event {
                     *cost_usd = result.cost_usd;
-                    *retry = record
-                        .attempt
-                        .as_ref()
-                        .and_then(|attempt| attempt.retry.clone());
                 }
             }
         }
