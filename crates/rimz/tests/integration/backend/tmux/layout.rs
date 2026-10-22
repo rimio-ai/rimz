@@ -552,6 +552,55 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
         .expect("Codex broker")
         .pane_id
         .clone();
+    let geometry = server
+        .backend
+        .view_geometry("rimz-bg-repair", &broker, Duration::from_secs(3))
+        .expect("view geometry");
+    assert!(
+        geometry.is_some(),
+        "a fresh daemon window has tiled geometry"
+    );
+    let geometry = geometry.unwrap();
+    assert_eq!(geometry.gap, 1);
+    let native = server.wait_for_panes("rimz-bg-repair:rimzd", 4);
+    assert_eq!(geometry.panes.len(), native.len());
+    for rect in &geometry.panes {
+        let pane = native
+            .iter()
+            .find(|pane| pane.id == rect.pane_id.raw())
+            .unwrap();
+        assert_eq!(
+            (rect.x, rect.y, rect.cols, rect.rows),
+            (pane.left, pane.top, pane.width, pane.height),
+        );
+    }
+    assert_eq!(
+        rimz::daemon_view::inspect_daemon_shape(
+            &server.backend,
+            "rimz-bg-repair",
+            &sidebar.workspace_id
+        )
+        .unwrap(),
+        Some(rimz::daemon_view::DaemonShape::Healthy),
+    );
+    server.tmux(&["resize-pane", "-Z", "-t", broker.raw()]);
+    assert!(
+        server
+            .backend
+            .view_geometry("rimz-bg-repair", &broker, Duration::from_secs(3))
+            .unwrap()
+            .is_none()
+    );
+    server.tmux(&["resize-pane", "-Z", "-t", broker.raw()]);
+    server.tmux(&["set-option", "-p", "-t", broker.raw(), "@rimz_stack", "1"]);
+    assert!(
+        server
+            .backend
+            .view_geometry("rimz-bg-repair", &broker, Duration::from_secs(3))
+            .unwrap()
+            .is_none()
+    );
+    server.tmux(&["set-option", "-pu", "-t", broker.raw(), "@rimz_stack"]);
     server.tmux(&["kill-pane", "-t", panel.raw()]);
     server.tmux(&["kill-pane", "-t", broker.raw()]);
 
@@ -609,6 +658,120 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
     assert!(
         content_left < broker_left,
         "runtime column must stay to the right of content: {panes:?}"
+    );
+}
+
+#[test]
+fn daemon_shape_repairs_spanning_loop_without_restarting_the_app_server() {
+    use rimz::daemon_view::{DaemonShape, RepairOutcome, inspect_daemon_shape, repair_daemon_view};
+    use rimz::mux::SplitDirection;
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-shape-repair";
+    ensure_rimz_session(&server, session, Some((256, 81)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(256));
+    let view = rimz::mux::DaemonView {
+        name: rimz::pane::VIEW_NAME.to_owned(),
+        content: vec![held_managed_pane(&[
+            "rimz", "daemon", "content", "--slot", "0",
+        ])],
+        hosts: vec![held_managed_pane(&["rimz", "codex", "app-server", "serve"])],
+        loop_panel: held_managed_pane(&["rimz", "loop", "watch", "--hold"]),
+    };
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: view.name.clone(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: view.content[0].argv.clone(),
+                    name: None,
+                }])],
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: sidebar.clone(),
+        })
+        .unwrap();
+    let tab = format!("{session}:rimzd");
+    let initial = server.wait_for_panes(&tab, 2);
+    let content = initial
+        .iter()
+        .max_by_key(|pane| pane.left)
+        .unwrap()
+        .id
+        .clone();
+    let split = |pane: &rimz::mux::HostPane, direction| {
+        server
+            .backend
+            .split_pane(SplitPaneOptions {
+                target: SplitTarget::SessionPane {
+                    session_name: session.to_owned(),
+                    pane_id: PaneId::from_parts(MuxName::Tmux, &content),
+                },
+                command: Some(pane.argv.clone()),
+                title: Some(pane.argv.join(" ")),
+                close_on_exit: true,
+                placement: SplitPlacement::Directional(direction),
+                focus: false,
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap()
+    };
+    let panel = split(&view.loop_panel, SplitDirection::Down);
+    let broker = split(&view.hosts[0], SplitDirection::Right);
+    let broker_pid = server.display(broker.raw(), "#{pane_pid}");
+    let content_pid = server.display(&content, "#{pane_pid}");
+    let shape = inspect_daemon_shape(&server.backend, session, &sidebar.workspace_id).unwrap();
+    assert!(
+        matches!(shape, Some(DaemonShape::Repairable { .. })),
+        "{shape:?}"
+    );
+    assert_eq!(
+        repair_daemon_view(&server.backend, session, &sidebar.workspace_id, &view),
+        RepairOutcome::Converged
+    );
+    let after = server.wait_for_panes(&tab, 4);
+    assert_eq!(server.display(broker.raw(), "#{pane_pid}"), broker_pid);
+    assert_eq!(server.display(&content, "#{pane_pid}"), content_pid);
+    assert!(
+        !after.iter().any(|pane| pane.id == panel.raw()),
+        "only loop is restarted"
+    );
+    let listing = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            consistency: PaneReadConsistency::RequireAuthoritative,
+            ..Default::default()
+        })
+        .unwrap();
+    let loop_id = &rimz::daemon_view::find_loop_panel(&listing.panes)
+        .unwrap()
+        .pane_id;
+    let panel = after.iter().find(|pane| pane.id == loop_id.raw()).unwrap();
+    let broker = after.iter().find(|pane| pane.id == broker.raw()).unwrap();
+    let content = after.iter().find(|pane| pane.id == content).unwrap();
+    let bottom = after
+        .iter()
+        .map(|pane| pane.top + pane.height)
+        .max()
+        .unwrap();
+    assert_eq!((content.top, content.height), (0, bottom));
+    assert_eq!((broker.left, broker.width), (panel.left, panel.width));
+    assert_eq!(broker.top, 0);
+    assert_eq!(broker.height + 1, panel.top);
+    assert_eq!(panel.top + panel.height, bottom);
+    assert!(panel.left > content.left + content.width);
+    assert_eq!(
+        inspect_daemon_shape(&server.backend, session, &sidebar.workspace_id).unwrap(),
+        Some(DaemonShape::Healthy)
     );
 }
 
