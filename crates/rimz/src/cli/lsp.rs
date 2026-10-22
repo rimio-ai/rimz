@@ -1133,6 +1133,21 @@ fn stop(
                 continue;
             }
         }
+        if let Ok(response) = registry::request(
+            entry,
+            &serde_json::json!({"op": "status"}),
+            Duration::from_secs(2),
+        ) && let Ok(current) = serde_json::from_value::<registry::Entry>(response)
+            && current.state.is_alarm()
+        {
+            errors.push(format!(
+                "{} ({}): not acknowledged, still {} while its broker finishes stopping the server (run rimz lsp stop again in a second)",
+                entry.server,
+                entry.root.display(),
+                render::lsp_state_label(&current.state)
+            ));
+            continue;
+        }
         if entry.state.is_running() {
             stopped += &format!("stopped {} ({})\n", entry.server, entry.root.display());
         } else if entry.state.is_alarm() {
