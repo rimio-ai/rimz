@@ -106,7 +106,9 @@ path = "crates/rimz/src/lsp"
 # shares acknowledgment and visibility across broker and CLI (+4).
 # NamedItem unifies column-less errors before and after outline enrichment (+1).
 # query::classification_outline bounds test-classification enrichment separately (+1).
-surface-budget = 96
+# usage, usage::{Log, Counts, Snapshot}, Log::{new, read}, and Snapshot::for_entry
+# share one room-scoped usage snapshot across CLI inspection (+7).
+surface-budget = 103
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -731,7 +733,13 @@ allowed-dependencies = [
 # Daily effort appends and the spending reader share classed segment paths (+2).
 # RuntimePaths::sidebar_reconcile_lock serializes attach and repair for one session (+1).
 # RuntimePaths::group_roots_path gives the fetch writer its own cache lane (+1).
-surface-budget = 279
+# StatePaths::lsp_usage_paths keeps usage records and locks in their lifetime classes (+1).
+surface-budget = 280
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::lsp_usage_paths"
+reason = "The usage writer constructs both room paths through the classed disk boundary."
 
 [[verdict]]
 kind = "item"
@@ -7290,6 +7298,36 @@ reason = "Read-only inspection loads history once for every selected row."
 kind = "item"
 key = "lsp::history::Needs::for_entry"
 reason = "List and status take a row's next-start needs from one rule: the learned peak, else its admitted estimate."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Log"
+reason = "CLI queries and inspection share a room-scoped usage log handle."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Log::new"
+reason = "The CLI constructs a non-creating handle from the participant room's classed paths."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Log::read"
+reason = "List and status read usage once per command rather than once per row."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Counts"
+reason = "Text and JSON inspection share answered and failed query counts."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Snapshot"
+reason = "Inspection retains the room total independently of visible registry rows."
+
+[[verdict]]
+kind = "item"
+key = "lsp::usage::Snapshot::for_entry"
+reason = "CLI rows use the library's checkout/server usage key."
 
 [[verdict]]
 kind = "item"
