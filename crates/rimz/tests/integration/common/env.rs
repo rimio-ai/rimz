@@ -295,6 +295,7 @@ impl Env {
         let mut cmd = Command::new(rimz_bin);
         cmd.stdin(Stdio::null())
             .scrub_session_env()
+            .env(super::ENV_PROBE_TIMEOUT_MS_ENV, "20000")
             .env("RIMZ_HOME", self.rimz_home())
             .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
@@ -329,6 +330,7 @@ impl Env {
     /// reconstructing a partial environment that can miss tmux isolation.
     pub fn pin_pty_command(&self, cmd: &mut portable_pty::CommandBuilder) {
         cmd.scrub_session_env();
+        cmd.env(super::ENV_PROBE_TIMEOUT_MS_ENV, "20000");
         cmd.env("RIMZ_HOME", self.rimz_home());
         cmd.env("XDG_STATE_HOME", self.state_root());
         cmd.env("XDG_RUNTIME_DIR", &self.runtime_root);
@@ -885,11 +887,17 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     assert!(env.tmux_tmpdir().starts_with(&env.runtime_root));
     let codex_bin = configured("RIMZ_CODEX_BIN");
     assert!(!codex_bin.exists(), "the default codex binary is missing");
+    let probe_timeout_ms = configured(super::ENV_PROBE_TIMEOUT_MS_ENV);
+    assert_eq!(probe_timeout_ms.as_os_str(), "20000");
 
     let mut pty = portable_pty::CommandBuilder::new("rimz");
     pty.env("CODEX_HOME", "/ambient/codex");
     env.pin_pty_command(&mut pty);
     assert_eq!(pty.get_env("RIMZ_CODEX_BIN"), Some(codex_bin.as_os_str()));
+    assert_eq!(
+        pty.get_env(super::ENV_PROBE_TIMEOUT_MS_ENV),
+        Some(probe_timeout_ms.as_os_str())
+    );
     let scrubbed: Vec<_> = provider_home_keys().collect();
     assert!(scrubbed.contains(&"CODEX_HOME") && scrubbed.contains(&"CLAUDE_CONFIG_DIR"));
     for key in scrubbed {

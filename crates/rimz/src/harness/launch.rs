@@ -1821,7 +1821,8 @@ fn run_probe_command(
             });
         }
     };
-    let deadline = Instant::now() + ENV_PROBE_TIMEOUT;
+    let timeout = env_probe_timeout();
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child
             .try_wait()
@@ -1836,7 +1837,7 @@ fn run_probe_command(
                 remove_probe_stdout(&stdout_path);
                 return Err(ProgramLookupErr::ProbeTimeout {
                     program: program.to_owned(),
-                    timeout: ENV_PROBE_TIMEOUT,
+                    timeout,
                 });
             }
             None => std::thread::sleep(ENV_PROBE_POLL),
@@ -1854,6 +1855,17 @@ fn run_probe_command(
     };
     remove_probe_stdout(&stdout_path);
     Ok((status, stdout))
+}
+
+fn env_probe_timeout() -> Duration {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some(ms) = std::env::var("RIMZ_TEST_ENV_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    ENV_PROBE_TIMEOUT
 }
 
 fn env_probe_stdout_path() -> PathBuf {
