@@ -2819,6 +2819,19 @@ fn program_lookup_rejects_invalid_launch_env_keys() {
     assert!(err.to_string().contains("BAD=KEY"));
 }
 
+#[test]
+fn probe_timeout_names_the_shell_that_ran() {
+    let err = ProgramLookupErr::ProbeTimeout {
+        program: "/bin/zsh".to_owned(),
+        timeout: ENV_PROBE_TIMEOUT,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "launch environment probe `/bin/zsh` timed out after 5s"
+    );
+}
+
 fn unique_probe_program() -> String {
     format!("rimz-agent-probe-{}", std::process::id())
 }

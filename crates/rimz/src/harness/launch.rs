@@ -158,8 +158,8 @@ pub enum ProgramLookupErr {
         #[source]
         source: io::Error,
     },
-    #[error("launch environment probe timed out after {0:?}")]
-    ProbeTimeout(Duration),
+    #[error("launch environment probe `{program}` timed out after {timeout:?}")]
+    ProbeTimeout { program: String, timeout: Duration },
     #[error("cannot access launch environment probe output {path}: {source}")]
     ProbeIo {
         path: PathBuf,
@@ -1831,7 +1831,10 @@ fn run_probe_command(
                 let _ = child.kill();
                 let _ = child.wait();
                 remove_probe_stdout(&stdout_path);
-                return Err(ProgramLookupErr::ProbeTimeout(ENV_PROBE_TIMEOUT));
+                return Err(ProgramLookupErr::ProbeTimeout {
+                    program: program.to_owned(),
+                    timeout: ENV_PROBE_TIMEOUT,
+                });
             }
             None => std::thread::sleep(ENV_PROBE_POLL),
         }
