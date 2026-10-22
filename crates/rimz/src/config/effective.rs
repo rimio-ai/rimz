@@ -253,10 +253,10 @@ impl LaunchAgents {
                 let pick = table.walk(
                     requested,
                     &preference,
-                    |kind| renders.renders.contains_key(kind),
+                    |kind| renders.exclusions.get(kind).map(String::as_str),
                     &mut unavailable,
                 )?;
-                // Only successful complete family renders are eligible for the walk.
+                // Load renders or excludes every table family, and the walk passes the excluded ones.
                 let mut selected = renders.renders[&pick.kind].clone();
                 selected.effort = renders.effort.clone().or_else(|| {
                     crate::agents::definition_defaults(&pick.kind, Some(&pick.model))
@@ -268,6 +268,7 @@ impl LaunchAgents {
                     tier: requested,
                     model: pick.model,
                     used_tier: pick.used_tier,
+                    unbuildable: pick.unbuildable,
                     skipped: pick
                         .skipped
                         .into_iter()

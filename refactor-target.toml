@@ -244,7 +244,8 @@ upward-dependencies = ["address"]
 # PendingWaitClass (including its re-export), rested_status and display_rest_status replace sleeping_over (+3 net).
 # InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
 # LaunchCapability::allow_team_notes_args shares the archive run grant with the process compiler (+1).
-surface-budget = 1110
+# TierUnbuildable, TierPass, TierStamp::moved and TierStamp::passes share move evidence with launch and CLI consumers (+4).
+surface-budget = 1114
 
 [[verdict]]
 kind = "item"
@@ -6288,6 +6289,26 @@ reason = "ProviderCapacity::from_windows is built by harness/auto_continue/tests
 kind = "item"
 key = "agents::account::ManagedLaunchState::binding"
 reason = "ManagedLaunchState::binding is read by the binary (cli/supervised/run.rs) and the integration crate, so E0624 refuted pub(crate) and it stays pub; AccountUsageIdentity::binding narrowed to pub(super) and needs no verdict (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::TierUnbuildable"
+reason = "Additive build-pass evidence carried by launch stamps and assist records."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::TierPass"
+reason = "One short/full pass description shared by launch and CLI presentation."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::TierStamp::moved"
+reason = "Single move predicate for assist recording and launch presentation."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::TierStamp::passes"
+reason = "Single ordered projection of build and usage passes for all consumers."
 
 [[verdict]]
 kind = "item"

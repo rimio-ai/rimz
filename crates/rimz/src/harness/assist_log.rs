@@ -121,6 +121,8 @@ pub enum Assist {
         tier: crate::config::tiers::ModelTier,
         model: String,
         skipped: Vec<crate::agents::TierSkip>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unbuildable: Vec<crate::agents::TierUnbuildable>,
     },
     AutoRedeem {
         kind: String,
@@ -346,11 +348,7 @@ pub fn record_tier_fallback(
     label: Option<&str>,
     launch: &crate::agents::LaunchParams,
 ) {
-    let Some(stamp) = launch
-        .tier
-        .as_ref()
-        .filter(|stamp| !stamp.skipped.is_empty())
-    else {
+    let Some(stamp) = launch.tier.as_ref().filter(|stamp| stamp.moved()) else {
         return;
     };
     append(&AssistRecord {
@@ -364,6 +362,7 @@ pub fn record_tier_fallback(
             tier: stamp.tier,
             model: stamp.model.clone(),
             skipped: stamp.skipped.clone(),
+            unbuildable: stamp.unbuildable.clone(),
         },
     });
 }
@@ -543,6 +542,21 @@ mod tests {
         let decoded = serde_json::from_value::<AssistRecord>(fallback.clone());
         assert!(decoded.is_ok(), "tier fallback is an assist: {decoded:?}");
         assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), fallback);
+        let mut unbuildable = fallback.clone();
+        unbuildable["skipped"] = serde_json::json!([]);
+        unbuildable["unbuildable"] = serde_json::json!([
+            {"model": "opus", "error": "drop the user-only skill"}
+        ]);
+        let decoded: AssistRecord = serde_json::from_value(unbuildable.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), unbuildable);
+        #[derive(Deserialize)]
+        struct OldFallback {
+            model: String,
+            skipped: Vec<crate::agents::TierSkip>,
+        }
+        let old: OldFallback = serde_json::from_value(unbuildable).unwrap();
+        assert_eq!(old.model, "gpt-6-astra");
+        assert!(old.skipped.is_empty());
         for record in [
             AssistRecord {
                 at: ts(20),

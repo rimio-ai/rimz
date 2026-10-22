@@ -593,6 +593,14 @@ fn tier_subagent_routes_spent_provider_and_records_one_assist() {
 
 #[cfg(unix)]
 #[test]
+fn tier_unbuildable_launch_records_the_event_and_one_assist() {
+    for routing in ["fallback", "off"] {
+        assert_tier_launch(routing, "subagent-unbuildable");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn tier_same_pane_records_assist_before_exec() {
     assert_tier_launch("fallback", "same-pane");
 }
@@ -647,7 +655,8 @@ fn lane_resume_seat_refilled_failed_tab_stays_pending() {
 
 #[cfg(unix)]
 fn assert_tier_launch(routing: &str, surface: &str) {
-    let interactive = surface != "subagent";
+    let unbuildable = surface == "subagent-unbuildable";
+    let interactive = !surface.starts_with("subagent");
     let lane = surface.starts_with("lane");
     let resume = surface.starts_with("resume") || lane;
     let refilled = surface.contains("refilled");
@@ -665,9 +674,21 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     std::fs::create_dir_all(env.rimz_home().join("subagents")).unwrap();
     std::fs::write(
         env.rimz_home().join("subagents/worker.md"),
-        "---\ndescription: Worker\ntier: senior\ntools: [Bash]\n---\nWork.",
+        if unbuildable {
+            "---\ndescription: Worker\ntier: senior\ntools: [Bash, Skill]\nskills: [work]\n---\nWork."
+        } else {
+            "---\ndescription: Worker\ntier: senior\ntools: [Bash]\n---\nWork."
+        },
     )
     .unwrap();
+    if unbuildable {
+        std::fs::create_dir_all(env.rimz_home().join("skills/work")).unwrap();
+        std::fs::write(
+            env.rimz_home().join("skills/work/SKILL.md"),
+            "---\ndescription: Work\ndisable-model-invocation: true\n---\nWork.",
+        )
+        .unwrap();
+    }
     std::fs::copy(
         env.rimz_home().join("subagents/worker.md"),
         env.rimz_home().join("agents/preview.md"),
@@ -707,12 +728,12 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .collect(),
         ..Default::default()
     });
-    let kind = if routing == "fallback" {
+    let kind = if routing == "fallback" || unbuildable {
         "codex"
     } else {
         "claude"
     };
-    let model = if routing == "fallback" {
+    let model = if routing == "fallback" || unbuildable {
         "astra"
     } else {
         "opus"
@@ -737,7 +758,32 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         preview["profile"]["chain"],
         serde_json::json!(["preview", kind])
     );
-    if routing == "fallback" {
+    if unbuildable {
+        assert_eq!(preview["tier_unbuildable"][0]["model"], "opus");
+        assert!(
+            preview["tier_unbuildable"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("user-only")
+        );
+        let human = env
+            .rimz()
+            .args(["agents", "explain", "preview"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            human.status.success(),
+            "{}",
+            String::from_utf8_lossy(&human.stderr)
+        );
+        let human = String::from_utf8_lossy(&human.stdout);
+        assert!(
+            human.contains("opus: not buildable: ") && human.contains("user-only"),
+            "{human}"
+        );
+    } else if routing == "fallback" {
         assert_eq!(preview["tier_skipped"][0]["reason"], "exhausted");
     }
     assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
@@ -766,6 +812,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
                             tier: rimz::config::tiers::ModelTier::Senior,
                             model: "opus".into(),
                             used_tier: None,
+                            unbuildable: Vec::new(),
                             skipped: vec![rimz::agents::TierSkip {
                                 model: "astra".into(),
                                 reason: rimz::agents::TierSkipReason::LoggedOut,
@@ -1038,9 +1085,18 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     assert_eq!(wire["source"], kind);
     assert_eq!(wire["params"]["tier"]["model"], model);
     assert_eq!(wire["params"]["tier"]["tier"], "senior");
+    if unbuildable {
+        assert_eq!(wire["params"]["tier"]["unbuildable"][0]["model"], "opus");
+        assert!(
+            wire["params"]["tier"]["unbuildable"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("user-only")
+        );
+    }
     assert_eq!(
         launches[0].1.launch.tier.as_ref().unwrap().skipped.len(),
-        usize::from(routing == "fallback")
+        usize::from(routing == "fallback" && !unbuildable)
     );
     let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
     let fallbacks: Vec<_> = assists
@@ -1054,8 +1110,19 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .collect();
     assert_eq!(
         fallbacks.len(),
-        usize::from(routing == "fallback" && !failed_tab) * (1 + usize::from(refilled))
+        usize::from((routing == "fallback" || unbuildable) && !failed_tab)
+            * (1 + usize::from(refilled))
     );
+    if unbuildable {
+        let wire = serde_json::to_value(fallbacks[0]).unwrap();
+        assert_eq!(wire["unbuildable"][0]["model"], "opus");
+        assert!(
+            wire["unbuildable"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("user-only")
+        );
+    }
     if refilled {
         assert_eq!(assists.len(), fallbacks.len());
     }

@@ -3168,6 +3168,20 @@ fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
         line.contains("worker: opus → gpt-6-astra (logged out)"),
         "{line}"
     );
+    let record = serde_json::from_value(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
+        "kind": "codex", "agent_id": "session-1", "profile": "worker",
+        "tier": "senior", "model": "gpt-6-astra", "skipped": [],
+        "unbuildable": [{"model": "opus", "error": "drop the user-only skill"}]
+    }))
+    .unwrap();
+    let stats = assists::AssistStats::from_records("all", vec![record]);
+    assert_eq!(stats.rollup.tier_fallbacks, 1);
+    let line = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        line.contains("worker: opus → gpt-6-astra (not buildable)"),
+        "{line}"
+    );
 }
 
 #[test]

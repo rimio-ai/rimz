@@ -45,6 +45,38 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     machine.agents.profiles = definitions.agent_profiles;
     let project = tempdir().unwrap();
     let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
+    let mut excluded = launch.clone();
+    let renders = excluded
+        .profiles
+        .0
+        .get_mut("worker")
+        .unwrap()
+        .definition_renders
+        .as_mut()
+        .unwrap();
+    renders.renders.remove("claude");
+    renders
+        .exclusions
+        .insert("claude".into(), "drop the user-only skill".into());
+    excluded
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("worker"),
+            None,
+            None,
+            None,
+            |_, _| None,
+        )
+        .unwrap();
+    let stamp = excluded.profiles.0["worker"].tier_stamp.as_ref().unwrap();
+    assert_eq!(
+        stamp.unbuildable,
+        vec![crate::agents::TierUnbuildable {
+            model: "opus".into(),
+            error: "drop the user-only skill".into(),
+        }]
+    );
     launch
         .route(
             &machine.tiers,

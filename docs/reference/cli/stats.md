@@ -102,6 +102,8 @@ rimz stats --window year --json | jq 'first(.models[] | select(has("tokens_per_s
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty.
 
+`tier_fallbacks` counts one per moved launch, whether it passed an unbuildable family, a spent account, or both. Its benefit line names the first pass (`not buildable` or the usage reason); the event retains all usage `skipped` entries and optional `unbuildable` entries with their full build errors.
+
 `providers`, `agents`, and `subagents` are always arrays, including when empty. `cache_hit_pct` in profile rows is `null` when there is no input to measure; in model and provider rows it is omitted. `tokens_per_sec` is a rounded integer from the selected-window tally, omitted when the model or provider has no timed responses. Activity days, streaks, and the most-active day retain their full-history meaning regardless of `--window`.
 
 An `auto_gc` event carries `scope` (`room` or `machine`); records written before scopes existed read as `machine`. Totals cover the whole sweep's scope. The durable assist record additionally holds own-room `class_bytes` and `worktree_paths` (the first 50 removed paths in sweep order, `[]` for legacy records), which this JSON projection does not expose. `worktrees_removed` remains the full count, so a count above the path-list length indicates truncation on new records ([GC report](./maintenance.md#the-report)).
