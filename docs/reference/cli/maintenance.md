@@ -9,7 +9,7 @@ These commands inspect, upgrade, repair, clean up, and remove RimZ. Which ones w
 | [`workspace migrate`](#move-a-store-after-the-project-moves) | One workspace store | Moves and rewrites the store | No |
 | [`workspace rotate-events`](#rotate-the-event-log) | The current workspace | Archives the event log, prunes old archives | No |
 | [`update`](#update-rimz) | The installed binary | Replaces the binary, then reloads | No |
-| [`reload`](#reload-running-sidebars) | Every live room on the machine | Publishes the new build to each room | No |
+| [`reload`](#reload-running-sidebars) | The whole machine | Publishes build targets and retires outdated language-server brokers | No |
 | [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes | No |
 | [`reset`](#reset-a-wedged-room) | The current workspace's room | Tears the room down, archives its records, rebuilds | Yes |
 | [`gc`](#sweep-stale-state) | The current room; `--all` adds the machine | Removes stale state and landed worktrees; `--all` also prunes dead stores | No |
@@ -144,7 +144,7 @@ rimz update [--version <TAG>]
 | Cargo (the binary is in Cargo's bin directory) | `cargo install --locked rimz`. A source build (a version containing `+g`) prints a warning that the crates.io release will replace it. |
 | The install script or a downloaded binary | Resolves the latest release, downloads the archive for this platform, verifies it against the release's `SHA256SUMS`, runs the extracted binary's `--version`, and atomically replaces the running binary in place. If the running version already matches, it prints `rimz VERSION is up to date.` and stops. |
 
-When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it. If that reload fails, `update` exits 1 with ``RimZ updated, but `PATH` reload exited with STATUS; rerun `rimz reload` ``.
+When the binary changed, `update` runs the new build's [`rimz reload`](#reload-running-sidebars), so live sidebars and dashboards move to it and outdated language-server brokers retire without interrupting their servers. If that reload fails, `update` exits 1 with ``RimZ updated, but `PATH` reload exited with STATUS; rerun `rimz reload` ``.
 
 `--version <TAG>` picks the release:
 
@@ -170,18 +170,21 @@ Installing and choosing a method is covered in the [installation guide](../../gu
 rimz reload [--repair]
 ```
 
-`reload` moves every running RimZ surface on the machine to the binary you invoke, without changing any pane. It runs from any directory, inside or outside a room. One run:
+`reload` promotes the invoking binary to live rooms and dashboards, and retires outdated language-server brokers against the first `rimz` on PATH, without changing any pane. It runs from any directory, inside or outside a room. One run:
 
 - publishes the invoking build as the target of every live room, so each room's sidebars restart onto it in place;
 - stops each live room's running hook drainer after its current frame, then nudges a replacement on the recorded build; a room with no running drainer starts none;
 - upgrades a room's Zellij presence plugin when its build or configuration differs, and leaves a current one alone;
 - restarts held `rimz stats --refresh` dashboards on the new build;
+- retires outdated language-server brokers without interrupting running servers or attached editors;
 - reaps sidebar processes whose pane is gone, and sweeps leftover processes and runtime files from stopped sessions;
 - restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped, and a failed restart prints a warning without failing the reload.
 
 It never starts a stopped session, creates or closes a pane, or touches an agent process. If the new build fails to start, each sidebar keeps running on its old build.
 
 A drainer that cannot stop within the bounded wait keeps its old build until it goes idle or a later reload succeeds. Reload reports it and continues with the other surfaces and rooms. Pending hooks stay queued across a restart.
+
+A broker on the PATH build is left alone, including a staged copy of that build. An outdated broker retires now if dormant, with no start pending and no editor attached; otherwise it leaves after its server next stops and no editor remains. Its leases stay for the next query to start a fresh broker, without relaunching agents. An outdated broker already exiting counts as retired; one that exits during the check is left out of the report. Older brokers that cannot receive the retirement mark are retired only when their server and editors are gone; reload reports the rest and asks for another reload once they are idle. If the installed build cannot be read from PATH, reload reports that brokers were not checked. No running or indexing language server is restarted by reload.
 
 A room whose sidebar pane was closed has nothing to reload, so the report counts it and names the verb that fixes it: ``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` That room still counts as a live session, so `No running sidebars to reload.` never covers this case. The same line covers a sidebar running a protocol this build cannot signal, which repair replaces rather than mounts. `--repair`, or [`rimz sidebar repair`](#repair-sidebars) on its own, is what does it; with `--repair` already passed the line is left out, since the repair runs next.
 
@@ -197,10 +200,14 @@ The report prints a line per non-zero count:
 | `Reloaded N stats dashboards.` | Held dashboards restarted. |
 | `Restarted N hook drainers onto the current build.` | Running drainers stopped at a frame boundary; their successors use the room's recorded build. |
 | `N hook drainers did not stop in time; they keep their old build until they go idle or the next reload.` | Stops that failed; reload continued. |
+| `Retired N outdated language-server brokers. The next query in each checkout starts a fresh one.` | Dormant outdated brokers retired with their leases kept. |
+| `N outdated language-server brokers still serving; each retires when its server next stops.` | Brokers marked for retirement without interrupting their server. |
+| ``Left N language-server brokers running: too old to be told to retire. Run `rimz reload` again once idle.`` | Legacy brokers that could not safely retire now. |
+| ``Language-server brokers were not checked: no readable installed `rimz` resolves on PATH. No broker stops servers under memory pressure until `rimz` is on PATH.`` | Live brokers exist, but the installed build could not be resolved. |
 | `Reaped N orphaned sidebar processes.`, `Swept N leftover processes from stopped sessions.` | Cleanup. |
 | ``N rooms with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` | Live rooms with no fresh, protocol-current sidebar heartbeat: the pane is gone, or its renderer is one this build cannot signal. Suppressed under `--repair`, which runs that repair next. |
 | `Restarted the shared web daemon.` | The web daemon was running and restarted. |
-| `No running sidebars to reload.` | No live room, no stopped session to sweep, and no dashboard. A second line suggests `rimz start` or `rimz attach`. |
+| `No running sidebars to reload.` | No live room, stopped session to sweep, dashboard, or broker retirement report. A second line suggests `rimz start` or `rimz attach`. |
 
 `--repair` runs [`rimz sidebar repair`](#repair-sidebars) after the reload finishes, as a separate step: a repair that cannot run does not undo the reload. How a sidebar hands over to a new build is in [sidebar internals](../../internals/sidebar/sidebar.md#build-promotion).
 

@@ -109,7 +109,8 @@ path = "crates/rimz/src/lsp"
 # usage, usage::{Log, Counts, Snapshot}, Log::{new, read}, and Snapshot::for_entry
 # share one room-scoped usage snapshot across CLI inspection (+7).
 # usage::Log::record shares outcome classification across verb and outline queries (+1).
-surface-budget = 104
+# retire, retire::run, and retire::Outcome expose one machine-wide reload pass and counts (+3).
+surface-budget = 107
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -7410,6 +7411,21 @@ reason = "The CLI's test-classification outlines use a short readiness wait with
 kind = "item"
 key = "lsp::NamedItem"
 reason = "Column-less target errors retain an optional outline item's kind, name and column across parsing and enrichment."
+
+[[verdict]]
+kind = "item"
+key = "lsp::retire"
+reason = "Reload reaches broker retirement through its owning language-server module."
+
+[[verdict]]
+kind = "item"
+key = "lsp::retire::run"
+reason = "Reload delegates machine-wide broker retirement to the language-server domain."
+
+[[verdict]]
+kind = "item"
+key = "lsp::retire::Outcome"
+reason = "The machine-wide retirement pass returns counts without depending on reload orchestration."
 
 [[verdict]]
 kind = "shape"

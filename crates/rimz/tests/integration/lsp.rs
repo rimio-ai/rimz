@@ -3459,6 +3459,151 @@ fn lsp_crash_preserves_exit_and_stderr_in_status_and_diagnostics() {
     assert!(broker.wait().unwrap().success());
 }
 
+fn reload_stub_broker(env: &Env) -> (std::process::Child, std::path::PathBuf, Value) {
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.project_root.join("lib.rs"), "fn work() {}\n").unwrap();
+    let (broker, directory, request) = start_stub_broker(env, env.project_root.clone());
+    write_unreserved_config(env, &request);
+    let holder = env.agent_owner_pid();
+    assert_eq!(
+        editor_rpc(
+            &directory,
+            json!({"op":"lease", "pid":holder, "start_token":rimz::proc::process_start_token(holder).unwrap()})
+        )["ok"],
+        true
+    );
+    let previous = editor_rpc(&directory, json!({"op":"status"}));
+    (broker, directory, previous)
+}
+
+fn reload_as_installed(env: &Env, installed: &Path) -> std::process::Output {
+    let front = env.rimz_home().join("installed-bin");
+    std::fs::create_dir_all(&front).unwrap();
+    std::os::unix::fs::symlink(installed, front.join("rimz")).unwrap();
+    env.rimz()
+        .arg("reload")
+        .env("PATH", crate::common::path_with_front(&front))
+        .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
+        .output()
+        .unwrap()
+}
+
+fn assert_retired_broker_revives(env: &Env, directory: &Path, previous: &Value) {
+    assert!(!directory.join("sock").exists());
+    let kept: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("entry.json")).unwrap()).unwrap();
+    assert_eq!(kept["broker_pid"], previous["broker_pid"]);
+    assert_eq!(kept["leases"], previous["leases"]);
+    assert!(kept["state"].get("dormant").is_some(), "{kept}");
+    env.rimz()
+        .args(["lsp", "list", "--all", "--json"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(previous["root"].as_str().unwrap()).not());
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .success()
+        .stdout("fixture hover\n");
+    let revived = editor_rpc(directory, json!({"op":"status"}));
+    assert_ne!(revived["broker_pid"], previous["broker_pid"]);
+    assert_eq!(revived["leases"], previous["leases"]);
+    let records = lsp_records(env, "revived");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["details"]["broker_pid"], previous["broker_pid"]);
+    assert_eq!(records[0]["details"]["leases"], 1);
+    editor_rpc(directory, json!({"op":"stop", "reason":"checkout removed"}));
+}
+
+#[test]
+fn lsp_reload_retires_a_dormant_outdated_broker_and_preserves_its_leases() {
+    let env = Env::new();
+    let (mut broker, directory, previous) = reload_stub_broker(&env);
+    let before = std::fs::read(directory.join("entry.json")).unwrap();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let output = reload_as_installed(&env, &stub);
+    output.assert().success().stdout(predicates::str::contains(
+        "Retired 1 outdated language-server broker",
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while broker.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "dormant broker did not retire");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(std::fs::read(directory.join("entry.json")).unwrap(), before);
+    let exits = lsp_records(&env, "broker_exited");
+    assert_eq!(exits.len(), 1, "{exits:?}");
+    assert_eq!(exits[0]["details"]["reason"], "retired");
+    let records = lsp_records(&env, "retired");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        records[0]["details"],
+        json!({"broker_pid": previous["broker_pid"], "build": rimz::build_id::of_file(&env.rimz_bin()).unwrap(), "installed": rimz::build_id::of_file(&stub).unwrap(), "outcome": "exiting"})
+    );
+    assert_retired_broker_revives(&env, &directory, &previous);
+}
+
+#[test]
+fn lsp_reload_marks_a_serving_outdated_broker_until_its_next_stop() {
+    let env = Env::new();
+    let (mut broker, directory, previous) = reload_stub_broker(&env);
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .success();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    reload_as_installed(&env, &stub)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "still serving; each retires when its server next stops.",
+        ));
+    assert!(broker.try_wait().unwrap().is_none());
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .success()
+        .stdout("fixture hover\n");
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"status"}))["broker_pid"],
+        previous["broker_pid"]
+    );
+    let records = lsp_records(&env, "retired");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["details"]["outcome"], "marked");
+    env.rimz().args(["lsp", "stop"]).assert().success();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while broker.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "marked broker did not retire after stopping"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_retired_broker_revives(&env, &directory, &previous);
+}
+
+#[test]
+fn lsp_reload_leaves_a_current_broker_alone() {
+    let env = Env::new();
+    let (mut broker, directory, previous) = reload_stub_broker(&env);
+    reload_as_installed(&env, &env.rimz_bin())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("language-server broker").not());
+    assert!(broker.try_wait().unwrap().is_none());
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"status"}))["broker_pid"],
+        previous["broker_pid"]
+    );
+    assert!(lsp_records(&env, "retired").is_empty());
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+    broker.wait().unwrap();
+}
+
 fn lost_stub_broker(
     env: &Env,
 ) -> (

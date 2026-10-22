@@ -10,6 +10,7 @@ pub mod memory;
 pub mod protocol;
 pub mod query;
 pub mod registry;
+pub(crate) mod retire;
 mod server;
 pub mod usage;
 

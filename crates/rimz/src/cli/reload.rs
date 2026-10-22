@@ -1,4 +1,4 @@
-//! `rimz reload` — publish a freshly-installed build and let every running
+//! `rimz reload` — publish the invoking build and let every running
 //! sidebar and hook drainer converge onto it without changing panes.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
@@ -6,9 +6,12 @@
 //! a live mux session it publishes durable build intent and nudges the live
 //! supervisors; their record poll makes delivery self-healing. `--repair` then
 //! invokes the independent `rimz sidebar repair` orchestration. Held
-//! `rimz stats --refresh` dashboards re-exec in place
-//! before room enumeration. Workspaces whose session is gone have their
-//! leftovers swept. An online shared web daemon restarts onto the new build.
+//! `rimz stats --refresh` dashboards re-exec in place before room enumeration,
+//! alongside machine-wide retirement of outdated language-server brokers.
+//! Brokers compare against the PATH build and keep serving until their server
+//! stops; their leases survive for lazy revival. Workspaces whose session is
+//! gone have their leftovers swept. An online shared web daemon restarts onto
+//! the new build.
 //! Every step is best-effort and run-once.
 
 use std::io::Write;
@@ -61,7 +64,14 @@ fn report(
     let n = |count: usize, noun: &str| {
         render::paint(render::palette::accent(), &self::count(count, noun))
     };
-    if outcome.sessions == 0 && outcome.dead_swept == 0 && outcome.stats_reloaded == 0 {
+    if outcome.sessions == 0
+        && outcome.dead_swept == 0
+        && outcome.stats_reloaded == 0
+        && outcome.brokers_retired == 0
+        && outcome.brokers_marked == 0
+        && outcome.brokers_kept == 0
+        && outcome.brokers_unchecked == 0
+    {
         writeln!(out, "No running sidebars to reload.")?;
         writeln!(out, "Launch one with `rimz start` or `rimz attach`.")?;
     } else if outcome.reexeced > 0 {
@@ -77,6 +87,33 @@ fn report(
             out,
             "Reloaded {}.",
             n(outcome.stats_reloaded, "stats dashboard")
+        )?;
+    }
+    if outcome.brokers_retired > 0 {
+        writeln!(
+            out,
+            "Retired {}. The next query in each checkout starts a fresh one.",
+            n(outcome.brokers_retired, "outdated language-server broker"),
+        )?;
+    }
+    if outcome.brokers_marked > 0 {
+        writeln!(
+            out,
+            "{} still serving; each retires when its server next stops.",
+            n(outcome.brokers_marked, "outdated language-server broker"),
+        )?;
+    }
+    if outcome.brokers_kept > 0 {
+        writeln!(
+            out,
+            "Left {} running: too old to be told to retire. Run `rimz reload` again once idle.",
+            n(outcome.brokers_kept, "language-server broker"),
+        )?;
+    }
+    if outcome.brokers_unchecked > 0 {
+        writeln!(
+            out,
+            "Language-server brokers were not checked: no readable installed `rimz` resolves on PATH. No broker stops servers under memory pressure until `rimz` is on PATH.",
         )?;
     }
     if outcome.drainers_restarted > 0 {
@@ -206,6 +243,58 @@ mod tests {
             report.contains("until they go idle or the next reload"),
             "{report}"
         );
+    }
+
+    #[test]
+    fn broker_counts_are_reported_only_when_nonzero_and_suppress_no_sidebars() {
+        let quiet = rendered(&ReloadOutcome::default(), false);
+        assert!(!quiet.contains("broker"), "{quiet}");
+        let cases = [
+            (
+                ReloadOutcome {
+                    brokers_retired: 2,
+                    ..ReloadOutcome::default()
+                },
+                "2 outdated language-server brokers",
+                "Retired",
+                "The next query in each checkout starts a fresh one.",
+            ),
+            (
+                ReloadOutcome {
+                    brokers_marked: 2,
+                    ..ReloadOutcome::default()
+                },
+                "2 outdated language-server brokers",
+                "still serving",
+                "each retires when its server next stops.",
+            ),
+            (
+                ReloadOutcome {
+                    brokers_kept: 2,
+                    ..ReloadOutcome::default()
+                },
+                "2 language-server brokers",
+                "running: too old to be told to retire.",
+                "Run `rimz reload` again once idle.",
+            ),
+            (
+                ReloadOutcome {
+                    brokers_unchecked: 2,
+                    ..ReloadOutcome::default()
+                },
+                "Language-server brokers were not checked",
+                "no readable installed `rimz` resolves on PATH",
+                "No broker stops servers under memory pressure until `rimz` is on PATH.",
+            ),
+        ];
+        for (outcome, count, meaning, next) in cases {
+            let report = rendered(&outcome, false);
+            for expected in [count, meaning, next] {
+                assert!(report.contains(expected), "missing {expected:?}: {report}");
+            }
+            assert!(!report.contains("No running sidebars"), "{report}");
+            assert!(!report.contains("Launch one with"), "{report}");
+        }
     }
 
     #[test]

@@ -448,6 +448,8 @@ Bare reload creates and closes no panes. It still reloads refresh dashboards, sw
 
 A reload also restarts each live room's running hook drainer after recording the build, before sweeping runtime claims. This step is shared by both backends and leaves an absent drainer absent. The [store contract](../store.md#the-workspace-store) owns the frame-boundary stop and queued-work handover.
 
+Machine-wide [language-server broker retirement](../lsp.md#build-retirement) runs even without a live room, leaving running servers uninterrupted and preserving leases for lazy revival.
+
 ### Zellij plugin upgrades
 
 A reload upgrades the Zellij presence plugin only when its identity differs. The plugin configuration names the room's build-stable `rimz` pointer and includes the embedded wasm digest (computed lazily, once) plus a hash of the loaded configuration, and the plugin echoes both in its topology writer. A fresh matching writer counts as current and skips every start, reload, and retire pipe; a stale, legacy, or mismatched writer runs the replace-and-retire path ([multiplexers.md](../multiplexers.md#retirement)) and reports the upgrade.
