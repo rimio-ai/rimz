@@ -29,7 +29,8 @@ use super::refresh::cohort_spend::{CohortSpendCache, read_cohort_spend_cache};
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, is_trunk_branch, worktree_group_path_fields,
+    DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache, is_trunk_branch,
+    worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::rate_limits::apply_cached_rate_limits;
@@ -79,9 +80,13 @@ fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_m
 /// *path*, not of any one agent, so they belong to the group — which also
 /// settles the shared-worktree "whose branch?" ambiguity. The producer
 /// validates checkout paths before refreshing their entries and publishes
-/// exact channel marker classifications; consumers project that cache without
+/// exact channel marker classifications; consumers project those caches without
 /// git subprocesses or checkout metadata reads.
-fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
+fn project_diff_stats(
+    snapshot: &mut SidebarSnapshot,
+    cache: &DiffStatsCache,
+    roots_cache: Option<&WorktreeRootsCache>,
+) {
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         if group.kind == SidebarWorktreeKind::Channel {
             group.worktree_backed = false;
@@ -91,7 +96,7 @@ fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
             &group.label,
             &group.key,
             &group.rows,
-            cache,
+            roots_cache,
         ) else {
             continue;
         };
@@ -231,16 +236,13 @@ fn cached_git_backed_worktree_path<'a>(
     label: &str,
     key: &'a str,
     rows: &'a [SidebarRow],
-    cache: &DiffStatsCache,
+    roots_cache: Option<&WorktreeRootsCache>,
 ) -> Option<&'a str> {
     let path = worktree_group_path_fields(key, rows)?;
     match kind {
         SidebarWorktreeKind::Worktree => Some(path),
-        SidebarWorktreeKind::Channel => cache
-            .worktrees
-            .as_ref()?
+        SidebarWorktreeKind::Channel => roots_cache?
             .marker_names
-            .as_ref()?
             .get(Path::new(path))
             .is_some_and(|name| name == label)
             .then_some(path),
@@ -253,6 +255,7 @@ fn project_pr_state_map(
     states: &BTreeMap<String, PrLink>,
     branch_ci: &BTreeMap<String, WorktreeCi>,
     diff_cache: &DiffStatsCache,
+    roots_cache: Option<&WorktreeRootsCache>,
 ) {
     for group in Arc::make_mut(&mut snapshot.worktree_groups) {
         group.pr_stack = Default::default();
@@ -261,7 +264,7 @@ fn project_pr_state_map(
             &group.label,
             &group.key,
             &group.rows,
-            diff_cache,
+            roots_cache,
         ) else {
             continue;
         };
@@ -306,9 +309,16 @@ fn project_cached_pr_states(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     diff_cache: &DiffStatsCache,
+    roots_cache: Option<&WorktreeRootsCache>,
 ) {
     let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_state_map(snapshot, &cache.states, &cache.branch_ci, diff_cache);
+    project_pr_state_map(
+        snapshot,
+        &cache.states,
+        &cache.branch_ci,
+        diff_cache,
+        roots_cache,
+    );
 }
 
 fn classify_trunk_sync(
@@ -540,6 +550,8 @@ fn enrich_core(
     fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
+    let roots_cache: Option<WorktreeRootsCache> =
+        crate::disk::atomic::read_json_cache(&runtime.group_roots_path());
     let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
     let pipeline_cache = super::refresh::pipeline::read_pipeline_cache(&runtime.pipeline_path());
     let keep_warm_cache =
@@ -554,8 +566,7 @@ fn enrich_core(
         snapshot = snapshot.with_worktree_roots(roots);
     } else if snapshot.project_root.is_some() {
         snapshot = snapshot.with_worktree_roots(
-            diff_cache
-                .worktrees
+            roots_cache
                 .as_ref()
                 .map(|cache| cache.roots.clone())
                 .unwrap_or_default(),
@@ -753,7 +764,7 @@ fn enrich_core(
         remote_control_health,
         lanes,
     );
-    project_diff_stats(&mut folded, &diff_cache);
+    project_diff_stats(&mut folded, &diff_cache, roots_cache.as_ref());
     disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
     for group in Arc::make_mut(&mut folded.worktree_groups) {
@@ -767,9 +778,15 @@ fn enrich_core(
         runtime,
     );
     if let Some(lanes) = lanes {
-        project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
+        project_pr_state_map(
+            &mut folded,
+            &lanes.pr_states,
+            &lanes.branch_ci,
+            &diff_cache,
+            roots_cache.as_ref(),
+        );
     } else {
-        project_cached_pr_states(&mut folded, runtime, &diff_cache);
+        project_cached_pr_states(&mut folded, runtime, &diff_cache, roots_cache.as_ref());
     }
     snapshot = folded;
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile

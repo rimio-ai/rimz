@@ -209,7 +209,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     let cache = WorktreeRootsCache {
         refreshed_at_ms: 1_000,
         roots: Vec::new(),
-        marker_names: Some(Default::default()),
+        marker_names: Default::default(),
     };
     let ttl = WORKTREE_ROOTS_TTL.as_millis() as u64;
     assert!(cache.is_fresh(1_000 + ttl));
@@ -237,7 +237,6 @@ fn settled_tier_boundaries_and_precedence() {
                   at: u64| {
         let cache = DiffStatsCache {
             entries: BTreeMap::from([(path.to_owned(), entry.clone())]),
-            worktrees: None,
         };
         !stale_paths(&cache, &needed, focused, hot, at).is_empty()
     };
@@ -1904,6 +1903,76 @@ fn run_pass(
         pass,
         &mut GitRefreshState::default(),
     )
+}
+
+#[test]
+fn diff_stats_publication_leaves_group_roots_byte_identical() {
+    let total = MAX_HOST_PASS_ENTRIES + 2;
+    let (root, needed, cache) = backlog_fixture(total);
+    let (_dir, runtime) = runtime_for(root.path());
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &cache).unwrap();
+    atomic::write_temp_then_rename_cache(
+        &runtime.group_roots_path(),
+        &serde_json::json!({
+            "refreshed_at_ms": BACKLOG_NOW_MS,
+            "roots": needed,
+            "marker_names": { needed[0].clone(): "feature" }
+        }),
+    )
+    .unwrap();
+    let before = std::fs::read(runtime.group_roots_path()).unwrap();
+
+    let result = run_pass(
+        &runtime,
+        &needed,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        GitPass::Host,
+    );
+
+    assert_eq!(std::fs::read(runtime.group_roots_path()).unwrap(), before);
+    let published: DiffStatsCache = atomic::read_json_cache(&runtime.diff_stats_path());
+    let selected: Vec<_> = needed[..MAX_HOST_PASS_ENTRIES]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(refreshed_paths(&result), selected);
+    assert_eq!(refreshed_paths(&published), selected);
+    assert_eq!(published.entries.len(), total);
+}
+
+#[test]
+fn pre_split_diff_stats_keeps_fresh_entries_without_forks() {
+    let (root, needed, mut cache) = backlog_fixture(1);
+    let (_dir, runtime) = runtime_for(root.path());
+    let entry = cache.entries.get_mut(&needed[0]).unwrap();
+    entry.refreshed_at_ms = BACKLOG_NOW_MS;
+    entry.commit_refreshed_at_ms = Some(BACKLOG_NOW_MS);
+    entry.added = Some(7);
+    let mut legacy = serde_json::to_value(&cache).unwrap();
+    legacy["worktrees"] = serde_json::json!({
+        "refreshed_at_ms": BACKLOG_NOW_MS,
+        "roots": needed,
+        "marker_names": {}
+    });
+    atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &legacy).unwrap();
+    let before = std::fs::read(runtime.diff_stats_path()).unwrap();
+    let forks = crate::proc::testkit::spawn_count();
+
+    let result = run_pass(
+        &runtime,
+        &needed,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        GitPass::OneShot,
+    );
+
+    assert_eq!(crate::proc::testkit::spawn_count() - forks, 0);
+    assert_eq!(
+        serde_json::to_value(&result.entries).unwrap(),
+        serde_json::to_value(&cache.entries).unwrap()
+    );
+    assert_eq!(std::fs::read(runtime.diff_stats_path()).unwrap(), before);
 }
 
 #[test]

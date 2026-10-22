@@ -560,14 +560,11 @@ fn channel_snapshot(name: &str, marked: bool) -> (tempfile::TempDir, PathBuf, Si
     (dir, worktree, snapshot)
 }
 
-fn diff_cache_with_marker(path: &Path, name: &str) -> DiffStatsCache {
-    DiffStatsCache {
-        worktrees: Some(WorktreeRootsCache {
-            refreshed_at_ms: unix_now_ms(),
-            roots: vec![path.to_path_buf()],
-            marker_names: Some(BTreeMap::from([(path.to_path_buf(), name.to_owned())])),
-        }),
-        ..DiffStatsCache::default()
+fn roots_cache_with_marker(path: &Path, name: &str) -> WorktreeRootsCache {
+    WorktreeRootsCache {
+        refreshed_at_ms: unix_now_ms(),
+        roots: vec![path.to_path_buf()],
+        marker_names: BTreeMap::from([(path.to_path_buf(), name.to_owned())]),
     }
 }
 
