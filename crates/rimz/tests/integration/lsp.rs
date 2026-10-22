@@ -611,6 +611,144 @@ fn lsp_status_and_stop_select_one_lazy_server() {
 }
 
 #[test]
+fn lsp_query_usage_counts_targets_in_the_participant_room() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    let pinned = env.home_root.join("pinned-room");
+    for project in [&root, &pinned] {
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(project)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    env.record(&root);
+    std::fs::write(root.join("work.rs"), "fn work() {}\n").unwrap();
+    let (mut broker, directory, _) = start_stub_broker(&env, root.clone());
+    let real_git = which::which("git").unwrap();
+    let shim = env.home_root.join("counting-git");
+    let resolutions = env.home_root.join("git-resolutions");
+    crate::common::write_path_shim(
+        &shim,
+        "git",
+        r#"
+case " $* " in
+    *' rev-parse --show-toplevel --git-common-dir --abbrev-ref HEAD '*)
+        printf 'resolve\n' >> "$RIMZ_TEST_GIT_LOG"
+        ;;
+esac
+exec "$RIMZ_TEST_REAL_GIT" "$@"
+"#,
+    );
+    // The usage room adds no second workspace resolution, pinned or not.
+    let resolving_once = |command: &mut std::process::Command| {
+        std::fs::write(&resolutions, "").unwrap();
+        let output = command
+            .env("PATH", crate::common::path_with_front(&shim))
+            .env("RIMZ_TEST_REAL_GIT", &real_git)
+            .env("RIMZ_TEST_GIT_LOG", &resolutions)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let resolutions = std::fs::read_to_string(&resolutions).unwrap();
+        assert_eq!(resolutions, "resolve\n", "{command:?}");
+        output
+    };
+    resolving_once(
+        env.rimz()
+            .args(["lsp", "def", "work.rs:1:1", "work.rs:1:1", "--json"]),
+    );
+    let usage = rimz::lsp::usage::Log::new(&env.state_path_for(&root));
+    assert_eq!(usage.read().total.answered, 2);
+    for args in [
+        vec!["lsp", "def", "work.py:1:1"],
+        vec!["lsp", "def", "work.rs:1"],
+    ] {
+        env.rimz().args(args).assert().code(1);
+    }
+    env.rimz()
+        .args(["lsp", "def", "work.rs:1:1", "--server", "unknown"])
+        .assert()
+        .code(2);
+    assert_eq!(usage.read().total.answered, 2);
+    assert_eq!(usage.read().total.failed, 0);
+
+    env.record(&pinned);
+    resolving_once(
+        env.rimz()
+            .env(rimz::workspace::ENV_PROJECT_ROOT, &pinned)
+            .env(
+                rimz::workspace::ENV_WORKSPACE_ID,
+                rimz::ids::WorkspaceId::from_project_root(&pinned).to_string(),
+            )
+            .args(["lsp", "def", "work.rs:1:1", "--json"]),
+    );
+    assert_eq!(usage.read().total.answered, 2);
+    assert_eq!(
+        rimz::lsp::usage::Log::new(&env.state_path_for(&pinned))
+            .read()
+            .total
+            .answered,
+        1
+    );
+
+    editor_rpc(&directory, json!({"op":"stop", "reason":"stopped by hand"}));
+    env.rimz()
+        .args(["lsp", "def", "work.rs:1:1", "--json"])
+        .assert()
+        .success();
+    assert_eq!(usage.read().total.answered, 3);
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+    broker.wait().unwrap();
+    env.rimz()
+        .args(["lsp", "list", "--json"])
+        .assert()
+        .success();
+    assert_eq!(usage.read().total.answered, 3);
+}
+
+#[test]
+fn lsp_usage_never_creates_a_room_or_changes_a_query_when_unwritable() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    std::fs::write(root.join("work.rs"), "fn work() {}\n").unwrap();
+    let (mut broker, directory, _) = start_stub_broker(&env, root.clone());
+    let before = env
+        .rimz()
+        .args(["lsp", "def", "work.rs:1:1", "--json"])
+        .output()
+        .unwrap();
+    assert!(before.status.success(), "{before:?}");
+    assert!(!env.rimz_home().join("ws").exists());
+    env.record(&root);
+    std::fs::create_dir_all(
+        env.state_path_for(&root)
+            .root
+            .join("records/lsp-usage.jsonl"),
+    )
+    .unwrap();
+    let after = env
+        .rimz()
+        .args(["lsp", "def", "work.rs:1:1", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(before.status.code(), after.status.code());
+    assert_eq!(before.stdout, after.stdout);
+    assert_eq!(before.stderr, after.stderr);
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_list_and_stop_all_stay_in_the_room() {
     let env = Env::new();
     let root = env.project_root.canonicalize().unwrap();

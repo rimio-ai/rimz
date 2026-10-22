@@ -8,7 +8,7 @@ use rimz::lsp::{
     attach::{self, Outcome, Target},
     check,
     query::{self, QueryErr, Verb},
-    registry,
+    registry, usage,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -204,6 +204,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 &context.root,
                 &context.entries,
                 &context.servers,
+                context.usage.as_ref(),
             ) {
                 Ok(blocks) => blocks,
                 Err(error) => {
@@ -244,6 +245,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 &context.entries,
                 &context.servers,
                 mode,
+                context.usage.as_ref(),
             ) {
                 Ok(reports) => reports,
                 Err(error) => return query_error(error),
@@ -311,6 +313,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let context = query_context(globals)?;
     context.validate_server(args.server.as_deref())?;
+    let kind: String = serde_json::from_value(serde_json::to_value(verb)?)?;
     let root = &context.root;
     let multiple = args.targets.len() > 1;
     let mut failures = QueryFailures::default();
@@ -357,9 +360,11 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 args.server.as_deref(),
                 target.path(),
             )?;
-            let output =
-                failures.execute(&entry.server, || query::execute(&entry, verb, &target))?;
-            Ok::<_, QueryErr>((entry, output))
+            let output = failures.execute(&entry.server, || query::execute(&entry, verb, &target));
+            if let Some(usage) = &context.usage {
+                usage.record(&entry, &kind, &output);
+            }
+            Ok::<_, QueryErr>((entry, output?))
         })();
         let text = match result {
             Err(error) => {
@@ -439,6 +444,7 @@ struct QueryContext {
     root: PathBuf,
     entries: Vec<registry::Entry>,
     servers: std::collections::BTreeMap<String, rimz::config::LspServerConfig>,
+    usage: Option<usage::Log>,
 }
 
 impl QueryContext {
@@ -529,7 +535,28 @@ fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
         root,
         entries,
         servers: config.lsp_servers,
+        // The participant ladder departs from `resolve` only to follow a verified pane pin.
+        usage: room_usage(globals, || Ok(workspace.project_root.clone())),
     })
+}
+
+/// The usage log of the participant room, the one `list` reads. A verified pane pin names it
+/// without spawning git unless `--root` overrides the pin; otherwise `resolve` names it.
+fn room_usage(
+    globals: &GlobalFlags,
+    resolve: impl FnOnce() -> Result<PathBuf>,
+) -> Option<usage::Log> {
+    let room = match &globals.root {
+        None => super::pinned_room_root().map_or_else(resolve, Ok),
+        Some(_) => resolve(),
+    };
+    match room.and_then(|room| Ok(usage::Log::new(&rimz::StatePaths::for_project_root(&room)?))) {
+        Ok(log) => Some(log),
+        Err(error) => {
+            tracing::debug!(%error, "cannot resolve language-server usage room");
+            None
+        }
+    }
 }
 
 fn attach(server: Option<String>, version: bool, globals: &GlobalFlags) -> Result<()> {

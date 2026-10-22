@@ -9,12 +9,13 @@ pub fn show(
     root: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
+    usage: Option<&super::super::usage::Log>,
 ) -> super::super::Result<Vec<(String, i32)>> {
     let anchors = arguments
         .iter()
         .map(|argument| parse_argument(argument))
         .collect::<super::super::Result<Vec<_>>>()?;
-    let mut context = match Context::new(root, entries, servers) {
+    let mut context = match Context::new(root, entries, servers, usage.map(|log| (log, "show"))) {
         Ok(context) => context,
         Err(error) => {
             return Ok(arguments
@@ -433,6 +434,7 @@ mod tests {
             root.path(),
             &[],
             &servers,
+            None,
         )
         .unwrap();
         assert_eq!(blocks[0], ("lib.rs:2-2\n     2\tsecond\n".into(), 0));
@@ -619,7 +621,8 @@ mod tests {
                 false,
                 Path::new("/does-not-exist"),
                 &[],
-                &BTreeMap::new()
+                &BTreeMap::new(),
+                None,
             )
             .is_err()
         );
