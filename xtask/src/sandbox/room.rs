@@ -3,6 +3,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,6 +13,11 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::{DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
+
+#[derive(Deserialize)]
+struct Workspace {
+    session_name: String,
+}
 
 #[derive(Deserialize)]
 struct Renderer {
@@ -191,11 +197,14 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
     // Zellij materializes a new tab's layout panes only while a client is attached, so the
     // client comes up before the team: without it `teams` fails in the backend's
     // `wait_for_named_tab_materialized`.
-    output(
+    let client_pane = output(
         "sized client attach",
         room.command("tmux").args([
             "new-session",
             "-d",
+            "-P",
+            "-F",
+            "#{pane_pid}",
             "-x",
             "200",
             "-y",
@@ -205,7 +214,11 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
             &attach,
         ]),
     )?;
-    room.wait_for_client(&session)?;
+    let pane_pid = std::str::from_utf8(&client_pane)?
+        .trim()
+        .parse()
+        .context("parsing client pane PID")?;
+    room.wait_for_client(&session, pane_pid)?;
     room.rimz(
         "team launch",
         &["teams", "forge", "-w", "probe", "--isolation", "host"],
@@ -284,16 +297,17 @@ impl Room<'_> {
             .with_context(|| format!("{step}: decoding JSON"))
     }
 
-    /// `start` returns before the fresh room answers a pane roster, so poll for its session.
+    /// Resolve the room's name without waiting for client-dependent topology.
     fn session(&self) -> Result<String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match self.json::<Panes>("room session", &["pane", "list", "--json"]) {
-                Ok(panes) => return Ok(panes.session),
-                Err(error) if Instant::now() >= deadline => return Err(error),
-                Err(_) => std::thread::sleep(Duration::from_millis(200)),
-            }
-        }
+        let workspace: Workspace = self.json(
+            "room session",
+            &[
+                "workspace",
+                "resolve",
+                self.cwd.to_str().context("room path is not UTF-8")?,
+            ],
+        )?;
+        Ok(workspace.session_name)
     }
 
     /// Bring one tab into the attached client's view, so its sidebar repaints and takes the
@@ -336,21 +350,23 @@ impl Room<'_> {
 
     /// The client attaches asynchronously, and Zellij materializes a new tab's layout panes
     /// only while one is attached; tmux needs no client, so only Zellij waits.
-    fn wait_for_client(&self, session: &str) -> Result<()> {
+    fn wait_for_client(&self, session: &str, pane_pid: u32) -> Result<()> {
         if self.mux != "zellij" {
             return Ok(());
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            // A session with no client prints the header row alone.
-            let attached = output(
-                "client list",
-                self.command("zellij")
-                    .args(["--session", session, "action", "list-clients"]),
-            )
-            .is_ok_and(|clients| String::from_utf8_lossy(&clients).lines().count() > 1);
-            if attached {
-                return Ok(());
+            if let Some(pid) = client_pid(pane_pid, session) {
+                let attached = output(
+                    "client list",
+                    self.command("zellij")
+                        .args(["--session", session, "action", "list-clients"]),
+                )
+                .is_ok_and(|clients| client_count(&clients) > 0);
+                // Reject a bootstrap row or a client that Zellij dropped during the query.
+                if attached && client_pid(pane_pid, session) == Some(pid) {
+                    return Ok(());
+                }
             }
             if Instant::now() >= deadline {
                 bail!(
@@ -440,6 +456,57 @@ pub(super) fn output(step: &str, command: &mut Command) -> Result<Vec<u8>> {
         );
     }
     Ok(result.stdout)
+}
+
+fn client_pid(pane_pid: u32, session: &str) -> Option<u32> {
+    std::fs::read_dir("/proc")
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .find(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .is_ok_and(|comm| comm.trim() == "zellij")
+                && std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|cmdline| is_client_argv(&cmdline, session))
+                && descends_from(*pid, pane_pid)
+        })
+}
+
+fn descends_from(mut pid: u32, ancestor: u32) -> bool {
+    while pid != 0 {
+        if pid == ancestor {
+            return true;
+        }
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            return false;
+        };
+        let Some(parent) = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:"))
+            .and_then(|parent| parent.trim().parse().ok())
+        else {
+            return false;
+        };
+        pid = parent;
+    }
+    false
+}
+
+fn is_client_argv(cmdline: &[u8], session: &str) -> bool {
+    let argv: Vec<_> = cmdline.split(|byte| *byte == 0).collect();
+    argv.first().is_some_and(|program| {
+        Path::new(OsStr::from_bytes(program)).file_name() == Some(OsStr::new("zellij"))
+    }) && argv.get(1) == Some(&b"attach".as_slice())
+        && argv.iter().skip(2).any(|arg| *arg == session.as_bytes())
+        && !argv.contains(&b"--create-background".as_slice())
+}
+
+fn client_count(clients: &[u8]) -> usize {
+    String::from_utf8_lossy(clients)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .skip(1)
+        .count()
 }
 
 fn verify_stub(path: &OsStr, stub: &Path, executable: impl Fn(&Path) -> bool) -> Result<()> {
@@ -615,6 +682,45 @@ fn render_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_argv_accepts_both_managed_attach_shapes_not_bootstrap_or_other_sessions() {
+        for cmdline in [
+            &b"/usr/local/bin/zellij\0attach\0--create\0room-abcd\0options\0--mouse-mode\0true\0"[..],
+            &b"zellij\0attach\0room-abcd\0options\0--mouse-mode\0true\0"[..],
+        ] {
+            assert!(is_client_argv(cmdline, "room-abcd"), "{cmdline:?}");
+        }
+        for cmdline in [
+            &b"zellij\0attach\0--create-background\0room-abcd\0"[..],
+            &b"zellij\0attach\0room-abcd-other\0options\0"[..],
+            &b"zellij\0--session\0room-abcd\0action\0list-clients\0"[..],
+            &b"zellij\0--server\0room-abcd\0"[..],
+            &b"rimz\0attach\0room-abcd\0"[..],
+            &b""[..],
+        ] {
+            assert!(!is_client_argv(cmdline, "room-abcd"), "{cmdline:?}");
+        }
+    }
+
+    #[test]
+    fn client_count_ignores_header_and_blank_lines() {
+        assert_eq!(client_count(b""), 0);
+        assert_eq!(
+            client_count(b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\n  \n"),
+            0
+        );
+        assert_eq!(
+            client_count(b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_1 /bin/sh\n"),
+            1
+        );
+        assert_eq!(
+            client_count(
+                b"\nCLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\n1 terminal_1 /bin/sh\n2 terminal_2 vim\n\n"
+            ),
+            2
+        );
+    }
 
     #[test]
     fn room_refuses_provider_path_that_does_not_resolve_to_stub() {
