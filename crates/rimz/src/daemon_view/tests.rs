@@ -688,9 +688,33 @@ fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
     assert_eq!((builds.get(), repairs.get()), (1, 1));
     assert_eq!(crate::proc::testkit::spawn_count(), spawns);
 
+    let mut changed = healthy.clone();
+    let mut shell = pane_with_id("%20", Some("zsh"), Some(VIEW_NAME));
+    shell.session_name = "rimz-demo".to_owned();
+    let mut refs = changed.to_pane_refs();
+    refs.push(shell);
+    changed = crate::sidebar::frame::assemble_frame(refs, now_ms, "rimz-demo".to_owned());
+    for frame in [&changed, &changed, &healthy] {
+        tracker.maintain_with(
+            stamp.clone(),
+            Some(frame),
+            now_ms,
+            || panic!("membership alone must not rebuild the spec"),
+            |_| {
+                repairs.set(repairs.get() + 1);
+                RepairOutcome::Converged
+            },
+        );
+    }
+    assert_eq!(
+        (builds.get(), repairs.get()),
+        (1, 3),
+        "each new id set repairs once"
+    );
+
     tracker.maintain_with(
         tracker_stamp(dir.path(), 2),
-        Some(&healthy),
+        Some(&changed),
         now_ms,
         || {
             builds.set(builds.get() + 1);
@@ -701,7 +725,7 @@ fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
             RepairOutcome::Retry
         },
     );
-    assert_eq!((builds.get(), repairs.get()), (2, 2));
+    assert_eq!((builds.get(), repairs.get()), (2, 4));
 
     tracker.maintain_with(
         tracker_stamp(dir.path(), 2),
@@ -713,7 +737,257 @@ fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
             RepairOutcome::Converged
         },
     );
-    assert_eq!((builds.get(), repairs.get()), (2, 3));
+    assert_eq!((builds.get(), repairs.get()), (2, 5));
+    tracker.maintain_with(
+        tracker_stamp(dir.path(), 2),
+        Some(&healthy),
+        now_ms,
+        || panic!("stable inputs must not rebuild"),
+        |_| panic!("a converged, unchanged frame must not repair"),
+    );
+}
+
+mod shape {
+    use super::*;
+    use crate::mux::{PaneRect, ViewGeometry};
+
+    const CONTENT: &str = "rimz daemon content --slot 0";
+    const HOST: &str = "rimz codex app-server serve";
+    const LOOP: &str = "rimz loop watch --hold";
+
+    fn fixture(cells: &[(&str, u64, u64, u64, u64)], gap: u64) -> (Vec<PaneRef>, ViewGeometry) {
+        let mut panes = Vec::new();
+        let mut rectangles = Vec::new();
+        for (index, &(command, x, y, cols, rows)) in cells.iter().enumerate() {
+            let mut pane = spawned_pane_with_id(&format!("%{index}"), command, Some(VIEW_NAME));
+            pane.command = Some("foreground-child".to_owned());
+            rectangles.push(PaneRect {
+                pane_id: pane.pane_id.clone(),
+                x,
+                y,
+                cols,
+                rows,
+            });
+            panes.push(pane);
+        }
+        (
+            panes,
+            ViewGeometry {
+                panes: rectangles,
+                gap,
+            },
+        )
+    }
+
+    fn eddie(gap: u64) -> (Vec<PaneRef>, ViewGeometry) {
+        fixture(
+            &[
+                ("zsh", 0, 0, 64, 76),
+                (CONTENT, 64 + gap, 0, 127, 38),
+                (HOST, 191 + 2 * gap, 0, 64, 38),
+                (LOOP, 64 + gap, 38 + gap, 191 + gap, 38 - gap),
+            ],
+            gap,
+        )
+    }
+
+    #[test]
+    fn healthy_columns_allow_foreign_rows_and_missing_members_but_require_rectangles() {
+        for gap in [0, 1] {
+            let (mut panes, mut geometry) = fixture(
+                &[
+                    ("zsh", 0, 0, 64, 76),
+                    (CONTENT, 64 + gap, 0, 127, 38),
+                    ("user-shell", 64 + gap, 38 + gap, 127, 38 - gap),
+                    (HOST, 191 + 2 * gap, 0, 64, 38),
+                    (LOOP, 191 + 2 * gap, 38 + gap, 64, 38 - gap),
+                ],
+                gap,
+            );
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&geometry)),
+                DaemonShape::Healthy
+            );
+            panes.remove(4);
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&geometry)),
+                DaemonShape::Healthy
+            );
+            geometry.panes.remove(3);
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&geometry)),
+                DaemonShape::Unjudged
+            );
+            assert_eq!(judge_daemon_shape(&panes, None), DaemonShape::Unjudged);
+        }
+    }
+
+    #[test]
+    fn spanning_loop_is_repairable_and_its_close_and_respawn_reach_a_fixpoint() {
+        for gap in [0, 1] {
+            let (panes, geometry) = eddie(gap);
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&geometry)),
+                DaemonShape::Repairable {
+                    faults: vec![
+                        DaemonShapeFault::ContentNotFullHeight,
+                        DaemonShapeFault::RuntimeSplit
+                    ],
+                }
+            );
+            let mut repaired = geometry.clone();
+            repaired.panes[1].rows = 76;
+            repaired.panes[3].x = repaired.panes[2].x;
+            repaired.panes[3].cols = repaired.panes[2].cols;
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&repaired)),
+                DaemonShape::Healthy
+            );
+        }
+    }
+
+    #[test]
+    fn other_shapes_are_report_only_in_fault_order() {
+        let cases = [
+            (
+                vec![
+                    (CONTENT, 0, 0, 80, 20),
+                    (LOOP, 0, 20, 80, 20),
+                    (HOST, 80, 0, 40, 40),
+                ],
+                vec![
+                    DaemonShapeFault::ContentNotFullHeight,
+                    DaemonShapeFault::RuntimeSplit,
+                ],
+            ),
+            (
+                vec![(CONTENT, 0, 0, 80, 20), (LOOP, 0, 20, 80, 20)],
+                vec![
+                    DaemonShapeFault::ContentNotFullHeight,
+                    DaemonShapeFault::RuntimeNotFullHeight,
+                    DaemonShapeFault::RuntimeLeftOfContent,
+                ],
+            ),
+            (
+                vec![
+                    (CONTENT, 0, 0, 80, 40),
+                    (HOST, 80, 0, 40, 40),
+                    (LOOP, 120, 0, 40, 40),
+                ],
+                vec![DaemonShapeFault::RuntimeSplit],
+            ),
+            (
+                vec![
+                    (CONTENT, 0, 0, 80, 40),
+                    (HOST, 80, 0, 40, 20),
+                    ("zsh", 80, 20, 20, 20),
+                    ("zsh", 100, 20, 20, 20),
+                ],
+                vec![DaemonShapeFault::RuntimeNotFullHeight],
+            ),
+            (
+                vec![
+                    (CONTENT, 80, 0, 80, 40),
+                    (HOST, 0, 0, 80, 20),
+                    (LOOP, 0, 20, 80, 20),
+                ],
+                vec![DaemonShapeFault::RuntimeLeftOfContent],
+            ),
+            (
+                vec![
+                    (CONTENT, 0, 0, 80, 20),
+                    ("rimz daemon content --slot 1", 80, 0, 40, 40),
+                    (LOOP, 0, 20, 80, 20),
+                ],
+                vec![
+                    DaemonShapeFault::ContentSplit,
+                    DaemonShapeFault::RuntimeNotFullHeight,
+                ],
+            ),
+        ];
+        for (cells, faults) in cases {
+            let (panes, geometry) = fixture(&cells, 0);
+            assert_eq!(
+                judge_daemon_shape(&panes, Some(&geometry)),
+                DaemonShape::Misshapen { faults }
+            );
+        }
+        let (mut panes, mut geometry) = eddie(0);
+        geometry.panes[0].rows = 38;
+        let shell = pane_with_id("%9", Some("zsh"), Some(VIEW_NAME));
+        geometry.panes.push(PaneRect {
+            pane_id: shell.pane_id.clone(),
+            x: 0,
+            y: 38,
+            cols: 64,
+            rows: 38,
+        });
+        panes.push(shell);
+        assert_eq!(
+            judge_daemon_shape(&panes, Some(&geometry)),
+            DaemonShape::Misshapen {
+                faults: vec![
+                    DaemonShapeFault::ContentNotFullHeight,
+                    DaemonShapeFault::RuntimeSplit
+                ],
+            },
+            "aligned sidebar neighbours would fill the loop instead"
+        );
+    }
+
+    #[test]
+    fn shape_close_uses_only_the_post_wake_decision_and_propagates_failures() {
+        use std::cell::RefCell;
+        let panel = PaneId::from_parts(MuxName::Tmux, "%3");
+        let other = PaneId::from_parts(MuxName::Tmux, "%4");
+        for (fresh, wake_ok, close_ok, expected) in [
+            (Some(panel.clone()), true, true, ShapeCloseOutcome::Closed),
+            (Some(other), true, true, ShapeCloseOutcome::Left),
+            (None, true, true, ShapeCloseOutcome::Left),
+            (Some(panel.clone()), false, true, ShapeCloseOutcome::Retry),
+            (Some(panel.clone()), true, false, ShapeCloseOutcome::Retry),
+        ] {
+            let events = RefCell::new(Vec::new());
+            assert_eq!(
+                close_shape_loop_with(
+                    &panel,
+                    || {
+                        events.borrow_mut().push("wake");
+                        wake_ok
+                    },
+                    || {
+                        events.borrow_mut().push("read");
+                        Ok(fresh.clone())
+                    },
+                    || {
+                        events.borrow_mut().push("close");
+                        close_ok
+                    },
+                ),
+                expected
+            );
+            let expected_events = if !wake_ok {
+                vec!["wake"]
+            } else if fresh.as_ref() == Some(&panel) {
+                vec!["wake", "read", "close"]
+            } else {
+                vec!["wake", "read"]
+            };
+            assert_eq!(*events.borrow(), expected_events);
+        }
+        assert_eq!(
+            close_shape_loop_with(
+                &panel,
+                || true,
+                || Err(crate::mux::MuxErr::Output {
+                    program: "fake".into(),
+                    reason: "read failed".into()
+                }),
+                || panic!("a failed fresh read must not close")
+            ),
+            ShapeCloseOutcome::Retry
+        );
+    }
 }
 
 #[test]

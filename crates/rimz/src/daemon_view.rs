@@ -13,7 +13,7 @@
 //!
 //! Internals: `docs/internals/rimzd.md`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,8 +22,8 @@ use crate::disk::parse_cache::StampedPath;
 use crate::disk::paths::StatePaths;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
+    DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, PaneRect,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, ViewGeometry,
 };
 use crate::pane::{APP_SERVER_MARKER, PaneRef, VIEW_NAME, command_is_claude_host};
 use crate::workspace::record;
@@ -31,6 +31,262 @@ use crate::workspace::record;
 const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
 const SETTLE_ATTEMPTS: usize = 5;
 const SETTLE_POLL: Duration = Duration::from_millis(100);
+
+/// Shape of the managed content and runtime columns in a daemon view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DaemonShape {
+    Healthy,
+    Repairable { faults: Vec<DaemonShapeFault> },
+    Misshapen { faults: Vec<DaemonShapeFault> },
+    Unjudged,
+}
+
+/// Column faults, in content, runtime, then left-to-right order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonShapeFault {
+    ContentSplit,
+    ContentNotFullHeight,
+    RuntimeSplit,
+    RuntimeNotFullHeight,
+    RuntimeLeftOfContent,
+}
+
+/// Inspect a daemon view without waking or changing any pane. `None` means closed.
+pub fn inspect_daemon_shape(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+) -> crate::mux::Result<Option<DaemonShape>> {
+    let listing = list_daemon_panes(backend, session_name, workspace_id)?;
+    listed_daemon_shape(backend, session_name, &listing.panes)
+}
+
+fn pane_marker(pane: &PaneRef) -> Option<ManagedPaneMarker> {
+    if pane.view_name.as_deref() != Some(VIEW_NAME) || pane.is_floating {
+        return None;
+    }
+    [
+        pane.spawn_command.as_deref(),
+        pane.command.as_deref(),
+        pane.title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(command_marker)
+}
+
+fn rect_marker(panes: &[PaneRef], rect: &PaneRect) -> Option<ManagedPaneMarker> {
+    panes
+        .iter()
+        .find(|pane| pane.pane_id == rect.pane_id)
+        .and_then(pane_marker)
+}
+
+fn listed_daemon_shape(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    panes: &[PaneRef],
+) -> crate::mux::Result<Option<DaemonShape>> {
+    let anchor = panes
+        .iter()
+        .find(|pane| pane_marker(pane).is_some())
+        .or_else(|| {
+            panes
+                .iter()
+                .find(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+        });
+    let Some(anchor) = anchor else {
+        return Ok(None);
+    };
+    let geometry = backend.view_geometry(session_name, &anchor.pane_id, REPAIR_LIST_TIMEOUT)?;
+    Ok(Some(judge_daemon_shape(panes, geometry.as_ref())))
+}
+
+fn judge_daemon_shape(panes: &[PaneRef], geometry: Option<&ViewGeometry>) -> DaemonShape {
+    let Some(geometry) = geometry else {
+        return DaemonShape::Unjudged;
+    };
+    if geometry.panes.is_empty()
+        || panes.iter().any(|pane| {
+            pane_marker(pane).is_some()
+                && !geometry
+                    .panes
+                    .iter()
+                    .any(|rect| rect.pane_id == pane.pane_id)
+        })
+    {
+        return DaemonShape::Unjudged;
+    }
+    let faults = shape_faults(panes, geometry);
+    if faults.is_empty() {
+        return DaemonShape::Healthy;
+    }
+    if repairable_loop(panes, geometry).is_some() {
+        DaemonShape::Repairable { faults }
+    } else {
+        DaemonShape::Misshapen { faults }
+    }
+}
+
+fn shape_faults(panes: &[PaneRef], geometry: &ViewGeometry) -> Vec<DaemonShapeFault> {
+    let top = geometry.panes.iter().map(|pane| pane.y).min().unwrap_or(0);
+    let bottom = geometry
+        .panes
+        .iter()
+        .map(|pane| pane.y + pane.rows)
+        .max()
+        .unwrap_or(0);
+    let mut faults = Vec::new();
+    let mut band = |column, split, short| {
+        let members = geometry
+            .panes
+            .iter()
+            .filter(|rect| rect_marker(panes, rect).is_some_and(|marker| marker.column() == column))
+            .collect::<Vec<_>>();
+        let first = *members.first()?;
+        let band = (first.x, first.cols);
+        if members.iter().any(|pane| (pane.x, pane.cols) != band) {
+            faults.push(split);
+            return None;
+        }
+        let mut tiles = geometry
+            .panes
+            .iter()
+            .filter(|pane| {
+                (pane.x, pane.cols) == band
+                    && rect_marker(panes, pane).is_none_or(|marker| marker.column() == column)
+            })
+            .collect::<Vec<_>>();
+        tiles.sort_by_key(|pane| pane.y);
+        let mut edge = top;
+        for tile in tiles {
+            if tile.y != edge {
+                faults.push(short);
+                return Some(band);
+            }
+            edge = tile.y + tile.rows + geometry.gap;
+        }
+        if edge != bottom + geometry.gap {
+            faults.push(short);
+        }
+        Some(band)
+    };
+    let content = band(
+        DaemonColumn::Content,
+        DaemonShapeFault::ContentSplit,
+        DaemonShapeFault::ContentNotFullHeight,
+    );
+    let runtime = band(
+        DaemonColumn::Runtime,
+        DaemonShapeFault::RuntimeSplit,
+        DaemonShapeFault::RuntimeNotFullHeight,
+    );
+    if let (Some((content_x, content_cols)), Some((runtime_x, _))) = (content, runtime)
+        && runtime_x < content_x + content_cols + geometry.gap
+    {
+        faults.push(DaemonShapeFault::RuntimeLeftOfContent);
+    }
+    faults
+}
+
+fn repairable_loop(panes: &[PaneRef], geometry: &ViewGeometry) -> Option<PaneId> {
+    let panel = geometry
+        .panes
+        .iter()
+        .filter(|rect| rect_marker(panes, rect) == Some(ManagedPaneMarker::LoopPanel))
+        .min_by_key(|rect| (rect.pane_id.creation_ordinal(), rect.pane_id.as_str()))?;
+    let bottom = geometry.panes.iter().map(|pane| pane.y + pane.rows).max()?;
+    if panel.y + panel.rows != bottom {
+        return None;
+    }
+    let mut above = geometry
+        .panes
+        .iter()
+        .filter(|pane| {
+            pane.y + pane.rows + geometry.gap == panel.y
+                && pane.x >= panel.x
+                && pane.x + pane.cols <= panel.x + panel.cols
+        })
+        .collect::<Vec<_>>();
+    above.sort_by_key(|pane| pane.x);
+    let mut edge = panel.x;
+    for pane in &above {
+        if pane.x != edge {
+            return None;
+        }
+        edge = pane.x + pane.cols + geometry.gap;
+    }
+    if edge != panel.x + panel.cols + geometry.gap
+        || !above.iter().any(|rect| {
+            rect_marker(panes, rect).is_some_and(|marker| marker.column() == DaemonColumn::Content)
+        })
+        || !above.iter().any(|rect| {
+            rect_marker(panes, rect).is_some_and(|marker| marker.column() == DaemonColumn::Runtime)
+        })
+    {
+        return None;
+    }
+    for left in [true, false] {
+        let edges = geometry
+            .panes
+            .iter()
+            .filter(|pane| {
+                if left {
+                    pane.x + pane.cols + geometry.gap == panel.x
+                } else {
+                    pane.x == panel.x + panel.cols + geometry.gap
+                }
+            })
+            .flat_map(|pane| [pane.y, pane.y + pane.rows])
+            .collect::<BTreeSet<_>>();
+        if edges.contains(&panel.y) && edges.contains(&(panel.y + panel.rows)) {
+            return None;
+        }
+    }
+    let mut filled = geometry.clone();
+    filled.panes.retain(|pane| pane.pane_id != panel.pane_id);
+    for pane in &mut filled.panes {
+        if above.iter().any(|old| old.pane_id == pane.pane_id) {
+            pane.rows += panel.rows + geometry.gap;
+        }
+    }
+    shape_faults(panes, &filled)
+        .is_empty()
+        .then(|| panel.pane_id.clone())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ShapeCloseOutcome {
+    Left,
+    Closed,
+    Retry,
+}
+
+fn close_shape_loop_with(
+    pane: &PaneId,
+    wake: impl FnOnce() -> bool,
+    recheck: impl FnOnce() -> crate::mux::Result<Option<PaneId>>,
+    close: impl FnOnce() -> bool,
+) -> ShapeCloseOutcome {
+    if !wake() {
+        return ShapeCloseOutcome::Retry;
+    }
+    match recheck() {
+        Ok(Some(fresh)) if fresh == *pane => {
+            if close() {
+                ShapeCloseOutcome::Closed
+            } else {
+                ShapeCloseOutcome::Retry
+            }
+        }
+        Ok(_) => ShapeCloseOutcome::Left,
+        Err(error) => {
+            tracing::debug!(%error, "daemon shape could not be re-read after wake");
+            ShapeCloseOutcome::Retry
+        }
+    }
+}
 
 /// Inputs that determine the managed panes in one workspace's daemon view.
 pub struct DaemonViewSpecParams<'a> {
@@ -204,16 +460,22 @@ fn next_spawn_step(panes: &[PaneRef], view: &DaemonView, missing: Option<&HostPa
 
 /// Recreate every missing managed pane while any pane in `rimzd` survives.
 /// Closing the whole view leaves no anchor and is treated as deliberate.
+/// Once the markers are satisfied, restart a loop watch spanning beneath both
+/// columns; every other wrong shape is left as it is.
 pub fn repair_daemon_view(
     backend: &dyn MuxBackend,
     session_name: &str,
     workspace_id: &WorkspaceId,
     view: &DaemonView,
 ) -> RepairOutcome {
-    let Some(mut listing) = list_daemon_panes(backend, session_name, workspace_id) else {
+    let Ok(mut listing) = list_daemon_panes(backend, session_name, workspace_id) else {
         return RepairOutcome::Retry;
     };
-    if next_repair_step(&listing.panes, view) == RepairStep::Done {
+    if !listing
+        .panes
+        .iter()
+        .any(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+    {
         return RepairOutcome::Converged;
     }
     let reconciliation = managed_pane_reconciliation(view, &listing.panes);
@@ -261,7 +523,7 @@ pub fn repair_daemon_view(
         listing = settled;
     }
     if next_repair_step(&listing.panes, view) == RepairStep::Done {
-        RepairOutcome::Converged
+        repair_daemon_shape(backend, session_name, workspace_id, view, &listing.panes)
     } else {
         RepairOutcome::Retry
     }
@@ -271,23 +533,115 @@ fn list_daemon_panes(
     backend: &dyn MuxBackend,
     session_name: &str,
     workspace_id: &WorkspaceId,
-) -> Option<PaneListing> {
-    match backend.list_panes(PaneListOptions {
-        session_name: Some(session_name.to_owned()),
-        workspace_id: Some(workspace_id.clone()),
-        command_timeout: Some(REPAIR_LIST_TIMEOUT),
-        consistency: PaneReadConsistency::RequireAuthoritative,
-        ..Default::default()
-    }) {
-        Ok(listing) => Some(listing),
-        Err(err) => {
+) -> crate::mux::Result<PaneListing> {
+    backend
+        .list_panes(PaneListOptions {
+            session_name: Some(session_name.to_owned()),
+            workspace_id: Some(workspace_id.clone()),
+            command_timeout: Some(REPAIR_LIST_TIMEOUT),
+            consistency: PaneReadConsistency::RequireAuthoritative,
+            ..Default::default()
+        })
+        .inspect_err(|err| {
             tracing::debug!(
                 session = %session_name,
-                error = &err as &dyn std::error::Error,
+                error = err as &dyn std::error::Error,
                 "daemon view repair skipped; pane listing failed",
             );
-            None
+        })
+}
+
+fn shape_repair_target(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    panes: &[PaneRef],
+) -> crate::mux::Result<Option<PaneId>> {
+    if !matches!(
+        listed_daemon_shape(backend, session_name, panes)?,
+        Some(DaemonShape::Repairable { .. })
+    ) {
+        return Ok(None);
+    }
+    Ok(panes
+        .iter()
+        .filter(|pane| pane_marker(pane) == Some(ManagedPaneMarker::LoopPanel))
+        .min_by_key(|pane| (pane.pane_id.creation_ordinal(), pane.pane_id.as_str()))
+        .map(|pane| pane.pane_id.clone()))
+}
+
+fn repair_daemon_shape(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+    workspace_id: &WorkspaceId,
+    view: &DaemonView,
+    panes: &[PaneRef],
+) -> RepairOutcome {
+    let panel = match shape_repair_target(backend, session_name, panes) {
+        Ok(Some(panel)) => panel,
+        Ok(None) => return RepairOutcome::Converged,
+        Err(error) => {
+            tracing::debug!(%error, "daemon shape read failed");
+            return RepairOutcome::Retry;
         }
+    };
+    let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
+        return RepairOutcome::Retry;
+    };
+    match close_shape_loop_with(
+        &panel,
+        || {
+            !crate::store::hibernate::read(&paths)
+                .iter()
+                .any(|entry| entry.pane_id == panel)
+                || match crate::harness::hibernate::wake_pane_at(&paths, &panel) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        tracing::warn!(%error, %panel, "could not wake misshapen loop panel");
+                        false
+                    }
+                }
+        },
+        || {
+            let fresh = list_daemon_panes(backend, session_name, workspace_id)?;
+            shape_repair_target(backend, session_name, &fresh.panes)
+        },
+        || match backend.close_pane(session_name, &panel) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, %panel, "could not close misshapen loop panel");
+                false
+            }
+        },
+    ) {
+        ShapeCloseOutcome::Left => return RepairOutcome::Converged,
+        ShapeCloseOutcome::Retry => return RepairOutcome::Retry,
+        ShapeCloseOutcome::Closed => {}
+    }
+    let Ok(listing) = list_daemon_panes(backend, session_name, workspace_id) else {
+        return RepairOutcome::Retry;
+    };
+    let marker = ManagedPaneMarker::LoopPanel;
+    if !matching_managed_panes(&listing.panes, &marker).is_empty() {
+        return RepairOutcome::Retry;
+    }
+    let Some((anchor, direction)) = spawn_anchor(&listing.panes, view, &marker) else {
+        return RepairOutcome::Retry;
+    };
+    if !split_managed_pane(
+        backend,
+        session_name,
+        &listing.panes,
+        &view.loop_panel,
+        &anchor,
+        direction,
+    ) {
+        return RepairOutcome::Retry;
+    }
+    match settle_managed_pane(backend, session_name, workspace_id, &marker) {
+        Some(listing) if next_repair_step(&listing.panes, view) == RepairStep::Done => {
+            RepairOutcome::Converged
+        }
+        _ => RepairOutcome::Retry,
     }
 }
 
@@ -397,7 +751,7 @@ fn settle_managed_pane(
     marker: &ManagedPaneMarker,
 ) -> Option<PaneListing> {
     for attempt in 0..SETTLE_ATTEMPTS {
-        let listing = list_daemon_panes(backend, session_name, workspace_id)?;
+        let listing = list_daemon_panes(backend, session_name, workspace_id).ok()?;
         if !matching_managed_panes(&listing.panes, marker).is_empty() {
             return Some(listing);
         }
@@ -703,15 +1057,16 @@ fn classify_daemon_frame(
 }
 
 /// Long-lived elder maintenance state. Stable inputs and a healthy published
-/// frame take the pure zero-child path; changed inputs rebuild the effective
-/// specification, while stale or unhealthy frame truth falls back to the
-/// authoritative backend repair path.
+/// frame with unchanged pane membership take the pure zero-child path; changed
+/// inputs rebuild the effective specification, while changed membership or stale
+/// or unhealthy frame truth falls back to authoritative backend repair.
 pub struct DaemonRepairTracker {
     workspace_id: WorkspaceId,
     session_name: String,
     inputs: Option<DaemonViewInputsStamp>,
     view: Option<DaemonView>,
     repair_pending: bool,
+    last_pass_pane_ids: Option<HashSet<PaneId>>,
 }
 
 impl DaemonRepairTracker {
@@ -722,6 +1077,7 @@ impl DaemonRepairTracker {
             inputs: None,
             view: None,
             repair_pending: false,
+            last_pass_pane_ids: None,
         }
     }
 
@@ -808,13 +1164,23 @@ impl DaemonRepairTracker {
         }
 
         let view = self.view.as_ref().expect("view rebuilt above");
+        let pane_ids = frame.map(|frame| {
+            frame
+                .tabs
+                .iter()
+                .filter(|tab| tab.name.as_deref() == Some(VIEW_NAME))
+                .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
+                .collect::<HashSet<_>>()
+        });
         if !self.repair_pending
+            && pane_ids == self.last_pass_pane_ids
             && classify_daemon_frame(frame, &self.session_name, view, now_ms)
                 == DaemonFrameAction::Skip
         {
             return;
         }
         self.repair_pending = repair(view) == RepairOutcome::Retry;
+        self.last_pass_pane_ids = pane_ids;
     }
 }
 

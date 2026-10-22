@@ -115,7 +115,11 @@ Placement follows specification order within a column:
 3. With an empty column, the column is created to the right of its structural neighbour: content splits off the sidebar, and runtime splits off the first live content pane, else the sidebar.
 4. With none of those alive, it splits right of any pane in the view.
 
-Placement is decided when a pane is created and never revisited. A pane that satisfies the specification stays where it is, even if a different binary would have placed it elsewhere, until it closes or the view is reborn.
+Once the markers are satisfied, repair reads the view's outer pane rectangles through `MuxBackend::view_geometry`. The same read-only judge is available as `inspect_daemon_shape`. Content must share one x position and width; runtime members must share another, to its right. Each column's band must cover the view's full height, allowing a foreign pane such as a user shell to fill part of that band. Missing managed members are for marker repair, not shape faults. Floating panes and plugins (including Zellij's compact bar) are outside the tiled region. A fullscreen, zoomed, suppressed, stacked, or geometry-less view, or a managed pane missing from the geometry read, is left unjudged.
+
+Only one wrong shape is repaired: the loop watch spans across the bottom beneath both content and a runtime host, and closing it is predicted to restore healthy columns. Panes immediately above it must cover its whole width, include both content and runtime, and become healthy when extended to the bottom. Neither side may satisfy Zellij's fill rule: the top and bottom edges of all panes touching that side, even those outside the loop's vertical span, must not contain both loop edges. This ensures the panes above, rather than a side neighbour, take the freed space; tmux's preceding-sibling fill produces the same columns for this family.
+
+For that shape only, the pass wakes the loop when hibernation froze it, re-lists and re-reads geometry, and closes it only if the fresh decision still names that same repairable loop. It then recreates the loop below its preceding runtime host through the normal placement path. A pass closes at most one loop for shape. Content and app-server panes are never restarted for shape; every other wrong shape is report-only and stays as the user left it. On Zellij 0.44.x, an unfocused directional split follows client focus within the tab rather than the exact anchor, so the replacement loop can land elsewhere and leave a reported wrong shape. It cannot recreate the spanning-bottom family with one split, so it does not cycle. Fixed-size Zellij panes may also force a best-effort relayout rather than the predicted fill; the pass still restarts only once.
 
 The outcome is `Converged` or `Retry`. Callers treat `Retry` as backpressure to try again later; neither outcome is an error.
 
@@ -140,29 +144,30 @@ The host tracker is built to make the common tick free. The shared data plane is
 | `rimz_bin`, `claude_bin`, `codex_bin` | Stamped paths of the RimZ executable and of `claude` and `codex` as resolved on `PATH` |
 | `claude_settings` | Stamped path of Claude's settings file under the room's Claude login |
 
-A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker receives the host's retained pane frame instead of reading its publication or the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. When the workspace's state paths or record cannot be read, the tick is skipped.
+A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker receives the host's retained pane frame instead of reading its publication or the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification and has the same set of `rimzd` pane ids as the last pass ends the tick with no work and no child processes. A changed pane-id set, or a missing, stale, or unsatisfied frame, escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. Moving or swapping panes without changing membership waits for a host start, another repair trigger, or the next `rimz start`. When the workspace's state paths or record cannot be read, the tick is skipped.
 
 ## Where the code lives
 
 | File | What it holds |
 | --- | --- |
-| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, the host tracker |
-| [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Specification, planner, reconciliation, identity, and tracker tests |
+| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, shape inspection, repair and placement, the host tracker |
+| [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Specification, planner, reconciliation, identity, shape, post-wake decision, and tracker tests |
 | [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child termination |
 | [`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs) | The hidden `rimz daemon content` entry point |
+| [`cli/doctor/runtime.rs`](../../crates/rimz/src/cli/doctor/runtime.rs) | Read-only doctor runtime and multiplexer probes |
 | [`config/daemon.rs`](../../crates/rimz/src/config/daemon.rs) | `DaemonConfig` and `DaemonPane` |
 | [`pane.rs`](../../crates/rimz/src/pane.rs) | `VIEW_NAME`, the host markers, `command_is_host`, `command_is_claude_host`, `pane_runs_daemon_host`, `pane_is_host` |
 | [`remote_control.rs`](../../crates/rimz/src/remote_control.rs) | `ReadinessSnapshot`, `prepare_hosts`, `apply_runtime_toggle` |
 | [`room/mod.rs`](../../crates/rimz/src/room/mod.rs), [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) | The start-time specification and birth-time repair |
 | [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The host tick that calls the tracker |
-| [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs) | `DaemonView`, `HostPane`, and `BackgroundViewOptions`, the backend-facing types |
+| [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs) | `DaemonView`, `HostPane`, `BackgroundViewOptions`, `PaneRect`, and `ViewGeometry`, the backend-facing types |
 | [`mux/tmux/backend.rs`](../../crates/rimz/src/mux/tmux/backend.rs), [`mux/zellij/backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | `open_background_view` on each backend |
 
 ## Tests
 
-The planner and reconciliation tests in `daemon_view/tests.rs` are pure: they build a specification, hand it a synthetic pane listing, and assert the next step. They cover the cases hardest to reach live: a runtime column chaining back from empty, identity surviving foreground command churn, surplus panes closing down to the oldest, and a closed view staying closed. The tracker tests drive `maintain_with` directly with injected build and repair closures, so stamp invalidation and frame classification run without a mux. Slot resolution and reload comparison are unit tests in `daemon_content.rs`.
+The planner, reconciliation, and shape tests in `daemon_view/tests.rs` build a specification, hand it synthetic listings and rectangles, and assert the next step. They cover a runtime column chaining back from empty, identity surviving foreground command churn, surplus panes closing down to the oldest, a closed view staying closed, gap-zero and gap-one healthy and repairable shapes, foreign rows, report-only shapes, the repair fixpoint, and a changed post-wake decision preventing a close. The tracker tests drive `maintain_with` directly with injected build and repair closures, so stamp invalidation, pane-id changes, and frame classification run without a mux. Slot resolution and reload comparison are unit tests in `daemon_content.rs`.
 
-Run them with `cargo xtask test 'daemon_view::'` and `cargo xtask test 'daemon_content::'`. Backend placement belongs to the live-backend tier ([multiplexers.md](./multiplexers.md)).
+Run them with `cargo xtask test 'daemon_view::'` and `cargo xtask test 'daemon_content::'`. The live-backend tests in `backend/zellij/daemon.rs` and `backend/tmux/layout.rs` prove healthy births and the spanning-loop repair against native geometry while the app-server process survives; Zellij also proves a report-only shape leaves every pane unchanged. Backend placement belongs to the live-backend tier ([multiplexers.md](./multiplexers.md)).
 
 ## See also
 
