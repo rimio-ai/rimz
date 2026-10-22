@@ -515,6 +515,7 @@ mod tests {
             thread_id: None,
             is_sidechain: false,
             has_speed: false,
+            fast: false,
             model: Some("fixture".to_owned()),
             rolled: false,
             timing: None,

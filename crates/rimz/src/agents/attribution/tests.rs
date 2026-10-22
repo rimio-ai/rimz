@@ -392,7 +392,7 @@ fn branch_scope_children_follow_admitted_parents() {
     );
 }
 
-fn mixed_origin_report() -> Attribution {
+fn mixed_origin_report(fast_source: Option<&str>) -> Attribution {
     let dir = tempfile::tempdir().expect("tempdir");
     let transcript = dir.path().join("parent.jsonl");
     let subagent_dir = dir.path().join("parent/subagents");
@@ -423,7 +423,25 @@ fn mixed_origin_report() -> Attribution {
     )
     .expect("write launched transcript");
 
+    for (source, path) in [
+        ("parent", transcript.clone()),
+        ("native", subagent_dir.join("agent-native.jsonl")),
+        ("launched", launched_transcript.clone()),
+    ] {
+        if fast_source != Some(source) {
+            continue;
+        }
+        let mut entry: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        entry["message"]["usage"]["speed"] = json!("fast");
+        std::fs::write(path, serde_json::to_vec(&entry).unwrap()).unwrap();
+    }
+
     let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
+    parent.record = Some(Box::new(crate::agents::LaunchRecord {
+        fast: true,
+        ..Default::default()
+    }));
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.transcript_path = Some(transcript.to_string_lossy().into_owned());
@@ -884,7 +902,7 @@ fn seat_active_secs_sums_retained_identity_and_child_records() {
 
 #[test]
 fn subagents_with_one_label_merge_across_origins() {
-    let report = mixed_origin_report();
+    let report = mixed_origin_report(None);
     let group = &report.groups[0];
     let member = &group.members[0];
 
@@ -905,15 +923,16 @@ fn subagents_with_one_label_merge_across_origins() {
 }
 
 #[test]
-fn schema_eight_serializes_one_cost_and_task_grouped_subagents() {
-    let report = serde_json::to_value(mixed_origin_report()).expect("serialize attribution");
+fn schema_nine_serializes_one_cost_and_task_grouped_subagents() {
+    let report = serde_json::to_value(mixed_origin_report(None)).expect("serialize attribution");
     let member = &report["groups"][0]["members"][0];
     let subagent = &member["subagents"][0];
 
-    assert_eq!(report["schema"], 8);
+    assert_eq!(report["schema"], 9);
+    assert_eq!(member["fast"], false);
     assert_eq!(report["scope"].get("since"), Some(&serde_json::Value::Null));
     assert_eq!(member["cost_usd"], 6.0);
-    assert_eq!(member.as_object().map(serde_json::Map::len), Some(23));
+    assert_eq!(member.as_object().map(serde_json::Map::len), Some(24));
     assert_eq!(
         report["models"],
         json!([
@@ -967,6 +986,19 @@ fn schema_eight_serializes_one_cost_and_task_grouped_subagents() {
         report["totals"].as_object().map(serde_json::Map::len),
         Some(10)
     );
+}
+
+#[test]
+fn member_fast_tracks_any_counted_origin_without_launch_fallback() {
+    let flags = [Some("parent"), Some("native"), Some("launched"), None].map(|source| {
+        let report = mixed_origin_report(source);
+        let member = &report.groups[0].members[0];
+        assert_eq!(member.cost_usd, Some(6.0));
+        assert_eq!(member.tokens.input, 60);
+        assert_eq!(member.tokens.output, 6);
+        member.fast
+    });
+    assert_eq!(flags, [true, true, true, false]);
 }
 
 #[test]
@@ -1157,6 +1189,7 @@ fn model_stats_merges_empty_ids_and_omits_rows_without_effort() {
                     cost_usd,
                     timed_ms: 1_000,
                     timed_output: 100,
+                    fast: false,
                 },
             )
         })

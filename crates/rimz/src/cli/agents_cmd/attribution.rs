@@ -191,6 +191,8 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
         );
     }
 
+    let config = crate::cli::machine_config();
+    let glyph = rimz::theme::theme_glyphs(&config.theme);
     let show_captions = report.groups.len() > 1 || report.groups[0].team.as_ref().is_some();
     for (group_index, group) in report.groups.iter().enumerate() {
         if group_index > 0 {
@@ -213,13 +215,24 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
             }
             writeln!(
                 w,
-                "  {} · {} · {}",
+                "  {} · {} · {}{}",
                 render::paint(
                     render::palette::identity(member.kind.as_str()),
                     &identity_label(member)
                 ),
                 member.provider,
-                render::paint(render::palette::muted(), &model_label(member))
+                render::paint(render::palette::muted(), &model_label(member)),
+                if member.fast {
+                    format!(
+                        " {}",
+                        render::paint(
+                            render::palette::electric(),
+                            &format!("{} fast", glyph(rimz::config::GlyphRole::CardFast))
+                        )
+                    )
+                } else {
+                    String::new()
+                }
             )?;
             let mut details = render::KeyVals::new().indent(6);
             if let Some(effort) = effort_label(member) {
@@ -299,10 +312,11 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             let role = member.role.as_deref().unwrap_or(member.handle.as_str());
             writeln!(
                 w,
-                "- **{}** — {} {}",
+                "- **{}** — {} {}{}",
                 markdown_code(role),
                 markdown_escape(&member.provider),
                 markdown_code(&model_label(member)),
+                if member.fast { " ⚡ fast" } else { "" },
             )?;
             if let Some(effort) = effort_label(member) {
                 writeln!(w, "  - effort: {}", markdown_escape(&effort))?;

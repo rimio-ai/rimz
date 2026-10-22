@@ -401,6 +401,7 @@ fn pricing_applies_fast_multiplier() {
 
     assert_eq!(entries.len(), 1);
     assert!((entries[0].cost_usd - 25.0).abs() < f64::EPSILON);
+    assert!(entries[0].fast);
 }
 
 #[test]

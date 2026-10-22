@@ -46,6 +46,7 @@ Each figure keeps its source boundary.
 | estimated active seconds | per-session active-time sidecars, projected by `store::active_time::display_secs_for_keys` under the configured silence grace and summed across the seat and launched children by `agents::attribution::seat_active_secs` ([model.md](./model.md#activity-clocks)); provider-native children pulse their parent's record |
 | per-kind active seconds | the same retained sidecars, summed over every continuation of each launched child slot in the kind; native children contribute no separate time, including in mixed-origin kinds |
 | model `tokens_per_sec` | transcript `CachedEntry.timing` through the seat's `SlotEffort` fold, rounded ratio of summed timed output to summed milliseconds per model; report rows fold raw counters over retained members, never member rates |
+| member `fast` | transcript `CachedEntry.fast` (wire key `f`) through the seat's `SlotEffort` fold over own, provider-native, and launched-child entries: set when any counted turn ran fast; the launch record never sets it |
 
 Matched system nudges are sender-stamped and excluded from prompt counts. System nudges written before sender stamping existed cannot be told apart from user prompts.
 

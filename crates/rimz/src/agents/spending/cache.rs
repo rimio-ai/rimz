@@ -77,7 +77,8 @@ use super::aggregate::{
 /// v27 prices Codex turns after a priority `thread_settings_applied` at the
 /// model's fast multiplier, so finalized Codex sessions reprice once.
 /// Optional content anchors do not bump v27: legacy cursors retain their resume rule.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 27;
+/// v28 records per-entry fast mode; finalized sessions rebuild once to backfill the flag.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 28;
 
 /// Output tokens and elapsed milliseconds for timed responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +278,9 @@ pub struct CachedEntry {
     /// The source usage carried speed metadata, used to keep the richest Claude duplicate.
     #[serde(default, rename = "v", skip_serializing_if = "is_false")]
     pub has_speed: bool,
+    /// Provider fast mode; compacted rows retain whether any counted turn was fast.
+    #[serde(default, rename = "f", skip_serializing_if = "is_false")]
+    pub fast: bool,
     /// Model id as the transcript named it (`claude-opus-4-8`, `gpt-5-codex`, …),
     /// kept for the per-model token breakdown. `None` for an entry whose
     /// transcript named no model. Carried through dedup so a kept turn keeps its
@@ -305,10 +309,10 @@ impl SpendParse {
 }
 
 impl CachedEntry {
-    /// One priced entry from a token split. Cache-creation tokens are stored
-    /// summed: the 5-minute/1-hour distinction is a pricing input, never a
-    /// stored fact. Provider-specific identity — model, dedup keys, thread id,
-    /// sidechain and speed flags — is filled by the adapter through struct
+    /// One priced entry from a token split, retaining its fast flag. Cache-creation
+    /// tokens are stored summed: the 5-minute/1-hour distinction is a pricing input,
+    /// never a stored fact. Provider-specific identity — model, dedup keys, thread id,
+    /// sidechain and speed-metadata presence — is filled by the adapter through struct
     /// update.
     pub fn new(ts_secs: u64, cost_usd: f64, split: &TokenSplit) -> Self {
         Self {
@@ -318,6 +322,7 @@ impl CachedEntry {
             output: split.output,
             cache_write: split.cache_write.saturating_add(split.cache_write_1h),
             cache_read: split.cache_read,
+            fast: split.fast,
             ..Self::default()
         }
     }
@@ -511,6 +516,7 @@ fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
         thread_id: entry.thread_id.clone(),
         is_sidechain: false,
         has_speed: false,
+        fast: entry.fast,
         model: entry.model.clone(),
         rolled: true,
     }
@@ -527,6 +533,7 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
             rolled.output += entry.output;
             rolled.cache_write += entry.cache_write;
             rolled.cache_read += entry.cache_read;
+            rolled.fast |= entry.fast;
             if let Some(timing) = entry.timing {
                 let total = rolled
                     .timing

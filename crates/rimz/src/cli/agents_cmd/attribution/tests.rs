@@ -11,6 +11,7 @@ fn member(handle: &str, role: Option<&str>, provider: &str, model: &str) -> Attr
         provider: provider.to_owned(),
         model: Some(model.to_owned()),
         effort: Some("high".to_owned()),
+        fast: false,
         presence: Presence::Exited,
         me: false,
         launch_ordinal: Some(0),
@@ -100,7 +101,7 @@ fn report() -> Attribution {
     let team_members = vec![team_member];
     let other_members = vec![stray];
     Attribution {
-        schema: 8,
+        schema: 9,
         generated_at: jiff::Timestamp::UNIX_EPOCH,
         rimz_version: "test".to_owned(),
         scope: AttributionScope::default(),
@@ -156,8 +157,10 @@ fn subagent_block_handles_one_unpriced_run_and_a_priced_share_without_member_cos
 
 #[test]
 fn panel_groups_team_and_stray_members() {
+    let mut report = report();
+    report.groups[1].members[0].fast = true;
     let mut output = anstream::StripStream::new(Vec::new());
-    render_panel(&mut output, &report()).expect("render panel");
+    render_panel(&mut output, &report).expect("render panel");
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
     forge team · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
@@ -172,7 +175,7 @@ fn panel_groups_team_and_stray_members() {
 
     Other agents · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
-      @codex · Codex · gpt-5.5@high
+      @codex · Codex · gpt-5.5@high ϟ fast
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
@@ -269,8 +272,10 @@ fn panel_omits_total_that_repeats_the_only_caption() {
 
 #[test]
 fn markdown_escapes_values_and_renders_grouped_bullets() {
+    let mut report = report();
+    report.groups[1].members[0].fast = true;
     let mut output = Vec::new();
-    render_markdown(&mut output, &report()).expect("render markdown");
+    render_markdown(&mut output, &report).expect("render markdown");
     insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r#"
     <details>
     <summary>Implemented by <a href="https://github.com/rimio-ai/rimz">RimZ</a> agents · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)</summary>
@@ -292,7 +297,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Other agents**
 
-    - **`@codex`** — Codex `gpt-5.5@high`
+    - **`@codex`** — Codex `gpt-5.5@high` ⚡ fast
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90

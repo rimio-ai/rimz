@@ -740,7 +740,7 @@ A stopped agent's history stays readable while its provider transcript exists. P
 | `--all` | Every lane in the room. |
 | `--branch <BRANCH>` | Credit only agents observed on `BRANCH`. Default: the selected checkout's current branch. With `--all`, detached HEAD, or a scope spanning several checkouts, no branch filter applies unless you pass this flag. |
 | `--md` | Emit a collapsed `<details>` block for a pull-request body. |
-| `--json` | Emit the schema 8 document. Conflicts with `--md`. |
+| `--json` | Emit the schema 9 document. Conflicts with `--md`. |
 
 Which agents count:
 
@@ -752,7 +752,7 @@ Which agents count:
 - An unreadable checkout or malformed worktree marker leaves its agents out and prints a warning on stderr naming the path.
 - Several sessions of one contributor (after compaction or `/clear`) fold into one member when they share a team role, launch cell, explicit name, or pane; `sessions` counts them.
 
-The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted.
+The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted. A member whose counted turns include fast mode adds the configured bolt and `fast` after the model, in bold electric color. This includes the member's own sessions, provider-native children, and launched children; the launch setting alone never adds the mark. Per-model rows stay unmarked.
 
 - `effort` is active time and cost. Active time includes the seat and the pane-backed children it launched. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
 - `subagents` opens a block with `{n} runs · {subagent cost}`, followed by one row per kind as `{kind}  {count} × · {duration} active · {cost}`. Unavailable time or cost parts are omitted; one run reads `1 run`. Rows sort by cost, highest first (unpriced last), then count, then kind name. The breakdown is a share of `effort`, never added to it. Kinds come from provider-reported types and launch profiles, and missing or description-like types group as `other`. Per-kind active time sums retained sidecars across the pane-backed children's sessions only; native children contribute no separate time.
@@ -777,15 +777,15 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 [...]
 ```
 
-`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} · {N} tok/s `` (with `unknown` outside the code span and throughput omitted without timing). A `subagents` bullet carries the run count and cost share, with nested kind bullets as `{kind}: {count} × · {duration} active · {cost}`, omitting unavailable parts. Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
+`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, with ` ⚡ fast` appended outside the code span when any counted turn ran fast, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} · {N} tok/s `` (with `unknown` outside the code span and throughput omitted without timing). A `subagents` bullet carries the run count and cost share, with nested kind bullets as `{kind}: {count} × · {duration} active · {cost}`, omitting unavailable parts. Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
 
-The `--json` document has the keys `schema` (`8`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time, cost, or throughput figure is `null`, never a placeholder zero or wall-clock time. Lists arrive in rendered order.
+The `--json` document has the keys `schema` (`9`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time, cost, or throughput figure is `null`, never a placeholder zero or wall-clock time. Lists arrive in rendered order.
 
 | Object | Fields |
 | --- | --- |
 | `scope` | `selector`, `channel`, `branch` (the applied filter or `null`), `worktree`, `since` (RFC 3339 boundary or `null`) |
 | group | `team` (`name` and launch-ordered `roles`, or `null`), `totals`, `members` |
-| member | `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `presence` (`live` or `exited`), `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens`, `cost_usd`, `subagents`, `models` |
+| member | `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `fast` (whether any counted turn ran fast), `presence` (`live` or `exited`), `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens`, `cost_usd`, `subagents`, `models` |
 | `messages` | `from_user`, `from_teammates`, `to_teammates` |
 | `tokens` | `input`, `output`, `cache_write`, `cache_read` |
 | subagent group | `task`, `count`, `cost_usd`, `active_secs` (retained pane-backed child time only) |

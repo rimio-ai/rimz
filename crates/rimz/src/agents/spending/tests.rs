@@ -365,6 +365,7 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
         thread_id: Some(thread_id.to_owned()),
         is_sidechain: false,
         has_speed: false,
+        fast: false,
         model: None,
         rolled: false,
         timing: None,

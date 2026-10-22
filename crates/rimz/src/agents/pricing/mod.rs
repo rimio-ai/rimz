@@ -65,9 +65,8 @@ pub fn cache_rewarm_cost_usd(
 }
 
 /// The token counts one priced request consumed. Providers fill the fields
-/// their wire exposes and leave the rest at zero; `cache_write_1h` and `fast`
-/// carry Claude's cache-tier and priority-turn distinctions, which every other
-/// provider leaves at the default.
+/// their wire exposes and leave the rest at zero. `cache_write_1h` carries
+/// Claude's cache tier; `fast` carries Claude, Codex, and Cursor priority turns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TokenSplit {
     /// Fresh (uncached) input tokens.

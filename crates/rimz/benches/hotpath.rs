@@ -562,6 +562,7 @@ fn spending_fixture_scaled(
                     thread_id: Some(format!("thread-{index}")),
                     is_sidechain: false,
                     has_speed: false,
+                    fast: false,
                     model: Some("claude-opus-4-8".to_owned()),
                     rolled: false,
                     timing: None,

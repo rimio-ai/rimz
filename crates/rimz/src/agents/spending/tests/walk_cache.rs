@@ -142,7 +142,7 @@ fn spending_discovery_override_reaches_worker_and_restores_prior() {
 
 #[test]
 fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
-    assert_eq!(SPENDING_CACHE_VERSION, 27);
+    assert_eq!(SPENDING_CACHE_VERSION, 28);
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
     let file = write_jsonl(
@@ -187,6 +187,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     thread_id: None,
                     is_sidechain: false,
                     has_speed: false,
+                    fast: false,
                     model: None,
                     rolled: false,
                     timing: None,

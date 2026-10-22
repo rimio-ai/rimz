@@ -418,7 +418,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 8);
+    assert_eq!(report["schema"], 9);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -575,7 +575,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
 
-    assert_eq!(report["schema"], 8);
+    assert_eq!(report["schema"], 9);
     assert_eq!(
         report["models"],
         serde_json::json!([

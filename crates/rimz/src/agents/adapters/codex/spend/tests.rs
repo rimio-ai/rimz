@@ -896,6 +896,30 @@ fn priority_thread_settings_price_following_turns_fast_until_the_tier_reverts() 
 }
 
 #[test]
+fn priced_entries_keep_the_observed_fast_tier() {
+    let (_dir, path) = write_session(
+        "fast-entries.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            &count_line(1),
+            &tier_line(2, Some("priority")),
+            &count_line(3),
+            &tier_line(4, Some("default")),
+            &count_line(5),
+        ],
+    );
+    let parsed = parse_codex_spend(&path, None, &fast_book());
+    assert_eq!(
+        parsed
+            .entries
+            .iter()
+            .map(|entry| entry.fast)
+            .collect::<Vec<_>>(),
+        [false, true, false]
+    );
+}
+
+#[test]
 fn a_resumed_spend_cursor_keeps_the_fast_tier() {
     let (_dir, path) = write_session(
         "tier-resume.jsonl",
