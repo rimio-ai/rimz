@@ -7,6 +7,61 @@ use tempfile::TempDir;
 
 use super::support::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn session_liveness_distinguishes_a_live_server_from_its_leftover_socket() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+    use nix::unistd::Pid;
+    use rimz::mux::SessionLiveness;
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::net::UnixStream;
+
+    require_zellij!();
+
+    let room = LiveZellijSession::new("liveness");
+    let config = room.path().join(".config/zellij/config.kdl");
+    let mut contents = std::fs::read_to_string(&config).expect("read Zellij config");
+    contents.push_str("session_serialization false\n");
+    std::fs::write(config, contents).expect("disable session serialization");
+    room.create_plain_background(room.path(), "600");
+    let socket = room
+        .path()
+        .join("zellij/contract_version_1")
+        .join(room.name());
+    let connection = UnixStream::connect(&socket).expect("connect to live Zellij socket");
+    let server = getsockopt(&connection, PeerCredentials).expect("Zellij server credentials");
+    drop(connection);
+    assert_eq!(
+        room.backend()
+            .session_liveness(room.name())
+            .expect("live server"),
+        SessionLiveness::Live,
+    );
+
+    kill(Pid::from_raw(server.pid()), Signal::SIGKILL).expect("kill Zellij server");
+    poll_until(
+        Duration::from_secs(10),
+        || Ok(UnixStream::connect(&socket).err().map(|error| error.kind())),
+        |error| *error == Some(std::io::ErrorKind::ConnectionRefused),
+        "killed Zellij server stops accepting connections",
+    );
+    assert!(
+        socket
+            .symlink_metadata()
+            .expect("leftover socket")
+            .file_type()
+            .is_socket(),
+        "SIGKILL must leave the socket file behind",
+    );
+    assert_eq!(
+        room.backend()
+            .session_liveness(room.name())
+            .expect("dead server"),
+        SessionLiveness::Absent,
+    );
+}
+
 /// Mouse mode is client-local: an explicit true cannot override config.kdl's
 /// false. Use the namespace's mouse-silent config as the positive baseline.
 #[test]

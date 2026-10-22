@@ -437,19 +437,19 @@ impl ZellijBackend {
             .unwrap_or(SessionLiveness::Absent)
     }
 
-    /// Classify `name` from `zellij list-sessions` while preserving command
-    /// failures. A non-live verdict checks the named socket for a denied
-    /// connect before treating Zellij's listing as absence or resurrection.
+    /// An accepting socket or full backlog proves `name` live without a CLI
+    /// probe. Otherwise classify it from `zellij list-sessions`, preserving
+    /// command failures and denied socket connects.
     pub(super) fn session_state_checked(&self, name: &str) -> Result<SessionLiveness> {
         let spec = self.cmd().args(["list-sessions", "--no-formatting"]);
+        if self.check_socket_connect(super::socket::spec_socket_path(&spec, name))? {
+            return Ok(SessionLiveness::Live);
+        }
         let listing = session_listing(&spec, super::super::COMMAND_TIMEOUT)?;
         let state = listing
             .lines()
             .find_map(|line| session_state_from_line(line, name))
             .unwrap_or(SessionLiveness::Absent);
-        if state != SessionLiveness::Live {
-            self.check_socket_connect(super::socket::spec_socket_path(&spec, name))?;
-        }
         Ok(state)
     }
 

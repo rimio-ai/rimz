@@ -10,6 +10,57 @@ use tempfile::TempDir;
 use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
+fn attach_preserves_a_live_zellij_session_omitted_from_the_listing() {
+    let env = Env::new();
+    let shim = FakeZellij::new();
+    let session = "unlisted-room";
+    let sockets = shim._home.path().join("sock");
+    let directory = sockets.join("contract_version_1");
+    fs::create_dir_all(&directory).expect("socket directory");
+    let _listener = std::os::unix::net::UnixListener::bind(directory.join(session))
+        .expect("live session socket");
+
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", session, "--print"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", session)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_EMPTY", "1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("ZELLIJ_SOCKET_DIR", &sockets)
+        .bounded_output()
+        .expect("run rimz attach");
+
+    assert!(
+        output.status.success(),
+        "an accepting socket proves the room is live: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(session),
+        "attach command: {:?}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let lines = read_trace_lines(&shim.log, Duration::from_millis(200));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("--create-background") || line.contains("delete-session")),
+        "RimZ must not birth or delete the live room: {lines:?}",
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("action\tlist-panes"))
+            .count(),
+        1,
+        "the live room's control plane is probed once: {lines:?}",
+    );
+}
+
+#[test]
 fn unresponsive_live_zellij_room_fails_fast_and_is_preserved() {
     assert_unresponsive_live_room_is_preserved(None);
 }
@@ -472,6 +523,9 @@ if [ "$1" = "--version" ]; then
 fi
 
 if [ "$1" = "list-sessions" ]; then
+  if [ -n "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_EMPTY" ]; then
+    exit 0
+  fi
   if [ -n "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP" ]; then
     exec /bin/sleep "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP"
   fi

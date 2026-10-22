@@ -136,7 +136,7 @@ fn unlisted_socket_denial_is_not_an_absent_or_exited_session() {
         let correct = listing.as_ref().is_err_and(&denied) && liveness.as_ref().is_err_and(&denied);
         let log = support::shim_log(&temp);
         let attempts = if reply.contains("There is no active session!") { 6 } else { 1 };
-        assert_eq!(support::command_count(&log, "list-sessions"), 2 * attempts, "{log}");
+        assert_eq!(support::command_count(&log, "list-sessions"), attempts, "{log}");
         (reply, correct, listing, liveness)
     }).collect();
     assert!(
@@ -188,7 +188,52 @@ fn delete_session_does_not_hide_socket_denial() {
 
 #[cfg(unix)]
 #[test]
-fn socket_probe_preserves_non_denial_classifications() {
+fn accepting_socket_overrides_missing_or_exited_listing_without_running_it() {
+    for reply in [
+        "printf 'No active zellij sessions found.\\n' >&2; exit 1",
+        "printf 'room [Created 1m ago] (EXITED - attach to resurrect)\\n'",
+    ] {
+        let (temp, mut backend, socket) = socket_listing_fixture(reply);
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        backend.socket_connect = Some(|_| Ok(()));
+        assert_eq!(
+            backend.session_liveness("room").unwrap(),
+            crate::mux::SessionLiveness::Live,
+            "{reply}",
+        );
+        assert_eq!(
+            support::command_count(&support::shim_log(&temp), "list-sessions"),
+            0,
+            "{reply}",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn full_socket_backlog_is_live_without_running_the_listing() {
+    let (temp, mut backend, socket) =
+        socket_listing_fixture("printf 'No active zellij sessions found.\\n' >&2; exit 1");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    backend.socket_connect = Some(|_| Err(std::io::ErrorKind::WouldBlock.into()));
+    assert_eq!(
+        backend.session_liveness("room").unwrap(),
+        crate::mux::SessionLiveness::Live,
+    );
+    assert_eq!(
+        support::command_count(&support::shim_log(&temp), "list-sessions"),
+        0,
+    );
+    assert_eq!(backend.list_sessions().unwrap(), ["room"]);
+    assert_eq!(
+        support::command_count(&support::shim_log(&temp), "list-sessions"),
+        1,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn nonaccepting_socket_preserves_listing_classification() {
     for reply in [
         "printf 'No active zellij sessions found.\\n' >&2; exit 1",
         "printf 'There is no active session!\\n' >&2; exit 1",
@@ -204,8 +249,8 @@ fn socket_probe_preserves_non_denial_classifications() {
         assert_eq!(backend.session_liveness("room").unwrap(), expected);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         for connect in [
-            (|_: &Path| Ok(())) as fn(&Path) -> std::io::Result<()>,
-            |_| Err(std::io::ErrorKind::ConnectionRefused.into()),
+            (|_: &Path| Err(std::io::ErrorKind::ConnectionRefused.into()))
+                as fn(&Path) -> std::io::Result<()>,
             |_| Err(std::io::ErrorKind::NotFound.into()),
             |_| Err(std::io::ErrorKind::Other.into()),
         ] {
@@ -220,10 +265,33 @@ fn socket_probe_preserves_non_denial_classifications() {
         };
         assert_eq!(
             support::command_count(&support::shim_log(&temp), "list-sessions"),
-            2 + 8 * attempts
+            2 + 6 * attempts
         );
         drop(listener);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn listing_includes_unlisted_accepting_sockets_but_not_refused_ones() {
+    let (temp, mut backend, socket) = socket_listing_fixture("printf 'listed [Created 1m ago]\\n'");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let refused = socket.with_file_name("refused");
+    let _refused_listener = std::os::unix::net::UnixListener::bind(&refused).unwrap();
+    backend.socket_connect = Some(|path| {
+        if path.file_name().unwrap() == "room" {
+            Ok(())
+        } else {
+            Err(std::io::ErrorKind::ConnectionRefused.into())
+        }
+    });
+    let mut sessions = backend.list_sessions().unwrap();
+    sessions.sort();
+    assert_eq!(sessions, ["listed", "room"]);
+    assert_eq!(
+        support::command_count(&support::shim_log(&temp), "list-sessions"),
+        1,
+    );
 }
 
 #[cfg(unix)]
@@ -235,6 +303,7 @@ fn socket_probe_skips_live_sessions_directories_and_regular_files() {
     std::fs::write(socket.parent().unwrap().join("regular"), "").unwrap();
     backend.socket_connect = Some(|_| panic!("live sockets and non-sockets must not be probed"));
     assert_eq!(backend.list_sessions().unwrap(), ["room"]);
+    backend.socket_connect = Some(|_| Ok(()));
     assert_eq!(
         backend.session_liveness("room").unwrap(),
         crate::mux::SessionLiveness::Live
@@ -246,7 +315,7 @@ fn socket_probe_skips_live_sessions_directories_and_regular_files() {
     );
     assert_eq!(
         support::command_count(&support::shim_log(&temp), "list-sessions"),
-        3
+        2
     );
 }
 

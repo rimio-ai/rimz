@@ -1,4 +1,4 @@
-//! Zellij IPC socket path budgeting and denied-connect evidence.
+//! Zellij IPC socket path budgeting and liveness evidence.
 //!
 //! Zellij derives an AF_UNIX socket path from its socket base, protocol
 //! contract directory, and session name. On macOS the path budget is especially
@@ -6,8 +6,9 @@
 //! classifies the matching stderr if a different environment reaches Zellij
 //! first.
 //!
-//! A socket omitted from Zellij's live listing gets one nonblocking connect
-//! probe. Only a permission denial overrides the listing's classification.
+//! One nonblocking connect proves liveness when the socket accepts or reports
+//! a full backlog. A permission denial is an error; other outcomes leave
+//! Zellij's listing to distinguish absence from an exited session.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -38,32 +39,38 @@ fn connect_socket(path: &Path) -> std::io::Result<()> {
 }
 
 impl super::ZellijBackend {
-    pub(super) fn check_socket_connect(&self, socket: PathBuf) -> Result<()> {
+    pub(super) fn check_socket_connect(&self, socket: PathBuf) -> Result<bool> {
         use std::os::unix::fs::FileTypeExt;
 
         if !socket
             .symlink_metadata()
             .is_ok_and(|meta| meta.file_type().is_socket())
         {
-            return Ok(());
+            return Ok(false);
         }
         #[cfg(test)]
         let connect = self.socket_connect.unwrap_or(connect_socket);
         #[cfg(not(test))]
         let connect = connect_socket;
-        if let Err(error) = connect(&socket)
-            && error.kind() == std::io::ErrorKind::PermissionDenied
-        {
-            return Err(MuxErr::SocketConnectDenied {
-                mux: crate::ids::MuxName::Zellij,
-                socket,
-                reason: error.to_string(),
-            });
+        match connect(&socket) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                Err(MuxErr::SocketConnectDenied {
+                    mux: crate::ids::MuxName::Zellij,
+                    socket,
+                    reason: error.to_string(),
+                })
+            }
+            Err(_) => Ok(false),
         }
-        Ok(())
     }
 
-    pub(super) fn check_unlisted_sockets(&self, spec: &CommandSpec, live: &[String]) -> Result<()> {
+    pub(super) fn check_unlisted_sockets(
+        &self,
+        spec: &CommandSpec,
+        live: &mut Vec<String>,
+    ) -> Result<()> {
         let directory = spec_socket_path(spec, "");
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -77,10 +84,15 @@ impl super::ZellijBackend {
             Err(_) => return Ok(()),
         };
         for entry in entries.flatten() {
-            if live.iter().any(|name| entry.file_name() == name.as_str()) {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            if live.contains(&name) {
                 continue;
             }
-            self.check_socket_connect(entry.path())?;
+            if self.check_socket_connect(entry.path())? {
+                live.push(name);
+            }
         }
         Ok(())
     }
