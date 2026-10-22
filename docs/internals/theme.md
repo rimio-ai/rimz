@@ -105,7 +105,7 @@ Beside the flat slots, `Palette` carries two ramps and three derived tones:
 
 `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. `warm_heat_tone` maps its amount into `[HEAT_RAMP_WARM_START, 1.0]`, the tail from `warn` onward, for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
 
-Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule; `cache_expired` follows it for both `alarm` and `muted`, and `electric` for `accent`. None of the derived tones adds a config slot.
+Ramp stops resolve through `derived_rgb_slot`, which differs from a flat slot in one case. An override naming a raw xterm index 0 to 15 has a terminal-defined RGB value the core cannot know, so the ramp keeps the derived tone while the flat slot wears the override. An index of 16 or above converts through `xterm_rgb` and joins the ramp. The expense tone derives from the ramp's `alarm` stop and follows the same rule; `cache_expired` follows it for both `alarm` and `muted`, and `electric` for `accent`. None of the derived tones adds a config slot. A user recolors a derived tone only through its source slot, so a new derived tone is also named in that slot's row of the [guide's slot table](../guide/theme.md#color-slots).
 
 ## Color depth and graceful degradation
 
