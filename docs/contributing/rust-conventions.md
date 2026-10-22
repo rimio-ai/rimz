@@ -207,9 +207,13 @@ Snapshot churn caused by transient IDs is a test-helper bug, not a product failu
 
 A provider stub that stays alive answers informational probes such as `--version` at once; a stub that sleeps through one spends the launch's startup deadline before the provider is spawned, and the failure appears only under full-suite load.
 
+A unit test does not wait out a production command deadline (`LIST_SESSIONS_TIMEOUT`, `COMMAND_TIMEOUT` in `crates/rimz/src/mux/command.rs`): when the path behind a deadline matters, the test reaches it through a shorter bound it passes in, or through a cheaper failure such as a missing binary.
+
 When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
 
 A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build. The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
+
+A test of a bounded retry or poll includes a case that succeeds only after several retries and a case asserting that giving up waits at least the bound. Besides the parent-tree negative control, run these cases once against the loop cut down to a single retry: one of them must fail, or the tests do not pin the loop over the simpler design.
 
 A test of a timing floor or rate limit queues the inputs it means to merge before the worker can wake (sent from inside the cycle, or held behind a barrier) instead of racing a sleep against the floor; it asserts a delay's lower bound against the floor and its upper bound against the floor plus generous slack.
 
