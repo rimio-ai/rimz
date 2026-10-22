@@ -22,6 +22,7 @@ mod engine;
 mod publish;
 mod refresh;
 pub mod service;
+pub mod session_effort;
 pub mod session_roles;
 mod time;
 pub mod user_input;

@@ -1146,6 +1146,16 @@ impl RuntimePaths {
         Self::session_roles_for_cursor(&self.shared_spending_cursor_path(), year)
     }
 
+    pub(crate) fn shared_session_effort(&self, date: jiff::civil::Date) -> PathBuf {
+        Self::session_effort_for_cursor(&self.shared_spending_cursor_path(), date)
+    }
+
+    pub(crate) fn session_effort_for_cursor(cursor: &Path, date: jiff::civil::Date) -> PathBuf {
+        cursor
+            .with_file_name("session-effort")
+            .join(format!("{date}.jsonl"))
+    }
+
     pub(crate) fn session_roles_for_cursor(cursor: &Path, year: i16) -> PathBuf {
         cursor
             .with_file_name("session-roles")

@@ -174,6 +174,20 @@ fn conversation_input<'a>(
     }
 }
 
+fn effort_records(store: &Store) -> Vec<serde_json::Value> {
+    let directory = store
+        .runtime_paths()
+        .shared_spending_cursor_path()
+        .with_file_name("session-effort");
+    std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|entry| session_effort::read_segment(&entry.path()))
+        .map(|record| serde_json::to_value(record).unwrap())
+        .collect()
+}
+
 fn append_launched_agent(
     store: &Store,
     kind: &str,
@@ -633,6 +647,12 @@ fn user_message_header_records_prompt_without_envelope() {
     assert_eq!(entries[0].from, None);
     assert_eq!(entries[0].text, "from a human");
     assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+    let effort = effort_records(&store);
+    assert_eq!(effort.len(), 1);
+    assert_eq!(effort[0]["event"], "from_user");
+    assert_eq!(effort[0]["kind"], "claude");
+    assert_eq!(effort[0]["session"], "sess-1");
+    assert_eq!(effort[0]["at"], entries[0].at.to_string());
 }
 
 #[test]
@@ -729,6 +749,13 @@ fn launched_child_brief_is_attributed_to_parent() {
         entries[1].parent_agent_id.as_deref(),
         Some("parent-launch-session")
     );
+    let effort = effort_records(&store);
+    assert_eq!(effort.len(), 2);
+    assert_eq!(effort[0]["event"], "from_agent");
+    assert_eq!(effort[0]["sender_kind"], "codex");
+    assert_eq!(effort[0]["sender_session"], "provider-parent-session");
+    assert_eq!(effort[0]["session"], "child-session");
+    assert_eq!(effort[1]["event"], "from_user");
 
     let original_run_id = run.run_id.clone();
     run.run_id = rimz::RunId::new();
@@ -1329,6 +1356,101 @@ fn replay_finishes_a_partially_recorded_prompt_batch() {
     assert_eq!(entries[1].text, "second");
     assert_eq!(entries[1].entry, TranscriptKind::Prompt);
     assert_eq!(entries[1].ingress.as_ref(), Some(&frame.event_id));
+    let effort = effort_records(&store);
+    assert_eq!(
+        effort.len(),
+        1,
+        "replay credits only the newly appended section"
+    );
+    assert_eq!(effort[0]["event"], "from_user");
+    assert_eq!(effort[0]["at"], entries[1].at.to_string());
+}
+
+#[test]
+fn effort_counts_only_appended_human_prompts_and_agent_messages() {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender, PromptSection};
+    use rimz::transcript::{SectionOrigin, TranscriptKind};
+
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    append_launched_agent(
+        &store,
+        "codex",
+        "native-sender",
+        Some("sender-launch"),
+        "sender",
+        Default::default(),
+    );
+    let receiver = rimz::testkit::agent_state("claude", "sess-1", recent_at());
+    let message = MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &receiver,
+        "queued".into(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Agent {
+        agent_id: Some("sender-launch".into()),
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        name: Some("sender".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    });
+    let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        recent_at(),
+        agent.spec().kind_id(),
+        "sess-1".into(),
+        TranscriptKind::Ask,
+        String::new(),
+    );
+    ask.id = Some(ask_id);
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    let sections = [
+        (SectionOrigin::Human, None),
+        (SectionOrigin::Agent("@sender".into()), Some(&message)),
+        (SectionOrigin::Human, None),
+        (SectionOrigin::Harness, None),
+        (SectionOrigin::Notice("@rimz".into()), None),
+        (SectionOrigin::Subagent("@child".into()), None),
+        (SectionOrigin::Agent("@header-only".into()), None),
+    ]
+    .into_iter()
+    .map(|(origin, record)| PromptSection {
+        origin,
+        record,
+        text: "text".into(),
+    })
+    .collect::<Vec<_>>();
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.receipt.waiting_cleared = true;
+    super::record_conversation(
+        &workspace,
+        &store,
+        agent,
+        &started,
+        ConversationInput {
+            assistant_message: None,
+            questions: &[],
+            sections: &sections,
+            run_id: None,
+        },
+    )
+    .unwrap();
+    let effort = effort_records(&store);
+    assert_eq!(
+        effort.len(),
+        3,
+        "answers, harness prompts, waits and reports do not count"
+    );
+    assert_eq!(effort[0]["event"], "from_agent");
+    assert_eq!(effort[0]["sender_kind"], "codex");
+    assert_eq!(effort[0]["sender_session"], "native-sender");
+    assert_eq!(effort[1]["event"], "from_user");
+    assert_eq!(effort[2]["event"], "from_agent");
+    assert!(effort[2].get("sender_session").is_none());
+    assert!(effort[2].get("sender_kind").is_none());
 }
 
 #[test]

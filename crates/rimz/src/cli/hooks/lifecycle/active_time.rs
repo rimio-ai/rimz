@@ -2,6 +2,8 @@
 
 use tracing::warn;
 
+use rimz::agents::spending::session_effort::{self, SessionEffortEvent, SessionEffortRecord};
+
 use super::{AgentDefinition, HookOutput, LifecycleSignal, RecordedLifecycle, Store};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +87,7 @@ fn apply(
             at,
             grace_secs,
         )
-        .map(|_| ()),
+        .map(|(_, released)| released),
         ActiveTimeOp::Stop => rimz::store::active_time::record_stop(
             store.runtime_paths(),
             agent.spec().kind,
@@ -94,12 +96,35 @@ fn apply(
             grace_secs,
         ),
     };
-    if let Err(err) = result {
+    let released = match result {
+        Ok(0) => return,
+        Ok(released) => released,
+        Err(err) => {
+            warn!(
+                agent = agent.spec().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to update estimated active time",
+            );
+            return;
+        }
+    };
+    if let Err(error) = session_effort::record(
+        store.runtime_paths(),
+        &SessionEffortRecord {
+            kind: agent.spec().kind_id(),
+            session: agent_id.into(),
+            at,
+            event: SessionEffortEvent::Active {
+                active_ms: released,
+            },
+        },
+    ) {
         warn!(
             agent = agent.spec().kind,
             event = %event_name,
-            error = %err,
-            "lifecycle: failed to update estimated active time",
+            %error,
+            "lifecycle: failed to append session effort"
         );
     }
 }
@@ -172,6 +197,99 @@ fn active_time_at(
 mod tests {
     use super::*;
     use rimz::agents::AskKind;
+
+    #[test]
+    fn released_effort_is_appended_once_at_the_operation_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            rimz::StatePaths::under(id.clone(), dir.path()).unwrap(),
+            rimz::RuntimePaths::under(id, dir.path()).unwrap(),
+        )
+        .unwrap();
+        let agent = rimz::agents::definition_by_kind("claude").unwrap();
+        for (op, second) in [
+            (ActiveTimeOp::Progress, 0),
+            (ActiveTimeOp::Progress, 10),
+            (ActiveTimeOp::Stop, 20),
+            (ActiveTimeOp::Stop, 20),
+        ] {
+            apply(
+                &store,
+                agent,
+                op,
+                "host",
+                jiff::Timestamp::from_second(second).unwrap(),
+                "test",
+            );
+        }
+        let records = effort_records(&store);
+        assert_eq!(records.len(), 1, "only nonzero releases append effort");
+        assert_eq!(records[0]["session"], "host");
+        assert_eq!(records[0]["event"], "active");
+        assert_eq!(records[0]["active_ms"], 20_000);
+        assert_eq!(records[0]["at"], "1970-01-01T00:00:20Z");
+    }
+
+    #[test]
+    fn side_conversation_effort_is_released_to_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+        let store = Store::open(
+            rimz::StatePaths::under(id.clone(), dir.path()).unwrap(),
+            rimz::RuntimePaths::under(id, dir.path()).unwrap(),
+        )
+        .unwrap();
+        let agent = rimz::agents::definition_by_kind("claude").unwrap();
+        for (signal, second) in [
+            (LifecycleSignal::TurnStarted { turn_id: None }, 0),
+            (
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+                20,
+            ),
+        ] {
+            let frame = rimz::store::ingress::HookIngress {
+                schema_version: "1".into(),
+                event_id: rimz::ids::EventId::new(),
+                ts: jiff::Timestamp::from_second(second).unwrap(),
+                source: agent.spec().kind_id(),
+                event: None,
+                payload: String::new(),
+                cwd: dir.path().to_owned(),
+                hook_pid: std::process::id(),
+                env: Default::default(),
+            };
+            rimz::harness::hook_drain::with_frame_env(
+                &frame,
+                rimz::harness::hook_drain::FrameAttempt::First,
+                || {
+                    record_side_conversation(&store, agent, &signal, "host", false, "test");
+                },
+            );
+        }
+        let records = effort_records(&store);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["session"], "host");
+        assert_eq!(records[0]["active_ms"], 20_000);
+    }
+
+    fn effort_records(store: &Store) -> Vec<serde_json::Value> {
+        let directory = store
+            .runtime_paths()
+            .shared_spending_cursor_path()
+            .with_file_name("session-effort");
+        std::fs::read_dir(directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|entry| session_effort::read_segment(&entry.path()))
+            .map(|record| serde_json::to_value(record).unwrap())
+            .collect()
+    }
 
     #[test]
     fn side_conversations_credit_their_host_without_closing_its_live_turn() {

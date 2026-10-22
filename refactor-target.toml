@@ -246,7 +246,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::allow_team_notes_args shares the archive run grant with the process compiler (+1).
 # TierUnbuildable, TierPass, TierStamp::moved and TierStamp::passes share move evidence with launch and CLI consumers (+4).
 # AgentSeat preserves solo/team provenance across the lifecycle hook and spending ledger (+1).
-surface-budget = 1115
+# The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
+surface-budget = 1120
 
 [[verdict]]
 kind = "item"
@@ -471,7 +472,8 @@ path = "crates/rimz/src/agents/spending"
 # SpendUpdate exposes the parser's three-way cache update policy (+1).
 # Local-day helpers, session-role module/record/writer, and published tallies (+8).
 # ModelTally carries the producing provider identity across the publication/stats seam.
-surface-budget = 97
+# The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
+surface-budget = 102
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -717,7 +719,8 @@ allowed-dependencies = [
 # StatePaths::home keeps the team-link home guard independent of the workspace layout (+1).
 # lease::{Lease, LeaseAttempt, LeaseState, claim, probe, remove_if_free} share gated single-flight mechanics (+6).
 # The lease module exposes these mechanics to harness and store (+1).
-surface-budget = 275
+# Daily effort appends and the spending reader share classed segment paths (+2).
+surface-budget = 277
 
 [[verdict]]
 kind = "item"
@@ -818,6 +821,36 @@ reason = "Hook provenance shares the account-global durable provider root rather
 kind = "item"
 key = "disk::paths::RuntimePaths::session_roles_for_cursor"
 reason = "Walker reads provenance beside its explicit cursor, including isolated roots, without constructing paths outside disk."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_effort::SessionEffortRecord"
+reason = "The hook records native session identity and event time in the home-wide effort ledger."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_effort::SessionEffortEvent"
+reason = "Typed active releases and received messages cross the hook-to-ledger boundary."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_effort::record"
+reason = "Single read-free durable append boundary for home-wide effort, outside the source effect's lock."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_effort::read_segment"
+reason = "The ledger decoder serves spending readers and binary/integration regression checks without duplicating its tolerant wire parser."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::shared_session_effort"
+reason = "Hook effort shares the account-global durable provider root rather than room lifetime."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::session_effort_for_cursor"
+reason = "The spending reader addresses daily effort segments beside its explicit cursor without constructing paths outside disk."
 
 [[module]]
 path = "crates/rimz/src/forge"
