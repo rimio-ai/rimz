@@ -787,12 +787,14 @@ fn catalog_exhausted_budget_opens_nothing() {
 #[test]
 fn catalog_budget_exhausted_by_an_attempt_prevents_the_next_open() {
     let mut opened = 0;
+    // The budget leaves room for the first open to start under load; sleeping
+    // through the budget it was handed spends the deadline exactly.
     let result = catalog_from_attempts(
         attempts_for(Some(Path::new("broker")), None),
-        Instant::now() + Duration::from_millis(5),
-        |_, _| {
+        Instant::now() + Duration::from_secs(1),
+        |_, budget| {
             opened += 1;
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(budget);
             Err::<CannedTransport, _>(AppServerErr::Closed)
         },
     );
