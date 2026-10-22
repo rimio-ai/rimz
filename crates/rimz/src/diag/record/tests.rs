@@ -1194,9 +1194,10 @@ fn summary_describes_renderer_exit_without_cleanly_label() {
         "renderer exited: self_close_empty_tab"
     );
     assert_eq!(
-        DiagEvent::RendererExit {
-            cause: RendererExitCause::DegradedGaveUp,
-        }
+        serde_json::from_str::<DiagEvent>(
+            r#"{"kind":"renderer_exit","cause":"degraded_gave_up"}"#,
+        )
+        .unwrap()
         .summary(),
         "renderer exited: degraded_gave_up"
     );

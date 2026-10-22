@@ -498,7 +498,7 @@ impl Host {
             Ok(Ok(AttachmentExit::Closed)) if live.leaving.load(Ordering::SeqCst) => {
                 Some(Control::Reload)
             }
-            Ok(Ok(AttachmentExit::Closed | AttachmentExit::GaveUp)) => None,
+            Ok(Ok(AttachmentExit::Closed)) => None,
             Ok(Err(err)) => {
                 debug!(instance = %hello.instance_id, error = %err, "sidebar pane output closed");
                 None

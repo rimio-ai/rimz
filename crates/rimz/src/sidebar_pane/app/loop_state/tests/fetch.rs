@@ -1318,6 +1318,70 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
 }
 
 #[test]
+fn sustained_failures_keep_the_frame_and_alert_until_completed_production() {
+    let clock = LoopClock::play(Timestamp::from_second(1_700_000_000).unwrap());
+    let mut rig = Rig::with_clock(None, BodyLens::default(), None, clock.clone());
+    let output = FrameOutput::default();
+    rig.terminal = Terminal::with_options(
+        PaneBackend::headless(output.clone()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
+        },
+    )
+    .unwrap();
+    let snapshot = agent_snapshot(&rig.ws);
+    let committed_names: Vec<_> = snapshot.rows().map(|row| row.name.clone()).collect();
+    rig.fold(snapshot.clone(), SnapshotSource::Produced);
+    for _ in 0..super::super::super::health::ALERT_AFTER_FAILURES {
+        rig.deliver(FetchUpdate::Failed {
+            error: "store not found".to_owned(),
+        });
+    }
+    assert!(rig.state.alert_active());
+    clock.advance(Duration::from_secs(31));
+    rig.deliver(FetchUpdate::Failed {
+        error: "store not found".to_owned(),
+    });
+    rig.state.fold_fused_now();
+    assert!(
+        !rig.state.should_exit,
+        "degradation must not detach the pane"
+    );
+    assert_eq!(
+        rig.view()
+            .current
+            .rows()
+            .map(|row| row.name.clone())
+            .collect::<Vec<_>>(),
+        committed_names
+    );
+    rig.paint(true);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    screen.process(&output.0.lock().unwrap());
+    let screen = screen.screen().contents();
+    assert!(screen.contains("Sidebar degraded"), "{screen}");
+    assert!(screen.contains(&committed_names[0]), "{screen}");
+
+    rig.fold(snapshot.clone(), SnapshotSource::Cached);
+    assert!(
+        rig.state.alert_active(),
+        "cached content cannot recover health"
+    );
+    rig.fold(snapshot, SnapshotSource::Produced);
+    assert!(!rig.state.should_exit);
+    assert!(!rig.state.alert_active());
+    assert!(
+        rig.view()
+            .health
+            .alert
+            .as_ref()
+            .unwrap()
+            .recovered_at
+            .is_some()
+    );
+}
+
+#[test]
 fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     let mut rig = Rig::new();
     let snapshot = agent_snapshot(&rig.ws);

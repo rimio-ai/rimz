@@ -20,8 +20,8 @@ use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, CARRY_COLLAPSED_SPEND_FOR}
 /// [`Health`](super::health::Health) but deliberately orthogonal to it:
 /// `Health` tracks a *failed fetch*, this tracks a fetch that *succeeded but
 /// regressed transiently* and was held. `Gate` never feeds
-/// `failure_streak`/`degraded_too_long`, so a sub-second binding glitch
-/// neither flashes the degraded banner nor counts toward self-close.
+/// `failure_streak`, so a sub-second binding glitch does not flash the
+/// degraded banner.
 /// `reject_streak` and `rejecting_since` bound how long a regression may be held
 /// before the escape hatch releases it (see [`escape_hatch_open`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -139,9 +139,7 @@ fn foreground_command_changed(prev: Option<&str>, incoming: Option<&str>) -> boo
 }
 
 /// Whether a hold episode has run long enough to accept the regression and
-/// stop holding. Mirrors
-/// [`degraded_too_long`](super::health::degraded_too_long)'s "never freeze
-/// forever" rule for the gate.
+/// stop holding.
 fn escape_hatch_open(gate: &GateState, now: Timestamp) -> bool {
     gate_remaining(gate, now).is_some_and(|remaining| remaining.is_zero())
 }

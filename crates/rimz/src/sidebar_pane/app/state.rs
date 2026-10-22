@@ -44,13 +44,10 @@ pub(super) struct RenderState {
     pub(super) health: Health,
 }
 
-/// What [`apply_fetch_outcome`] reports back to the loop: whether to exit,
-/// whether that exit is the tab-empty self-close path, and whether this fetch
-/// was held as a transient regression (the loop fires one self-heal refetch so
-/// the cache reaches the next good frame).
+/// Whether a fold asks to close an empty tab, and whether it was held as a
+/// transient regression (requiring one self-heal refetch).
 pub(super) struct ApplyOutcome {
     pub(super) should_exit: bool,
-    pub(super) tab_emptied: bool,
     pub(super) rejected: bool,
 }
 

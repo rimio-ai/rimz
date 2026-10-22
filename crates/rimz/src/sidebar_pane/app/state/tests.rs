@@ -1294,7 +1294,6 @@ fn published_fast_success_keeps_refresh_alert_active() {
     });
 
     assert!(!h.should_exit);
-    assert!(!h.tab_emptied);
     assert!(!rejected);
     let health = h.inspect_view(|_, view| view.health.clone());
     assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);

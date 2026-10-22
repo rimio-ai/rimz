@@ -130,6 +130,7 @@ pub enum TickLoop {
 #[serde(rename_all = "snake_case")]
 pub enum RendererExitCause {
     SelfCloseEmptyTab,
+    /// Retained for historical records; degraded attachments no longer emit this cause.
     DegradedGaveUp,
 }
 
