@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn picker_revive_uses_latest_launch_in_a_reused_pane() {
+    assert_picker_uses_latest_launch(true);
+}
+
+#[test]
+fn picker_adoption_uses_latest_launch_in_a_reused_pane() {
+    assert_picker_uses_latest_launch(false);
+}
+
+fn assert_picker_uses_latest_launch(recorded: bool) {
+    for latest_ended in [false, true] {
+        for (older, latest, launched_at) in
+            [("launch_a", "launch_b", 2), ("launch_z", "launch_a", 1)]
+        {
+            let mut events = Vec::new();
+            if recorded {
+                events.push(launch_event(
+                    "codex",
+                    launch_payload("picked-id", "old-handle"),
+                ));
+                events.push(raw_lifecycle_at(
+                    "codex",
+                    1,
+                    json!({"agent_id": "picked-id", "signal": {"signal": "ended"}}),
+                ));
+            }
+            for (launch_id, name, at) in [
+                (older, "first-picker", 1),
+                (latest, "second-picker", launched_at),
+            ] {
+                let mut launch = launch_event(
+                    "codex",
+                    AgentLaunchPayload {
+                        launch_id: Some(launch_id.into()),
+                        pane_id: Some(PaneId::parse("tmux:%7").unwrap()),
+                        prompt: None,
+                        ..launch_payload(launch_id, name)
+                    },
+                );
+                launch.timestamp = Timestamp::from_second(epoch().as_second() + at).unwrap();
+                events.push(launch);
+                if launch_id == older || latest_ended {
+                    events.push(raw_lifecycle_at(
+                        "codex",
+                        3,
+                        json!({"agent_id": launch_id, "signal": {"signal": "ended"}}),
+                    ));
+                }
+            }
+            events.push(raw_lifecycle_at(
+                "codex",
+                4,
+                json!({"agent_id": older, "signal": {"signal": "ended"}}),
+            ));
+            events.push(raw_lifecycle_at(
+                "codex",
+                5,
+                json!({
+                    "agent_id": "picked-id", "pane_id": "tmux:%7",
+                    "signal": {"signal": "turn_started"}
+                }),
+            ));
+            let agents = reduce_agent_states(&events);
+            let picked = agents
+                .iter()
+                .find(|agent| agent.agent_id == "picked-id")
+                .unwrap();
+            assert_eq!(picked.launch_id.as_deref(), Some(latest));
+            assert_eq!(
+                picked.name.as_deref(),
+                Some(if recorded {
+                    "old-handle"
+                } else {
+                    "second-picker"
+                })
+            );
+            assert!(agents.iter().any(|agent| agent.agent_id == older));
+            assert!(!agents.iter().any(|agent| agent.agent_id == latest));
+        }
+    }
+}
+
+#[test]
 fn picked_session_adopts_new_identity_or_revives_closed_identity() {
     for (kind, signal) in [("claude", "registered"), ("codex", "turn_started")] {
         for (recorded, old_pane) in [(false, None), (true, None), (true, Some("tmux:%3"))] {
