@@ -1997,6 +1997,14 @@ fn inline_multiline_nested_comments_stay_untouched() {
 }
 
 #[test]
+fn inline_multiline_dotted_entry_comments_stay_with_lines() {
+    assert_inline_account_update(
+        "[accounts]\ncodex = {\n  team-3 = {}, # beside team-3\n  # over dotted\n  team-2.label = \"x\", # beside dotted\n  team-2.history = \"shared\" # before comma\n  , # beside second\n  team-1 = {},\n}\n",
+        "[accounts]\n\n[accounts.codex]\nteam-3 = {} # beside team-3\n# over dotted\nteam-2.label = \"x\" # beside dotted\nteam-2.history = \"shared\" # before comma\n# beside second\n\n[accounts.codex.team-1]\nhistory = \"standalone\"\nlabel = \"work\"\n",
+    );
+}
+
+#[test]
 fn inline_provider_table_update_converts_only_the_named_path() {
     assert_inline_account_update(
         "[accounts]\ncodex = { team-2 = {}, team-1 = { history = \"shared\" } } # provider\n\n[notifications]\n# tail\n",

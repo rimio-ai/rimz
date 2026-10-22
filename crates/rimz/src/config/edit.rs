@@ -1,9 +1,15 @@
 //! Comment-preserving editing for the per-machine config set.
+//!
+//! The reader accepts TOML 1.1, so an inline table may span lines and hold
+//! comments in its entries' key prefixes, value suffixes, and `trailing()`.
+//! A write whose path crosses an inline table converts it to a standard
+//! table and carries that decor across.
 
 use std::path::{Path, PathBuf};
 
 use toml_edit::{
-    Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, RawString, Table, TableLike, Value,
+    Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, KeyMut, RawString, Table,
+    TableLike, Value,
 };
 
 use crate::disk::atomic::write_bytes_atomically;
@@ -739,21 +745,24 @@ fn convert_inline_tables(doc: &mut DocumentMut, path: &[String]) -> Result<()> {
 }
 
 /// `inline` as a standard table that keeps every comment: `above`, the
-/// lines over its key, over the header, and each entry's comments over or
-/// beside that entry's line.
-fn inline_into_block(mut inline: InlineTable, above: &str) -> Table {
+/// lines over its key, over the header, and each line's comments over or
+/// beside that line, where a dotted entry such as `a.b = 1` is a line of
+/// its own.
+fn inline_into_block(inline: InlineTable, above: &str) -> Table {
     let mut decor = Decor::default();
     // An unset prefix lets the renderer omit the blank line before the file's first table.
     if !above.trim().is_empty() {
         decor.set_prefix(format!("\n{above}"));
     }
     let mut header_suffix = decor_text(inline.decor().suffix()).to_owned();
-    let mut entries: Vec<(String, String)> = Vec::new();
-    for (key, value) in inline.iter_mut() {
+    let mut lines: Vec<(String, String)> = Vec::new();
+    // The parser keeps a line's leading text on its last key, so a dotted line keeps it inside.
+    for (path, value) in inline.get_values() {
         let mut over = String::new();
-        for (same_line, comment) in decor_comments(key.leaf_decor().prefix()) {
-            match entries.last_mut() {
-                // A comment after the previous entry's comma annotates that entry.
+        let leading = path.last().and_then(|key| key.leaf_decor().prefix());
+        for (same_line, comment) in decor_comments(leading) {
+            match lines.last_mut() {
+                // A comment after the previous line's comma annotates that line.
                 Some((_, beside)) if same_line => push_comment(beside, true, comment),
                 _ => {
                     over.push_str(comment);
@@ -765,25 +774,47 @@ fn inline_into_block(mut inline: InlineTable, above: &str) -> Table {
         for (same_line, comment) in decor_comments(value.decor().suffix()) {
             push_comment(&mut beside, same_line, comment);
         }
-        entries.push((over, beside));
+        lines.push((over, beside));
     }
     let trailing = decor_comments(Some(inline.trailing()));
-    if let Some((_, beside)) = entries.last_mut() {
+    if let Some((_, beside)) = lines.last_mut() {
         trailing.for_each(|(same_line, comment)| push_comment(beside, same_line, comment));
     } else {
         trailing.for_each(|(_, comment)| push_comment(&mut header_suffix, false, comment));
     }
     decor.set_suffix(header_suffix);
-    // `into_table` resets each entry's decor and keeps each entry a value.
+    // `into_table` keeps each entry a value and resets decor on top-level entries only.
     let mut block = inline.into_table();
-    for ((mut key, item), (over, beside)) in block.iter_mut().zip(entries) {
+    let entries = block
+        .iter_mut()
+        .filter_map(|(key, item)| Some((key, item.as_value_mut()?)));
+    for ((mut key, value), (over, beside)) in lines_mut(entries).into_iter().zip(lines) {
+        key.leaf_decor_mut().clear();
         key.leaf_decor_mut().set_prefix(over);
-        if let Some(value) = item.as_value_mut() {
-            value.decor_mut().set_suffix(beside);
-        }
+        value.decor_mut().clear();
+        value.decor_mut().set_suffix(beside);
     }
     *block.decor_mut() = decor;
     block
+}
+
+/// The last key and the value of each line `entries` render, in the
+/// renderer's order: a dotted entry renders a line per value inside it.
+fn lines_mut<'t>(
+    entries: impl Iterator<Item = (KeyMut<'t>, &'t mut Value)>,
+) -> Vec<(KeyMut<'t>, &'t mut Value)> {
+    let mut lines = Vec::new();
+    for (key, value) in entries {
+        // A guard would hold a borrow of `value` into the arm that moves it.
+        match (
+            value.as_inline_table().is_some_and(InlineTable::is_dotted),
+            value,
+        ) {
+            (true, Value::InlineTable(dotted)) => lines.extend(lines_mut(dotted.iter_mut())),
+            (_, value) => lines.push((key, value)),
+        }
+    }
+    lines
 }
 
 fn decor_text(raw: Option<&RawString>) -> &str {
