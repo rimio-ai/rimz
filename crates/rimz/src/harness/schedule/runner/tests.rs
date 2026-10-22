@@ -1736,6 +1736,164 @@ fn run_check_captures_output_status_and_timeout() {
 }
 
 #[test]
+fn hosted_check_publishes_its_process_group_and_tees_both_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("check.log");
+    let mut published = None;
+    let output = run_command(
+        dir.path(),
+        "printf out; printf err >&2; exit 7",
+        WatchDeadline::Hosted {
+            interrupted: &|| false,
+            spawned: &mut |pid| {
+                assert_eq!(
+                    nix::unistd::getpgid(Some(Pid::from_raw(pid as i32)))?.as_raw(),
+                    pid as i32
+                );
+                published = Some(pid);
+                Ok(())
+            },
+        },
+        CheckEcho::Tee {
+            file: File::create(&path).unwrap(),
+        },
+        &BTreeMap::new(),
+        |_, _| panic!("hosted checks have no check-in"),
+        &mut None,
+    );
+    assert!(
+        output.is_ok(),
+        "hosted checks must run and publish their PID"
+    );
+    let output = output.unwrap();
+    assert!(published.is_some());
+    assert_eq!(output.code, Some(7));
+    assert!(!output.passed);
+    assert!(!output.timed_out);
+    assert!(!output.interrupted);
+    let log = std::fs::read_to_string(path).unwrap();
+    assert!(log.contains("out") && log.contains("err"), "{log}");
+}
+
+#[test]
+fn hosted_check_interrupt_kills_the_group_without_a_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let polls = std::cell::Cell::new(0);
+    let mut published = None;
+    let output = run_command(
+        dir.path(),
+        "sleep 60 & echo $! > descendant.pid; wait",
+        WatchDeadline::Hosted {
+            interrupted: &|| {
+                polls.set(polls.get() + 1);
+                polls.get() >= 3
+                    && std::fs::read_to_string(dir.path().join("descendant.pid"))
+                        .ok()
+                        .is_some_and(|pid| pid.trim().parse::<u32>().is_ok())
+            },
+            spawned: &mut |pid| {
+                published = Some(pid);
+                Ok(())
+            },
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("hosted checks have no check-in"),
+        &mut None,
+    );
+    assert!(output.is_ok(), "hosted interruption must return an outcome");
+    let output = output.unwrap();
+    assert!(output.interrupted);
+    assert!(!output.timed_out);
+    assert!(!output.passed);
+    assert!(!crate::proc::process_is_live(published.unwrap(), None));
+    let descendant = std::fs::read_to_string(dir.path().join("descendant.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!crate::proc::process_is_live(descendant, None));
+}
+
+#[test]
+fn hosted_check_interrupts_pipe_holders_after_the_shell_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let polls = std::cell::Cell::new(0);
+    let output = run_command(
+        dir.path(),
+        "sleep 60 & echo $! > descendant.pid",
+        WatchDeadline::Hosted {
+            interrupted: &|| {
+                polls.set(polls.get() + 1);
+                polls.get() >= 3
+                    && std::fs::read_to_string(dir.path().join("descendant.pid"))
+                        .ok()
+                        .is_some_and(|pid| pid.trim().parse::<u32>().is_ok())
+            },
+            spawned: &mut |_| Ok(()),
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("hosted checks have no check-in"),
+        &mut None,
+    );
+    assert!(
+        output.is_ok(),
+        "hosted checks must keep polling while draining"
+    );
+    let output = output.unwrap();
+    assert!(output.interrupted);
+    assert!(!output.passed);
+    let descendant = std::fs::read_to_string(dir.path().join("descendant.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!crate::proc::process_is_live(descendant, None));
+}
+
+#[test]
+fn hosted_check_publication_error_kills_the_group_and_returns_the_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut published = None;
+    let output = run_command(
+        dir.path(),
+        "sleep 60 & echo $! > descendant.pid; wait",
+        WatchDeadline::Hosted {
+            interrupted: &|| false,
+            spawned: &mut |pid| {
+                published = Some(pid);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !std::fs::read_to_string(dir.path().join("descendant.pid"))
+                    .ok()
+                    .is_some_and(|pid| pid.trim().parse::<u32>().is_ok())
+                {
+                    assert!(Instant::now() < deadline, "child did not start");
+                    std::thread::sleep(CHECK_POLL_INTERVAL);
+                }
+                Err(std::io::Error::other("publication refused"))
+            },
+        },
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("hosted checks have no check-in"),
+        &mut None,
+    );
+    assert!(
+        published.is_some(),
+        "hosted checks must call the publication hook"
+    );
+    assert!(output.is_err_and(|error| format!("{error:#}").contains("publication refused")));
+    assert!(!crate::proc::process_is_live(published.unwrap(), None));
+    let descendant = std::fs::read_to_string(dir.path().join("descendant.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!crate::proc::process_is_live(descendant, None));
+}
+
+#[test]
 fn polled_watch_probe_runs_to_exit_without_checkin() {
     let dir = tempfile::tempdir().unwrap();
     let output = run_command(

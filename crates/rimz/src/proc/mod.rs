@@ -259,6 +259,45 @@ pub fn list_processes() -> Vec<ProcInfo> {
     Vec::new()
 }
 
+/// Whether a live member of `pgid` carries the exact environment marker.
+/// A surviving member reserves the group ID after its leader has been reaped.
+pub(crate) fn process_group_has_env(pgid: u32, key: &str, value: &str) -> bool {
+    use nix::unistd::{Pid, getpgid};
+
+    let Ok(pgid) = i32::try_from(pgid) else {
+        return false;
+    };
+    if pgid <= 0 {
+        return false;
+    }
+    let group = Pid::from_raw(pgid);
+    #[cfg(target_os = "linux")]
+    let mut pids = {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return false;
+        };
+        entries.flatten().filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+        })
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut pids = list_processes().into_iter().map(|process| process.pid);
+    pids.any(|pid| {
+        let Ok(raw) = i32::try_from(pid) else {
+            return false;
+        };
+        let member = Pid::from_raw(raw);
+        getpgid(Some(member)) == Ok(group)
+            && env_var(pid, key).as_deref() == Some(value)
+            && process_is_live(pid, None)
+            // Membership may change while reading the environment and liveness.
+            && getpgid(Some(member)) == Ok(group)
+    })
+}
+
 /// The base command name of `pid` from `/proc/<pid>/comm`. A pane's root process
 /// is the shell that owns it, so this names the shell anchor a process row shows
 /// on its primary line while a command runs underneath. Non-Linux, or an

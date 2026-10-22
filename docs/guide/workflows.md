@@ -2,16 +2,15 @@
 
 A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and `--verify` can re-prompt that turn until a command passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as loop tasks, that plan lives in prompts and in an agent's context, and a dead or compacted agent loses it.
 
-A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a shell command, a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
 
 ## Write a workflow
 
-The smallest useful workflow runs the test suite, sends an agent to fix it when it fails, and gives up after three tries. A loop task's `--verify` could do this one alone. It is shown first because every larger graph uses the same parts. Create three files:
+The smallest useful workflow runs the test suite, sends an agent to fix it when it fails, and gives up after three tries. A loop task's `--verify` could do this one alone. It is shown first because every larger graph uses the same parts. Create two files:
 
 ```text
 ~/.rimz/workflows/fix-tests/
   workflow.toml
-  checks/tests.sh
   prompts/fix.md
 ```
 
@@ -23,7 +22,7 @@ scope = "worktree"
 start = "tests"
 
 [checks.tests]
-run = "sh checks/tests.sh"
+shell = "cargo test"
 on = { pass = "@done", fail = "fix" }
 
 [steps.fix]
@@ -34,16 +33,7 @@ max-visits = 3
 timeout = "1h"
 ```
 
-`checks/tests.sh` is the check. It runs in the checkout, prints exactly one JSON object on stdout, and exits 0. The suite's own output goes to a file, so it cannot mix into the answer. Replace `cargo test` with your suite's command:
-
-```sh
-log="$RIMZ_WORKFLOW_DIR/notes/tests.log"
-if cargo test >"$log" 2>&1; then
-  echo '{"outcome": "pass"}'
-else
-  printf '{"outcome": "fail", "reason": "tests failed", "log": "%s"}\n' "$log"
-fi
-```
+`shell` runs the command in the checkout through `sh -c`. Exit 0 answers `pass`; any other exit or signal answers `fail`. RimZ saves both output streams in a per-evaluation log and gives its absolute path to the next node as `input.log`. Replace `cargo test` with your suite's command. A shell check requires both `on.pass` and `on.fail`; its only other routes are `on.timeout` and `on.invalid`. Use `run` instead when a script needs to answer more than pass or fail.
 
 `prompts/fix.md` is what the agent receives each time the step launches. RimZ sets `RIMZ_WORKFLOW_DIR` in the agent's environment, and the agent reads it there. RimZ does not expand variables in the prompt text.
 
@@ -60,7 +50,7 @@ Read the graph from `start`. The run begins at the `tests` check. An answer of `
 
 Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Durations take `s`, `m`, `h`, and `d`.
 
-Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
+Select exactly one of `run`, `shell`, `agent`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
 
 ## Check it and start a run
 
@@ -69,12 +59,12 @@ Validate the definition first. The command prints every node with the edges it r
 ```console
 $ rimz workflow validate ~/.rimz/workflows/fix-tests
 WORKFLOW   NODE   KIND   RUNNER              BACKGROUND  EDGES
-fix-tests  tests  check  sh checks/tests.sh  —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
+fix-tests  tests  check  cargo test          —           deadline → @user (default), fail → fix (explicit), invalid → @user (default), pass → @done (explicit), timeout → @user (default)
 fix-tests  fix    step   claude              yes         asked → @user (default), cap → @user (default), deadline → @user (default), then → tests (explicit)
 warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
 ```
 
-Every `(default)` edge to `@user` parks the run for you. The `tests` row says a broken script (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
+Every `(default)` edge to `@user` parks the run for you. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
 
 The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one.
 
@@ -117,11 +107,11 @@ An attempt can end as `died` when the agent fails to start or crashes. `show` re
 - `record.json`, the run's current position, which is the truth the engine reads.
 - `journal.jsonl`, the append-only history `show` prints.
 - `workflow.toml`, a sealed copy of the definition. Editing the original changes later runs, never this one. Scripts and prompt files are not copied: each check and launch reads them fresh from `~/.rimz/workflows/<name>/`.
-- `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, and `signs/`. Your nodes keep their scratch here, and the engine's own files sit outside it.
+- `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, `signs/`, shell logs (`<seq>.check.log`), and judge answers (`<seq>.check.json`). Your nodes keep their scratch here; the run record and journal sit outside it.
 
 RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the `input`, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
 
-A script check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads its stdout once it exits. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process.
+A script or shell check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads a script's stdout as its answer; a shell command's output is only a log at `work/<seq>.check.log`. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process. A check's optional `timeout` spans evaluations and waits; shell checks do not inherit the loop's default timeout. Timeout, deadline, and cancellation stop the shell's whole process group.
 
 A step launches its agent in a new pane, with the same two variables set. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to it like any agent. When its turn ends, RimZ stops the agent and the subagents it launched, records the commit before and after, and follows `then`. A peer or a team the agent launched keeps running until you stop it.
 
@@ -214,7 +204,7 @@ A run parks when it would otherwise have to guess:
 
 - a step reached `max-visits`,
 - a check's `timeout` passed,
-- a script exited nonzero or printed a bad answer,
+- a `run` script exited nonzero or printed a bad answer, or a shell command could not start or its log could not open,
 - a judge failed twice,
 - a step's agent stopped on a question or a permission prompt, and no `on.asked` edge answers it,
 - the run's `deadline` passed,
@@ -245,7 +235,7 @@ A run that is still active takes `--extend` too, without `--at`. An extension is
 rimz workflow cancel "$RUN"
 ```
 
-`cancel` ends the run as `canceled` and stops whatever it is running: the check's script, the judge, or the step's agent and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
+`cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, or the step's agent and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
 A run started by a loop task can come back. The task starts a new run in any worktree that has none while its condition holds. To stop for good, end the condition or disable the task with `rimz loop disable <name>`.
 
@@ -287,6 +277,8 @@ The engine stays simple because nodes follow four rules.
 
 A script prints, and a judge writes, exactly one JSON object. A script must also exit 0: a nonzero exit routes to `invalid`, so a script that uses `set -e` must catch the failures it expects.
 
+A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `code` is the exit code (null after a signal), `log` is the absolute log path, and `key` is inherited when present. Only `fail` includes `reason`, either `exited N` or `killed by signal`. Output tails stay out of the history. A check timeout routes `timeout`, and the run's deadline routes `deadline`, never `fail`.
+
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
@@ -307,7 +299,7 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | `input` | The answer that routed here, or the engine's object after a cap, timeout, or deadline. |
 | `key` | The current item key, or null. |
 | `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits` counts the total. |
-| `output_path` | Judges only: the file to write the answer to. Null for scripts and steps. |
+| `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
 | `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |

@@ -20,6 +20,7 @@ pub struct NodeRow {
     pub kind: String,
     pub runner: String,
     pub run: Option<String>,
+    pub shell: Option<String>,
     pub agent: Option<String>,
     pub do_background: bool,
     pub edges: Vec<Edge>,
@@ -129,6 +130,27 @@ pub(super) fn validate_spec(
         {
             report.error(&format!("{path}.run"), err);
         }
+        if let Some(CheckKind::Shell(shell)) = check.kind() {
+            if shell.trim().is_empty() {
+                report.error(&format!("{path}.shell"), "set a nonempty shell command");
+            }
+            for outcome in ["pass", "fail"] {
+                if !check.on.contains_key(outcome) {
+                    report.error(
+                        &format!("{path}.on.{outcome}"),
+                        "a shell check requires both on.pass and on.fail",
+                    );
+                }
+            }
+            for outcome in check.on.keys() {
+                if !matches!(outcome.as_str(), "pass" | "fail" | "timeout" | "invalid") {
+                    report.error(
+                        &format!("{path}.on.{outcome}"),
+                        "a shell check routes only pass, fail, timeout, and invalid",
+                    );
+                }
+            }
+        }
         if matches!(check.kind(), Some(CheckKind::Agent(_))) && check.prompt_file.is_none() {
             report.error(
                 &format!("{path}.prompt-file"),
@@ -224,11 +246,13 @@ pub(super) fn validate_spec(
             kind: "check".into(),
             runner: match check.kind() {
                 Some(CheckKind::Run(_)) => "run",
+                Some(CheckKind::Shell(_)) => "shell",
                 Some(CheckKind::Condition) => "condition",
                 _ => "agent",
             }
             .into(),
             run: check.run.clone(),
+            shell: check.shell.clone(),
             agent: check.agent.clone(),
             do_background: do_background(check.agent.as_deref(), definitions).unwrap_or(false),
             edges: resolved_edges(spec, edges, |outcome| check.on.contains_key(outcome)),
@@ -291,6 +315,7 @@ pub(super) fn validate_spec(
             kind: "step".into(),
             runner: "agent".into(),
             run: None,
+            shell: None,
             agent: Some(step.agent.clone()),
             do_background: do_background.unwrap_or(false),
             edges: resolved_edges(spec, edges, |outcome| match outcome {

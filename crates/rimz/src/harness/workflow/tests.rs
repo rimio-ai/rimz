@@ -161,7 +161,71 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 
 #[test]
 fn validation_rejects_each_invalid_spec() {
+    let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@user'}\n";
     let cases = [
+        (
+            "shell requires pass",
+            shell.replace("pass='@done',", ""),
+            "checks.pick.on.pass",
+        ),
+        (
+            "shell requires fail",
+            shell.replace(",fail='@user'", ""),
+            "checks.pick.on.fail",
+        ),
+        (
+            "shell dead outcome",
+            shell.replace("fail='@user'", "fail='@user',other='@done'"),
+            "checks.pick.on.other",
+        ),
+        (
+            "empty shell",
+            shell.replace("shell='true'", "shell='  '"),
+            "checks.pick.shell",
+        ),
+        (
+            "shell and run",
+            shell.replace("shell='true'", "shell='true'\nrun='true'"),
+            "checks.pick",
+        ),
+        (
+            "shell and agent",
+            shell.replace("shell='true'", "shell='true'\nagent='claude'"),
+            "checks.pick",
+        ),
+        (
+            "shell and cases",
+            format!("{shell}[[checks.pick.cases]]\nwhen=['ci=passed']\noutcome='pass'\n"),
+            "checks.pick",
+        ),
+        (
+            "shell prompt",
+            shell.replace(
+                "shell='true'",
+                "shell='true'\nprompt-file='prompts/build.md'",
+            ),
+            "checks.pick.prompt-file",
+        ),
+        (
+            "shell window",
+            shell.replace("shell='true'", "shell='true'\nwindow='5h.left>=42'"),
+            "checks.pick.window",
+        ),
+        (
+            "shell else",
+            shell.replace("shell='true'", "shell='true'\nelse='pass'"),
+            "checks.pick.else",
+        ),
+        (
+            "shell provider",
+            shell.replace("shell='true'", "shell='true'\nprovider='claude'"),
+            "checks.pick.provider",
+        ),
+        (
+            "shell account",
+            shell.replace("shell='true'", "shell='true'\naccount='default'"),
+            "checks.pick.account",
+        ),
         (
             "unknown field",
             VALID.replace("timeout = \"1d\"", "surprise = true"),
@@ -350,6 +414,21 @@ fn validation_rejects_each_invalid_spec() {
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
+fn validation_accepts_shell_checks_without_confining_the_command() {
+    let (home, dir) = fixture();
+    fs::write(
+        dir.join("workflow.toml"),
+        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='cat /absolute/path | sort > ../result'\non={pass='@done',fail='@user',invalid='@done',timeout='@user'}\n",
+    ).unwrap();
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+    assert!(
+        report.errors.is_empty(),
+        "shell checks must accept shell syntax and external paths: {report:?}"
+    );
+    assert_eq!(report.rows[0].runner, "shell");
 }
 
 #[test]

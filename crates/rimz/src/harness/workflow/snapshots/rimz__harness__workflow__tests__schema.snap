@@ -92,6 +92,12 @@ expression: value
             "null"
           ]
         },
+        "shell": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "timeout": {
           "type": [
             "string",
