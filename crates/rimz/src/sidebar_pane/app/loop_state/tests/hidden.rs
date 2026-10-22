@@ -104,6 +104,83 @@ fn hidden_rig() -> Rig {
     rig
 }
 
+#[test]
+fn first_focus_reveal_reads_siblings_after_dwell() {
+    let mut rig = hidden_rig();
+    let clock = LoopClock::play(rig.state.current.now);
+    rig.state.clock = clock.clone();
+    let mut snapshot = rig.state.current.clone();
+    let rows = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows);
+    rows[0].unread = true;
+    let mut sibling = rows[0].clone();
+    sibling.id = "sibling".into();
+    sibling.pane = Some(pane("terminal_10", "tab_0", false));
+    rows.push(sibling);
+    snapshot
+        .own_view
+        .as_mut()
+        .unwrap()
+        .working_pane_ids
+        .push(pane("terminal_10", "tab_0", false).pane_id);
+    snapshot.own_view.as_mut().unwrap().sibling_count = 2;
+    rig.lazy_fold(snapshot, SnapshotSource::Produced);
+    defer_name(&mut rig, "reveal");
+    rig.event(SidebarEvent::FocusChanged {
+        focused: vec![own_view().working_pane_ids[0].clone()],
+        unfocused: vec![],
+    });
+    assert!(
+        rig.state
+            .inspect_view(|_, view| view.tab_read_dwell_until.is_some())
+    );
+    assert!(rig.state.inspect_view(|ui, _| ui.freeze.is_some()));
+    assert!(
+        rig.state
+            .current
+            .rows()
+            .find(|row| row.id == "sibling")
+            .unwrap()
+            .unread
+    );
+
+    clock.advance(TAB_READ_DWELL + Duration::from_millis(1));
+    let mut viewed = rig.state.current.clone();
+    viewed.viewed_panes = viewed.own_view.as_ref().unwrap().working_pane_ids.clone();
+    rig.lazy_fold(viewed, SnapshotSource::Produced);
+    assert!(rig.state.current.rows().all(|row| !row.unread));
+    assert!(
+        ReadMarks::load(&rig.runtime)
+            .cleared_at_ms("sibling")
+            .is_some()
+    );
+}
+
+#[test]
+fn first_input_reveal_arms_dwell_only_once() {
+    let mut rig = hidden_rig();
+    let clock = LoopClock::play(rig.state.current.now);
+    rig.state.clock = clock.clone();
+    rig.state
+        .on_input(
+            Wakeup::Key(KeyAction::Dismiss),
+            &mut rig.terminal,
+            &mut rig.fetch,
+        )
+        .unwrap();
+    let until = rig.state.inspect_view(|_, view| view.tab_read_dwell_until);
+    assert_eq!(until, Some(clock.now() + TAB_READ_DWELL));
+    assert!(rig.state.inspect_view(|ui, _| ui.freeze.is_some()));
+
+    clock.advance(Duration::from_millis(100));
+    let mut viewed = rig.state.current.clone();
+    viewed.viewed_panes = viewed.own_view.as_ref().unwrap().working_pane_ids.clone();
+    rig.lazy_fold(viewed, SnapshotSource::Produced);
+    assert_eq!(
+        rig.state.inspect_view(|_, view| view.tab_read_dwell_until),
+        until
+    );
+}
+
 fn defer_name(rig: &mut Rig, name: &str) {
     let mut snapshot = rig.state.current.clone();
     snapshot.display_name = name.into();

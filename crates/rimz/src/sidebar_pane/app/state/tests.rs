@@ -968,6 +968,34 @@ fn tab_switch_in_arms_sibling_read_dwell() {
 }
 
 #[test]
+fn first_tab_reveal_arms_sibling_read_dwell() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+    let (mut background, first, _) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"));
+    set_all_rows_unread(&mut background);
+    set_viewed(&mut background, false);
+    a.apply(background);
+    assert!(row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+
+    let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
+    set_all_rows_unread(&mut viewed);
+    a.apply(viewed);
+
+    assert!(
+        a.inspect_view(|_, view| view.tab_read_dwell_until.is_some()),
+        "first reveal arms the sibling dwell"
+    );
+    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(row_unread_by_id(&a.current, "sess-2"));
+    let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
+    assert!(marks.cleared_at_ms("sess-1").is_some());
+    assert!(marks.cleared_at_ms("sess-2").is_none());
+}
+
+#[test]
 fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
@@ -1151,6 +1179,7 @@ fn attach_to_viewed_tab_keeps_unread_siblings() {
     a.apply(viewed);
 
     assert_eq!(a.inspect_view(|ui, _| ui.viewing_own_tab), Some(true));
+    assert_eq!(a.inspect_view(|_, view| view.tab_read_dwell_until), None);
     assert!(!row_unread_by_id(&a.current, "sess-1"));
     assert!(row_unread_by_id(&a.current, "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);

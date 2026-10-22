@@ -88,18 +88,18 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// It advances on a `Some` derivation and holds across a `None` (sidebar
     /// focus, disagreement between co-viewers, or a focused pane without a row).
     pub(in crate::sidebar_pane) baseline_pane: Option<PaneId>,
-    /// Whether this renderer's own tab was the on-screen tab on the last fold
-    /// that carried an own-view. `None` until the first own-view fold, so
-    /// attaching to an already-viewed tab seeds the latch without sweeping and
-    /// a real off-screen→on-screen switch arms the tab-wide read dwell; leaving
-    /// disarms it.
+    /// Whether arrival or the last own-view fold found this view's tab on screen.
+    /// Projection arms arrivals, preserving that latch through older hidden
+    /// catch-up content. While a view stays routed, an off-screen→on-screen switch
+    /// also arms the tab-read dwell; leaving disarms it. `None` seeds an
+    /// already-viewed tab without sweeping.
     pub(in crate::sidebar_pane) viewing_own_tab: Option<bool>,
     /// The transient motion or click browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(in crate::sidebar_pane) browse: Option<Browse>,
     /// The row/group order and visible row set actually painted last; this
-    /// is the source for a layout freeze. Empty before the first paint, which
-    /// makes the first hold a no-op for ordering.
+    /// is the source for a layout freeze. Empty before the first paint, so a
+    /// hold without a painted order adopts its first frame's order.
     pub(in crate::sidebar_pane) last_order: FrozenOrder,
     /// The armed layout freeze, or `None` while rows
     /// rank and cap live.

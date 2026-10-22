@@ -46,6 +46,7 @@ impl LoopState {
     pub(in crate::sidebar_pane::app) fn share_views(&mut self, views: Arc<Mutex<Views>>) {
         self.baseline_seed = self.ui.baseline_pane.take();
         self.views = views;
+        self.view_advanced = false;
     }
 
     pub(in crate::sidebar_pane::app) fn with_shared_view<T>(
@@ -96,6 +97,7 @@ impl LoopState {
             drop(views);
             self.view_token = None;
             self.view_scope = Some(ViewScope::Scratch);
+            self.view_advanced |= advancing;
             let result = advance(self);
             self.view_scope = None;
             return result;
@@ -137,11 +139,13 @@ impl LoopState {
         if let Some(own_view) = own_view {
             context.current.own_view = Some(own_view);
         }
+        let mut arrival_until = None;
         if advancing && (entry.unpainted || entry.last_pane.as_ref() != Some(&pane)) {
-            if entry.last_pane.is_some() {
+            if entry.last_pane.is_some() || self.view_advanced {
                 entry.state.arrival_pending = true;
                 context.tab_read_dwell_until = Some(now + crate::sidebar::timing::TAB_READ_DWELL);
                 entry.state.viewing_own_tab = Some(true);
+                arrival_until = context.tab_read_dwell_until;
                 if entry.state.freeze.is_none() {
                     layout_freeze::arm_freeze(
                         &mut entry.state,
@@ -160,6 +164,7 @@ impl LoopState {
             entry.last_pane = Some(pane.clone());
             entry.unpainted = false;
         }
+        self.view_advanced |= advancing;
         std::mem::swap(&mut self.ui.view, &mut entry.state);
         std::mem::swap(&mut self.view, context);
         self.view_scope = Some(ViewScope::Shared(id));
@@ -249,6 +254,11 @@ impl LoopState {
                 }
             }
             entry.revision = revision;
+        }
+        // Catch-up can replay hidden content older than the evidence that routed this arrival.
+        if let Some(until) = arrival_until {
+            self.view.tab_read_dwell_until = Some(until);
+            self.ui.viewing_own_tab = Some(true);
         }
         self.view_token = Some((id, entry.revision, entry.activity));
         let result = advance(self);
