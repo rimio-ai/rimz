@@ -130,6 +130,7 @@ fn is_spawn_failure(result: LoopRunResult) -> bool {
             | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
+            | LoopRunResult::Replaced
     )
 }
 
@@ -741,6 +742,7 @@ pub(super) fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::Errored
             | LoopRunResult::StartFailed
+            | LoopRunResult::Replaced
     ) {
         return None;
     }
@@ -830,6 +832,25 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_replaced_run_is_a_failure_not_its_successful_guard_exit() {
+        use super::*;
+        let mut record = LoopRunRecord::new(
+            "replaced",
+            LoopRunResult::Replaced,
+            LoopRunMode::Scheduled,
+            1,
+        );
+        record.check = Some(
+            serde_json::from_value(serde_json::json!({
+                "code":0,"timed_out":false,"output":""
+            }))
+            .unwrap(),
+        );
+        assert_eq!(detail_exit_segment(&record), None);
+        assert!(is_spawn_failure(record.result));
+    }
+
     #[test]
     fn ordered_judge_forensics_and_skip_summary_name_every_tier() {
         use super::*;

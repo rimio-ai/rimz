@@ -331,6 +331,8 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: Some("work".parse().expect("login name")),
             throttle: Some(crate::config::ThrottleSwitch::Off),
+            overlap: None,
+            overlap_limit: None,
         };
 
         let machine = task_entry_table(&entry, true).expect("serialize machine");

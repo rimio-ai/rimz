@@ -224,6 +224,7 @@ fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         mode: None,
         duration_ms: None,
         throttle_wait_ms: None,
+        absorbed: 0,
         error: None,
         check: None,
         watch: None,

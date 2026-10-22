@@ -627,6 +627,49 @@ fn watch_refuses_a_judge_guard() {
     ));
 }
 
+#[test]
+fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
+    for (fields, reason) in [
+        (
+            "agent='claude'\nstay=true\nevery='1h'",
+            "resident task launches once per checkout",
+        ),
+        (
+            "check='true'\nwhen=['team.stage=Done']",
+            "clock and signal triggers",
+        ),
+        ("check='true'\nat='07:00'", "one-shot"),
+        ("check='true'\nevery='1h'\nonce=true", "one-shot"),
+        (
+            "check='true'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
+            "one-shot",
+        ),
+        (
+            "wait={kind='claude',session='s',handle='@a'}\nsignal='deploy.done'",
+            "no run to overlap",
+        ),
+        (
+            "workflow='review'\nevery='1h'",
+            "workflow admission owns its runs",
+        ),
+        ("check='true'\nevery='1h'\noverlap-limit=2", "queue"),
+    ] {
+        let entry: crate::config::TaskEntry =
+            toml::from_str(&format!("overlap='coalesce'\n{fields}")).unwrap();
+        let shape = TaskShape::compile("busy", &entry);
+        assert!(shape.action().is_err(), "overlap must refuse {fields}");
+        assert!(shape.action().unwrap_err().to_string().contains(reason));
+    }
+    for fields in ["overlap-limit=2", "overlap='queue'\noverlap-limit=0"] {
+        let entry: crate::config::TaskEntry =
+            toml::from_str(&format!("check='true'\nevery='1h'\n{fields}")).unwrap();
+        assert!(
+            TaskShape::compile("busy", &entry).action().is_err(),
+            "invalid overlap-limit must be refused: {fields}"
+        );
+    }
+}
+
 /// A row compiles into independent action and timing halves, so a malformed
 /// schedule leaves the action observable.
 #[test]

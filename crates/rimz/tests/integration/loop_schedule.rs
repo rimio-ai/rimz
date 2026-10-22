@@ -24,6 +24,8 @@ use rimz::store::run::{RunRecord, RunStatus};
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
 #[path = "loop_list.rs"]
 mod list_tests;
+#[path = "loop_overlap.rs"]
+mod overlap_tests;
 
 #[test]
 fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {

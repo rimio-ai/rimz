@@ -641,6 +641,7 @@ fn fire_signal_with_wait(
     signal: &Signal,
     wait: bool,
 ) -> Result<SignalFire, serde_json::Error> {
+    let fired_at = jiff::Timestamp::now();
     wake_workflows(project_root, signal);
     // A row pinned to a session that is durably ended must never be selected,
     // whoever ended it: the sibling-skip branch below returns before the fire
@@ -688,14 +689,14 @@ fn fire_signal_with_wait(
             continue;
         }
         let outcome = if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
-            super::fire::wait_loop_run(runtime, task, Some(project_root), name, signal)
+            super::fire::wait_loop_run(runtime, task, Some(project_root), name, signal, fired_at)
         } else {
             super::fire::spawn_loop_run(
                 runtime,
                 task,
                 Some(project_root),
                 name,
-                Some(signal),
+                Some((signal, fired_at)),
                 None,
                 None,
                 super::fire::LoopRunHost::Detached,

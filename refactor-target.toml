@@ -1078,7 +1078,10 @@ path = "crates/rimz/src/harness"
 # hook_drain::spawn_refresh_detached shares helper spawn discipline with hooks and resumed wrappers (+1).
 # hook_drain::DrainerLease::{prepare_handoff, handover} share exec socket mechanics with the CLI (+1).
 # SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve the single-session CLI (+3).
-surface-budget = 947
+# schedule::backlog's reader/schema and TaskFire::{take_backlog, release_run_lock} cross the CLI boundary (+9).
+# runner::discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
+surface-budget = 958
 
 [[verdict]]
 kind = "item"
@@ -2540,7 +2543,7 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"
-# The recorded-room predicate gates state-lock creation.
+# The recorded-room predicate gates room-dependent locks; cold checks take runtime-only run locks.
 allowed-dependencies = [
     "agents",
     "config",
@@ -2573,7 +2576,10 @@ allowed-dependencies = [
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
 # The CLI hears hold reasons and reports a resident launch through the fire (+2).
 # signal_subject shares delivered headline composition with events list (+1).
-surface-budget = 53
+# TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
+# discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
+surface-budget = 57
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
@@ -2844,6 +2850,71 @@ reason = "Events list and follow serialize the same signal-line projection."
 kind = "item"
 key = "harness::schedule::runner::TaskFire::new"
 reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::TaskFire::with_arrived_at"
+reason = "Signal firing time crosses the CLI boundary separately from the runner's fresh gate clock."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::discard_backlog"
+reason = "A drain whose task is missing or invalid discards its waiting triggers through the private locked writer."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::TaskFire::take_backlog"
+reason = "A fresh drain claims one trigger under the backlog lock before CLI arming and trust gates."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::TaskFire::release_run_lock"
+reason = "CLI process exit must spawn a waiting drain and release under the backlog lock, before Drop is bypassed."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::OverlapPolicy"
+reason = "Typed skip, coalesce, queue and replace policy is shared by task configuration, runner and display."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog"
+reason = "The scheduler and CLI share a read-only durable trigger record; locked mutation stays private to schedule."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::Backlog"
+reason = "Versioned per-room trigger records cross the reader, runner and CLI boundaries."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::TaskBacklog"
+reason = "The CLI renders waiting triggers and reserved stop marks from the same durable task record."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::WaitingTrigger"
+reason = "Trigger timestamps, signal payloads and absorbed counts retain their serialized shape in CLI inspection."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::StopMark"
+reason = "The first backlog schema reserves holder identity and stop cause for the shared stop protocol."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::StopCause"
+reason = "The reserved durable stop mark distinguishes replacement from an explicit stop."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::BacklogErr"
+reason = "Strict readers surface I/O, malformed records and unsupported versions rather than losing waiting work."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::backlog::load"
+reason = "The sidebar-safe scheduler backstop and CLI inspection share strict durable backlog reads."
 
 [[verdict]]
 kind = "item"

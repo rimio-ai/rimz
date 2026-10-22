@@ -429,6 +429,7 @@ impl TaskCatalog {
             super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
         }
         if changed && root.is_absolute() {
+            super::backlog_store::remove(&StatePaths::for_project_root(&root)?, name)?;
             super::launch_ledger_store::remove_declines(
                 &StatePaths::for_project_root(&root)?,
                 name,
@@ -477,6 +478,7 @@ impl TaskCatalog {
         };
         let old_key = task.key(name);
         if changed && root.is_absolute() {
+            super::backlog_store::rename(&StatePaths::for_project_root(&root)?, name, new_name)?;
             super::launch_ledger_store::rename_declines(
                 &StatePaths::for_project_root(&root)?,
                 name,
@@ -511,10 +513,15 @@ impl TaskCatalog {
     }
 
     fn clear_declines(&self, name: &str, root: &Path) -> Result<()> {
+        super::backlog_store::remove(&StatePaths::for_project_root(root)?, name)?;
         super::launch_ledger_store::remove_declines(&StatePaths::for_project_root(root)?, name)?;
         if let Some(task) = self.visible.get(name)
             && task.entry().resolved_root() != root
         {
+            super::backlog_store::remove(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+            )?;
             super::launch_ledger_store::remove_declines(
                 &StatePaths::for_project_root(&task.entry().resolved_root())?,
                 name,

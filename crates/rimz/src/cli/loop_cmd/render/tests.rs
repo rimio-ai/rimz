@@ -153,6 +153,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             ),
         ]),
         in_flight: None,
+        backlog: None,
         condition: "  pr=open   ✓ open\n  ci=passed   ? not checked yet\n".into(),
         subscriptions: vec![SubscriptionView {
             name: "wake".into(),
@@ -1571,6 +1572,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         mode: None,
         duration_ms: None,
         throttle_wait_ms: None,
+        absorbed: 0,
         error: None,
         check: None,
         watch: None,
@@ -2021,7 +2023,36 @@ fn run_status_names_check_skipped_outcomes() {
 
 #[test]
 fn run_result_marks_and_static_labels_cover_every_variant() {
+    for (name, glyph, style) in [
+        ("deferred", "○", ui::palette::muted()),
+        ("replaced", "✗", ui::palette::alarm()),
+    ] {
+        let result = serde_json::from_value::<LoopRunResult>(serde_json::json!(name));
+        assert!(result.is_ok(), "{name} must be a rendered history result");
+        let result = result.unwrap();
+        assert_eq!(loop_result_mark(result).glyph, glyph);
+        assert_eq!(loop_result_mark(result).style, style);
+        assert_eq!(result.label(), name);
+    }
     let cases = [
+        (
+            LoopRunResult::Launched,
+            "✓",
+            ui::palette::good(),
+            "launched",
+        ),
+        (
+            LoopRunResult::SignalSkipped,
+            "○",
+            ui::palette::muted(),
+            "skipped",
+        ),
+        (
+            LoopRunResult::WorkflowSkipped,
+            "○",
+            ui::palette::muted(),
+            "skipped",
+        ),
         (
             LoopRunResult::Completed,
             "✓",
@@ -2126,7 +2157,15 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             let status = run_status(&record(10, result));
             assert_eq!(status.glyph, glyph, "{result:?}");
             assert_eq!(status.style, style, "{result:?}");
-            assert_eq!(status.label, label, "{result:?}");
+            assert_eq!(
+                status.label,
+                if result == LoopRunResult::SignalSkipped {
+                    "heard"
+                } else {
+                    label
+                },
+                "{result:?}"
+            );
         }
     }
 }

@@ -2,6 +2,228 @@ use std::path::Path;
 
 use super::*;
 
+fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
+    TaskFire::new(
+        "pending",
+        LoadedTask::new(
+            "pending",
+            TaskEntry {
+                root: root.to_owned(),
+                check: Some("true".into()),
+                every: Some("1h".into()),
+                overlap: Some(crate::config::OverlapPolicy::Coalesce),
+                ..Default::default()
+            },
+            catalog::TaskSource::Config,
+        ),
+        catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap()
+}
+
+fn seed_backlog(root: &Path) {
+    let paths = StatePaths::for_project_root(root).unwrap();
+    crate::disk::atomic::write_temp_then_rename(
+        &super::super::backlog::path(&paths),
+        &serde_json::json!({"version":1, "tasks":{"pending":{"triggers":[{"arrived_at":Timestamp::now(),"signal":null,"absorbed":0}]}}})
+    ).unwrap();
+}
+
+#[test]
+fn reconciliation_keeps_firing_order_on_acquisition_and_after_admission() {
+    for after_admission in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        record_room(root.path()).unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut fire = backlog_fire(root.path(), &catalog);
+        let (own_time, own_from, own_to, waiting_time, waiting_from, waiting_to) =
+            if after_admission {
+                (2, "b", "c", 1, "a", "b")
+            } else {
+                (1, "a", "b", 2, "b", "c")
+            };
+        fire.now = Timestamp::from_second(own_time).unwrap();
+        fire.signal = Some(
+            serde_json::from_value(serde_json::json!({
+                "name": "trunk.moved", "source": "git",
+                "payload": {"from": own_from, "to": own_to}
+            }))
+            .unwrap(),
+        );
+        if after_admission {
+            fire.prepare_run_lock(false).unwrap();
+        }
+        let mut locked = LockedBacklog::acquire(&paths).unwrap();
+        locked.record.tasks.insert("pending".into(), serde_json::from_value(serde_json::json!({
+            "triggers": [{"arrived_at": Timestamp::from_second(waiting_time).unwrap(),
+                "signal": {"name": "trunk.moved", "payload": {"from": waiting_from, "to": waiting_to}},
+                "absorbed": 0}]
+        })).unwrap());
+        locked.save().unwrap();
+        drop(locked);
+        if after_admission {
+            assert!(fire.reconcile_backlog().unwrap().is_none());
+        } else {
+            assert!(fire.prepare_run_lock(false).unwrap().is_none());
+        }
+        assert_eq!(
+            fire.signal.as_ref().unwrap().payload,
+            *serde_json::json!({"from": "a", "to": "c"})
+                .as_object()
+                .unwrap()
+        );
+        assert_eq!(fire.waiting_trigger().arrived_at.as_second(), 2);
+        assert_eq!(fire.absorbed, 1);
+    }
+}
+
+#[test]
+fn arrival_reprobes_a_released_lock_and_absorbs_the_waiting_slot() {
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    seed_backlog(root.path());
+    let mut fire = backlog_fire(root.path(), &catalog);
+    assert!(fire.prepare_run_lock(false).unwrap().is_none());
+    assert!(
+        fire.run_lock.is_some(),
+        "an arrival that finds the lock free runs"
+    );
+    assert_eq!(
+        serde_json::to_value(fire.terminal_record(LoopRunResult::Completed)).unwrap()["absorbed"],
+        1
+    );
+}
+
+#[test]
+fn release_unlocks_under_the_backlog_lock_and_spawns_only_when_triggers_wait() {
+    for pending in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        record_room(root.path()).unwrap();
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let mut fire = backlog_fire(root.path(), &catalog);
+        fire.mode = LoopRunMode::Manual;
+        fire.prepare_run_lock(false).unwrap();
+        if pending {
+            seed_backlog(root.path());
+        }
+        let mut spawns = 0;
+        fire.release_run_lock_with(|_, _, _| {
+            spawns += 1;
+            assert!(
+                crate::disk::lock::WorkspaceLock::try_acquire(
+                    &paths.lock_path("loop-backlog.lock")
+                )
+                .unwrap()
+                .is_none()
+            );
+            assert!(matches!(
+                probe_run_lock_path(
+                    &run_lock_path("loop-run-pending.lock", &fire_entry(root.path())).unwrap()
+                )
+                .unwrap(),
+                RunLockState::Held(_)
+            ));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(spawns, usize::from(pending));
+        assert!(
+            fire.run_lock.is_none(),
+            "release must let go even when nothing waits"
+        );
+    }
+}
+
+fn fire_entry(root: &Path) -> TaskEntry {
+    TaskEntry {
+        root: root.to_owned(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_cold_check_observes_the_run_lock_before_it_can_execute() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&paths).unwrap();
+    let mut fire = backlog_fire(root.path(), &catalog);
+    fire.entry.overlap = None;
+    let mut checked = false;
+    fire.prepare(&mut |_| {
+        checked = true;
+        let path = runtime.lock_path(run_lock_file_name("pending", None));
+        assert!(
+            matches!(probe_run_lock_path(&path).unwrap(), RunLockState::Held(_)),
+            "a cold check must already own the run lock"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert!(checked);
+}
+
+#[test]
+fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    seed_backlog(root.path());
+    let lock_path = run_lock_path("loop-run-pending.lock", &fire_entry(root.path())).unwrap();
+    let RunLockAttempt::Acquired(held) =
+        acquire_run_lock_file(&lock_path, Some(TaskKind::Routine)).unwrap()
+    else {
+        panic!("fixture takes lock")
+    };
+    let mut fire = backlog_fire(root.path(), &catalog);
+    assert!(!fire.take_backlog().unwrap());
+    assert!(!fire.finished, "held drainer writes no row");
+    drop(held);
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let arrived_at = backlog::load(&paths).unwrap().tasks["pending"].triggers[0].arrived_at;
+    assert!(
+        fire.take_backlog().unwrap(),
+        "free drainer must claim waiting work"
+    );
+    assert_eq!(fire.waiting_trigger().arrived_at, arrived_at);
+    assert!(!fire.finished);
+}
+
+#[test]
+fn a_coalescing_fire_reconciles_after_an_earlier_throttle_admission() {
+    let root = tempfile::tempdir().unwrap();
+    record_room(root.path()).unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let mut fire = backlog_fire(root.path(), &catalog);
+    fire.throttle_host = throttle::tests::FakeHost::new().host();
+    fire.config = Arc::new(toml::from_str("[loop.throttle]\npace='1s'\n").unwrap());
+    fire.prepare_run_lock(false).unwrap();
+    assert!(fire.prepare_throttle().unwrap().is_none());
+    assert!(fire.throttle_turn.is_some());
+    seed_backlog(root.path());
+    fire.context = Some(FireContext {
+        action: TaskAction::Spawn("claude".into()),
+        root: root.path().to_owned(),
+        scope: None,
+    });
+    // Reconciliation must precede prompt/preflight work, even if it later fails.
+    assert!(fire.prepare_effect().is_err());
+    assert_eq!(
+        fire.absorbed, 1,
+        "arrivals during room birth after admission must reach the effect"
+    );
+}
+
 #[test]
 fn guard_usage_sums_every_judge() {
     let mut wire = serde_json::to_value(LoopRunRecord::new(

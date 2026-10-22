@@ -138,7 +138,7 @@ With no matching subscriber the line reads `no task is subscribed to it` and not
 | `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
 | `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
 
-Firing happens inside the `emit` process, with no daemon and no queue. It needs an existing room but no running agent. It spawns one detached run for each enabled subscription that exists in this workspace at that moment; a task added afterwards never sees the signal, and nothing replays it later. A disabled or paused task, or a project task whose project is untrusted, does not fire. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each enabled subscription that exists in this workspace at that moment; a task added afterwards never sees the signal. A busy task can retain its trigger through its [overlap policy](./loop.md#overlapping-triggers), not through signal replay to later subscribers. A disabled or paused task, or a project task whose project is untrusted, does not fire. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
 
 `emit` refuses these inputs with exit code 1, before it writes anything:
 

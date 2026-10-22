@@ -267,6 +267,20 @@ fn keep_warm_team_role_and_profile_fields_do_not_enter_trust_hash() {
 }
 
 #[test]
+fn loop_overlap_fields_do_not_enter_project_trust_hash() {
+    let base = "[tasks.x]\ncheck='true'\nevery='1h'\n";
+    let configured = format!("{base}overlap='queue'\noverlap-limit=3\n");
+    let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
+    let value = serde_json::to_value(&entry.tasks.0["x"]).unwrap();
+    assert_eq!(value["overlap"], "queue");
+    assert_eq!(value["overlap-limit"], 3);
+    assert_eq!(
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(base).unwrap()),
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(&configured).unwrap())
+    );
+}
+
+#[test]
 fn runtime_env_key_does_not_enter_trust_hash() {
     let base = project_with("");
     let extra = project_with("[agents]\nruntime-env = false\n");
