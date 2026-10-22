@@ -31,6 +31,7 @@ fn estimate_records(
             record.project.as_deref() == Some(project)
                 && record.server == server
                 && record.settings_hash == settings
+                && record.ready_ms.is_some()
         })
         .take(5)
         .map(|record| record.peak_rss_kb.saturating_mul(1024))
@@ -114,7 +115,7 @@ mod tests {
             server,
             settings_hash: settings,
             peak_rss_kb,
-            ready_ms: None,
+            ready_ms: Some(1),
             dormant_ms: None,
             reason: super::super::registry::StopReason::Idle,
         };
@@ -210,7 +211,7 @@ mod tests {
                 server: "rust".into(),
                 settings_hash: "a".into(),
                 peak_rss_kb,
-                ready_ms: None,
+                ready_ms: Some(1),
                 dormant_ms: None,
                 reason: crate::lsp::registry::StopReason::Released,
             })
@@ -222,9 +223,9 @@ mod tests {
     #[test]
     fn learned_peak_is_shared_by_project_not_checkout() {
         let records: Vec<Record> = serde_json::from_value(serde_json::json!([
-            {"at_ms": 0, "root": "/checkout-a", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 5, "ready_ms": null, "reason": "released"},
-            {"at_ms": 1, "root": "/checkout-b", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 7, "ready_ms": null, "reason": "released"},
-            {"at_ms": 2, "root": "/checkout-c", "project": "/other", "server": "rust", "settings_hash": "a", "peak_rss_kb": 100, "ready_ms": null, "reason": "released"}
+            {"at_ms": 0, "root": "/checkout-a", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 5, "ready_ms": 1, "reason": "released"},
+            {"at_ms": 1, "root": "/checkout-b", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 7, "ready_ms": 1, "reason": "released"},
+            {"at_ms": 2, "root": "/checkout-c", "project": "/other", "server": "rust", "settings_hash": "a", "peak_rss_kb": 100, "ready_ms": 1, "reason": "released"}
         ])).unwrap();
         assert_eq!(
             estimate_records(&records, Path::new("/project"), "rust", "a", 99),
@@ -247,7 +248,43 @@ mod tests {
     #[test]
     fn learned_peak_skips_legacy_records_without_project() {
         let records: Vec<Record> = serde_json::from_value(serde_json::json!([
-            {"at_ms": 0, "root": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 100, "ready_ms": null, "reason": "released"}
+            {"at_ms": 0, "root": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 100, "ready_ms": 1, "reason": "released"}
+        ])).unwrap();
+        assert_eq!(
+            estimate_records(&records, Path::new("/project"), "rust", "a", 99),
+            99
+        );
+    }
+
+    #[test]
+    fn learned_peak_skips_partial_lifetimes_before_taking_five() {
+        let project = Path::new("/project");
+        let records: Vec<_> = [100, 9, 2, 3, 4, 5, 200, 1, 300, 2, 400, 3]
+            .into_iter()
+            .enumerate()
+            .map(|(index, peak_rss_kb)| Record {
+                at_ms: index as u64,
+                root: project.into(),
+                project: Some(project.into()),
+                server: "rust".into(),
+                settings_hash: "a".into(),
+                peak_rss_kb,
+                ready_ms: (index < 6).then_some(1),
+                dormant_ms: None,
+                reason: crate::lsp::registry::StopReason::MemoryPressure,
+            })
+            .collect();
+        assert_eq!(
+            estimate_records(&records, project, "rust", "a", 99),
+            9 * 1024
+        );
+    }
+
+    #[test]
+    fn learned_peak_with_only_partial_lifetimes_uses_fallback() {
+        let records: Vec<Record> = serde_json::from_value(serde_json::json!([
+            {"at_ms": 0, "root": "/project", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 100, "ready_ms": null, "reason": "released"},
+            {"at_ms": 1, "root": "/project", "project": "/project", "server": "rust", "settings_hash": "a", "peak_rss_kb": 200, "reason": "released"}
         ])).unwrap();
         assert_eq!(
             estimate_records(&records, Path::new("/project"), "rust", "a", 99),
