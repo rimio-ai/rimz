@@ -357,7 +357,7 @@ pub(crate) fn render_dispatch_outcome(
             Some(ParkReason::ProviderStarting) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
             ),
-            Some(ParkReason::Resuming { register_by }) => format!(
+            Some(ParkReason::Resuming { register_by, .. }) => format!(
                 "queued for {label} ({message_id}) — {label} is resuming; delivers when {label} registers; fails if {label} has not registered by {register_by}"
             ),
         }),
@@ -801,7 +801,10 @@ mod tests {
         let outcome = DispatchOutcome::Queued {
             label: "@otter".to_owned(),
             message_id: "msg_0123456789abcdef".parse().unwrap(),
-            reason: Some(ParkReason::Resuming { register_by }),
+            reason: Some(ParkReason::Resuming {
+                register_by,
+                attempt: rimz::store::writer::ResumeAttempt::Started,
+            }),
         };
         for kind in [
             DeliveryKind::Boundary,

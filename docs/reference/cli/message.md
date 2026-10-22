@@ -173,7 +173,7 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 | --- | --- | --- |
 | `RIMZ_MESSAGE_QUEUED_NOTICE_IDLE_MS` | `300000` (5 min) | Queued-notice delay when the receiver is not working, in milliseconds |
 | `RIMZ_MESSAGE_QUEUED_NOTICE_BUSY_MS` | `1200000` (20 min) | Queued-notice delay when the receiver is busy in a turn or compacting, in milliseconds |
-| `RIMZ_MESSAGE_REGISTER_TIMEOUT_MS` | `120000` (2 min) | Registration limit for a parent's follow-up to an ended child, in milliseconds; a registered child waiting on a provider prompt does not expire |
+| `RIMZ_MESSAGE_REGISTER_TIMEOUT_MS` | `120000` (2 min) | Registration limit for a child's resume, in milliseconds from the follow-up that opens its pane; joining follow-ups share that deadline, and a registered child waiting on a provider prompt does not expire |
 
 `rimz transcript` hides `@rimz` deliveries from its human view; `rimz transcript --json` keeps them.
 

@@ -67,6 +67,13 @@ pub enum BoundaryClaim {
     },
 }
 
+/// Whether a queued follow-up starts a resume or joins its registration wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumeAttempt {
+    Started,
+    Joined,
+}
+
 fn same_submitted_batch(first: &MessageRecord, candidate: &MessageRecord) -> bool {
     if first.message_id == candidate.message_id {
         return true;
@@ -623,29 +630,54 @@ impl Store {
         })
     }
 
+    /// Queue a resume follow-up and return its stored record and attempt outcome; a live card returns `None` without writing.
     #[must_use = "durability barrier; check the result"]
     pub fn queue_resuming_message(
         &self,
         message: &MessageRecord,
         session_name: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<(MessageRecord, ResumeAttempt)>> {
+        self.queue_resuming_message_with(message, session_name, Timestamp::now)
+    }
+
+    fn queue_resuming_message_with(
+        &self,
+        message: &MessageRecord,
+        session_name: &str,
+        clock: impl FnOnce() -> Timestamp,
+    ) -> Result<Option<(MessageRecord, ResumeAttempt)>> {
         self.commit_queue(|queue| {
-            if self
-                .snapshot()?
-                .agents
+            let agents = self.snapshot()?.agents;
+            if agents
                 .iter()
                 .any(|agent| agent.ended_at.is_none() && message.same_agent_card(agent))
             {
-                return Ok(false);
+                return Ok(None);
             }
-            queue.upsert(message.clone());
+            let now = clock();
+            let deadline = queue
+                .live()
+                .iter()
+                .filter(|waiting| {
+                    waiting.same_card(message.card_ref()) && waiting.awaiting_registration(&agents)
+                })
+                .filter_map(|waiting| waiting.register_by.filter(|deadline| now < *deadline))
+                .min();
+            let mut stored = message.clone();
+            let attempt = if let Some(deadline) = deadline {
+                stored.register_by = Some(deadline);
+                ResumeAttempt::Joined
+            } else {
+                ResumeAttempt::Started
+            };
+            queue.upsert(stored.clone());
             queue.stage_event(EventEnvelope::message_event(
-                message,
+                &stored,
                 session_name,
                 MessageEventMethod::Queued,
                 None,
             ));
-            Ok(true)
+            Ok(Some((stored, attempt)))
         })
     }
 
@@ -1180,8 +1212,7 @@ impl Store {
                     return MessageUpdate::Finalize {
                         status: MessageStatus::Expired,
                         reason: Some(format!(
-                            "expired: {address} did not register within {} of its resume",
-                            message::format_dwell(register_by.duration_since(message.enqueued_at).as_secs().max(0) as u64)
+                            "expired: {address} did not register by {register_by}"
                         )),
                     };
                 }

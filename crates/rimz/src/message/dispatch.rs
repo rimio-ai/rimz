@@ -21,7 +21,7 @@ use crate::store::message::{
     WhenCondition, env_ms, fresh_boundary_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
-use crate::store::writer::BoundaryClaim;
+use crate::store::writer::{BoundaryClaim, ResumeAttempt};
 use crate::workspace::ResolvedWorkspace;
 
 use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
@@ -130,6 +130,7 @@ pub enum ParkReason {
     ProviderStarting,
     Resuming {
         register_by: Timestamp,
+        attempt: ResumeAttempt,
     },
     Scheduled(Timestamp),
     After(String),
@@ -834,7 +835,7 @@ impl DispatchState<'_> {
         text: &str,
         mode: &PreparedMode,
         handle: &str,
-    ) -> Result<(MessageRecord, Option<MessageId>)> {
+    ) -> Result<(MessageRecord, Option<ParkReason>)> {
         let recipient = match (target.agent.as_ref(), pane) {
             (Some(agent), pane) => Recipient::Agent { agent, pane },
             (None, Some(pane)) => Recipient::Pane {
@@ -863,13 +864,17 @@ impl DispatchState<'_> {
                 message.enqueued_at
                     + env_ms(RESUME_REGISTER_LIMIT_ENV).unwrap_or(RESUME_REGISTER_LIMIT),
             );
-            if !self
+            let Some((message, attempt)) = self
                 .store
                 .queue_resuming_message(&message, &self.workspace.session_name)?
-            {
+            else {
                 return Err(DispatchErr::RecipientBecameLive);
-            }
-            return Ok((message, None));
+            };
+            let reason = message.register_by.map(|register_by| ParkReason::Resuming {
+                register_by,
+                attempt,
+            });
+            return Ok((message, reason));
         }
         if pane.is_some() {
             #[cfg(feature = "testkit")]
@@ -882,7 +887,9 @@ impl DispatchState<'_> {
                 )?;
                 return Ok(match claim {
                     BoundaryClaim::Claimed(message) => (message, None),
-                    BoundaryClaim::Parked { message, blocker } => (message, Some(blocker)),
+                    BoundaryClaim::Parked { message, blocker } => {
+                        (message, Some(ParkReason::Behind(blocker)))
+                    }
                 });
             }
             let claimed = self.store.queue_claimed_message(
@@ -1056,12 +1063,12 @@ fn dispatch_one(
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let (message, blocker) = state.enqueue(target, Some(pane), text, mode, &handle)?;
-    if let Some(blocker) = blocker {
+    let (message, reason) = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    if reason.is_some() {
         return Ok(DispatchOutcome::Queued {
             label: handle,
             message_id: message.message_id,
-            reason: Some(ParkReason::Behind(blocker)),
+            reason,
         });
     }
     let message_id = message.message_id.clone();
@@ -1116,35 +1123,12 @@ fn dispatch_parked(
     handle: String,
     reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
-    let (message, _) = state.enqueue(target, None, text, mode, &handle)?;
-    let reason = message
-        .register_by
-        .map(|register_by| ParkReason::Resuming { register_by })
-        .or(reason);
+    let (message, queued_reason) = state.enqueue(target, None, text, mode, &handle)?;
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id: message.message_id,
-        reason,
+        reason: queued_reason.or(reason),
     })
-}
-
-/// Whether an unexpired follow-up to `child`'s card still waits for the resume
-/// that queued it. `agents` must be read after the subagent zone lock, so an end
-/// that landed while the caller waited for that lock releases the wait.
-pub fn resume_in_flight(
-    store: &Store,
-    child: &AgentState,
-    agents: &[AgentState],
-    exclude_message: Option<&MessageId>,
-) -> crate::store::Result<bool> {
-    let pending = store.list_pending_messages()?;
-    let now = Timestamp::now();
-    Ok(pending.iter().any(|message| {
-        exclude_message != Some(&message.message_id)
-            && message.same_agent_card(child)
-            && message.awaiting_registration(agents)
-            && message.register_by.is_some_and(|deadline| now < deadline)
-    }))
 }
 
 fn preflight_queue_hooks(
