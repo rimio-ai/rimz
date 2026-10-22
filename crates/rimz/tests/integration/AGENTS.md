@@ -75,6 +75,8 @@ No in-process `MuxBackend` fake exists; a failing multiplexer call is a fake exe
 
 A room born through `zellij-trace` runs no sidebar and never writes a heartbeat itself, so a claimed birth waits out its full six-second sidebar-heartbeat bound unless the fixture publishes one; `common::room::ShimRoom::watch` does.
 
+A supervised attach (`RIMZ_REMOTE_SUPERVISED`) checks session liveness at once and then every 2 s, needs a Live check followed by a Gone check, and a test driving it sets `RIMZ_REMOTE_WATCHDOG_MS` short.
+
 | Double | Reach | Can make fail |
 | --- | --- | --- |
 | `zellij-trace` fixture binary, behind `RIMZ_ZELLIJ_BIN` (`common::shim::zellij_trace_shim`) | every suite; logs each argv, plus each `--layout` file's contents under `RIMZ_TEST_ZELLIJ_LOG_LAYOUTS` (RimZ deletes the file afterwards) | writes and Enter (`RIMZ_TEST_ZELLIJ_MODE=fail-write`, `fail-enter`), session birth (`birth-fails`, `socket-overflow-on-birth`), `new-tab` (`RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB`), `close-pane` (`RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE`). A cached pane listing comes from the topology cache `common::room::seed_live_zellij_room` writes; an authoritative one runs `list-panes`, scripted by `RIMZ_TEST_ZELLIJ_LIST_PANES`, and with no override answers a session the shim has born with the materialized room |

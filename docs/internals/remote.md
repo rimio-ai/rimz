@@ -423,6 +423,7 @@ Every clock and probe in the module has an environment override, which keeps the
 | `RIMZ_REMOTE_REACHABLE_RETRY_MS`, `RIMZ_REMOTE_FLAT_WINDOW_MS`, `RIMZ_REMOTE_BACKOFF_CAP_MS` | Retry pacing. |
 | `RIMZ_REMOTE_GRACE_MS`, `RIMZ_REMOTE_MIN_DISPLAY_MS` | Panel grace and minimum display. |
 | `RIMZ_REMOTE_PROBE_MS`, `RIMZ_REMOTE_PROBE_TIMEOUT_MS`, `RIMZ_REMOTE_BLACKOUT_MS` | Probe cadence, timeout, and blackout threshold. `RIMZ_REMOTE_PROBE_MS=0` disables probing. |
+| `RIMZ_REMOTE_WATCHDOG_MS` | Supervised attach session-liveness check interval, read once per attach. The first check is immediate; only a positive integer in milliseconds replaces the 2 s default. Unset, `0`, or invalid values keep the default. |
 | `RIMZ_REMOTE_DIAL_MS` | Reachability cadence. `0` disables endpoint discovery and all TCP dials. |
 | `RIMZ_REMOTE_TUN` | Forces a TUN interface name for route classification. |
 | `RIMZ_REMOTE_INTERNET_PROBE` | Replaces the internet checkpoint with an HTTP or HTTPS URL that must return `204`. Empty or `0` disables the row. |

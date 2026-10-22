@@ -270,9 +270,9 @@ fn handle_attach() {
     let Some(state) = watchdog_state_path() else {
         return;
     };
-    std::fs::write(state.with_extension("attached"), b"").expect("mark attached client");
     std::fs::write(state.with_extension("pid"), std::process::id().to_string())
         .expect("record attached client pid");
+    std::fs::write(state.with_extension("attached"), b"").expect("mark attached client");
     if env::var_os("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT").is_some() {
         let observed_live = state.with_extension("observed-live");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

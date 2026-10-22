@@ -35,10 +35,27 @@ enum RemoteRoomPoll {
     RoomEnded,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RemoteRoomWatchdog {
     room_seen: bool,
     next_observation: Duration,
+    interval: Duration,
+}
+
+fn remote_room_watchdog_interval(raw: Option<&str>) -> Duration {
+    raw.and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map_or(REMOTE_ROOM_WATCHDOG_INTERVAL, Duration::from_millis)
+}
+
+impl Default for RemoteRoomWatchdog {
+    fn default() -> Self {
+        Self {
+            room_seen: false,
+            next_observation: Duration::ZERO,
+            interval: REMOTE_ROOM_WATCHDOG_INTERVAL,
+        }
+    }
 }
 
 impl RemoteRoomWatchdog {
@@ -52,7 +69,7 @@ impl RemoteRoomWatchdog {
             RemoteRoomObservation::Gone if self.room_seen => return true,
             RemoteRoomObservation::Gone | RemoteRoomObservation::Unknown => {}
         }
-        self.next_observation = elapsed.saturating_add(REMOTE_ROOM_WATCHDOG_INTERVAL);
+        self.next_observation = elapsed.saturating_add(self.interval);
         false
     }
 }
@@ -74,7 +91,12 @@ impl RemoteRoomMonitor {
         Self {
             backend: rimz::mux::backend_for(mux),
             session_name: session_name.to_owned(),
-            watchdog: RemoteRoomWatchdog::default(),
+            watchdog: RemoteRoomWatchdog {
+                interval: remote_room_watchdog_interval(
+                    std::env::var("RIMZ_REMOTE_WATCHDOG_MS").ok().as_deref(),
+                ),
+                ..RemoteRoomWatchdog::default()
+            },
         }
     }
 
@@ -89,7 +111,7 @@ impl RemoteRoomMonitor {
         ) {
             RemoteRoomPoll::RoomEnded
         } else {
-            RemoteRoomPoll::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
+            RemoteRoomPoll::Wait(self.watchdog.interval)
         }
     }
 
@@ -578,6 +600,36 @@ mod tests {
         assert!(remote_session_lost_exit(RemoteRoomObservation::Gone));
         assert!(!remote_session_lost_exit(RemoteRoomObservation::Live));
         assert!(!remote_session_lost_exit(RemoteRoomObservation::Unknown));
+    }
+
+    #[test]
+    fn remote_room_watchdog_interval_accepts_only_positive_milliseconds() {
+        assert_eq!(
+            remote_room_watchdog_interval(Some("25")),
+            Duration::from_millis(25)
+        );
+        for raw in [None, Some("0"), Some("invalid")] {
+            assert_eq!(
+                remote_room_watchdog_interval(raw),
+                REMOTE_ROOM_WATCHDOG_INTERVAL,
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_room_watchdog_uses_a_custom_interval() {
+        let interval = Duration::from_millis(25);
+        let mut watchdog = RemoteRoomWatchdog {
+            interval,
+            ..RemoteRoomWatchdog::default()
+        };
+
+        assert_eq!(watchdog.next_observation_in(Duration::ZERO), Duration::ZERO);
+        assert!(!watchdog.observe(Duration::ZERO, RemoteRoomObservation::Live));
+        assert_eq!(watchdog.next_observation_in(Duration::ZERO), interval);
+        assert_eq!(watchdog.next_observation_in(interval), Duration::ZERO);
+        assert!(watchdog.observe(interval, RemoteRoomObservation::Gone));
     }
 
     #[test]
