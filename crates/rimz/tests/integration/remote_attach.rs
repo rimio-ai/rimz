@@ -2183,7 +2183,12 @@ fn supervised_remote_attach_ends_when_the_session_disappears() {
             )
             .env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state)
             .env("RIMZ_REMOTE_SUPERVISED", "1")
-            .env("RIMZ_REMOTE_WATCHDOG_MS", "25");
+            // A client that exits on its own must beat the next check, or the pass ends
+            // through the watchdog's kill and never reaches the post-exit check it exists for.
+            .env(
+                "RIMZ_REMOTE_WATCHDOG_MS",
+                if attach_exits { "1000" } else { "25" },
+            );
         if attach_exits {
             command.env("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT", "1");
         }
