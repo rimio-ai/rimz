@@ -57,9 +57,8 @@ fn end_log_capture_flush() {
     let _ = stderr.flush();
 }
 
-/// Captured tracing lines for a full-screen surface to render without writing
-/// over its active terminal frame.
-pub fn captured_log_lines() -> Vec<String> {
+#[cfg(test)]
+fn captured_log_lines() -> Vec<String> {
     let bytes = log_capture()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -71,6 +70,7 @@ pub fn captured_log_lines() -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars();
@@ -165,8 +165,7 @@ pub enum Screen {
 }
 
 pub struct TerminalModeGuard {
-    mouse: MouseCapture,
-    screen: Screen,
+    modes: Option<(MouseCapture, Screen)>,
     saved_hook: Option<SharedPanicHook>,
 }
 
@@ -325,8 +324,7 @@ impl TerminalModeGuard {
             }
         }));
         Ok(Self {
-            mouse,
-            screen,
+            modes: Some((mouse, screen)),
             saved_hook: Some(saved_hook),
         })
     }
@@ -339,6 +337,25 @@ impl TerminalModeGuard {
         std::mem::forget(self);
     }
 
+    /// Restore terminal modes and the panic hook, but retain log capture until
+    /// this guard is dropped or consumed by [`Self::into_captured_logs`].
+    pub fn restore_modes_keep_capture(&mut self) {
+        if let Some((mouse, screen)) = self.modes.take() {
+            restore_terminal_modes(mouse, screen);
+        }
+        self.restore_hook();
+    }
+
+    /// Disarm terminal cleanup and return captured logs without writing them.
+    /// The caller owns mode cleanup and the timing of replay. If another guard
+    /// still captures logs, its eventual release owns the shared buffer.
+    pub fn into_captured_logs(mut self) -> Vec<u8> {
+        let bytes = end_log_capture().unwrap_or_default();
+        self.restore_hook();
+        std::mem::forget(self);
+        bytes
+    }
+
     /// Hand the terminal to another full-screen application without clearing
     /// the current screen or dropping mouse reporting. The successor paints
     /// over the held frame and takes ownership of terminal modes; keeping mouse
@@ -346,7 +363,7 @@ impl TerminalModeGuard {
     /// residual wheel tick into an arrow key for the successor. The returned
     /// guard retains cleanup ownership and restores the terminal when dropped.
     pub fn handoff_keep_screen(mut self) -> io::Result<Self> {
-        if self.screen == Screen::Alternate {
+        if let Some((_, Screen::Alternate)) = self.modes {
             execute!(io::stdout(), terminal::EnableLineWrap, cursor::Show)?;
         }
         terminal::disable_raw_mode()?;
@@ -365,33 +382,14 @@ impl TerminalModeGuard {
             panic::set_hook(hook);
         }
     }
-
-    /// Resume a handed-off terminal long enough to read input before restoring
-    /// the screen and mouse mode preserved by [`Self::handoff_keep_screen`].
-    pub fn resume_handoff(mut self) -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        let mouse = self.mouse;
-        let screen = self.screen;
-        let saved_hook = Arc::new(Mutex::new(Some(panic::take_hook())));
-        let hook_for_panic = Arc::clone(&saved_hook);
-        panic::set_hook(Box::new(move |info| {
-            restore_terminal(mouse, screen);
-            if let Some(previous) = hook_for_panic
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_ref()
-            {
-                previous(info);
-            }
-        }));
-        self.saved_hook = Some(saved_hook);
-        Ok(self)
-    }
 }
 
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
-        restore_terminal(self.mouse, self.screen);
+        if let Some((mouse, screen)) = self.modes.take() {
+            restore_terminal_modes(mouse, screen);
+        }
+        end_log_capture_flush();
         self.restore_hook();
     }
 }
@@ -413,6 +411,11 @@ fn disable_mouse(mouse: MouseCapture) -> io::Result<()> {
 }
 
 pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
+    restore_terminal_modes(mouse, screen);
+    end_log_capture_flush();
+}
+
+fn restore_terminal_modes(mouse: MouseCapture, screen: Screen) {
     let _ = disable_mouse(mouse);
     if screen == Screen::Alternate {
         let _ = execute!(
@@ -423,7 +426,6 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
         );
     }
     let _ = terminal::disable_raw_mode();
-    end_log_capture_flush();
 }
 
 #[cfg(test)]
@@ -628,6 +630,24 @@ mod tests {
             assert!(terminal::is_raw_mode_enabled().unwrap());
             assert_eq!(nix::sys::termios::tcgetattr(io::stdout()).unwrap(), modes);
         }
+        let mut guard = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main).unwrap();
+        guard.restore_modes_keep_capture();
+        assert!(
+            !terminal::is_raw_mode_enabled().unwrap(),
+            "step-out must restore modes without ending capture"
+        );
+        TuiLogWriter
+            .make_writer()
+            .write_all(b"warning while the room runs\n")
+            .unwrap();
+        assert_eq!(log_capture().lock().unwrap().depth, 1);
+        assert_eq!(
+            guard.into_captured_logs(),
+            b"warning while the room runs\n",
+            "session completion must return logs emitted after step-out"
+        );
+        assert_eq!(log_capture().lock().unwrap().depth, 0);
+        terminal::enable_raw_mode().unwrap();
         assert!(panic::catch_unwind(|| panic!("test restored hook")).is_err());
         assert_eq!(invoked.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(

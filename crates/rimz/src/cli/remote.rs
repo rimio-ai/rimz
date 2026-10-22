@@ -19,6 +19,7 @@ use rimz::remote::{
 mod link_stats;
 mod list;
 mod outage_ui;
+mod relay;
 mod setup;
 mod supervisor;
 mod tty;

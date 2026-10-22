@@ -182,18 +182,6 @@ impl OutageUi {
         }
     }
 
-    /// Hold a final failure frame long enough to read it before restoring the
-    /// main screen, where the caller will report the same error to scrollback.
-    pub(super) fn fail_hold(&mut self, headline: &str, details: &[String]) -> io::Result<()> {
-        let UiState::Panel(panel) = &mut self.state else {
-            return Ok(());
-        };
-        let rows = failure_rows(headline, details, &rimz::tui::captured_log_lines());
-        panel.draw_rows(&rows)?;
-        wait_for_keypress()?;
-        self.release()
-    }
-
     pub(super) fn handoff(
         &mut self,
         frame: &RecoveryFrame,
@@ -321,64 +309,11 @@ impl OutagePanel {
     }
 }
 
-fn wait_for_keypress() -> io::Result<()> {
-    loop {
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind == KeyEventKind::Press {
-            return Ok(());
-        }
-    }
-}
-
 struct DisplayRow {
     text: String,
     color: Color,
     bold: bool,
     dim: bool,
-}
-
-fn failure_rows(headline: &str, details: &[String], captured_logs: &[String]) -> Vec<DisplayRow> {
-    let mut rows = Vec::with_capacity(details.len() + captured_logs.len().min(5) + 4);
-    rows.push(DisplayRow {
-        text: format!("✗ {headline}"),
-        color: Color::Red,
-        bold: true,
-        dim: false,
-    });
-    rows.extend(details.iter().map(|detail| DisplayRow {
-        text: detail.clone(),
-        color: Color::Reset,
-        bold: false,
-        dim: false,
-    }));
-    rows.extend(
-        captured_logs
-            .iter()
-            .rev()
-            .take(5)
-            .rev()
-            .map(|line| DisplayRow {
-                text: format!("⚠  {line}"),
-                color: Color::DarkGrey,
-                bold: false,
-                dim: true,
-            }),
-    );
-    rows.push(DisplayRow {
-        text: String::new(),
-        color: Color::Reset,
-        bold: false,
-        dim: false,
-    });
-    rows.push(DisplayRow {
-        text: "press any key to exit".to_owned(),
-        color: Color::DarkGrey,
-        bold: false,
-        dim: true,
-    });
-    rows
 }
 
 fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
@@ -451,57 +386,6 @@ fn frame_rows(frame: &RecoveryFrame, active: char) -> Vec<DisplayRow> {
     rows
 }
 
-pub(super) struct HandoffScreen {
-    guard: Option<TerminalModeGuard>,
-}
-
-impl HandoffScreen {
-    pub(super) fn take(held_screen: &mut Option<TerminalModeGuard>) -> Self {
-        Self {
-            guard: held_screen.take(),
-        }
-    }
-
-    pub(super) fn release(&mut self) {
-        drop(self.guard.take());
-    }
-
-    pub(super) fn hold_failure(&mut self, headline: &str) {
-        let Some(guard) = self.guard.take() else {
-            return;
-        };
-        if write_handoff_failure(headline).is_err() {
-            drop(guard);
-            return;
-        }
-        let Ok(guard) = guard.resume_handoff() else {
-            return;
-        };
-        let _ = wait_for_keypress();
-        drop(guard);
-    }
-}
-
-fn write_handoff_failure(headline: &str) -> io::Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    queue!(stdout, Print("\n"), SetAttribute(Attribute::Bold))?;
-    if !no_color() {
-        queue!(stdout, SetForegroundColor(Color::Red))?;
-    }
-    queue!(
-        stdout,
-        Print(format!("✗ {headline}")),
-        ResetColor,
-        SetAttribute(Attribute::Reset),
-        Print("\n\n"),
-        SetAttribute(Attribute::Dim),
-        Print("press any key to exit"),
-        SetAttribute(Attribute::Reset),
-        Print("\n")
-    )?;
-    stdout.flush()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PanelLayout {
     width: u16,
@@ -528,7 +412,7 @@ fn panel_layout(width: u16, height: u16, rows: &[DisplayRow]) -> PanelLayout {
     }
 }
 
-fn truncate_width(text: &str, width: usize) -> String {
+pub(super) fn truncate_width(text: &str, width: usize) -> String {
     let mut used = 0;
     text.chars()
         .take_while(|character| {

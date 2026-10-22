@@ -64,6 +64,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
         None,
         "dev",
         None,
+        FatalPhase::Ssh,
     );
 
     assert!(
@@ -79,7 +80,7 @@ fn fatal_session_message_points_missing_remote_rimz_at_setup() {
 
 #[test]
 fn fatal_session_message_reports_other_codes_without_setup_hint() {
-    let message = fatal_session_message(2, "dev-box", None, "dev", None);
+    let message = fatal_session_message(2, "dev-box", None, "dev", None, FatalPhase::Ssh);
 
     assert!(
         message.contains("ssh to dev-box exited with status 2"),
@@ -90,6 +91,25 @@ fn fatal_session_message_reports_other_codes_without_setup_hint() {
 }
 
 #[test]
+fn fatal_session_message_distinguishes_established_room_boundaries() {
+    for (phase, expected) in [
+        (
+            FatalPhase::BeforeRoom,
+            "rimz on dev-box exited with status 2 before the room opened; not reconnecting",
+        ),
+        (
+            FatalPhase::Room,
+            "rimz on dev-box exited with status 2; not reconnecting",
+        ),
+    ] {
+        assert_eq!(
+            fatal_session_message(2, "dev-box", None, "dev", None, phase),
+            expected
+        );
+    }
+}
+
+#[test]
 fn fatal_session_message_includes_a_captured_attach_error() {
     let message = fatal_session_message(
         2,
@@ -97,6 +117,7 @@ fn fatal_session_message_includes_a_captured_attach_error() {
         None,
         "dev",
         Some("SSH control connection dropped"),
+        FatalPhase::Ssh,
     );
 
     assert!(
@@ -137,6 +158,7 @@ fn fatal_session_message_explains_minor_version_bypass() {
         None,
         "dev",
         None,
+        FatalPhase::Ssh,
     );
 
     assert!(message.contains("differ by a minor version"), "{message}");
@@ -152,6 +174,7 @@ fn fatal_session_message_keeps_major_version_refusal_hard() {
         None,
         "dev",
         None,
+        FatalPhase::Ssh,
     );
 
     assert!(message.contains("differ by a major version"), "{message}");
@@ -170,6 +193,7 @@ fn fatal_session_message_explains_a_missing_remote_path() {
         Some(
             "remote path does not exist on dev-box: workspace/mis…; check the target with `rimz remote list`",
         ),
+        FatalPhase::Ssh,
     );
 
     assert!(
@@ -191,6 +215,7 @@ fn missing_path_sentinel_rebuilds_a_long_path_without_stderr() {
         Some(path),
         "dev",
         None,
+        FatalPhase::Ssh,
     );
 
     assert!(message.contains(path), "{message}");

@@ -1357,14 +1357,16 @@ fn established_interactive_fallback_failure_stays_fatal() {
     assert_eq!(main_invocation_count(&log), 1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("ssh to dev-box exited with status 1; not reconnecting"),
+        stderr.contains(
+            "rimz on dev-box exited with status 1 before the room opened; not reconnecting"
+        ),
         "{stderr}"
     );
     assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
 }
 
 #[test]
-fn fatal_attach_holds_the_remote_error_until_a_keypress() {
+fn host_text_lands_in_scrollback_without_holding_for_input() {
     const REMOTE_DETAIL: &str =
         "REMOTE DETAIL: room startup failed\nREMOTE DETAIL: run rimz doctor\n";
 
@@ -1398,51 +1400,7 @@ fn fatal_attach_holds_the_remote_error_until_a_keypress() {
                 .extend_from_slice(&chunk[..count]);
         }
     });
-    let mut writer = pair.master.take_writer().expect("take pty writer");
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let snapshot =
-            String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
-        if snapshot.contains("press any key to exit") {
-            break;
-        }
-        assert!(
-            child.try_wait().expect("poll remote connect").is_none(),
-            "remote connect exited before holding the fatal screen: {snapshot:?}"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "fatal screen did not show its keypress hint: {snapshot:?}"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    assert!(
-        child
-            .try_wait()
-            .expect("poll held remote connect")
-            .is_none(),
-        "remote connect is blocked for the keypress"
-    );
-    let held_output =
-        String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
-    assert!(
-        held_output.contains("REMOTE DETAIL: room startup failed")
-            && held_output.contains("REMOTE DETAIL: run rimz doctor"),
-        "{held_output:?}"
-    );
-    assert!(
-        held_output.contains("\x1b[?1049h"),
-        "the recovery panel handed off an alternate screen: {held_output:?}"
-    );
-    assert!(
-        !held_output.contains("\x1b[?1049l"),
-        "the alternate screen stays visible before the keypress: {held_output:?}"
-    );
-
-    writer.write_all(b"x").expect("send hold keypress");
-    writer.flush().expect("flush hold keypress");
-    drop(writer);
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll remote connect") {
             break Some(status);
@@ -1458,13 +1416,12 @@ fn fatal_attach_holds_the_remote_error_until_a_keypress() {
     reader_thread.join().expect("join pty reader");
     let final_output =
         String::from_utf8_lossy(&output.lock().expect("lock pty output")).into_owned();
-    let status = status.unwrap_or_else(|| panic!("remote connect timed out: {final_output:?}"));
+    let status = status.unwrap_or_else(|| {
+        panic!("host text must exit without waiting for input: {final_output:?}")
+    });
     assert!(!status.success(), "fatal attach exits nonzero");
 
     let detail = final_output.find("REMOTE DETAIL").expect("remote detail");
-    let hint = final_output
-        .find("press any key to exit")
-        .expect("keypress hint");
     let leave = final_output
         .find("\x1b[?1049l")
         .expect("leave alternate screen");
@@ -1472,8 +1429,370 @@ fn fatal_attach_holds_the_remote_error_until_a_keypress() {
         .rfind("not reconnecting")
         .expect("fatal scrollback report");
     assert!(
-        detail < hint && hint < leave && leave < report,
-        "fatal screen is held, then restored before the scrollback report: {final_output:?}"
+        leave < detail && detail < report,
+        "the panel leaves before host text: {final_output:?}"
+    );
+    let mut parser = vt100::Parser::new(24, 100, 100);
+    parser.process(final_output.as_bytes());
+    assert!(!parser.screen().alternate_screen());
+    let main = parser.screen().contents();
+    let separator = main
+        .find("── dev-box:query-engine · ")
+        .expect("separator on main screen");
+    assert!(
+        separator
+            < main
+                .find("REMOTE DETAIL: room startup failed")
+                .expect("host text on main screen"),
+        "{main}"
+    );
+    assert!(
+        main.lines()
+            .any(|line| line.starts_with("REMOTE DETAIL: run rimz doctor")),
+        "{main}"
+    );
+}
+
+#[test]
+fn supervised_silent_handoff_strips_the_sentinel_and_only_marks_a_colored_panel() {
+    for no_color in [false, true] {
+        let env = Env::new();
+        let log = env.project_root.join("ssh-trace.log");
+        let mut cmd = remote_connect_pty_command(&env, &log);
+        cmd.env("RIMZ_REMOTE_GRACE_MS", "0");
+        cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "100");
+        cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+        cmd.env(
+            "RIMZ_TEST_SSH_STDOUT",
+            format!(
+                "\x1b[?1004h{}\x1b[?1049hROOM\x1b[?1049l",
+                rimz::remote::tty::ROOM_OPEN_SENTINEL
+            ),
+        );
+        if no_color {
+            cmd.env("NO_COLOR", "1");
+        } else {
+            cmd.env_remove("NO_COLOR");
+        }
+        let (output, _) = run_pty_command(remote_connect_pty(), cmd);
+        assert!(
+            !output.contains("rimz-room-open"),
+            "sentinel leaked: {output:?}"
+        );
+        assert!(
+            !output.contains("── dev-box"),
+            "silent connect has no separator: {output:?}"
+        );
+        assert_eq!(
+            output.contains("\x1b[32m✓\x1b[39m"),
+            !no_color,
+            "{output:?}"
+        );
+        let room = output.find("ROOM").unwrap();
+        assert!(
+            !output[..room].contains("\x1b[?1049l"),
+            "panel stays until room paint: {output:?}"
+        );
+        assert_eq!(
+            output.matches("\x1b[?1049l").count(),
+            1,
+            "only the mux leaves the alternate screen: {output:?}"
+        );
+    }
+}
+
+#[test]
+fn supervised_held_panel_replays_logs_on_the_main_screen() {
+    assert_supervised_logs_survive(
+        &format!("{}\x1b[?1049hROOM", rimz::remote::tty::ROOM_OPEN_SENTINEL),
+        false,
+    );
+}
+
+#[test]
+fn supervised_stepped_off_panel_defers_logs_until_session_end() {
+    assert_supervised_logs_survive("host text\r\n", true);
+}
+
+fn assert_supervised_logs_survive(payload: &str, raw_tty: bool) {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_REMOTE_GRACE_MS", "0");
+    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "100");
+    cmd.env("RUST_LOG", "trace");
+    cmd.env("RIMZ_TEST_SSH_STDOUT", payload);
+    if raw_tty {
+        cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+    }
+    let (output, settings) = run_pty_command(remote_connect_pty(), cmd);
+    assert_shell_tty(&settings);
+
+    let mut parser = vt100::Parser::new(24, 100, 100);
+    parser.process(output.as_bytes());
+    assert!(!parser.screen().alternate_screen());
+    let main = parser.screen().contents();
+    parser.screen_mut().set_scrollback(24);
+    let mut rows = parser
+        .screen()
+        .rows(0, 100)
+        .take(parser.screen().scrollback())
+        .collect::<Vec<_>>();
+    rows.extend(main.lines().map(str::to_owned));
+    let logs = rows
+        .iter()
+        .filter(|line| line.contains("mio::poll"))
+        .collect::<Vec<_>>();
+    assert!(!logs.is_empty(), "captured logs survive: {rows:?}");
+    assert!(
+        logs.iter().all(|line| line.starts_with("20")),
+        "each captured log starts at column 0: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line == "rimz: detached from dev-box"),
+        "the end line starts at column 0: {rows:?}"
+    );
+    let first_log = output.find("mio::poll").expect("captured trace log");
+    let reset = output
+        .rfind(rimz::remote::tty::EMULATOR_RESET)
+        .expect("session emulator reset");
+    assert!(reset < first_log, "logs follow emulator reset: {output:?}");
+    if raw_tty {
+        assert!(
+            rows.iter()
+                .any(|line| line.starts_with("── dev-box:query-engine · ")),
+            "the separator starts at column 0: {rows:?}"
+        );
+        assert!(
+            output.find("host text").unwrap() < first_log,
+            "logs stay captured throughout host output: {output:?}"
+        );
+    } else {
+        let leave = output.rfind("\x1b[?1049l").expect("final screen leave");
+        assert!(
+            leave < first_log,
+            "no log precedes the final screen leave: {output:?}"
+        );
+    }
+}
+
+#[test]
+fn supervised_end_line_preserves_the_command_row_with_and_without_a_panel() {
+    for panel in [false, true] {
+        let env = Env::new();
+        let log = env.project_root.join("ssh-trace.log");
+        let pair = remote_connect_pty();
+        let mut tty = std::fs::OpenOptions::new()
+            .write(true)
+            .open(pair.master.tty_name().unwrap())
+            .unwrap();
+        tty.write_all(b"$ rimz remote connect dev\r\n").unwrap();
+        drop(tty);
+        let mut cmd = remote_connect_pty_command(&env, &log);
+        cmd.env("RIMZ_REMOTE_GRACE_MS", if panel { "0" } else { "60000" });
+        cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "100");
+        cmd.env("RIMZ_TEST_SSH_RAW_TTY", "1");
+        cmd.env(
+            "RIMZ_TEST_SSH_STDERR",
+            "Shared connection to dev-box closed.\n",
+        );
+        cmd.env(
+            "RIMZ_TEST_SSH_STDOUT",
+            format!(
+                "{}\x1b[?1049hROOM\x1b[?1049l[detached]",
+                rimz::remote::tty::ROOM_OPEN_SENTINEL
+            ),
+        );
+        let (output, _) = run_pty_command(pair, cmd);
+        let mut parser = vt100::Parser::new(24, 100, 100);
+        parser.process(output.as_bytes());
+        let main = parser.screen().contents();
+        assert!(!parser.screen().alternate_screen());
+        assert!(
+            main.lines().any(|line| line == "$ rimz remote connect dev"),
+            "command row intact: {main:?}"
+        );
+        let lines = main.lines().collect::<Vec<_>>();
+        let detach = lines
+            .iter()
+            .position(|line| *line == "[detached]")
+            .expect("detach row");
+        assert_eq!(lines[detach + 1], "rimz: detached from dev-box", "{main:?}");
+    }
+}
+
+#[test]
+fn supervised_reconnect_labels_each_surfaced_attach_but_never_piped_output() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "255\n0\n").unwrap();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_TEST_SSH_PLAN", &plan);
+    cmd.env("RIMZ_TEST_SSH_STDOUT", "host notice\r\n");
+    cmd.env("RIMZ_REMOTE_GATETIME_MS", "0");
+    let (output, _) = run_pty_command(remote_connect_pty(), cmd);
+    let separators = output
+        .lines()
+        .filter(|line| line.contains("── dev-box:query-engine · "))
+        .collect::<Vec<_>>();
+    assert_eq!(separators.len(), 2, "{output:?}");
+    assert!(!separators[0].contains("reconnected"));
+    assert!(separators[1].contains("reconnected"));
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_STDOUT", "host notice\n")
+        .bounded_output()
+        .unwrap();
+    assert_eq!(out.stdout, b"host notice\n");
+}
+
+#[test]
+fn supervised_unpainted_mux_error_is_replayed_as_text_on_the_main_screen() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env("RIMZ_REMOTE_GRACE_MS", "0");
+    cmd.env("RIMZ_REMOTE_MIN_DISPLAY_MS", "100");
+    cmd.env(
+        "RIMZ_TEST_SSH_STDOUT",
+        format!(
+            "{}\x1b[31mMUX FAILED\x1b]52;c;secret\x07",
+            rimz::remote::tty::ROOM_OPEN_SENTINEL
+        ),
+    );
+    let (output, _) = run_pty_command(remote_connect_pty(), cmd);
+    let leave = output.find("\x1b[?1049l").unwrap();
+    assert!(
+        output[leave..].contains("MUX FAILED"),
+        "unpainted error survives: {output:?}"
+    );
+    let reset = output.rfind(rimz::remote::tty::EMULATOR_RESET).unwrap()
+        + rimz::remote::tty::EMULATOR_RESET.len();
+    let separator = output[reset..].find("── ").unwrap();
+    assert!(
+        !output[reset..reset + separator].contains('\n'),
+        "the replay's separator takes the panel's row, an unfinished tail adds no blank row: {output:?}"
+    );
+    assert!(
+        !output[leave..].contains("secret"),
+        "escapes are not replayed: {output:?}"
+    );
+}
+
+#[test]
+fn supervised_drain_does_not_wait_for_a_descendant_or_leak_its_late_bytes() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "255\n0\n").unwrap();
+    let started = Instant::now();
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_LATE_OUTPUT", "1")
+        .env("RIMZ_TEST_SSH_STDOUT", "current attach\n")
+        .bounded_output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("LATE-OLD-ATTACH"),
+        "an ended attach must stop forwarding"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "inherited writers cannot hold the drain: {:?}",
+        started.elapsed()
+    );
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"current attach\ncurrent attach\n");
+    assert_eq!(main_invocation_count(&log), 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn supervised_idle_output_relay_sleeps_until_output_or_stop() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut child = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "2000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let task = loop {
+        let tasks = std::fs::read_dir(format!("/proc/{}/task", child.id())).unwrap();
+        if let Some(task) = tasks.filter_map(Result::ok).find(|task| {
+            std::fs::read_to_string(task.path().join("comm"))
+                .is_ok_and(|name| name.trim() == "remote-output")
+        }) {
+            break task.path();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("output relay did not start");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let switches = || {
+        std::fs::read_to_string(task.join("status"))
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("voluntary_ctxt_switches:"))
+            .unwrap()
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let before = switches();
+    std::thread::sleep(Duration::from_millis(200));
+    let wakeups = switches().saturating_sub(before);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(wakeups <= 3, "idle output relay woke {wakeups} times");
+}
+
+#[test]
+fn supervised_output_relay_failure_kills_ssh_and_never_reconnects() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut child = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_STDOUT", "host text\n")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "3000")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("local relay failure must stop ssh");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(stderr.contains("local output relay"), "{stderr}");
+    assert_eq!(status.code(), Some(1));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "ssh was killed promptly"
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        1,
+        "no reconnect after local failure"
     );
 }
 

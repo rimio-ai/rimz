@@ -26,7 +26,8 @@ use rimz::remote::recovery::{
 };
 use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
-use super::outage_ui::{HandoffScreen, OutageUi, PANEL_TICK, UiEvent};
+use super::outage_ui::{OutageUi, PANEL_TICK, UiEvent};
+use super::relay::{OutputRelay, RelayOutput};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -293,6 +294,10 @@ pub(super) fn supervise_remote(
             guard.settle_terminal_replies();
             supervisor.plan.retry()
         };
+        let terminal = SessionTerminal {
+            guard: &guard,
+            output: RelayOutput::new(supervisor.held_screen.take(), setup_hint, !first_attempt),
+        };
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
         let outcome = run_ssh_session(
@@ -302,9 +307,8 @@ pub(super) fn supervise_remote(
             &mut session_link,
             supervisor.dial_plan.as_ref(),
             confirmed_master,
+            terminal,
         );
-        guard.restore();
-        let mut handoff = HandoffScreen::take(&mut supervisor.held_screen);
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
         if outcome
@@ -312,8 +316,6 @@ pub(super) fn supervise_remote(
             .as_deref()
             .is_some_and(|stderr| rimz::remote::attach_interrupted(outcome.status.code(), stderr))
         {
-            handoff.release();
-            guard.reset_emulator();
             return Ok(());
         }
         let summary = session_error_summary(
@@ -333,8 +335,6 @@ pub(super) fn supervise_remote(
         }
         let retry_cause = 'settle: {
             if outcome.killed_zombie {
-                handoff.release();
-                guard.reset_emulator();
                 let _ = writeln!(
                     std::io::stderr().lock(),
                     "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
@@ -344,8 +344,6 @@ pub(super) fn supervise_remote(
             }
             match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
-                    handoff.release();
-                    guard.reset_emulator();
                     match (outcome.status.code(), outcome.stderr.as_ref()) {
                         (Some(rimz::remote::REMOTE_SESSION_LOST_EXIT), _) => {
                             let _ = writeln!(
@@ -362,28 +360,28 @@ pub(super) fn supervise_remote(
                     return Ok(());
                 }
                 Verdict::Fatal { code } => {
+                    let phase = if !outcome.established || outcome.status.code().is_none() {
+                        FatalPhase::Ssh
+                    } else if outcome.room_opened {
+                        FatalPhase::Room
+                    } else {
+                        FatalPhase::BeforeRoom
+                    };
                     let message = fatal_session_message(
                         code,
                         host,
                         target.remote_path(),
                         setup_hint,
                         summary.as_deref(),
+                        phase,
                     );
-                    handoff.hold_failure(&message);
-                    guard.reset_emulator();
                     return Err(crate::cli::ExitCodeError { code, message }.into());
                 }
-                Verdict::Retry => {
-                    handoff.release();
-                    guard.reset_emulator();
-                    LinkLoss::Dropped {
-                        summary,
-                        session_link: &mut session_link,
-                    }
-                }
+                Verdict::Retry => LinkLoss::Dropped {
+                    summary,
+                    session_link: &mut session_link,
+                },
                 Verdict::Reattach => {
-                    handoff.release();
-                    guard.reset_emulator();
                     let detail = summary
                         .as_deref()
                         .map(|summary| format!(" — {summary}"))
@@ -402,17 +400,31 @@ pub(super) fn supervise_remote(
     }
 }
 
+#[derive(Clone, Copy)]
+enum FatalPhase {
+    Ssh,
+    BeforeRoom,
+    Room,
+}
+
 fn fatal_session_message(
     code: i32,
     host: &str,
     remote_path: Option<&str>,
     setup_hint: &str,
     summary: Option<&str>,
+    phase: FatalPhase,
 ) -> String {
     if let Some(message) = known_remote_exit_message(code, host, remote_path, setup_hint) {
         return message;
     }
-    let message = format!("ssh to {host} exited with status {code}; not reconnecting");
+    let message = match phase {
+        FatalPhase::Ssh => format!("ssh to {host} exited with status {code}; not reconnecting"),
+        FatalPhase::BeforeRoom => format!(
+            "rimz on {host} exited with status {code} before the room opened; not reconnecting"
+        ),
+        FatalPhase::Room => format!("rimz on {host} exited with status {code}; not reconnecting"),
+    };
     match summary {
         Some(summary) => format!("{message} — {summary}"),
         None => message,
@@ -470,6 +482,11 @@ fn interrupted_message(
     format!("rimz: {action} to {host} stopped{detail}")
 }
 
+struct SessionTerminal<'a> {
+    guard: &'a super::tty::TtyGuard,
+    output: RelayOutput,
+}
+
 fn run_ssh_session(
     spec: &rimz::mux::CommandSpec,
     host: &str,
@@ -477,18 +494,30 @@ fn run_ssh_session(
     link: &mut SessionLinkState,
     dial_plan: Option<&DialPlan>,
     capture_stderr: bool,
+    terminal: SessionTerminal<'_>,
 ) -> Result<SessionOutcome> {
     let mut command = spec.to_command();
+    command.stdout(Stdio::piped());
     if capture_stderr {
         command.stderr(Stdio::piped());
     }
     let mut child = command
         .spawn()
         .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
-    let stderr = drain_stderr(&mut child);
+    let relay = match OutputRelay::start(child.stdout.take(), child.stderr.take(), terminal.output)
+    {
+        Ok(relay) => relay,
+        Err(err) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            terminal.guard.restore();
+            terminal.guard.reset_emulator();
+            return Err(err).context("starting local output relay");
+        }
+    };
     let started = Instant::now();
     let mut update = link.begin_session();
-    loop {
+    let outcome = (|| loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
             let (established, lived_past_gatetime) =
                 link.finish(started.elapsed(), events.try_iter());
@@ -497,8 +526,12 @@ fn run_ssh_session(
                 established,
                 lived_past_gatetime,
                 killed_zombie: false,
-                stderr: finish_session_stderr(stderr),
+                stderr: None,
+                room_opened: false,
             });
+        }
+        if relay.is_finished() {
+            anyhow::bail!("local output relay stopped while ssh was running");
         }
         let elapsed = started.elapsed();
         let poll = session_poll_interval(elapsed, update.next_deadline);
@@ -508,20 +541,24 @@ fn run_ssh_session(
         for action in &update.actions {
             if matches!(action, SessionLinkAction::VerifyZombie) {
                 if let Some(outcome) = verify_zombie(&mut child, dial_plan)? {
-                    return Ok(SessionOutcome {
-                        stderr: finish_session_stderr(stderr),
-                        ..outcome
-                    });
+                    return Ok(outcome);
                 }
             } else {
                 render_session_link_action(host, *action);
             }
         }
+    })();
+    if outcome.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
-}
-
-fn finish_session_stderr(stderr: Option<std::thread::JoinHandle<String>>) -> Option<String> {
-    stderr.map(|reader| reader.join().unwrap_or_default())
+    let output = relay.finish();
+    terminal.guard.restore();
+    let (room_opened, stderr) = output?.complete(terminal.guard)?;
+    let mut outcome = outcome?;
+    outcome.room_opened = room_opened;
+    outcome.stderr = stderr;
+    Ok(outcome)
 }
 
 fn session_error_summary(
@@ -558,6 +595,7 @@ fn verify_zombie(
                 lived_past_gatetime: true,
                 killed_zombie: true,
                 stderr: None,
+                room_opened: false,
             }))
         }
         Err(kill_err) => match child.try_wait().context("polling raced ssh session")? {
@@ -567,6 +605,7 @@ fn verify_zombie(
                 lived_past_gatetime: true,
                 killed_zombie: false,
                 stderr: None,
+                room_opened: false,
             })),
             None => Err(kill_err).context("killing zombie ssh session"),
         },
@@ -585,6 +624,7 @@ struct SessionOutcome {
     lived_past_gatetime: bool,
     killed_zombie: bool,
     stderr: Option<String>,
+    room_opened: bool,
 }
 
 fn resolve_dial_plan(destination: &str) -> Option<DialPlan> {
@@ -702,12 +742,10 @@ fn wait_for_master(
                     && let Some((spec, path)) = plan.path_preflight(control_path)
                     && run_path_preflight(&spec)
                 {
-                    let fix = REMOTE_PATH_FIX.to_owned();
-                    let details = [format!("{}: {path}", plan.target().host_display()), fix];
                     let message =
                         remote_path_missing_message(plan.target().host_display(), Some(path));
                     outage.panel.note_ssh_error(Some(message.clone()));
-                    ui.fail_hold("Remote path does not exist", &details)?;
+                    ui.release()?;
                     drop(guard);
                     return Err(crate::cli::ExitCodeError {
                         code: rimz::remote::REMOTE_PATH_MISSING_EXIT,
