@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
@@ -28,61 +28,10 @@ impl<'a> Host<'a> {
     fn ctx(&self) -> Result<Ctx> {
         Ctx::for_workspace(self.state.workspace_id.clone(), self.globals.mux)
     }
-
-    fn occupancy_snapshot(&self) -> Result<SidebarSnapshot> {
-        let ctx = self.ctx()?;
-        let mux =
-            crate::cli::render::room::present_mux_pick(rimz::room::session::pick_mux_for_session(
-                &ctx.workspace.session_name,
-                self.globals.mux,
-            ))?;
-        let listing = rimz::mux::backend_for(mux).list_panes(rimz::mux::PaneListOptions {
-            session_name: Some(ctx.workspace.session_name.clone()),
-            runtime_paths: Some(ctx.runtime().clone()),
-            workspace_id: Some(ctx.workspace.workspace_id.clone()),
-            consistency: rimz::mux::PaneReadConsistency::RequireAuthoritative,
-            ..Default::default()
-        })?;
-        let mut snapshot = ctx.alive_snapshot()?;
-        // Retain historical rows, but not pane stamps absent from the mux's current answer.
-        for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
-            if agent.pane.as_ref().is_some_and(|pane| {
-                !listing
-                    .panes
-                    .iter()
-                    .any(|live| live.pane_id == pane.pane_id)
-            }) {
-                agent.pane = None;
-            }
-        }
-        Ok(snapshot)
-    }
 }
 
 fn host_error(error: impl std::fmt::Display) -> WorkflowErr {
     WorkflowErr::Refused(error.to_string())
-}
-
-fn path_forms(path: PathBuf) -> impl Iterator<Item = PathBuf> {
-    let physical = path.canonicalize().ok();
-    std::iter::once(path).chain(physical)
-}
-
-fn occupants<'a>(snapshot: &'a SidebarSnapshot, scope: &Path, root: &Path) -> Result<Takeover<'a>> {
-    let owned = match rimz::worktree::discover_owned(root) {
-        Ok(owned) => owned
-            .into_iter()
-            .flat_map(|tree| path_forms(tree.marker.worktree_path))
-            .collect(),
-        Err(rimz::worktree::WorktreeErr::NotRepo) => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
-    Ok(takeover::plan(
-        &snapshot.agents,
-        &path_forms(scope.into()).collect::<Vec<_>>(),
-        &owned,
-        Timestamp::now(),
-    ))
 }
 
 fn agent<'a>(snapshot: &'a SidebarSnapshot, run: &RunRecord) -> Option<&'a AgentState> {
@@ -152,10 +101,12 @@ fn children(snapshot: &SidebarSnapshot, root: &AgentState, stopped: &[&AgentStat
 impl workflow::AttemptHost for Host<'_> {
     fn occupancy(&self, scope: &Path, root: &Path) -> Result<workflow::Occupancy, WorkflowErr> {
         (|| -> Result<_> {
-            let snapshot = self.occupancy_snapshot()?;
+            let ctx = self.ctx()?;
+            let snapshot = ctx.alive_snapshot()?;
+            let takeover = takeover::read(&snapshot.agents, scope, root)?;
             let peers = rimz::address::addressable_agents(&snapshot);
             let handle = |agent: &AgentState| rimz::address::agent_handle(agent, &peers, true);
-            Ok(match occupants(&snapshot, scope, root)? {
+            Ok(match takeover {
                 Takeover::Stop(agents) if agents.is_empty() => workflow::Occupancy::Free,
                 Takeover::Stop(agents) => {
                     workflow::Occupancy::Occupied(agents.into_iter().map(handle).collect())
@@ -174,8 +125,8 @@ impl workflow::AttemptHost for Host<'_> {
     fn evict(&self, scope: &Path, root: &Path) -> Result<Vec<String>, WorkflowErr> {
         (|| -> Result<_> {
             let ctx = self.ctx()?;
-            let snapshot = self.occupancy_snapshot()?;
-            let Takeover::Stop(agents) = occupants(&snapshot, scope, root)? else {
+            let snapshot = ctx.alive_snapshot()?;
+            let Takeover::Stop(agents) = takeover::read(&snapshot.agents, scope, root)? else {
                 bail!("checkout acquired an open turn before takeover");
             };
             let peers = rimz::address::addressable_agents(&snapshot);

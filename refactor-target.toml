@@ -1088,6 +1088,11 @@ surface-budget = 962
 
 [[verdict]]
 kind = "item"
+key = "harness::schedule::takeover::read"
+reason = "Loop takeover and workflow admission share owned-worktree discovery and occupancy over their caller-supplied runtime-scoped roster."
+
+[[verdict]]
+kind = "item"
 key = "harness::schedule::catalog::TaskCatalog::source_unavailable"
 reason = "GC distinguishes unreadable task sources from project failures without exposing private instance errors or rereading task files."
 
