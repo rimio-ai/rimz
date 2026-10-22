@@ -573,8 +573,8 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
     ]);
     let stats = role_stats(profiles.clone(), profiles);
     let panel = full_panel_text(&stats, false);
-    assert!(panel.contains("1 other agents"), "{panel}");
-    assert!(panel.contains("1 other subagents"), "{panel}");
+    assert!(panel.contains("1 other agent "), "{panel}");
+    assert!(panel.contains("1 other subagent "), "{panel}");
     for (role, key, count) in [
         (RoleView::Agents, "agents", "sessions"),
         (RoleView::Subagents, "subagents", "runs"),
