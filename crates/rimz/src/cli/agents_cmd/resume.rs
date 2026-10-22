@@ -289,11 +289,12 @@ fn resume_selected(
             ),
         ),
         ResumeSource::Provider(observation, profile) => {
-            let (name, plan) = rimz::harness::resume::plan_provider_resume(
+            let (name, plan, _) = rimz::harness::resume::plan_provider_resume(
                 observation,
                 profile,
                 &snapshot.agents,
                 resume_ctx,
+                &Default::default(),
             );
             (name, &observation.session_id, plan)
         }
