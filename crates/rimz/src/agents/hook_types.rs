@@ -61,6 +61,8 @@ pub const HOOK_ENV_NAMES: &[&str] = &[
 /// Extra environment carried by hook frames, beyond the identity keys.
 ///
 /// Muse derives `managed_hooks_env_vars` from both lists, so adding a name re-offers every existing Muse hook install.
+/// A name Muse already passes to every hook (its base set in `docs/externals/agent-adapter/muse-reference.md`, as with
+/// `SHELL`) goes in the removals of Muse's `passthrough_names` instead, and re-offers nothing.
 pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
     "HOME",
     "PATH",
