@@ -1,6 +1,6 @@
 # The stats panel
 
-`rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, spend by model, provider and profile, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)).
+`rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, spend by model, provider and profile, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)) and the effort ledger's maintenance, which compacts daily segments older than eight days and deletes those past a year ([spending.md](./agents/spending.md#session-effort-ledger)).
 
 The command has two homes. A one-shot `rimz stats` prints the spend-first report and returns to the shell. `rimz stats --refresh` holds the compact dashboard open as a live screen, and that held pane is the default middle-column content of the `rimzd` view ([rimzd.md](./rimzd.md#what-the-view-contains)).
 

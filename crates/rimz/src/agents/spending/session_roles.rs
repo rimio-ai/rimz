@@ -85,6 +85,7 @@ pub(super) type RoleMap = BTreeMap<AgentKind, BTreeMap<AgentSessionId, SessionRo
 pub(super) struct RoleIndex {
     pub(super) roles: RoleMap,
     pub(super) recorded_since_secs: Option<u64>,
+    pub(super) effort: Vec<Arc<Vec<super::session_effort::SessionEffortRecord>>>,
 }
 
 #[derive(Default)]
@@ -175,6 +176,14 @@ pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleIndex {
     RoleIndex {
         roles,
         recorded_since_secs,
+        ..Default::default()
+    }
+}
+
+pub(super) fn load_history(cursor: &Path, now_secs: u64) -> RoleIndex {
+    RoleIndex {
+        effort: super::session_effort::load(cursor, now_secs),
+        ..load(cursor, now_secs)
     }
 }
 

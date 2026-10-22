@@ -163,6 +163,7 @@ pub(crate) const NO_BURST_CUTOFF: u64 = u64::MAX;
 /// day, and trailing store windows: 7 days, 30 days, and 365 days. The store
 /// windows nest, with `year` the widest, while the headline is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SpendTally {
     /// Configured headline window (`[sidebar] spend_window`): the current
     /// session by default, trailing 24 hours, or the local calendar day.
@@ -391,7 +392,7 @@ pub(crate) fn aggregate_counted_rollups(
                 };
                 let placement = role.placement(provider);
                 accum(
-                    roles.entry(placement),
+                    &mut roles.entry(placement).tally,
                     entry,
                     now_secs,
                     cutoffs.total,
@@ -421,7 +422,7 @@ pub(crate) fn aggregate_counted_rollups(
     );
     for ((placement, _), youngest) in role_sessions {
         bump_sessions(
-            roles.entry(placement),
+            &mut roles.entry(placement).tally,
             youngest,
             now_secs,
             cutoffs.total,
@@ -447,6 +448,9 @@ pub(crate) fn aggregate_counted_rollups(
     for (login, sessions) in login_day_sessions {
         login_day.entry(login).or_default().sessions =
             sessions.len().try_into().unwrap_or(u32::MAX);
+    }
+    if let Some(index) = history_roles {
+        super::session_effort::fold(index, &mut roles, now_secs, history_day_cutoff);
     }
 
     SpendingWalkResult {

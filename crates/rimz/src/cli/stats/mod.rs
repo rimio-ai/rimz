@@ -296,8 +296,16 @@ impl Stats {
             timezone,
             refreshed_at_ms,
             day_cutoff_secs,
-            agents: roles.agents,
-            subagents: roles.subagents,
+            agents: roles
+                .agents
+                .into_iter()
+                .map(|(profile, entry)| (profile, entry.tally))
+                .collect(),
+            subagents: roles
+                .subagents
+                .into_iter()
+                .map(|(profile, entry)| (profile, entry.tally))
+                .collect(),
             recorded_since_secs: roles.recorded_since_secs,
             by_day: days,
             by_model: models,

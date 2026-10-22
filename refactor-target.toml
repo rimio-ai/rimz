@@ -247,7 +247,8 @@ upward-dependencies = ["address"]
 # TierUnbuildable, TierPass, TierStamp::moved and TierStamp::passes share move evidence with launch and CLI consumers (+4).
 # AgentSeat preserves solo/team provenance across the lifecycle hook and spending ledger (+1).
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
-surface-budget = 1120
+# RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
+surface-budget = 1123
 
 [[verdict]]
 kind = "item"
@@ -473,7 +474,8 @@ path = "crates/rimz/src/agents/spending"
 # Local-day helpers, session-role module/record/writer, and published tallies (+8).
 # ModelTally carries the producing provider identity across the publication/stats seam.
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
-surface-budget = 102
+# RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
+surface-budget = 105
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -786,6 +788,21 @@ reason = "Shared local-midnight convention is reachable for spending consumers i
 kind = "item"
 key = "agents::spending::RoleTallies"
 reason = "Published profile-attributed agent and subagent spend and the first retained role record shared with the stats reader."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::RoleTally"
+reason = "Published solo, team-role and subagent entries keep spend and recorded effort together across the stats boundary."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::EffortTally"
+reason = "Recorded effort shares the spend publication's local-day and trailing windows with the stats reader."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::EffortWindow"
+reason = "Stats consumes released active milliseconds and the three attribution-style message counters in each role window."
 
 [[verdict]]
 kind = "item"

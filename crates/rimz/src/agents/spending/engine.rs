@@ -348,6 +348,12 @@ fn walk_fleet_spending_files(
         read_provider_spending_cache, write_provider_spending_cache,
     };
 
+    if publish
+        && let Err(error) =
+            super::session_effort::maintain(&runtime.shared_spending_cursor_path(), now_secs)
+    {
+        tracing::warn!(%error, "failed to maintain session effort ledger");
+    }
     let provider_path = runtime.shared_provider_spending_path();
     let scope = SpendScope::for_workspace(
         context.project_root,
@@ -371,7 +377,8 @@ fn walk_fleet_spending_files(
         }
         let refreshed_at_ms = unix_now_ms();
         let user_inputs = user_input::load();
-        let roles = super::session_roles::load(&runtime.shared_spending_cursor_path(), now_secs);
+        let roles =
+            super::session_roles::load_history(&runtime.shared_spending_cursor_path(), now_secs);
         let result = crate::agents::spending::aggregate_walk_publish(
             files,
             &Default::default(),
@@ -491,8 +498,10 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
     }
 
     fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
-        let roles =
-            super::session_roles::load(&self.runtime.shared_spending_cursor_path(), self.now_secs);
+        let roles = super::session_roles::load_history(
+            &self.runtime.shared_spending_cursor_path(),
+            self.now_secs,
+        );
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,
