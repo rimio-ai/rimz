@@ -1318,6 +1318,9 @@ fn stop_drainer_sends_stop_to_a_drainer_that_binds_late() {
 
 #[test]
 fn drainer_lease_waits_for_a_late_socket() {
+    use std::io::{BufRead as _, BufReader};
+    use std::os::unix::net::UnixListener;
+
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
@@ -1327,17 +1330,190 @@ fn drainer_lease_waits_for_a_late_socket() {
     let socket = store.runtime_paths().hook_drainer_socket_path();
     let binder = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
-        std::os::unix::net::UnixListener::bind(socket).unwrap()
+        let listener = UnixListener::bind(socket).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut line = String::new();
+        let received = BufReader::new(&stream).read_line(&mut line);
+        let request = serde_json::from_str::<Value>(&line).unwrap_or_default();
+        if request["lease"] == true {
+            writeln!(stream, "{}", json!({"applied":0,"epoch":null,"reply":null})).unwrap();
+        }
+        (listener, stream, received, request)
     });
     let started = Instant::now();
     let lease = rimz::harness::hook_drain::DrainerLease::acquire(&store, Duration::from_secs(5));
-    let _listener = binder.join().unwrap();
+    let (_listener, _stream, received, request) = binder.join().unwrap();
+    assert_eq!(
+        request["lease"], true,
+        "the lease must request an answer: {received:?}; {request}"
+    );
+    assert_eq!(request["through"], 0);
+    assert!(request["reply_for"].is_null());
     assert!(
         lease.is_ok(),
         "lease did not wait for a late socket: {:?}",
         lease.err()
     );
     assert!(started.elapsed() < Duration::from_secs(5));
+    lease.unwrap().refresh().unwrap();
+}
+
+#[test]
+fn drainer_lease_requires_an_answer_before_its_deadline() {
+    use std::os::unix::net::UnixListener;
+
+    let mut unanswered = Vec::new();
+    for accept in [true, false] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let store = env.store();
+        let _spawning =
+            WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
+        let listener =
+            UnixListener::bind(store.runtime_paths().hook_drainer_socket_path()).unwrap();
+        let server = accept.then(|| {
+            let listener = listener.try_clone().unwrap();
+            std::thread::spawn(move || listener.accept().unwrap())
+        });
+        let started = Instant::now();
+        let lease =
+            rimz::harness::hook_drain::DrainerLease::acquire(&store, Duration::from_millis(200));
+        let _connection = server.map(|server| server.join().unwrap());
+        let failed = matches!(
+            lease,
+            Err(rimz::harness::hook_drain::HookDrainErr::NoReceipt { .. })
+        );
+        unanswered.push((accept, failed, started.elapsed()));
+    }
+    assert!(
+        unanswered.iter().all(|(_, failed, _)| *failed),
+        "an unserved socket must never grant a lease: {unanswered:?}"
+    );
+    assert!(
+        unanswered
+            .iter()
+            .all(|(_, _, elapsed)| *elapsed < Duration::from_secs(2)),
+        "the acquisition deadline must bound the answer wait: {unanswered:?}"
+    );
+}
+
+fn pin_drainer_spawn(env: &Env) {
+    let command = env.rimz();
+    let mut argv = vec!["/usr/bin/env".to_owned()];
+    for (name, _) in command.get_envs().filter(|(_, value)| value.is_none()) {
+        argv.extend(["-u".to_owned(), name.to_str().unwrap().to_owned()]);
+    }
+    argv.extend(command.get_envs().filter_map(|(name, value)| {
+        value.map(|value| format!("{}={}", name.to_str().unwrap(), value.to_str().unwrap()))
+    }));
+    argv.push(command.get_program().to_str().unwrap().to_owned());
+    let binary = crate::common::write_path_shim(
+        &env.home_root.join("drainer-bin"),
+        "rimz",
+        &format!(
+            "exec {} \"$@\"",
+            shlex::try_join(argv.iter().map(String::as_str)).unwrap()
+        ),
+    );
+    env.store()
+        .record_room_bin(
+            &env.resolve_workspace(&env.project_root),
+            binary,
+            "lease-test".to_owned(),
+        )
+        .unwrap();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn drainer_lease_rejects_an_exiting_drainers_backlog() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    pin_drainer_spawn(&env);
+    let store = env.store();
+    let barrier = store.runtime_paths().sock_dir.join("idle-exit.sock");
+    let listener = UnixListener::bind(&barrier).unwrap();
+    let mut drainer = drain_command(&env)
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "50")
+        .env("RIMZ_TEST_HOOK_DRAIN_BEFORE_UNLINK", &barrier)
+        .spawn()
+        .unwrap();
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut drainer),
+        &listener,
+        "drainer never decided to idle out",
+    );
+    let (answers, received) = mpsc::channel();
+    let acquiring = store.clone();
+    let worker = std::thread::spawn(move || {
+        answers
+            .send(rimz::harness::hook_drain::DrainerLease::acquire(
+                &acquiring,
+                Duration::from_secs(30),
+            ))
+            .unwrap();
+    });
+    let early = received.recv_timeout(Duration::from_millis(200));
+    release.write_all(&[1]).unwrap();
+    assert!(drainer.wait().unwrap().success());
+    let answered_early = early.is_ok();
+    let lease = early.unwrap_or_else(|_| received.recv_timeout(Duration::from_secs(30)).unwrap());
+    worker.join().unwrap();
+    assert!(
+        !answered_early,
+        "a backlog connection is not an answered lease from a live drainer"
+    );
+    let _lease = lease.unwrap();
+    let connection = drainer_connection(&store, None);
+    let pid = nix::sys::socket::getsockopt(&connection, nix::sys::socket::sockopt::PeerCredentials)
+        .unwrap()
+        .pid();
+    assert_ne!(
+        pid as u32,
+        drainer.id(),
+        "a successor must answer the lease"
+    );
+    assert!(rimz::proc::process_is_live(pid as u32, None));
+}
+
+#[test]
+fn drainer_lease_respawns_after_the_spawn_lock_is_released() {
+    use std::sync::mpsc;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    pin_drainer_spawn(&env);
+    let store = env.store();
+    let spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
+    let (started, running) = mpsc::channel();
+    let acquiring = store.clone();
+    let worker = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        rimz::harness::hook_drain::DrainerLease::acquire(&acquiring, Duration::from_secs(5))
+    });
+    running.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    drop(spawning);
+    let lease = worker.join().unwrap();
+    assert!(
+        lease.is_ok(),
+        "acquire must spawn again after contention: {:?}",
+        lease.err()
+    );
+    let _connection = drainer_connection(&store, None);
+    assert!(
+        WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn paused_drainer(

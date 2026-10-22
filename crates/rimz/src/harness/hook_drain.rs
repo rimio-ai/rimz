@@ -247,6 +247,8 @@ struct Request {
     epoch: Option<EventId>,
     #[serde(default)]
     stop: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lease: bool,
 }
 
 pub struct Connection {
@@ -269,6 +271,7 @@ impl Connection {
                 reply_for: None,
                 epoch: None,
                 stop: false,
+                lease: false,
             },
         )
     }
@@ -283,9 +286,38 @@ impl Connection {
                 reply_for: Some(reply_for),
                 epoch: None,
                 stop: false,
+                lease: false,
             },
         )?;
         read_line(&self.stream)
+    }
+
+    fn lease(mut self, deadline: Instant) -> Result<Self, HookDrainErr> {
+        let remaining = || {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "hook drainer lease timed out",
+                ));
+            }
+            Ok(remaining)
+        };
+        self.stream.set_write_timeout(Some(remaining()?))?;
+        write_line(
+            &mut self.stream,
+            &Request {
+                through: 0,
+                reply_for: None,
+                epoch: None,
+                stop: false,
+                lease: true,
+            },
+        )?;
+        self.stream.set_read_timeout(Some(remaining()?))?;
+        let _: DrainReceipt = read_line(&self.stream)?;
+        self.stream.set_nonblocking(true)?;
+        Ok(self)
     }
 }
 
@@ -295,21 +327,41 @@ pub struct DrainerLease {
 }
 
 impl DrainerLease {
+    /// Return only after a live drainer answers and retains this lease connection.
     pub fn acquire(store: &Store, wait: Duration) -> Result<Self, HookDrainErr> {
         let deadline = Instant::now() + wait;
-        spawn(store)?;
-        let connection = loop {
-            match Connection::connect(store) {
-                Ok(connection) => break connection,
-                Err(error) if Instant::now() >= deadline => return Err(error),
-                Err(_) => std::thread::sleep(RETRY),
+        loop {
+            spawn(store)?;
+            let round = Instant::now() + SOCKET_WAIT;
+            loop {
+                let connection = match Connection::connect(store) {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Err(error);
+                        }
+                        if now >= round {
+                            break;
+                        }
+                        std::thread::sleep(RETRY.min(deadline.saturating_duration_since(now)));
+                        continue;
+                    }
+                };
+                match connection.lease(deadline) {
+                    Ok(connection) => {
+                        return Ok(Self {
+                            store: store.clone(),
+                            connection,
+                        });
+                    }
+                    Err(_) if Instant::now() >= deadline => {
+                        return Err(HookDrainErr::NoReceipt { waited: wait });
+                    }
+                    Err(_) => break,
+                }
             }
-        };
-        connection.stream.set_nonblocking(true)?;
-        Ok(Self {
-            store: store.clone(),
-            connection,
-        })
+        }
     }
 
     pub fn refresh(&mut self) -> Result<(), HookDrainErr> {
@@ -350,6 +402,7 @@ pub fn nudge(store: &Store, through: u64) -> Result<(), HookDrainErr> {
                 reply_for: None,
                 epoch: None,
                 stop: false,
+                lease: false,
             },
         );
     }
@@ -436,6 +489,7 @@ pub fn drain_through(
         reply_for,
         epoch: None,
         stop: false,
+        lease: false,
     };
     let socket = store.runtime_paths().hook_drainer_socket_path();
     let lifetime_path = store.runtime_paths().hook_drainer_lock();
@@ -484,7 +538,13 @@ pub fn drain_through(
 struct Client {
     stream: UnixStream,
     bytes: Vec<u8>,
-    request: Option<Request>,
+    state: ClientState,
+}
+
+enum ClientState {
+    Reading,
+    Leased,
+    Requested(Request),
 }
 
 fn poll_clients(
@@ -500,7 +560,7 @@ fn poll_clients(
                 clients.push(Client {
                     stream,
                     bytes: Vec::new(),
-                    request: None,
+                    state: ClientState::Reading,
                 });
                 changed = true;
             }
@@ -514,17 +574,25 @@ fn poll_clients(
             Ok(0) => false,
             Ok(count) => {
                 client.bytes.extend_from_slice(&buffer[..count]);
-                if client.request.is_some() {
+                if !matches!(client.state, ClientState::Reading) {
                     false
                 } else if let Some(end) = client.bytes.iter().position(|byte| *byte == b'\n') {
                     match serde_json::from_slice::<Request>(&client.bytes[..end]) {
+                        Ok(request) if request.lease => {
+                            if write_line(&mut client.stream, &DrainReceipt::default()).is_ok() {
+                                client.state = ClientState::Leased;
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         Ok(mut request) => {
                             if request.through == 0 {
                                 request.through = fs::metadata(&store.paths().hook_ingress_log)
                                     .map(|metadata| metadata.len())
                                     .unwrap_or(0);
                             }
-                            client.request = Some(request);
+                            client.state = ClientState::Requested(request);
                             true
                         }
                         Err(error) => {
@@ -557,14 +625,14 @@ fn drain_clients(
         poll_clients(store, listener, clients)?;
         if clients
             .iter()
-            .any(|client| client.request.as_ref().is_some_and(|request| request.stop))
+            .any(|client| matches!(&client.state, ClientState::Requested(request) if request.stop))
         {
             stopping = true;
             answer_clients(drain, clients, false)?;
             return Ok(true);
         }
         for client in clients.iter_mut() {
-            if let Some(request) = client.request.as_mut() {
+            if let ClientState::Requested(request) = &mut client.state {
                 request.epoch = Some(drain.position(request).0);
             }
         }
@@ -589,7 +657,7 @@ fn answer_clients(
     let mut index = 0;
     while index < clients.len() {
         let client = &mut clients[index];
-        let Some(request) = client.request.as_ref() else {
+        let ClientState::Requested(request) = &client.state else {
             index += 1;
             continue;
         };
@@ -658,14 +726,17 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
         }
         if clients
             .iter()
-            .any(|client| client.request.as_ref().is_some_and(|request| request.stop))
+            .any(|client| matches!(&client.state, ClientState::Requested(request) if request.stop))
         {
             answer_clients(&mut drain, &mut clients, false)?;
             return Ok(());
         }
-        if clients.iter().any(|client| client.request.is_some()) {
+        if clients
+            .iter()
+            .any(|client| matches!(client.state, ClientState::Requested(_)))
+        {
             for client in &mut clients {
-                if let Some(request) = client.request.as_mut() {
+                if let ClientState::Requested(request) = &mut client.state {
                     request.epoch = Some(drain.position(request).0);
                 }
             }
@@ -708,6 +779,8 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
             Err(error) => return Err(io::Error::from(error).into()),
         }
     }
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_UNLINK");
     drop(socket_guard);
     drop(listener);
     #[cfg(feature = "testkit")]
@@ -1210,6 +1283,7 @@ mod tests {
             reply_for: None,
             epoch: None,
             stop: false,
+            lease: false,
         };
         let (_dir, store, _) = fixture(1);
         assert_eq!(Drainer::new(&store).receipt(&request, None).applied, 0);
