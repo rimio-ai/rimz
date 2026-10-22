@@ -259,6 +259,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         model_id: None,
         model_display_name: None,
         effort: None,
+        fast: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,

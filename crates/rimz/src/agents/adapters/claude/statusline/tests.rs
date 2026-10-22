@@ -46,6 +46,7 @@ fn full_payload_projects_every_field() {
         },
         "exceeds_200k_tokens": false,
         "effort": { "level": "high" },
+        "fast_mode": true,
         "thinking": { "enabled": true },
         "rate_limits": {
             "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600i64 },
@@ -63,6 +64,7 @@ fn full_payload_projects_every_field() {
     assert_eq!(ctx.model_id.as_deref(), Some("claude-opus-4-8"));
     assert_eq!(ctx.model_display_name.as_deref(), Some("Opus"));
     assert_eq!(ctx.effort.as_deref(), Some("high"));
+    assert_eq!(ctx.fast, Some(true));
     assert_eq!(ctx.thinking_enabled, Some(true));
     assert_eq!(ctx.output_style.as_deref(), Some("default"));
     assert_eq!(ctx.vim_mode.as_deref(), Some("NORMAL"));
@@ -124,6 +126,17 @@ fn full_payload_projects_every_field() {
     let pr = ctx.pr.unwrap();
     assert_eq!(pr.number, Some(1234));
     assert_eq!(pr.review_state.as_deref(), Some("pending"));
+}
+
+#[test]
+fn fast_mode_projects_enabled_disabled_and_unobserved() {
+    for (payload, expected) in [
+        (json!({"fast_mode": true}), Some(true)),
+        (json!({"fast_mode": false}), Some(false)),
+        (json!({}), None),
+    ] {
+        assert_eq!(parse(payload.clone()).fast, expected, "{payload}");
+    }
 }
 
 #[test]

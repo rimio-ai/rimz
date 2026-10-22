@@ -105,6 +105,9 @@ pub struct AgentContext {
     pub model_display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The provider's live fast-mode reading; absent until observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +207,7 @@ impl Default for AgentContext {
             model_id: None,
             model_display_name: None,
             effort: None,
+            fast: None,
             thinking_enabled: None,
             output_style: None,
             vim_mode: None,
@@ -336,6 +340,7 @@ pub struct LocalContextPatch {
     pub model_id: FieldPatch<String>,
     pub model_display_name: FieldPatch<String>,
     pub effort: FieldPatch<String>,
+    pub fast: FieldPatch<bool>,
     pub tokens: LocalTokenPatch,
     pub cost: FieldPatch<AgentCost>,
     pub turn_error: FieldPatch<AgentTurnError>,
@@ -363,6 +368,7 @@ impl LocalContextPatch {
         self.model_display_name
             .apply(&mut context.model_display_name);
         self.effort.apply(&mut context.effort);
+        self.fast.apply(&mut context.fast);
 
         let model_changed = prior_model_id != context.model_id
             || prior_model_display_name != context.model_display_name;

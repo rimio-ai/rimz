@@ -276,7 +276,7 @@ Any event may carry these optional fields:
 | `session_end` | none | Ends the session and hides its card; the session stays available to resume. |
 | `context` | shared fields, plus the context fields below | Updates the card's context, cost, and rate limits without changing state. |
 
-A `context` event also accepts the optional fields of RimZ's [`AgentContext`](../../crates/rimz/src/agents/context.rs) record, including `session_name`, `session_preview`, `model_id`, `effort`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. The top-level `model`, token, `context_pct`, `total_cost_usd`, and `rate_limits` fields fill the same record when its own fields are absent. RimZ sets `source` and `observed_at` itself.
+A `context` event also accepts the optional fields of RimZ's [`AgentContext`](../../crates/rimz/src/agents/context.rs) record, including `session_name`, `session_preview`, `model_id`, `effort`, `fast`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. `fast` is a live boolean reading: `false` clears the fast-mode badge, while an absent value preserves the last live reading or launch fallback. The top-level `model`, token, `context_pct`, `total_cost_usd`, and `rate_limits` fields fill the same record when its own fields are absent. RimZ sets `source` and `observed_at` itself.
 
 ### Dropped envelopes
 

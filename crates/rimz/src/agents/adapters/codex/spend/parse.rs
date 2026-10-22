@@ -191,8 +191,8 @@ pub(super) struct CodexSpendState {
     current_model: Option<String>,
     /// The service tier the latest `thread_settings_applied` carried is
     /// priority serving; it holds across cursors until another one says not.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    fast: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) fast: Option<bool>,
     /// The session `cwd` from the rollout's `session_meta` header, captured
     /// once and carried across resume cursors so every appended usage entry
     /// keeps its workspace origin without re-reading the header.
@@ -451,7 +451,7 @@ fn visit_session_entry(
         return;
     }
     if let RolloutKind::ThreadSettings { priority } = record.kind {
-        state.fast = priority;
+        state.fast = Some(priority);
         return;
     }
     let RolloutKind::TokenCount(token_count) = &record.kind else {
@@ -516,7 +516,7 @@ fn push_usage(
         total_tokens: raw.total_tokens,
         tool_calls: std::mem::take(&mut state.pending_tool_calls),
         timing,
-        fast: state.fast,
+        fast: state.fast.unwrap_or(false),
     });
 }
 

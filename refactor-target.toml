@@ -248,7 +248,13 @@ upward-dependencies = ["address"]
 # AgentSeat preserves solo/team provenance across the lifecycle hook and spending ledger (+1).
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
-surface-budget = 1123
+# AgentState::fast_mode shares live-over-launch truth with the CLI and sidebar projection (+1).
+surface-budget = 1124
+
+[[verdict]]
+kind = "item"
+key = "agents::state::AgentState::fast_mode"
+reason = "The CLI and sidebar card share one live-over-launch fast-mode decision."
 
 [[verdict]]
 kind = "item"

@@ -856,6 +856,19 @@ fn costs(path: &Path, resume: Option<&SpendCursor>) -> (Vec<f64>, SpendCursor) {
 }
 
 #[test]
+fn fast_cursor_distinguishes_unobserved_standard_and_legacy_priority() {
+    let empty = serde_json::to_value(CodexSpendState::default()).unwrap();
+    assert!(empty.get("fast").is_none());
+    let legacy: CodexSpendState =
+        serde_json::from_value(serde_json::json!({"fast": true})).unwrap();
+    assert_eq!(serde_json::to_value(legacy).unwrap()["fast"], true);
+    let (_dir, path) = write_session("standard-tier.jsonl", &[&tier_line(1, Some("default"))]);
+    let mut state = CodexSpendState::default();
+    parse_codex_session(&path, 0, &mut state);
+    assert_eq!(serde_json::to_value(state).unwrap()["fast"], false);
+}
+
+#[test]
 fn priority_thread_settings_price_following_turns_fast_until_the_tier_reverts() {
     let standard = 1000.0 * 1e-6 + 100.0 * 2e-6;
     let lines = [

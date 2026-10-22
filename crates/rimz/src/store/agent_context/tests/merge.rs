@@ -129,6 +129,30 @@ struct MergeCase {
 fn merge_local_context_preserves_prior_fields_by_case() {
     for case in [
         MergeCase {
+            name: "local fast reading replaces prior and Keep preserves it",
+            prior: |at| {
+                let mut prior = prior_effort(at);
+                prior.context.fast = Some(true);
+                prior
+            },
+            refresh: || {
+                let mut refresh = unknown_effort_refresh();
+                refresh.context.fast = FieldPatch::Set(false);
+                refresh
+            },
+            assert: |record, _, _| assert_eq!(record.context.fast, Some(false)),
+        },
+        MergeCase {
+            name: "unknown local fast reading keeps prior reading",
+            prior: |at| {
+                let mut prior = prior_effort(at);
+                prior.context.fast = Some(true);
+                prior
+            },
+            refresh: unknown_effort_refresh,
+            assert: |record, _, _| assert_eq!(record.context.fast, Some(true)),
+        },
+        MergeCase {
             name: "app-server fields survive local transcript refresh",
             prior: prior_app_server_fields,
             refresh: full_local_refresh,
@@ -550,6 +574,25 @@ fn observed_context_merge_preserves_fields_cost_coverage_and_monotonicity() {
 }
 
 #[test]
+fn observed_fast_reading_merges_enabled_disabled_and_unknown() {
+    let (_dir, runtime) = runtime();
+    for fast in [Some(true), Some(false), None] {
+        let context = AgentContext {
+            fast,
+            ..AgentContext::new("plugin", observed_at())
+        };
+        assert_eq!(
+            merge_observed(&runtime, "plugin", "sess-1", context).unwrap(),
+            fast.is_some()
+        );
+        assert_eq!(
+            read_one(&runtime, "plugin", "sess-1").unwrap().context.fast,
+            Some(fast.unwrap_or(false))
+        );
+    }
+}
+
+#[test]
 fn context_merge_accepts_model_and_effort_only_enrichment() {
     let (_dir, runtime) = runtime();
     let mut model_context = AgentContext::new("pi", observed_at());
@@ -927,6 +970,7 @@ fn observed_context() -> AgentContext {
         model_id: Some("gpt-5.5".to_owned()),
         model_display_name: Some("Fixture 5.5".to_owned()),
         effort: Some("high".to_owned()),
+        fast: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,

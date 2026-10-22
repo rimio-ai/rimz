@@ -2,6 +2,33 @@ use super::*;
 use crate::agents::{ParkDemotion, TurnSettle};
 
 #[test]
+fn fast_mode_prefers_live_reading_then_launch_then_standard() {
+    for (live, launch, expected) in [
+        (Some(true), Some(false), true),
+        (Some(false), Some(true), false),
+        (None, Some(true), true),
+        (None, None, false),
+    ] {
+        let mut agent = test_agent(AgentStatus::Idle, 1_000);
+        agent.context = Some(AgentContext {
+            fast: live,
+            ..Default::default()
+        });
+        agent.record = launch.map(|fast| {
+            Box::new(crate::agents::LaunchRecord {
+                fast,
+                ..Default::default()
+            })
+        });
+        assert_eq!(
+            agent.fast_mode(),
+            expected,
+            "live={live:?}, launch={launch:?}"
+        );
+    }
+}
+
+#[test]
 fn silent_child_includes_a_prompted_launch_that_never_started() {
     let mut child = test_agent(AgentStatus::Idle, 1_000);
     child.parent_agent_id = Some("parent".into());

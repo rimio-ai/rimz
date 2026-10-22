@@ -15,7 +15,7 @@ use super::install::{codex_config_path, read_existing_table};
 use super::rollout::{
     CodexTaskComplete, RolloutError, RolloutKind, RolloutRecord, decode_line, read_rollout_header,
 };
-use super::spend::{live_fold_needs_token_counter_backfill, resume_live_fold};
+use super::spend::{live_fast_mode, live_fold_needs_token_counter_backfill, resume_live_fold};
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
@@ -96,6 +96,7 @@ pub fn refresh_transcript_context(
         context: LocalContextPatch {
             model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
             effort: usage.effort.map_or(FieldPatch::Keep, FieldPatch::Set),
+            fast: live_fast_mode(&spend_fold).map_or(FieldPatch::Keep, FieldPatch::Set),
             tokens: LocalTokenPatch::PreserveEstablished(tokens),
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
             turn_error: turn_error.map_or(FieldPatch::Clear, FieldPatch::Set),

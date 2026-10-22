@@ -200,6 +200,7 @@ impl AgentContextRecord {
         merge_optional!(settle);
         merge_optional!(model_id);
         merge_optional!(effort);
+        merge_optional!(fast);
         if let Some(rate_limits) = context.rate_limits
             && self.context.rate_limits.as_ref() != Some(&rate_limits)
         {

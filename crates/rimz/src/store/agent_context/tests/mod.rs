@@ -17,6 +17,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
         model_id: Some("claude-opus-4-8".to_owned()),
         model_display_name: None,
         effort: None,
+        fast: None,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,
@@ -312,6 +313,20 @@ fn turn_openers_replace_and_survive_statusline_refresh() {
             .turn_opened_by
             .is_empty()
     );
+}
+
+#[test]
+fn statusline_refresh_replaces_the_live_fast_reading() {
+    let (_dir, runtime) = runtime();
+    for fast in [Some(true), Some(false), None] {
+        let mut context = ctx(Timestamp::now());
+        context.fast = fast;
+        write(&runtime, "claude", "sess-1", &context, None).unwrap();
+        assert_eq!(
+            read_one(&runtime, "claude", "sess-1").unwrap().context.fast,
+            fast
+        );
+    }
 }
 
 #[test]
