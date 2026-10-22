@@ -37,6 +37,13 @@ fn agents_flag_conflicts_with_other_explicit_views() {
     }
 }
 
+fn role_tally(tally: SpendTally) -> rimz::agents::spending::RoleTally {
+    rimz::agents::spending::RoleTally {
+        tally,
+        ..Default::default()
+    }
+}
+
 fn role_stats(
     agents: BTreeMap<String, SpendTally>,
     subagents: BTreeMap<String, SpendTally>,
@@ -52,8 +59,14 @@ fn role_stats(
         "removed-plugin".into(),
         every_window(tally(1_000, 100.0, 10)),
     );
-    cache.roles.agents = agents;
-    cache.roles.subagents = subagents;
+    cache.roles.agents = agents
+        .into_iter()
+        .map(|(profile, tally)| (profile, role_tally(tally)))
+        .collect();
+    cache.roles.subagents = subagents
+        .into_iter()
+        .map(|(profile, tally)| (profile, role_tally(tally)))
+        .collect();
     cache.roles.recorded_since_secs = Some(20_000 * 86_400 + 12 * 3_600);
     Stats::from_provider(cache)
 }
@@ -634,7 +647,9 @@ fn spend_first_publication_has_compact_json_and_panel() {
         .insert("codex".into(), every_window(tally(100, 60.0, 9)));
     cache.roles.subagents.insert(
         "fast".into(),
-        every_window(model_tally(2_000_000, 40.0, 1_500_000, 500_000, 3_000_000)),
+        role_tally(every_window(model_tally(
+            2_000_000, 40.0, 1_500_000, 500_000, 3_000_000,
+        ))),
     );
     for index in 0..5 {
         cache.models.insert(
@@ -845,14 +860,17 @@ fn week_scopes_plain_and_json_breakdowns_and_shares() {
     let mut row = every_window(tally(500, 50.0, 5));
     row.week = spend_window(50, 5.0, 30, 20, 0, 1);
     cache.models.insert("gpt-5".into(), produced(row.clone()));
-    cache.roles.subagents.insert("fast".into(), row.clone());
+    cache
+        .roles
+        .subagents
+        .insert("fast".into(), role_tally(row.clone()));
     cache
         .models
         .insert("old".into(), produced(tally(500, 50.0, 5)));
     cache
         .roles
         .subagents
-        .insert("old".into(), tally(500, 50.0, 5));
+        .insert("old".into(), role_tally(tally(500, 50.0, 5)));
     cache.days = BTreeMap::from([
         (20_000, day(100, 10.0)),
         (19_990, day(100, 10.0)),
@@ -1255,7 +1273,15 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         stats.total.month.tokens
     );
     assert_eq!(published.spending.by_provider, stats.by_provider);
-    assert_eq!(published.roles.subagents, stats.subagents);
+    assert_eq!(
+        published
+            .roles
+            .subagents
+            .into_iter()
+            .map(|(profile, entry)| (profile, entry.tally))
+            .collect::<BTreeMap<_, _>>(),
+        stats.subagents
+    );
     for transcript in [first, second] {
         assert!(
             cursor

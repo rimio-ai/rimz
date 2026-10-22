@@ -125,13 +125,184 @@ fn model_identity_uses_year_spend_then_tokens_then_kind() {
         let roles = serde_json::to_value(&result.roles).unwrap();
         assert_eq!(
             roles.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["agents", "recorded_since_secs", "subagents", "teams"]
+            [
+                "agents",
+                "effort_since_secs",
+                "recorded_since_secs",
+                "subagents",
+                "teams"
+            ]
         );
         assert!(roles["agents"].as_object().unwrap().is_empty());
         assert!(roles["recorded_since_secs"].is_null());
         assert!(roles["subagents"].as_object().unwrap().is_empty());
         assert!(roles["teams"].as_object().unwrap().is_empty());
     }
+}
+
+#[test]
+fn effort_uses_spend_windows_and_shared_placement_without_requiring_spend() {
+    use super::super::session_effort::{SessionEffortEvent, SessionEffortRecord};
+    use super::super::session_roles::{self, SessionRoleRecord};
+    use crate::ids::{AgentKind, WorkspaceId};
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths =
+        crate::RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let at = Timestamp::from_second(NOW_SECS as i64).unwrap();
+    for (kind, session, role) in [
+        (
+            "opencode",
+            "solo",
+            json!({"role":"agent", "profile":"solo.dotted", "seat":"solo"}),
+        ),
+        (
+            "claude",
+            "team",
+            json!({"role":"agent", "profile":"plain", "seat":{"team":"forge", "role":"coder"}}),
+        ),
+        (
+            "claude",
+            "legacy",
+            json!({"role":"agent", "profile":"forge.planner"}),
+        ),
+        (
+            "codex",
+            "child",
+            json!({"role":"subagent", "profile":"fast"}),
+        ),
+    ] {
+        session_roles::record(
+            &paths,
+            &SessionRoleRecord {
+                kind: AgentKind::new_unchecked(kind),
+                session: session.into(),
+                at,
+                role: serde_json::from_value(role).unwrap(),
+            },
+        )
+        .unwrap();
+    }
+    let spec = HeadlineSpec {
+        timezone: Some("Asia/Shanghai".into()),
+        ..Default::default()
+    };
+    let day = local_day_start_secs(NOW_SECS, spec.timezone.as_deref()).unwrap();
+    let seconds = [
+        NOW_SECS + 1,
+        day,
+        day - 1,
+        NOW_SECS - 7 * 86_400 + 1,
+        NOW_SECS - 7 * 86_400,
+        NOW_SECS - 30 * 86_400 + 1,
+        NOW_SECS - 30 * 86_400,
+        NOW_SECS - 365 * 86_400 + 1,
+        NOW_SECS - 365 * 86_400,
+    ];
+    let mut records: Vec<_> = seconds
+        .iter()
+        .map(|second| SessionEffortRecord {
+            kind: AgentKind::new_unchecked("opencode"),
+            session: "solo".into(),
+            at: Timestamp::from_second(*second as i64).unwrap(),
+            event: SessionEffortEvent::Active { active_ms: 1 },
+        })
+        .collect();
+    let receiver = SessionEffortRecord {
+        kind: AgentKind::new_unchecked("claude"),
+        session: "team".into(),
+        at,
+        event: SessionEffortEvent::FromUser,
+    };
+    records.extend([
+        receiver.clone(),
+        SessionEffortRecord {
+            event: SessionEffortEvent::FromAgent {
+                sender_kind: Some(AgentKind::new_unchecked("opencode")),
+                sender_session: Some("solo".into()),
+            },
+            ..receiver.clone()
+        },
+        SessionEffortRecord {
+            event: SessionEffortEvent::FromAgent {
+                sender_kind: None,
+                sender_session: None,
+            },
+            ..receiver.clone()
+        },
+        SessionEffortRecord {
+            session: "legacy".into(),
+            event: SessionEffortEvent::Active { active_ms: 100 },
+            ..receiver.clone()
+        },
+        SessionEffortRecord {
+            session: "orphan".into(),
+            event: SessionEffortEvent::FromAgent {
+                sender_kind: Some(AgentKind::new_unchecked("codex")),
+                sender_session: Some("child".into()),
+            },
+            ..receiver
+        },
+    ]);
+    let segment = paths.shared_session_effort(at.to_zoned(jiff::tz::TimeZone::UTC).date());
+    std::fs::create_dir_all(segment.parent().unwrap()).unwrap();
+    let mut bytes = Vec::new();
+    for record in records {
+        serde_json::to_writer(&mut bytes, &record).unwrap();
+        bytes.push(b'\n');
+    }
+    std::fs::write(segment, bytes).unwrap();
+    let history = session_roles::load_history(&paths.shared_spending_cursor_path(), NOW_SECS);
+    let transcript = PathBuf::from("/x/opencode.db");
+    let files = vec![spending_file(opencode_adapter(), transcript.clone())];
+    let entries = seconds
+        .iter()
+        .map(|second| CachedEntry {
+            input: 1,
+            output: 0,
+            cache_write: 0,
+            ..cached_entry(*second, 1.0, "solo")
+        })
+        .collect();
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&transcript, entries)]),
+        ..Default::default()
+    };
+    let result = aggregate_walk_publish(&files, &cache, &[], NOW_SECS, None, &spec, &history);
+    let roles = serde_json::to_value(&result.roles).unwrap();
+    assert_eq!(roles["effort_since_secs"], NOW_SECS - 365 * 86_400);
+    for window in ["day", "week", "month", "year"] {
+        assert_eq!(
+            roles["agents"]["solo.dotted"]["effort"][window]["active_ms"],
+            roles["agents"]["solo.dotted"][window]["tokens"],
+            "effort must match spend membership at {window} boundaries"
+        );
+        assert_eq!(
+            roles["agents"]["solo.dotted"]["effort"][window]["to_teammates"],
+            1
+        );
+        let team = &roles["teams"]["forge"]["coder"];
+        assert_eq!(
+            team[window]["usd"], 0.0,
+            "effort alone creates a role entry"
+        );
+        assert_eq!(
+            team["effort"][window],
+            json!({"active_ms":0,"from_user":1,"from_teammates":2,"to_teammates":0})
+        );
+        assert_eq!(
+            roles["teams"]["forge"]["planner"]["effort"][window]["active_ms"],
+            100
+        );
+        assert_eq!(
+            roles["subagents"]["fast"]["effort"][window]["to_teammates"], 1,
+            "unknown receiver must not hide a known sender"
+        );
+    }
+    assert_eq!(roles["agents"].as_object().unwrap().len(), 1);
+    assert_eq!(roles["teams"]["forge"].as_object().unwrap().len(), 2);
+    assert_eq!(roles["subagents"].as_object().unwrap().len(), 1);
 }
 
 #[test]
@@ -329,7 +500,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             .values()
             .chain(result.roles.subagents.values())
         {
-            sum.merge(window(tally));
+            sum.merge(window(&tally.tally));
         }
         for team in published_roles["teams"].as_object().unwrap().values() {
             for role in team.as_object().unwrap().values() {

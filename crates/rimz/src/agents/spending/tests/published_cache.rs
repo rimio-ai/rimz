@@ -185,6 +185,36 @@ fn absent_role_maps_default_to_empty() {
 }
 
 #[test]
+fn published_role_entries_keep_spend_and_default_missing_effort_fields() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("provider-spending.json");
+    let mut value = serde_json::to_value(ProviderSpendingCache::default()).unwrap();
+    let mut entry = serde_json::to_value(model_tally(100, 2.0, 70, 30, 0)).unwrap();
+    entry["effort"] = serde_json::json!({"year":{"active_ms":1234,"from_user":2}});
+    value["roles"] = serde_json::json!({"agents":{"solo":entry},"teams":{"forge":{"coder":{}}},"subagents":{"fast":{}},"effort_since_secs":123});
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let cache = read_provider_spending_cache(&path);
+    let roles = serde_json::to_value(&cache.roles).unwrap();
+    assert_eq!(roles["agents"]["solo"]["year"]["usd"], 2.0);
+    assert_eq!(roles["agents"]["solo"]["effort"]["year"]["active_ms"], 1234);
+    assert_eq!(
+        roles["agents"]["solo"]["effort"]["year"]["from_teammates"],
+        0
+    );
+    assert_eq!(
+        roles["teams"]["forge"]["coder"]["effort"]["day"]["from_user"],
+        0
+    );
+    assert_eq!(roles["subagents"]["fast"]["year"]["usd"], 0.0);
+    assert_eq!(roles["effort_since_secs"], 123);
+    write_provider_spending_cache(&path, &cache);
+    assert_eq!(
+        serde_json::to_value(read_provider_spending_cache(&path).roles).unwrap(),
+        roles
+    );
+}
+
+#[test]
 fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("workspace-spending.json");

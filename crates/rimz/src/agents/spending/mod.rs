@@ -140,16 +140,17 @@ pub struct SpendingWalkResult {
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RoleTallies {
     #[serde(default)]
-    pub agents: BTreeMap<String, SpendTally>,
+    pub agents: BTreeMap<String, RoleTally>,
     #[serde(default)]
-    pub teams: BTreeMap<String, BTreeMap<String, SpendTally>>,
+    pub teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
     #[serde(default)]
-    pub subagents: BTreeMap<String, SpendTally>,
+    pub subagents: BTreeMap<String, RoleTally>,
     pub recorded_since_secs: Option<u64>,
+    pub effort_since_secs: Option<u64>,
 }
 
 impl RoleTallies {
-    fn entry(&mut self, placement: session_roles::Placement<'_>) -> &mut SpendTally {
+    fn entry(&mut self, placement: session_roles::Placement<'_>) -> &mut RoleTally {
         use session_roles::Placement;
 
         match placement {
@@ -164,6 +165,44 @@ impl RoleTallies {
                 self.subagents.entry(profile.to_owned()).or_default()
             }
         }
+    }
+}
+
+/// Spend and recorded effort for one solo profile, team role, or subagent profile.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RoleTally {
+    #[serde(flatten)]
+    pub tally: SpendTally,
+    pub effort: EffortTally,
+}
+
+/// Recorded effort over the same local day and trailing windows as spend.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EffortTally {
+    pub day: EffortWindow,
+    pub week: EffortWindow,
+    pub month: EffortWindow,
+    pub year: EffortWindow,
+}
+
+/// Released active-time milliseconds and attribution-style message counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EffortWindow {
+    pub active_ms: u64,
+    pub from_user: u64,
+    pub from_teammates: u64,
+    pub to_teammates: u64,
+}
+
+impl EffortWindow {
+    fn merge(&mut self, other: Self) {
+        self.active_ms = self.active_ms.saturating_add(other.active_ms);
+        self.from_user = self.from_user.saturating_add(other.from_user);
+        self.from_teammates = self.from_teammates.saturating_add(other.from_teammates);
+        self.to_teammates = self.to_teammates.saturating_add(other.to_teammates);
     }
 }
 
@@ -454,7 +493,7 @@ impl SpendingWalker {
         self.ensure_memo(req.files, &mut stats);
         let locations = &self.memo.as_ref().expect("memo seeded above").counted;
         let counted = indexed_counted_entries(req.files, &self.cache, locations);
-        let roles = session_roles::load(cache_path, req.now_secs);
+        let roles = session_roles::load_history(cache_path, req.now_secs);
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,

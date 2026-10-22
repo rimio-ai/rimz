@@ -61,6 +61,130 @@ fn published_workspace_fixture() -> (tempfile::TempDir, RuntimePaths) {
     (dir, runtime)
 }
 
+fn effort_fixture() -> (tempfile::TempDir, RuntimePaths, u64) {
+    use crate::agents::spending::{session_effort, session_roles};
+    let (dir, runtime) = published_workspace_fixture();
+    let at = Timestamp::from_second(1_750_000_000).unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    session_roles::record(
+        &runtime,
+        &session_roles::SessionRoleRecord {
+            kind: kind.clone(),
+            session: "effort-only".into(),
+            at,
+            role: session_roles::SessionRole::Subagent {
+                profile: "fast".into(),
+            },
+        },
+    )
+    .unwrap();
+    let record = session_effort::SessionEffortRecord {
+        kind,
+        session: "effort-only".into(),
+        at,
+        event: session_effort::SessionEffortEvent::Active { active_ms: 1234 },
+    };
+    let path = runtime.shared_session_effort(at.to_zoned(jiff::tz::TimeZone::UTC).date());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    (dir, runtime, at.as_second() as u64)
+}
+
+#[test]
+fn walker_includes_effort_without_any_transcript_files() {
+    let (_dir, runtime, now_secs) = effort_fixture();
+    let result = SpendingWalker::new().walk_local(
+        &runtime.shared_spending_cursor_path(),
+        &crate::agents::spending::WalkRequest {
+            files: &[],
+            prices: &Default::default(),
+            now_secs,
+            origin_overrides: &Default::default(),
+            user_inputs: &[],
+            scope: None,
+            spec: &HeadlineSpec::default(),
+        },
+        &mut crate::agents::spending::SilentWalk,
+    );
+    let roles = serde_json::to_value(result.roles).unwrap();
+    assert_eq!(
+        roles["subagents"]["fast"]["effort"]["year"]["active_ms"],
+        1234
+    );
+}
+
+#[test]
+fn checkpoint_publication_includes_effort_without_spend() {
+    use crate::agents::spending::WalkObserver;
+    let (_dir, runtime, now_secs) = effort_fixture();
+    let mut progress = |_| {};
+    let spec = HeadlineSpec::default();
+    let mut observer = super::PublishingWalkObserver {
+        runtime: &runtime,
+        provider_path: runtime.shared_provider_spending_path(),
+        files: &[],
+        user_inputs: &[],
+        now_secs,
+        scope: None,
+        scope_hash: None,
+        spec: &spec,
+        progress: &mut progress,
+    };
+    observer.on_interval(&Default::default());
+    let roles = serde_json::to_value(
+        read_provider_spending_cache(&runtime.shared_provider_spending_path()).roles,
+    )
+    .unwrap();
+    assert_eq!(
+        roles["subagents"]["fast"]["effort"]["year"]["active_ms"],
+        1234
+    );
+}
+
+#[test]
+fn empty_fleet_publication_includes_effort_and_maintains_old_segments() {
+    use crate::agents::spending::session_effort::{
+        SessionEffortEvent, SessionEffortRecord, read_segment,
+    };
+    let (_dir, runtime, now_secs) = effort_fixture();
+    let old = Timestamp::from_second(now_secs as i64 - 10 * 86_400).unwrap();
+    let old_path = runtime.shared_session_effort(old.to_zoned(jiff::tz::TimeZone::UTC).date());
+    let record = SessionEffortRecord {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: "effort-only".into(),
+        at: old,
+        event: SessionEffortEvent::FromUser,
+    };
+    std::fs::write(
+        &old_path,
+        format!("{}\n", serde_json::to_string(&record).unwrap()),
+    )
+    .unwrap();
+    let request = service_request(&runtime, None, &HeadlineSpec::default());
+    let context = super::request_context(&request, true);
+    let result = super::walk_fleet_spending_files(
+        &mut SpendingWalker::new(),
+        &runtime,
+        &context,
+        true,
+        &mut |_| {},
+        &[],
+        now_secs,
+    );
+    let roles = serde_json::to_value(result.provider.roles).unwrap();
+    assert_eq!(
+        roles["subagents"]["fast"]["effort"]["year"]["active_ms"],
+        1234
+    );
+    assert!(
+        matches!(
+            read_segment(&old_path)[0].event,
+            SessionEffortEvent::Totals { from_user: 1, .. }
+        ),
+        "the producer must maintain effort segments even with no spend files"
+    );
+}
+
 fn publish_workspace(runtime: &RuntimePaths, scope_hash: &str, usd: f64) {
     let mut cache = crate::agents::spending::WorkspaceSpendingCache {
         scope_hash: scope_hash.to_owned(),
