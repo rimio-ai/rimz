@@ -704,7 +704,7 @@ Workspace reset and cleanup use `kill-session`. `kill-server` is reserved for ex
 
 ### Every managed client runs from `/`
 
-A tmux server inherits its working directory from the client that births it, and tmux's `spawn.c` applies a pane's `chdir(cwd)` only while `getcwd()` succeeds on the server. A server born in a directory that is later deleted (a disposable worktree, a swept tempdir) places every later pane in that deleted directory, even when RimZ passes an absolute `-c`.
+A tmux server inherits its working directory from the client that births it. Since tmux 3.7, `spawn.c` applies a pane's `chdir(cwd)` only while `getcwd()` succeeds on the server. A server born in a directory that is later deleted (a disposable worktree, a swept tempdir) therefore places every later pane in that deleted directory, even when RimZ passes an absolute `-c`. Earlier releases honour `-c` regardless of the server's working directory.
 
 `/` cannot be deleted or unmounted, so birth and rebirth always start from a readable directory. The Zellij plugin forks from `/` for the same reason.
 

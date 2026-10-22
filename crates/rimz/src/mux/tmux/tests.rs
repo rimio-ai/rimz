@@ -110,9 +110,9 @@ fn managed_endpoint_prefixes_every_command() {
         ["-S", "/run/user/1000/rimz/tmux/server", "-u"],
         "commands address the RimZ-owned server with a UTF-8 client",
     );
-    // A tmux server inherits its cwd from the client that births it, and only
-    // honours a pane's `-c` while `getcwd()` succeeds. Birth from a directory
-    // that can be deleted strands every later pane there.
+    // A server inherits its cwd from the client that births it. Since tmux 3.7,
+    // `-c` needs the server's `getcwd()` to succeed, so a deleted cwd strands
+    // panes. Earlier releases honour `-c` regardless.
     assert_eq!(spec.cwd.as_deref(), Some(Path::new("/")));
     assert!(
         spec.env_remove.contains("TMUX"),

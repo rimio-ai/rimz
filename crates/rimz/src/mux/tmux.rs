@@ -229,13 +229,13 @@ pub(crate) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 
 /// Working directory for every managed tmux client.
 ///
-/// A tmux server inherits its cwd from the client that births it, and
-/// `spawn.c` honours a pane's `-c` only when `getcwd()` on the server
-/// succeeds. A server born in a directory that is later deleted therefore
-/// strands every later pane in that deleted directory even when RimZ passes an
-/// absolute `-c`. `/` cannot be deleted or unmounted, so birth and rebirth
-/// always start from a readable cwd. The Zellij plugin host forks from `/` for
-/// the same reason.
+/// A tmux server inherits its cwd from the client that births it. Since tmux
+/// 3.7, `spawn.c` honours a pane's `-c` only when `getcwd()` on the server
+/// succeeds, so a deleted server cwd strands every later pane there. Earlier
+/// releases honour `-c` regardless of the server's cwd.
+///
+/// `/` cannot be deleted or unmounted, so birth and rebirth always start from
+/// a readable cwd. The Zellij plugin host forks from `/` for the same reason.
 const MANAGED_SERVER_CWD: &str = "/";
 
 #[derive(Debug)]
@@ -320,12 +320,12 @@ impl TmuxBackend {
 
     /// Prove the server honoured `-c` for a session this call just created.
     ///
-    /// tmux only performs the pane's `chdir` while `getcwd()` on the server
-    /// succeeds, so a server whose own working directory was deleted silently
-    /// strands every later pane there. Reading the birth pane back tests that
-    /// property directly, and portably — the alternative, inspecting the
-    /// daemon's live cwd, is unavailable on some hosts and only a proxy for
-    /// what actually matters.
+    /// Since tmux 3.7, the pane's `chdir` only happens while `getcwd()` on the
+    /// server succeeds, so a deleted server cwd silently strands every later
+    /// pane there. Earlier releases honour `-c` regardless of the server's cwd.
+    /// Reading the birth pane back tests placement directly and portably:
+    /// inspecting the daemon's live cwd is unavailable on some hosts and only a
+    /// proxy for what actually matters.
     pub(super) fn verify_birth_cwd(&self, session: &str, requested: &Path) -> Result<()> {
         let output = self
             .cmd()
