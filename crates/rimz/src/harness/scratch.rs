@@ -1,4 +1,4 @@
-//! Shared team memory-file discovery and advisory blackboard stage parsing.
+//! Shared team memory-file discovery, advisory stage parsing, and checkout-board holds.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -252,6 +252,28 @@ pub fn board_stage(root: &Path) -> Option<BoardStage> {
     parse_board_stage(&board)
 }
 
+/// Name the team holding a checkout against automatic removal, or none when free.
+///
+/// Done and missing boards hold nothing; stage-less or unreadable boards stay protective.
+/// A symlinked `.rimz` owns no board, since registration refuses one: the board
+/// behind it belongs to the checkout the link shares.
+pub fn holding_team(checkout: &Path) -> Option<String> {
+    if std::fs::symlink_metadata(checkout.join(".rimz")).is_ok_and(|meta| meta.is_symlink()) {
+        return None;
+    }
+    match std::fs::read_to_string(board_path(checkout)) {
+        Ok(board) => {
+            let stage = parse_board_stage(&board);
+            if !super::fleet::team_stage_pending(stage.as_ref().map(|stage| stage.name.as_str())) {
+                return None;
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => {}
+    }
+    Some(run_team(&checkout.join(TEAM_LINK)).unwrap_or_else(|| "unknown".to_owned()))
+}
+
 pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
     let stage = board
         .lines()
@@ -319,6 +341,85 @@ pub(super) fn is_atx_heading(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn holding_team_follows_the_link_and_releases_done_boards() {
+        let checkout = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        assert_eq!(holding_team(checkout.path()), None);
+        std::fs::write(checkout.path().join(BOARD_FILE), "Stage: Build\n").unwrap();
+        assert_eq!(holding_team(checkout.path()), None, "legacy board ignored");
+        std::fs::create_dir(checkout.path().join(".rimz")).unwrap();
+        let link = checkout.path().join(TEAM_LINK);
+        std::os::unix::fs::symlink(run.path(), &link).unwrap();
+        std::fs::write(run.path().join("run.json"), r#"{"team":"forge"}"#).unwrap();
+        assert_eq!(holding_team(checkout.path()), None, "run without a board");
+        let board = run.path().join(BOARD_FILE);
+        std::fs::write(&board, "Stage: Build (@coder)\nStage: Done\n").unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("forge"));
+        std::fs::write(&board, "Stage: Done\nStage: Build (@coder)\n").unwrap();
+        assert_eq!(holding_team(checkout.path()), None);
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(run.path().join("missing"), &link).unwrap();
+        assert_eq!(holding_team(checkout.path()), None, "dangling link");
+    }
+
+    #[test]
+    fn holding_team_keeps_a_board_without_a_stage() {
+        let checkout = tempfile::tempdir().unwrap();
+        let run = checkout.path().join(TEAM_LINK);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join(BOARD_FILE), "# Board\n## Goal\nKeep working\n").unwrap();
+        std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("forge"));
+    }
+
+    #[test]
+    fn holding_team_names_unknown_owners() {
+        let checkout = tempfile::tempdir().unwrap();
+        let run = checkout.path().join(TEAM_LINK);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join(BOARD_FILE), "Stage: Build\n").unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("unknown"));
+        for owner in ["{}", "not json"] {
+            std::fs::write(run.join("run.json"), owner).unwrap();
+            assert_eq!(holding_team(checkout.path()).as_deref(), Some("unknown"));
+        }
+    }
+
+    #[test]
+    fn holding_team_keeps_unreadable_boards() {
+        let checkout = tempfile::tempdir().unwrap();
+        let run = checkout.path().join(TEAM_LINK);
+        std::fs::create_dir_all(run.join(BOARD_FILE)).unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("unknown"));
+        std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("forge"));
+        std::fs::remove_dir(run.join(BOARD_FILE)).unwrap();
+        std::fs::write(run.join(BOARD_FILE), [0xff]).unwrap();
+        assert_eq!(holding_team(checkout.path()).as_deref(), Some("forge"));
+        let file_rimz = tempfile::tempdir().unwrap();
+        std::fs::write(file_rimz.path().join(".rimz"), "").unwrap();
+        assert_eq!(
+            holding_team(file_rimz.path()).as_deref(),
+            Some("unknown"),
+            "a regular-file .rimz is unreadable, not a shared link"
+        );
+    }
+
+    #[test]
+    fn holding_team_ignores_a_board_behind_a_shared_rimz_link() {
+        let root = tempfile::tempdir().unwrap();
+        let run = root.path().join(TEAM_LINK);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join(BOARD_FILE), "Stage: Build (@coder)\n").unwrap();
+        std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(root.path().join(".rimz"), worktree.path().join(".rimz"))
+            .unwrap();
+        assert_eq!(holding_team(root.path()).as_deref(), Some("forge"));
+        assert_eq!(holding_team(worktree.path()), None);
+    }
 
     #[test]
     fn board_run_reads_stage_and_optional_ledger() {

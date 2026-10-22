@@ -3,7 +3,7 @@
 //! Worktrees are identified by a marker stored in the linked worktree's git
 //! admin directory, not in the checkout. The checkout remains pristine, and
 //! removal only ever removes marked worktrees. Removal assessment combines Git
-//! safety with normalized pane and agent occupancy facts and loop-task pins.
+//! safety with normalized pane and agent occupancy facts, loop-task pins, and team-board pins.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -427,11 +427,15 @@ pub struct Holders {
     pub agents: Vec<String>,
     pub panes: u32,
     pub loop_tasks: Vec<String>,
+    pub teams: Vec<String>,
 }
 
 impl Holders {
     pub fn is_empty(&self) -> bool {
-        self.agents.is_empty() && self.panes == 0 && self.loop_tasks.is_empty()
+        self.agents.is_empty()
+            && self.panes == 0
+            && self.loop_tasks.is_empty()
+            && self.teams.is_empty()
     }
 }
 
@@ -448,6 +452,7 @@ impl std::fmt::Display for Holders {
                 .iter()
                 .map(|name| format!("loop task {name}")),
         );
+        parts.extend(self.teams.iter().map(|name| format!("team {name}")));
         f.write_str(&parts.join(", "))
     }
 }
@@ -534,7 +539,7 @@ struct AgentProtectionFact {
     process_cwd: Option<PathBuf>,
 }
 
-/// Normalized paths whose panes, agents, or loop tasks prevent checkout removal.
+/// Normalized paths whose panes, agents, loop tasks, or team boards prevent checkout removal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionSet {
     paths: Vec<(PathBuf, Holder)>,
@@ -545,6 +550,7 @@ enum Holder {
     Agent(String),
     Pane(PaneId),
     LoopTask(String),
+    Team(String),
 }
 
 /// Which agent records keep a checkout occupied.
@@ -560,7 +566,8 @@ pub enum Occupancy {
 }
 
 /// Fold current pane and agent state into worktree removal protection policy.
-/// Callers add loop-task pins separately through [`ProtectionSet::insert_loop_task`].
+///
+/// Callers add task and team pins separately through [`ProtectionSet`].
 pub fn protection_set_from_runtime(
     panes: &[PaneRef],
     agents: &[AgentState],
@@ -601,6 +608,11 @@ impl ProtectionSet {
         self.insert(Some(path), Holder::LoopTask(name.to_owned()));
     }
 
+    /// Add a team's pinned path without importing board discovery or caller policy.
+    pub fn insert_team(&mut self, name: &str, path: &Path) {
+        self.insert(Some(path), Holder::Team(name.to_owned()));
+    }
+
     pub fn holders(&self, candidate: &Path) -> Holders {
         let candidate = normalize_path_lexical(candidate);
         let mut holders = Holders::default();
@@ -623,13 +635,18 @@ impl ProtectionSet {
                         holders.loop_tasks.push(name.clone());
                     }
                 }
+                Holder::Team(name) => {
+                    if !holders.teams.contains(name) {
+                        holders.teams.push(name.clone());
+                    }
+                }
             }
         }
         holders.panes = panes.len().try_into().unwrap_or(u32::MAX);
         holders
     }
 
-    /// Fold already-probed occupancy facts before adding loop-task pins.
+    /// Fold already-probed occupancy facts before adding loop-task and team-board pins.
     fn from_facts(
         panes: &[PaneProtectionFact],
         agents: &[AgentProtectionFact],

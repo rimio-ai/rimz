@@ -468,6 +468,7 @@ fn holder_chips(holders: &Holders, limit: usize) -> String {
             .iter()
             .map(|name| format!("loop task {name}")),
     );
+    chips.extend(holders.teams.iter().map(|name| format!("team {name}")));
     if chips.is_empty() {
         return "-".to_owned();
     }
@@ -607,6 +608,36 @@ struct WorktreeSweepJson<'a> {
     sweep: &'a rimz::worktree::WorktreeSweep,
 }
 
+fn in_use_details(holders: &Holders) -> Vec<String> {
+    let mut details = Vec::new();
+    if !holders.agents.is_empty() {
+        details.push(holder_chips(
+            &Holders {
+                agents: holders.agents.clone(),
+                ..Holders::default()
+            },
+            4,
+        ));
+    }
+    if holders.panes > 0 {
+        details.push(
+            Holders {
+                panes: holders.panes,
+                ..Holders::default()
+            }
+            .to_string(),
+        );
+    }
+    details.extend(
+        holders
+            .loop_tasks
+            .iter()
+            .map(|name| format!("loop task {name}")),
+    );
+    details.extend(holders.teams.iter().map(|name| format!("team {name}")));
+    details
+}
+
 fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool, dir: &Path) -> Result<()> {
     let mut out = render::out();
     let action = if dry_run { "would remove" } else { "removed" };
@@ -653,34 +684,11 @@ fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool, dir: &Path
         }
         let mut table = render::Table::new(["", ""]).without_headers().indent(2);
         for kept in group {
-            let mut details = Vec::new();
-            if reason == KeepReason::InUse {
-                if !kept.holders.agents.is_empty() {
-                    details.push(holder_chips(
-                        &Holders {
-                            agents: kept.holders.agents.clone(),
-                            ..Holders::default()
-                        },
-                        4,
-                    ));
-                }
-                if kept.holders.panes > 0 {
-                    details.push(
-                        Holders {
-                            agents: Vec::new(),
-                            panes: kept.holders.panes,
-                            ..Holders::default()
-                        }
-                        .to_string(),
-                    );
-                }
-                details.extend(
-                    kept.holders
-                        .loop_tasks
-                        .iter()
-                        .map(|name| format!("loop task {name}")),
-                );
-            }
+            let mut details = if reason == KeepReason::InUse {
+                in_use_details(&kept.holders)
+            } else {
+                Vec::new()
+            };
             for extra in kept.reasons.iter().skip(1) {
                 details.push(format!(
                     "also {}",
@@ -867,13 +875,14 @@ pub(super) fn cleanup_worktree(
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let workspace = cleanup_workspace(&marker, globals)?;
-    let protections = match super::worktree_protection::for_wrapper_cleanup(&workspace, globals) {
-        Ok(protection) => protection.protections,
-        Err(error) => {
-            tracing::debug!(%error, "loop tasks unavailable; wrapper checkout kept");
-            return Ok(());
-        }
-    };
+    let protections =
+        match super::worktree_protection::for_wrapper_cleanup(&workspace, path, globals) {
+            Ok(protection) => protection.protections,
+            Err(error) => {
+                tracing::debug!(%error, "loop tasks unavailable; wrapper checkout kept");
+                return Ok(());
+            }
+        };
     let memo = rimz::worktree::LandedMemo::load(path);
     let state = rimz::worktree::inspect(path, &marker, &protections, &memo)?;
     let result = (|| {
@@ -1057,6 +1066,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn holder_chips_include_teams_after_loop_tasks() {
+        let holders = Holders {
+            agents: vec!["@coder".into(), "@reviewer".into()],
+            loop_tasks: vec!["nightly".into()],
+            teams: vec!["forge".into()],
+            ..Holders::default()
+        };
+        assert_eq!(
+            holder_chips(&holders, 1),
+            "@coder +1 loop task nightly team forge"
+        );
+        assert_eq!(holder_chips(&Holders::default(), 3), "-");
+    }
+
+    #[test]
+    fn sweep_in_use_details_include_teams_after_loop_tasks() {
+        let holders = Holders {
+            agents: vec!["@coder".into()],
+            panes: 2,
+            loop_tasks: vec!["nightly".into()],
+            teams: vec!["forge".into()],
+        };
+        assert_eq!(
+            in_use_details(&holders),
+            ["@coder", "2 open panes", "loop task nightly", "team forge"]
+        );
+    }
+
+    #[test]
     fn missing_worktree_names_show_near_matches_and_owned_counts() {
         let parent = Path::new("/repo-worktrees");
         assert_eq!(
@@ -1114,7 +1152,7 @@ mod tests {
                     "dirty": false,
                     "landed": landed,
                     "reasons": reasons,
-                    "holders": {"agents": [], "panes": 0, "loop_tasks": []},
+                    "holders": {"agents": [], "panes": 0, "loop_tasks": [], "teams": []},
                 })
             );
         }

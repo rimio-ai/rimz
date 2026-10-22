@@ -340,7 +340,7 @@ fn worktree_new_list_and_remove_round_trip() {
             "dirty": false,
             "landed": true,
             "reasons": [],
-            "holders": {"agents": [], "panes": 0, "loop_tasks": []},
+            "holders": {"agents": [], "panes": 0, "loop_tasks": [], "teams": []},
         })
     );
 
@@ -638,6 +638,205 @@ fn loop_tasks_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
         .assert()
         .success();
     assert!(!path.exists());
+}
+
+#[test]
+fn team_boards_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let path = team_worktree(&env, "followup", "Stage: Build (@coder)\n");
+    for args in [
+        vec!["worktree", "sweep", "--dry-run", "--json"],
+        vec!["worktree", "sweep", "--json"],
+    ] {
+        let output = env.rimz().args(args).assert().success();
+        let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+        assert_eq!(report["removed"], serde_json::json!([]));
+        assert_eq!(report["kept"][0]["reasons"], serde_json::json!(["in_use"]));
+        assert_eq!(
+            report["kept"][0]["holders"]["teams"],
+            serde_json::json!(["forge"])
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .assert()
+        .success();
+    let rows: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(rows[0]["holders"]["teams"], serde_json::json!(["forge"]));
+    assert_eq!(rows[0]["reasons"], serde_json::json!(["in_use"]));
+    env.rimz()
+        .args(["worktree", "list"])
+        .assert()
+        .success()
+        .stdout(contains("team forge").and(contains("1 in use")));
+    env.rimz()
+        .args(["worktree", "sweep"])
+        .assert()
+        .success()
+        .stdout(contains("kept, in use").and(contains("team forge")));
+    let output = env
+        .rimz()
+        .args(["gc", "--dry-run", "--json"])
+        .assert()
+        .success();
+    let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(
+        report["worktrees"]["kept"][0]["holders"]["teams"],
+        serde_json::json!(["forge"])
+    );
+    assert_eq!(
+        report["worktrees"]["kept"][0]["reasons"],
+        serde_json::json!(["in_use"])
+    );
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(path.exists());
+    env.rimz()
+        .args(["worktree", "merge", "followup", "--yes"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "remove", "followup"])
+        .assert()
+        .success();
+    assert!(!path.exists());
+}
+
+#[test]
+fn team_boards_hold_cleanup_until_done() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let path = team_worktree(&env, "followup", "Stage: Build (@coder)\n");
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(path.exists(), "unfinished team keeps its checkout");
+    assert!(git_succeeds(
+        &env.project_root,
+        &["show-ref", "--verify", "refs/heads/followup"]
+    ));
+    std::fs::write(path.join(".rimz/team/blackboard.md"), "Stage: Done\n").unwrap();
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(!path.exists(), "Done releases the checkout");
+    assert!(!git_succeeds(
+        &env.project_root,
+        &["show-ref", "--verify", "refs/heads/followup"]
+    ));
+}
+
+#[test]
+fn dangling_team_link_does_not_hold_cleanup() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let path = team_worktree(&env, "followup", "Stage: Build\n");
+    std::fs::remove_dir_all(env.home_root.join("team-run-followup")).unwrap();
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(!path.exists());
+}
+
+fn team_worktree(env: &Env, name: &str, board: &str) -> std::path::PathBuf {
+    env.rimz()
+        .args(["worktree", "new", name])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join(name);
+    let run = env.home_root.join(format!("team-run-{name}"));
+    std::fs::create_dir(&run).unwrap();
+    std::fs::write(run.join("blackboard.md"), board).unwrap();
+    std::fs::write(run.join("run.json"), r#"{"team":"forge"}"#).unwrap();
+    std::fs::create_dir_all(path.join(".rimz")).unwrap();
+    std::os::unix::fs::symlink(&run, path.join(".rimz/team")).unwrap();
+    rimz::worktree::exclude_team_scratch(&path, &["/.rimz/team".to_owned()]);
+    assert!(git_stdout(&path, &["status", "--porcelain"]).is_empty());
+    path
+}
+
+#[test]
+fn team_board_listing_failure_refuses_automatic_sweep() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let path = team_worktree(&env, "followup", "Stage: Build\n");
+    let real_git = which::which("git").unwrap();
+    let bin = env.home_root.join("failing-git");
+    let log = env.home_root.join("list-calls");
+    crate::common::write_path_shim(
+        &bin,
+        "git",
+        r#"
+case " $* " in
+    *' worktree list '*)
+        printf 'list\n' >> "$RIMZ_TEST_GIT_LOG"
+        printf 'worktree listing unavailable\n' >&2
+        exit 1
+        ;;
+esac
+exec "$RIMZ_TEST_REAL_GIT" "$@"
+"#,
+    );
+    for args in [
+        vec!["worktree", "sweep"],
+        vec!["worktree", "sweep", "--dry-run"],
+        vec!["gc", "--json"],
+        vec!["gc", "--dry-run", "--json"],
+    ] {
+        std::fs::write(&log, "").unwrap();
+        let mut command = env.rimz();
+        command
+            .args(&args)
+            .env("PATH", path_with_front(&bin))
+            .env("RIMZ_TEST_REAL_GIT", &real_git)
+            .env("RIMZ_TEST_GIT_LOG", &log);
+        if args[0] == "worktree" {
+            command.assert().code(1).stderr(contains(
+                "reading protection facts before sweeping worktrees",
+            ));
+        } else {
+            let output = command.assert().success();
+            let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+            assert_eq!(report["worktrees"]["skipped"], "list_failed");
+        }
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "list\n",
+            "{args:?}: one enumeration attempt"
+        );
+        assert!(path.exists());
+    }
 }
 
 #[test]

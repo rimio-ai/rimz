@@ -199,7 +199,10 @@ fn render_report_names_every_kept_worktree_and_reason() {
                     name: "active".to_owned(),
                     path: PathBuf::from("/repo-worktrees/active"),
                     reasons: vec![KeepReason::InUse, KeepReason::Dirty, KeepReason::Unlanded],
-                    holders: rimz::worktree::Holders::default(),
+                    holders: rimz::worktree::Holders {
+                        teams: vec!["forge".into()],
+                        ..rimz::worktree::Holders::default()
+                    },
                 },
                 KeptWorktree {
                     name: "dirty".to_owned(),
@@ -221,6 +224,7 @@ fn render_report_names_every_kept_worktree_and_reason() {
 
     assert!(out.contains("3 kept — 1 in use, 1 with uncommitted changes, 1 with unlanded work"));
     assert!(out.contains("kept: active — in use, uncommitted changes, unlanded work"));
+    assert!(out.contains("(team forge)"), "{out}");
     assert!(out.contains("kept: dirty — uncommitted changes, unlanded work"));
     assert!(out.contains("kept: unlanded — unlanded work"));
 }
@@ -356,6 +360,10 @@ fn json_report_serializes_gc_schema() {
     assert_eq!(value["worktrees"]["failed"][0]["error"], "remove boom");
     assert_eq!(
         value["worktrees"]["kept"][0]["holders"]["loop_tasks"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        value["worktrees"]["kept"][0]["holders"]["teams"],
         serde_json::json!([])
     );
     assert_eq!(

@@ -619,18 +619,47 @@ fn loop_pins_hold_containing_tree_and_deduplicate_names() {
 }
 
 #[test]
+fn team_pins_hold_containing_tree_and_deduplicate_names() {
+    let mut protections = ProtectionSet::default();
+    protections.insert_team("forge", Path::new("/trees/demo/subdir/../src"));
+    protections.insert_team("forge", Path::new("/trees/demo"));
+    protections.insert_team("outside", Path::new("/trees/other"));
+    let holders = protections.holders(Path::new("/trees/demo"));
+    assert_eq!(holders.teams, ["forge"]);
+    assert!(!holders.is_empty());
+    assert_eq!(
+        WorktreeState {
+            status: WorktreeStatus::default(),
+            holders
+        }
+        .keep_reasons(),
+        [KeepReason::InUse]
+    );
+    assert!(protections.holders(Path::new("/trees/dem")).is_empty());
+}
+
+#[test]
 fn holders_render_loop_tasks_after_agents_and_panes() {
     let holders = Holders {
         agents: vec!["@coder".into()],
         panes: 1,
         loop_tasks: vec!["nightly".into()],
+        teams: vec!["forge".into()],
     };
     assert_eq!(
         holders.to_string(),
-        "@coder, an open pane, loop task nightly"
+        "@coder, an open pane, loop task nightly, team forge"
     );
     assert_eq!(
         serde_json::to_value(Holders::default()).unwrap()["loop_tasks"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        serde_json::to_value(&holders).unwrap()["teams"],
+        serde_json::json!(["forge"])
+    );
+    assert_eq!(
+        serde_json::to_value(Holders::default()).unwrap()["teams"],
         serde_json::json!([])
     );
 }
