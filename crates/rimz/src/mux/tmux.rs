@@ -19,6 +19,7 @@ mod window;
 pub use presence::{ControlLine, PresenceWatch, TmuxLayoutPane};
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -238,6 +239,11 @@ pub(crate) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 /// a readable cwd. The Zellij plugin host forks from `/` for the same reason.
 const MANAGED_SERVER_CWD: &str = "/";
 
+// tmux 3.6 builds with systemd can spend about a second in `StartTransientUnit`
+// before the child chdirs, so give a mismatching cwd seconds to converge.
+const BIRTH_CWD_POLL_TIMEOUT: Duration = Duration::from_secs(3);
+const BIRTH_CWD_POLL_STEP: Duration = Duration::from_millis(25);
+
 #[derive(Debug)]
 pub struct TmuxBackend {
     /// The tmux server socket every command addresses. Always set: the managed
@@ -322,32 +328,51 @@ impl TmuxBackend {
     ///
     /// Since tmux 3.7, the pane's `chdir` only happens while `getcwd()` on the
     /// server succeeds, so a deleted server cwd silently strands every later
-    /// pane there. Earlier releases honour `-c` regardless of the server's cwd.
+    /// pane there. Before 3.7, the pane honours `-c` after the fork regardless
+    /// of the server's cwd, so an early read can show the server's own directory.
+    /// Re-read non-empty mismatches until the path matches, reads empty, or the
+    /// bound passes; a stranding server never converges.
+    ///
     /// Reading the birth pane back tests placement directly and portably:
     /// inspecting the daemon's live cwd is unavailable on some hosts and only a
     /// proxy for what actually matters.
     pub(super) fn verify_birth_cwd(&self, session: &str, requested: &Path) -> Result<()> {
-        let output = self
-            .cmd()
-            .args([
-                "display-message",
-                "-p",
-                "-t",
-                session,
-                "-F",
-                "#{pane_current_path}",
-            ])
-            .output_raw_with_timeout(super::command::LIST_SESSIONS_TIMEOUT)?;
-        let actual = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        // An unreadable answer is unknown, not unsafe: birth already succeeded,
-        // and refusing on a probe that could not speak would strand hosts whose
-        // tmux reports nothing here.
-        if actual.is_empty() {
-            return Ok(());
-        }
-        if Path::new(&actual) == requested {
-            return Ok(());
-        }
+        self.verify_birth_cwd_within(session, requested, BIRTH_CWD_POLL_TIMEOUT)
+    }
+
+    fn verify_birth_cwd_within(
+        &self,
+        session: &str,
+        requested: &Path,
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut deadline = None;
+        let actual = loop {
+            let output = self
+                .cmd()
+                .args([
+                    "display-message",
+                    "-p",
+                    "-t",
+                    session,
+                    "-F",
+                    "#{pane_current_path}",
+                ])
+                .output_raw_with_timeout(super::command::LIST_SESSIONS_TIMEOUT)?;
+            let actual = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            // An unreadable answer is unknown, not unsafe: birth already succeeded,
+            // and refusing on a probe that could not speak would strand hosts whose
+            // tmux reports nothing here.
+            if actual.is_empty() || Path::new(&actual) == requested {
+                return Ok(());
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                break actual;
+            }
+            // A slow first read must not spend the convergence window.
+            deadline.get_or_insert_with(|| Instant::now() + timeout);
+            std::thread::sleep(BIRTH_CWD_POLL_STEP);
+        };
         Err(MuxErr::ServerCwdUnusable {
             session: session.to_owned(),
             requested: requested.to_path_buf(),

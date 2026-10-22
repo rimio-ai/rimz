@@ -708,7 +708,7 @@ A tmux server inherits its working directory from the client that births it. Sin
 
 `/` cannot be deleted or unmounted, so birth and rebirth always start from a readable directory. The Zellij plugin forks from `/` for the same reason.
 
-Session birth checks the property: it reads the birth pane's `pane_current_path` back, and on a mismatch fails with `MuxErr::ServerCwdUnusable`, whose message gives the socket-scoped `tmux -S <socket> kill-server` fix. Reading the pane back tests what matters and works on every host; the daemon's own working directory is only a proxy and cannot be read on some platforms.
+Session birth checks the property by reading the birth pane's `pane_current_path` back. Before tmux 3.7 the pane enters the requested directory after the fork, so an early read can show the server's own directory. A matching or empty read passes immediately; on a non-empty mismatch, birth re-reads every 25 ms until a read matches, reads empty, or still mismatches after a 3 s bound counted from the first mismatch. A server that strands panes never converges, so a mismatch after the bound fails with `MuxErr::ServerCwdUnusable`, whose message gives the socket-scoped `tmux -S <socket> kill-server` fix. Reading the pane back tests what matters and works on every host; the daemon's own working directory is only a proxy and cannot be read on some platforms.
 
 ### Room options
 
