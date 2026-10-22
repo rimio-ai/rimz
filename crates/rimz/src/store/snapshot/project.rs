@@ -527,10 +527,18 @@ impl ReducerState {
             return;
         };
         if let Some(provisional) = self.retire_provisional(&provisional_key)
-            && let Some(launch_id) = provisional.launch_id
             && let Some(existing) = self.map.get_mut(key)
         {
-            existing.set_launch_id(launch_id);
+            if let Some(launch_id) = provisional.launch_id {
+                existing.set_launch_id(launch_id);
+            }
+            existing.record = provisional.record;
+            existing.tier = provisional.tier;
+            existing.mode = provisional.mode;
+            existing.isolation = provisional.isolation;
+            existing.effective_isolation = provisional
+                .effective_isolation
+                .or(existing.effective_isolation);
             self.launch_identity.replace(key, existing);
         }
     }
