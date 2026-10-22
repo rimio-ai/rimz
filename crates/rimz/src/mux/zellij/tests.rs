@@ -2949,8 +2949,8 @@ fn reconcile_reports_missing_mount_heartbeat_without_a_parse_error() {
     );
     assert!(
         warnings.contains(
-            "multiplexer command failed: zellij new-pane: sidebar zellij:terminal_9 \
-             mounted in tab 40 without a current-build heartbeat"
+            "sidebar zellij:terminal_9 mounted in tab 40 but published no \
+             current-build heartbeat within 6 s"
         ),
         "{warnings}"
     );
