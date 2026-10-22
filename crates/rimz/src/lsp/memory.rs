@@ -36,7 +36,9 @@ fn tree_with(
     Reading {
         rss_kb,
         swap_kb: status.swap_kb,
-        peak_kb: status.peak_rss_kb.max(rss_kb),
+        peak_kb: status
+            .peak_rss_kb
+            .max(rss_kb.saturating_add(status.swap_kb)),
     }
 }
 
@@ -67,7 +69,7 @@ mod tests {
     fn tree_peak_uses_high_water_with_sampled_floor() {
         for (peak, rss, expected) in [
             (Some(200), Some(100), 200),
-            (Some(100), Some(200), 200),
+            (Some(100), Some(200), 250),
             (None, Some(100), 100),
             (Some(100), None, 100),
             (None, None, 0),
