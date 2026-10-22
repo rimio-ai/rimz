@@ -3958,6 +3958,64 @@ fn verify_reprompt_interrupt_stays_canceled() {
 }
 
 #[cfg(unix)]
+#[test]
+fn sigterm_during_verify_cancels_without_reprompting() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut command = verifying_print_command(
+        &env,
+        "verify-term",
+        2,
+        &pane_fixture,
+        None,
+        "trap 'exit 0' TERM; touch verify-ready; while :; do sleep 0.05; done",
+    );
+    let mut child = command.spawn().expect("spawn verifying print");
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    register_verify_agent(&env, &store, &mut completed);
+    completed.status = RunStatus::Completed;
+    finish_run(&store, &mut completed);
+    let ready = env.project_root.join("verify-ready");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "runner exited before verify"
+        );
+        assert!(Instant::now() < deadline, "verify never started");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let stored = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "SIGTERM did not end verify: {stored:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(130), "{output:?}");
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert_eq!(stored.status, RunStatus::Canceled);
+    assert_eq!(stored.verify.unwrap().attempts, 1);
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "SIGTERM must never queue a verify re-prompt"
+    );
+}
+
+#[cfg(unix)]
 fn spawn_retrying_print(
     env: &Env,
     trace_name: &str,
@@ -4014,6 +4072,27 @@ fn spawn_verifying_print(
     pane_fixture: &std::path::Path,
     timeout: Option<&str>,
 ) -> std::process::Child {
+    verifying_print_command(
+        env,
+        trace_name,
+        max_attempts,
+        pane_fixture,
+        timeout,
+        "printf 'verify red\\n' >&2; test -f .verify-green",
+    )
+    .spawn()
+    .expect("spawn verifying print")
+}
+
+#[cfg(unix)]
+fn verifying_print_command(
+    env: &Env,
+    trace_name: &str,
+    max_attempts: u32,
+    pane_fixture: &std::path::Path,
+    timeout: Option<&str>,
+    verify: &str,
+) -> Command {
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(env);
     trust_codex_project(env, &env.project_root);
@@ -4032,7 +4111,7 @@ fn spawn_verifying_print(
             "fix it",
             "-p",
             "--verify",
-            "printf 'verify red\\n' >&2; test -f .verify-green",
+            verify,
             "--max-attempts",
             &max_attempts.to_string(),
         ])
@@ -4053,7 +4132,7 @@ fn spawn_verifying_print(
     if let Some(timeout) = timeout {
         command.args(["--timeout", timeout]);
     }
-    command.spawn().expect("spawn verifying print")
+    command
 }
 
 #[cfg(unix)]

@@ -335,6 +335,21 @@ pub(super) fn run_one(
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
     };
+    if let Some(holder) = finished.replace_holder.as_deref() {
+        match stop_active_run(
+            name,
+            &entry.resolved_root(),
+            schedule::backlog::StopCause::Replace,
+            Some(*holder),
+            globals,
+        ) {
+            Ok((_, None)) => {}
+            Ok((_, Some(open))) => tracing::warn!(task = name, "{open}"),
+            Err(error) => {
+                tracing::warn!(task = name, %error, "replacement could not stop the active run; trigger remains waiting")
+            }
+        }
+    }
     fire.release_run_lock()?;
     present_finished(name, &entry, &action, mode, keep, &finished)?;
     if let Some(code) = finished.presentation.exit_code {
@@ -474,7 +489,7 @@ fn record_task_error(
     let finished = fire.finish_error(&err);
     let transition = finished.transition;
     skip_or_error(finished, err).inspect_err(|err| {
-        handle_run_transition(name, entry, transition);
+        handle_run_transition(name, &entry.resolved_root(), transition);
         tracing::warn!(task = name, error = %err, "loop task run failed");
     })
 }
@@ -491,17 +506,17 @@ fn skip_or_error(
     }
 }
 
-fn handle_run_transition(name: &str, entry: &TaskEntry, transition: RunTransition) {
+pub(super) fn handle_run_transition(name: &str, root: &Path, transition: RunTransition) {
     if let RunTransition::AutoDisabled { strikes } = transition {
         let _ = writeln!(
             ui::out(),
             "loop `{name}`: disabled after {strikes} consecutive failed fires; enable with `rimz loop enable {name}`"
         );
-        notify_loop_disabled(name, entry, strikes);
+        notify_loop_disabled(name, root, strikes);
     }
 }
 
-fn notify_loop_disabled(name: &str, entry: &TaskEntry, count: u32) {
+fn notify_loop_disabled(name: &str, root: &Path, count: u32) {
     let notification = rimz::sidebar::notify::Notification {
         agents: Vec::new(),
         notification_kind: rimz::sidebar::notify::NotificationKind::LoopDisabled,
@@ -514,7 +529,7 @@ fn notify_loop_disabled(name: &str, entry: &TaskEntry, count: u32) {
     let prefs = MachineConfig::load_lenient().notifications.clone();
     rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
 
-    let runtime = match RuntimePaths::for_project_root(&entry.resolved_root()) {
+    let runtime = match RuntimePaths::for_project_root(root) {
         Ok(runtime) => runtime,
         Err(err) => {
             tracing::debug!(task = name, error = %err, "loop auto-disable runtime unavailable");
@@ -547,7 +562,7 @@ fn present_finished(
 ) -> Result<()> {
     use rimz::harness::schedule::runner::TaskFireNotice;
 
-    handle_run_transition(name, entry, finished.transition);
+    handle_run_transition(name, &entry.resolved_root(), finished.transition);
     match &finished.notice {
         TaskFireNotice::Gate { reason } => {
             if mode == LoopRunMode::Manual {

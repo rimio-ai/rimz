@@ -1080,8 +1080,10 @@ path = "crates/rimz/src/harness"
 # SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve the single-session CLI (+3).
 # schedule::backlog's reader/schema and TaskFire::{take_backlog, release_run_lock} cross the CLI boundary (+9).
 # runner::discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# runner::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-surface-budget = 958
+# runner::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
+surface-budget = 960
 
 [[verdict]]
 kind = "item"
@@ -2578,8 +2580,10 @@ allowed-dependencies = [
 # signal_subject shares delivered headline composition with events list (+1).
 # TaskFire::take_backlog and TaskFire::release_run_lock coordinate CLI drain gates and process exit (+2).
 # discard_backlog lets the CLI drop an unrunnable task's triggers before constructing a fire (+1).
+# CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
-surface-budget = 57
+# cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
+surface-budget = 59
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
@@ -2855,6 +2859,16 @@ reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
 kind = "item"
 key = "harness::schedule::runner::TaskFire::with_arrived_at"
 reason = "Signal firing time crosses the CLI boundary separately from the runner's fresh gate clock."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::CheckOutcome::terminated"
+reason = "Supervised verify must cancel on a caught SIGTERM, not re-prompt as it does on a red check."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::cancel_run_on_sigterm"
+reason = "Loop-owned supervised waits share the check driver's SIGTERM bookkeeping to cancel durably without overriding its conditional default."
 
 [[verdict]]
 kind = "item"
@@ -8280,11 +8294,6 @@ reason = "Loop and workflow judges share launch-plan compilation and materializa
 kind = "item"
 key = "harness::headless::ProcessErr"
 reason = "Bounded headless execution preserves directory and version refusals versus I/O failure."
-
-[[verdict]]
-kind = "item"
-key = "harness::headless::execute"
-reason = "The loop runner retains its injectable process-runner signature."
 
 [[verdict]]
 kind = "item"

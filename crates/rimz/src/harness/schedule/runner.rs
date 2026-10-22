@@ -17,6 +17,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::super::assist_log::{self, Assist, AssistRecord};
 use super::{
     LOOP_TASK_ENV,
-    backlog::{self, WaitingTrigger},
+    backlog::{self, StopCause, StopMark, WaitingTrigger},
     backlog_store::{self, LockedBacklog},
     fire::deadline_expired_at,
     throttle,
@@ -51,7 +52,7 @@ use crate::config::{
 use crate::disk::lease::{Lease, LeaseAttempt, LeaseState, claim, probe};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
-use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
+use crate::harness::run::{RunCancellation, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, JudgeRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
@@ -124,6 +125,7 @@ pub struct TaskFireFinished {
     pub presentation: LoopRunPresentation,
     pub transition: RunTransition,
     pub notice: TaskFireNotice,
+    pub replace_holder: Option<Box<RunLockInfo>>,
 }
 
 /// One fired guard check awaiting CLI presentation before its effect.
@@ -435,7 +437,7 @@ pub struct TaskFire<'a> {
     condition: Option<super::when::ConditionEvidence>,
     checkout: Option<PathBuf>,
     started: Instant,
-    run_lock: Option<Lease>,
+    run_lock: Option<RunLockGuard>,
     backlog_paths: Option<StatePaths>,
     absorbed: u64,
     needs_room: bool,
@@ -607,24 +609,52 @@ impl<'a> TaskFire<'a> {
         });
     }
 
-    fn reconcile_backlog(&mut self) -> Result<()> {
+    fn reconcile_backlog(&mut self) -> Result<Option<TaskFireFinished>> {
+        let Some(holder) = self.run_lock.as_ref().map(|guard| guard.info) else {
+            return Ok(None);
+        };
+        let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+        let mut backlog = match LockedBacklog::acquire(&paths) {
+            Ok(backlog) => backlog,
+            Err(error)
+                if self.mode != LoopRunMode::Scheduled
+                    || self.entry.overlap.unwrap_or_default() == OverlapPolicy::Skip =>
+            {
+                tracing::warn!(task = %self.name, %error, "failed to read loop stop mark; continuing without it");
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
+            return Ok(None);
+        };
+        if waiting
+            .stopping
+            .as_ref()
+            .is_some_and(|mark| holder.matches_stop(mark))
+        {
+            drop(backlog);
+            return Ok(Some(self.record_terminal_with(
+                LoopRunResult::Canceled,
+                LoopRunPresentation {
+                    exit_code: LoopRunResult::Canceled.spawn_exit_code(),
+                    ..LoopRunPresentation::default()
+                },
+                TaskFireNotice::None,
+                None,
+                |_| {},
+            )));
+        }
         if self.mode != LoopRunMode::Scheduled
             || !matches!(
                 self.entry.overlap,
                 Some(OverlapPolicy::Coalesce | OverlapPolicy::Replace)
             )
         {
-            return Ok(());
+            return Ok(None);
         }
-        let Some(paths) = self.backlog_paths.clone() else {
-            return Ok(());
-        };
-        let mut backlog = LockedBacklog::acquire(&paths)?;
-        let Some(waiting) = backlog.record.tasks.get_mut(&self.name) else {
-            return Ok(());
-        };
         let Some(mut newest) = waiting.triggers.pop_back() else {
-            return Ok(());
+            return Ok(None);
         };
         for older in waiting.triggers.drain(..).rev() {
             newest.absorb(older);
@@ -632,7 +662,7 @@ impl<'a> TaskFire<'a> {
         newest.absorb(self.waiting_trigger());
         backlog.save()?;
         self.serve_trigger(newest);
-        Ok(())
+        Ok(None)
     }
 
     pub fn with_arrived_at(mut self, arrived_at: Option<Timestamp>) -> Self {
@@ -795,7 +825,9 @@ impl<'a> TaskFire<'a> {
                 if let Some(done) = self.prepare_throttle()? {
                     return Ok(TaskFirePlan::Done(done));
                 }
-                self.reconcile_backlog()?;
+                if let Some(done) = self.reconcile_backlog()? {
+                    return Ok(TaskFirePlan::Done(done));
+                }
                 self.prepare_spawn(spec)
             }
             TaskAction::Deliver(target) => self.prepare_delivery(target),
@@ -1126,11 +1158,38 @@ impl<'a> TaskFire<'a> {
                     let waiting = backlog.record.tasks.entry(self.name.clone()).or_default();
                     let enqueued = waiting.enqueue(policy, limit, self.waiting_trigger());
                     let count = waiting.triggers.len();
+                    let mut replace_holder = None;
+                    let stopping = if policy == OverlapPolicy::Replace
+                        && let Some(info) = info
+                        && !throttle::held(&self.name, &self.entry.resolved_root())
+                            .iter()
+                            .any(|held| held.pid == info.pid)
+                    {
+                        if !waiting
+                            .stopping
+                            .as_ref()
+                            .is_some_and(|mark| info.matches_stop(mark))
+                        {
+                            waiting.stopping = Some(StopMark {
+                                pid: info.pid,
+                                started_at: info.started_at,
+                                cause: StopCause::Replace,
+                            });
+                            replace_holder = Some(Box::new(info));
+                        }
+                        true
+                    } else {
+                        false
+                    };
                     backlog.save()?;
                     let suffix = if !enqueued {
                         format!("queue full ({count}/{limit}), skipped")
                     } else if policy == OverlapPolicy::Queue {
                         format!("waiting (queue {count}/{limit})")
+                    } else if stopping {
+                        "stopping it for this trigger".to_owned()
+                    } else if policy == OverlapPolicy::Replace && info.is_none() {
+                        "waiting (holder identity unavailable)".to_owned()
                     } else {
                         "waiting".to_owned()
                     };
@@ -1145,7 +1204,7 @@ impl<'a> TaskFire<'a> {
                         },
                     );
                     let detail = Some(format!("{holder} — {suffix}"));
-                    return Ok(Some(self.record_terminal_with(
+                    let mut finished = self.record_terminal_with(
                         if enqueued {
                             LoopRunResult::Deferred
                         } else {
@@ -1157,7 +1216,9 @@ impl<'a> TaskFire<'a> {
                         },
                         None,
                         |record| record.error = detail,
-                    )));
+                    );
+                    finished.replace_holder = replace_holder;
+                    return Ok(Some(finished));
                 }
                 RunLockAttempt::Held(info) => return Ok(Some(self.record_overlap(info))),
             }
@@ -1890,7 +1951,7 @@ impl<'a> TaskFire<'a> {
     fn finish_record(
         &mut self,
         mut record: LoopRunRecord,
-        presentation: LoopRunPresentation,
+        mut presentation: LoopRunPresentation,
         notice: TaskFireNotice,
         at: Option<Timestamp>,
     ) -> TaskFireFinished {
@@ -1907,7 +1968,11 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, error = %format!("{err:#}"), "failed to remove a fired fire-at task");
         }
-        let transition = run_log::record_transition(&self.task, &record);
+        let result = record.result;
+        let transition = self.record_and_release(&mut record);
+        if record.result != result {
+            presentation.exit_code = record.result.spawn_exit_code();
+        }
         self.finished = true;
         // A turn this fire never reported is released with its row.
         self.throttle_turn = None;
@@ -1916,6 +1981,51 @@ impl<'a> TaskFire<'a> {
             presentation,
             transition,
             notice,
+            replace_holder: None,
+        }
+    }
+
+    fn record_and_release(&mut self, record: &mut LoopRunRecord) -> RunTransition {
+        let Some(holder) = self.run_lock.as_ref().map(|guard| guard.info) else {
+            return run_log::record_transition(&self.task, record);
+        };
+        let result = (|| -> Result<RunTransition> {
+            let root = self.entry.resolved_root();
+            let paths = StatePaths::for_project_root(&root)?;
+            let mut backlog = LockedBacklog::acquire(&paths)?;
+            let stopping = backlog
+                .record
+                .tasks
+                .get_mut(&self.name)
+                .and_then(|task| task.stopping.take_if(|mark| holder.matches_stop(mark)));
+            if let Some(mark) = &stopping {
+                if record.result == LoopRunResult::Canceled {
+                    set_stopped_result(record, mark.cause);
+                }
+                if let Err(error) = backlog.save() {
+                    // The surviving mark leaves the row to the stop ladder;
+                    // writing it here would let both sides record this run.
+                    tracing::warn!(task = %self.name, %error, "failed to retire loop stop mark; leaving terminal history to the stop ladder");
+                    self.run_lock = None;
+                    return Ok(RunTransition::Recorded);
+                }
+            }
+            let transition = run_log::record_transition(&self.task, record);
+            let release = spawn_backlog_drain(&paths, &root, &self.name, &backlog.record);
+            // Keep the terminal row and release in one critical section: a stop
+            // must not install a new mark after this row has already been written.
+            self.run_lock = None;
+            if let Err(error) = release {
+                tracing::warn!(task = %self.name, %error, "failed to start loop backlog drain");
+            }
+            Ok(transition)
+        })();
+        match result {
+            Ok(transition) => transition,
+            Err(error) => {
+                tracing::warn!(task = %self.name, %error, "failed to lock loop backlog for terminal history");
+                run_log::record_transition(&self.task, record)
+            }
         }
     }
 }
@@ -2460,8 +2570,7 @@ pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
     let Some((_, holder)) = held_run_lock(name, root)? else {
         return Ok(None);
     };
-    let project_root = WorkspaceResolver::persisted_project_root(root)
-        .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
+    let (_, project_root) = stop_workspace(root)?;
     let held = throttle::held(name, root);
     // A holder still held for its turn has started no run of its own.
     let holder_held = holder.is_some_and(|info| held.iter().any(|held| held.pid == info.pid));
@@ -2491,6 +2600,7 @@ pub enum StopOutcome {
     Stopped {
         run_id: Option<RunId>,
         signaled: bool,
+        waiting: usize,
     },
 }
 
@@ -2498,42 +2608,89 @@ pub enum StopOutcome {
 pub fn stop_task(
     name: &str,
     root: &Path,
+    cause: StopCause,
+    expected: Option<RunLockInfo>,
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
-) -> Result<StopOutcome> {
+) -> Result<(StopOutcome, RunTransition)> {
+    if expected.is_none() && held_run_lock(name, root)?.is_none() {
+        return Ok((StopOutcome::NoActiveRun, RunTransition::Recorded));
+    }
+    let (workspace, project_root) = stop_workspace(root)?;
+    let paths = StatePaths::for_project_root(&project_root)?;
+    let backlog_paths = StatePaths::for_project_root(root)?;
+    let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
     let Some((lock, holder)) = held_run_lock(name, root)? else {
-        return Ok(StopOutcome::NoActiveRun);
+        let transition = match expected {
+            Some(info) => append_stopped_record(name, root, info, None, None, &mut backlog)?,
+            None => RunTransition::Recorded,
+        };
+        return Ok((StopOutcome::NoActiveRun, transition));
     };
+    if let Some(expected) = expected
+        && Some(expected) != holder
+    {
+        // The original holder released and a drainer may already own this file.
+        let transition = append_stopped_record(name, root, expected, None, None, &mut backlog)?;
+        return Ok((StopOutcome::NoActiveRun, transition));
+    }
+    let info = holder
+        .context("loop run lock holder identity unavailable; stop the holder manually and retry")?;
     let kind = std::fs::read(&lock)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<RunLockMetadata>(&bytes).ok())
         .filter(|metadata| Some(metadata.holder) == holder)
         .and_then(|metadata| metadata.kind);
 
-    let (workspace, project_root) = stop_workspace(root)?;
-    let paths = StatePaths::for_project_root(&project_root)?;
+    let waiting = backlog.record.tasks.entry(name.to_owned()).or_default();
+    if expected.is_none()
+        || !waiting
+            .stopping
+            .as_ref()
+            .is_some_and(|mark| info.matches_stop(mark))
+    {
+        waiting.stopping = Some(StopMark {
+            pid: info.pid,
+            started_at: info.started_at,
+            cause,
+        });
+    }
+    let waiting = waiting.triggers.len();
+    backlog.save()?;
     let run = newest_active_run(&paths, name);
+    drop(backlog);
     cancel(
         workspace.as_ref(),
-        paths,
+        paths.clone(),
         run.as_ref().ok().and_then(Option::as_ref),
     )?;
     let run = run?;
 
-    if wait_for_run_lock_release_path(&lock, STOP_GRACE)? {
-        return Ok(StopOutcome::Stopped {
-            run_id: run.map(|record| record.run_id),
-            signaled: false,
-        });
+    if wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
+        let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
+        let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
+        return Ok((
+            StopOutcome::Stopped {
+                run_id: run.map(|record| record.run_id),
+                signaled: false,
+                waiting,
+            },
+            transition,
+        ));
     }
 
-    let signal_error = holder.and_then(|info| signal_run_lock_holder(&info).err());
+    // Cancellation and lock I/O can outlast a holder. Never signal its successor.
+    let (signaled, signal_error) = match probe_run_lock_path(&lock)? {
+        RunLockState::Held(current) if current == holder => {
+            (true, signal_run_lock_holder(&info).err())
+        }
+        _ => (false, None),
+    };
     let signal_deadline = Instant::now() + STOP_GRACE;
 
-    if signal_error.is_none()
-        && let Some(info) = holder
-        && wait_for_run_lock_release_path(&lock, STOP_GRACE)?
-    {
-        append_stopped_record(name, root, info, run.as_ref(), kind);
+    if signal_error.is_none() && wait_for_run_lock_release_path(&lock, holder, STOP_GRACE)? {
+        let mut backlog = LockedBacklog::acquire(&backlog_paths)?;
+        let transition = append_stopped_record(name, root, info, run.as_ref(), kind, &mut backlog)?;
+        drop(backlog);
         // A run stopped while held for its turn dies holding a ticket. The
         // kernel frees the lock before `/proc` reports the holder dead, and the
         // sweep removes a ticket only once its owner reads dead, so wait for
@@ -2546,10 +2703,14 @@ pub fn stop_task(
             tracing::debug!(pid = info.pid, "stopped loop run holder still reads live");
         }
         throttle::reap();
-        return Ok(StopOutcome::Stopped {
-            run_id: run.map(|record| record.run_id),
-            signaled: true,
-        });
+        return Ok((
+            StopOutcome::Stopped {
+                run_id: run.map(|record| record.run_id),
+                signaled,
+                waiting,
+            },
+            transition,
+        ));
     }
 
     let holder = holder
@@ -2583,7 +2744,17 @@ fn append_stopped_record(
     info: RunLockInfo,
     run: Option<&RunRecord>,
     kind: Option<TaskKind>,
-) {
+    backlog: &mut LockedBacklog<'_>,
+) -> Result<RunTransition> {
+    let Some(mark) = backlog
+        .record
+        .tasks
+        .get_mut(name)
+        .and_then(|task| task.stopping.take_if(|mark| info.matches_stop(mark)))
+    else {
+        return Ok(RunTransition::Recorded);
+    };
+    let paths = StatePaths::for_project_root(root)?;
     let elapsed = Timestamp::now()
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
@@ -2595,15 +2766,72 @@ fn append_stopped_record(
         duration_ms,
     );
     record.mode = None;
-    record.error = Some("stopped by rimz loop stop".to_owned());
+    set_stopped_result(&mut record, mark.cause);
     record.run_id = run.map(|record| record.run_id.to_string());
-    run_log::record_stopped(root, &record, kind);
+    let transition = if mark.cause == StopCause::Replace {
+        let catalog = TaskCatalog::load(Some(root))?;
+        let task = catalog
+            .for_run(name)
+            .context("replaced loop task was removed")?;
+        record.kind = Some(task.kind());
+        backlog.save()?;
+        run_log::record_transition(task, &record)
+    } else {
+        backlog.save()?;
+        run_log::record_stopped(root, &record, kind);
+        RunTransition::Recorded
+    };
+    if let Err(error) = spawn_backlog_drain(&paths, root, name, &backlog.record) {
+        tracing::warn!(task = name, %error, "failed to start loop backlog drain");
+    }
+    Ok(transition)
+}
+
+fn set_stopped_result(record: &mut LoopRunRecord, cause: StopCause) {
+    let (result, detail) = match cause {
+        StopCause::Replace => (LoopRunResult::Replaced, "replaced by a newer trigger"),
+        StopCause::Stop => (LoopRunResult::Canceled, "stopped by rimz loop stop"),
+    };
+    record.result = result;
+    record.error = Some(detail.to_owned());
+}
+
+fn spawn_backlog_drain(
+    paths: &StatePaths,
+    root: &Path,
+    name: &str,
+    backlog: &backlog::Backlog,
+) -> Result<()> {
+    if backlog
+        .tasks
+        .get(name)
+        .is_some_and(|task| !task.triggers.is_empty())
+    {
+        super::fire::spawn_loop_drain(
+            &RuntimePaths::for_state(paths)?,
+            root,
+            name,
+            super::fire::LoopRunHost::Detached,
+        )?;
+    }
+    Ok(())
+}
+
+struct RunLockGuard {
+    _lease: Lease,
+    info: RunLockInfo,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunLockInfo {
     pub pid: u32,
     pub started_at: Timestamp,
+}
+
+impl RunLockInfo {
+    fn matches_stop(self, mark: &StopMark) -> bool {
+        self.pid == mark.pid && self.started_at == mark.started_at
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2615,7 +2843,7 @@ struct RunLockMetadata {
 }
 
 enum RunLockAttempt {
-    Acquired(Lease),
+    Acquired(RunLockGuard),
     Held(Option<RunLockInfo>),
 }
 
@@ -2636,11 +2864,9 @@ struct RunLockFile {
 }
 
 impl RunLocks {
-    /// List and probe run locks; a root without a room or `locks/` has none.
+    /// List and probe run locks, including a cold check's runtime-only lock.
     pub fn list(root: &Path) -> Result<Self> {
-        let Some(runtime) = run_lock_runtime(root)? else {
-            return Ok(Self { files: Vec::new() });
-        };
+        let runtime = RuntimePaths::for_state(&StatePaths::for_project_root(root)?)?;
         let locks = runtime.locks_dir;
         let listing = || format!("listing loop run locks `{}`", locks.display());
         let entries = match std::fs::read_dir(&locks) {
@@ -2788,10 +3014,17 @@ fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
     }
 }
 
-fn wait_for_run_lock_release_path(path: &Path, grace: Duration) -> Result<bool> {
+fn wait_for_run_lock_release_path(
+    path: &Path,
+    holder: Option<RunLockInfo>,
+    grace: Duration,
+) -> Result<bool> {
     let deadline = Instant::now() + grace;
     loop {
-        if matches!(probe_run_lock_path(path)?, RunLockState::Available) {
+        if match probe_run_lock_path(path)? {
+            RunLockState::Available => true,
+            RunLockState::Held(current) => holder.is_some() && current != holder,
+        } {
             return Ok(true);
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -2815,17 +3048,23 @@ fn wait_for_process_exit(pid: u32, grace: Duration) -> bool {
 }
 
 fn acquire_run_lock_file(path: &Path, kind: Option<TaskKind>) -> Result<RunLockAttempt> {
+    let mut holder = None;
     match claim(path, |file| {
         let info = RunLockInfo {
             pid: std::process::id(),
             started_at: Timestamp::now(),
         };
+        holder = Some(info);
         serde_json::to_writer(file, &RunLockMetadata { holder: info, kind })
             .map_err(std::io::Error::other)
     })
     .with_context(|| format!("locking loop run lock `{}`", path.display()))?
     {
-        LeaseAttempt::Acquired(guard) => Ok(RunLockAttempt::Acquired(guard)),
+        LeaseAttempt::Acquired(lease) => Ok(RunLockAttempt::Acquired(RunLockGuard {
+            _lease: lease,
+            // `claim` runs the body writer before it reports an acquired lease.
+            info: holder.expect("acquired lease wrote its holder"),
+        })),
         LeaseAttempt::Held(body) => Ok(RunLockAttempt::Held(read_run_lock_info(&body))),
     }
 }
@@ -2838,6 +3077,7 @@ pub struct CheckOutcome {
     passed: bool,
     timed_out: bool,
     interrupted: bool,
+    terminated: bool,
     output: String,
     code: Option<i32>,
 }
@@ -2848,6 +3088,7 @@ impl CheckOutcome {
             passed,
             timed_out,
             interrupted: false,
+            terminated: false,
             output,
             code,
         }
@@ -2855,6 +3096,10 @@ impl CheckOutcome {
 
     pub fn passed(&self) -> bool {
         self.passed
+    }
+
+    pub fn terminated(&self) -> bool {
+        self.terminated
     }
 }
 
@@ -2961,6 +3206,92 @@ fn check_command(command: &str) -> Command {
     child
 }
 
+struct CheckSignalState {
+    unhandled: Option<Arc<AtomicBool>>,
+    active: usize,
+}
+
+static CHECK_SIGNALS: Mutex<CheckSignalState> = Mutex::new(CheckSignalState {
+    unhandled: None,
+    active: 0,
+});
+
+struct CheckSignalGuard {
+    cancellation: Option<signal_hook::SigId>,
+}
+
+impl CheckSignalGuard {
+    fn register<T>(register: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<(T, Self)> {
+        let mut state = CHECK_SIGNALS
+            .lock()
+            .map_err(|_| std::io::Error::other("loop check signal lock poisoned"))?;
+        let unhandled = match &state.unhandled {
+            Some(flag) => Arc::clone(flag),
+            None => {
+                let flag = Arc::new(AtomicBool::new(true));
+                // Unregistering signal-hook's iterator leaves SIGTERM ignored, so retain its
+                // default action between checks and loop-owned waits.
+                signal_hook::flag::register_conditional_default(
+                    signal_hook::consts::SIGTERM,
+                    Arc::clone(&flag),
+                )?;
+                state.unhandled = Some(Arc::clone(&flag));
+                flag
+            }
+        };
+        let handler = register()?;
+        state.active += 1;
+        unhandled.store(false, Ordering::SeqCst);
+        Ok((handler, Self { cancellation: None }))
+    }
+}
+
+impl Drop for CheckSignalGuard {
+    fn drop(&mut self) {
+        if let Some(handler) = self.cancellation.take() {
+            signal_hook::low_level::unregister(handler);
+        }
+        let Ok(mut state) = CHECK_SIGNALS.lock() else {
+            return;
+        };
+        state.active -= 1;
+        if state.active == 0
+            && let Some(flag) = &state.unhandled
+        {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+struct CheckSignals {
+    signals: signal_hook::iterator::Signals,
+    _guard: CheckSignalGuard,
+}
+
+impl CheckSignals {
+    fn new(signals: &[i32]) -> std::io::Result<Self> {
+        let (signals, guard) =
+            CheckSignalGuard::register(|| signal_hook::iterator::Signals::new(signals))?;
+        Ok(Self {
+            signals,
+            _guard: guard,
+        })
+    }
+
+    fn pending(&mut self) -> impl Iterator<Item = i32> + '_ {
+        self.signals.pending()
+    }
+}
+
+/// Cancel a loop-owned run on SIGTERM until the returned guard is dropped.
+pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<impl Drop> {
+    let (handler, mut guard) = CheckSignalGuard::register(|| {
+        signal_hook::flag::register(signal_hook::consts::SIGTERM, cancellation.signal_flag())
+    })?;
+    guard.cancellation = Some(handler);
+    Ok(guard)
+}
+
 pub(super) fn run_command(
     dir: &Path,
     cmd: &str,
@@ -2998,8 +3329,9 @@ pub(super) fn run_command(
     let (mut command, mut interrupts, kill_after, check_in_after) = match deadline {
         WatchDeadline::KillAfter(timeout) => (
             check_command(cmd),
-            Some(signal_hook::iterator::Signals::new([
+            Some(CheckSignals::new(&[
                 signal_hook::consts::SIGINT,
+                signal_hook::consts::SIGTERM,
             ])?),
             Some(timeout),
             None,
@@ -3042,18 +3374,34 @@ pub(super) fn run_command(
     let mut kill_at = kill_after.map(|timeout| started + timeout);
     let mut check_in_at = check_in_after.map(|timeout| started + timeout);
     let mut interrupted = false;
+    let mut terminated = false;
+    let mut pending_signals = Vec::new();
     let (status, timed_out) = loop {
-        if let Some(interrupts) = &mut interrupts
-            && interrupts.pending().next().is_some()
-        {
-            interrupted = true;
-            let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
-            let interrupt_deadline = Instant::now() + CHECK_INTERRUPT_GRACE;
-            kill_at = kill_at.map(|at| at.min(interrupt_deadline));
+        if let Some(interrupts) = &mut interrupts {
+            for signal in interrupts.pending() {
+                interrupted = true;
+                let signal = if signal == signal_hook::consts::SIGTERM {
+                    terminated = true;
+                    Signal::SIGTERM
+                } else {
+                    let interrupt_deadline = Instant::now() + CHECK_INTERRUPT_GRACE;
+                    kill_at = kill_at.map(|at| at.min(interrupt_deadline));
+                    Signal::SIGINT
+                };
+                if !pending_signals.contains(&signal) {
+                    pending_signals.push(signal);
+                }
+            }
         }
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("waiting for loop check `{cmd}`"))?
+        pending_signals.retain(|signal| {
+            killpg(Pid::from_raw(child.id() as i32), *signal) == Err(Errno::ESRCH)
+        });
+        // A shell can exit before its group's TERM handlers. Keep the lock and
+        // original timeout until those members close their output pipes.
+        if (!terminated || (stdout.is_finished() && stderr.is_finished()))
+            && let Some(status) = child
+                .try_wait()
+                .with_context(|| format!("waiting for loop check `{cmd}`"))?
         {
             break (status, false);
         }
@@ -3088,6 +3436,7 @@ pub(super) fn run_command(
         passed: status.success() && !timed_out && !interrupted,
         timed_out,
         interrupted,
+        terminated,
         output: captured_output()?,
         code: status.code(),
     })

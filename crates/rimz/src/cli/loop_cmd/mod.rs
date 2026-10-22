@@ -301,7 +301,7 @@ struct AddArgs {
     /// Whether the task's agent starts take their turn in the loop throttle; unset is on.
     #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
     throttle: Option<String>,
-    /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (currently coalesces).
+    /// Busy scheduled triggers: skip (default), coalesce, queue, or replace (stop for newest).
     #[arg(long, value_name = "POLICY", value_parser = ["skip", "coalesce", "queue", "replace"])]
     overlap: Option<String>,
     /// Maximum waiting triggers with --overlap queue; default 10, at least 1.
@@ -543,6 +543,49 @@ fn in_flight_without_row(
 fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
     let project_root = project_root_for_globals(globals);
     TaskCatalog::load(project_root.as_deref())
+}
+
+fn stop_active_run(
+    name: &str,
+    root: &Path,
+    cause: schedule::backlog::StopCause,
+    expected: Option<RunLockInfo>,
+    globals: &GlobalFlags,
+) -> Result<(schedule::runner::StopOutcome, Option<String>)> {
+    use crate::cli::supervised::StopRunErr;
+
+    let mut pane_open = None;
+    let outcome =
+        schedule::runner::stop_task(name, root, cause, expected, |workspace, paths, record| {
+            let Some(record) = record else {
+                return Ok(());
+            };
+            let id = paths.workspace_id.clone();
+            let store = crate::cli::open_existing_store_at(paths)?
+                .with_context(|| crate::cli::no_room(format_args!("for workspace {id}")))?;
+            let Some(workspace) = workspace else {
+                return crate::cli::supervised::cancel_supervised_run(&store, record);
+            };
+            match crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record) {
+                // Cancellation succeeded; still finish the ladder before reporting
+                // the pane which only the run's own stop can now close.
+                Err(StopRunErr::PaneOpen(open)) => {
+                    pane_open = Some(format!(
+                        "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
+                        record.run_id
+                    ));
+                    Ok(())
+                }
+                Err(StopRunErr::NotCanceled(err) | StopRunErr::NotEnded(err)) => Err(err),
+                Ok(()) => Ok(()),
+            }
+        });
+    let (outcome, transition) = match (outcome, &pane_open) {
+        (Err(err), Some(open)) => return Err(err.context(open.clone())),
+        (outcome, _) => outcome?,
+    };
+    run_tasks::handle_run_transition(name, root, transition);
+    Ok((outcome, pane_open))
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {

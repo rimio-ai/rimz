@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::agents::{AgentDefinition, HeadlessRequest, PermissionMode, ProviderLogin, ambient_env};
+use crate::agents::{AgentDefinition, PermissionMode, ProviderLogin, ambient_env};
 use crate::config::{
     MachineConfig,
     effective::{LaunchAgents, ProfileScope},
@@ -178,16 +178,6 @@ pub(crate) enum ProcessErr {
 
 pub(crate) struct AdmittedLaunch<'a> {
     plan: &'a LaunchPlan,
-}
-
-pub(crate) fn execute(
-    adapter: &AgentDefinition,
-    plan: &LaunchPlan,
-    _request: &HeadlessRequest,
-    timeout: Duration,
-    interrupted: &dyn Fn() -> bool,
-) -> Result<crate::proc::BoundedOutput, ProcessErr> {
-    admit(adapter, plan)?.execute_hosted(timeout, interrupted, |_| Ok(()))
 }
 
 pub(crate) fn admit<'a>(
