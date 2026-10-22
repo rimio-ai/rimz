@@ -119,6 +119,16 @@ fn backdate_check(env: &Env, value: &Value) {
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &record).unwrap();
 }
 
+/// The pid a check script wrote, once the whole line is there: the shell
+/// creates `script.pid` before it writes the pid.
+fn script_pid(value: &Value) -> Option<u32> {
+    fs::read_to_string(Path::new(value["dir"].as_str().unwrap()).join("script.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 fn evaluation_script(outcome: &str) -> String {
     format!("printf '%s\\n' '{{\"outcome\":\"{outcome}\"}}'\n")
 }
@@ -665,7 +675,7 @@ fn deadline_routes_once_and_can_be_rearmed() {
 fn timeout_kills_script_and_routes_or_parks() {
     for edge in ["", "on.timeout = 'report'"] {
         let spec = format!(
-            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1s'\n{edge}\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
+            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n{edge}\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n"
         );
         let (env, dir) = fixture(
             &spec,
@@ -673,6 +683,9 @@ fn timeout_kills_script_and_routes_or_parks() {
         );
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
         let id = start(&env);
+        let value = until(&env, &id, |v| script_pid(v).is_some());
+        let pid = script_pid(&value).unwrap();
+        backdate_check(&env, &value);
         let value = settled(&env, &id, if edge.is_empty() { "parked" } else { "done" });
         let input = if edge.is_empty() {
             value["record"]["input"].clone()
@@ -681,18 +694,15 @@ fn timeout_kills_script_and_routes_or_parks() {
         };
         assert_eq!(
             input,
-            json!({"outcome":"timeout","node":"pr","timeout":"1s"})
+            json!({"outcome":"timeout","node":"pr","timeout":"1h"})
         );
+        let evaluations = events(&value, "evaluation");
         assert!(
-            events(&value, "evaluation")[0]["digests"]["checks/pr.sh"].is_string(),
-            "a timed-out evaluation must retain the script digest it ran"
+            evaluations
+                .first()
+                .is_some_and(|row| row["digests"]["checks/pr.sh"].is_string()),
+            "a timed-out evaluation must retain the script digest it ran: {evaluations:#?}"
         );
-        let pid: u32 =
-            fs::read_to_string(Path::new(value["dir"].as_str().unwrap()).join("script.pid"))
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
         assert!(!rimz::proc::process_is_live(pid, None));
     }
 }
@@ -746,10 +756,10 @@ fn timeout_before_script_spawn_records_no_digests() {
 
 #[test]
 fn waiting_timeout_and_live_deadline_use_original_clock() {
-    let (env, _) = fixture(&format!("{HEADER}{}", WAIT.replace("1h", "1s")), PENDING);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let id = start(&env);
-    until(&env, &id, |v| v["record"]["wait"].is_object());
-    std::thread::sleep(Duration::from_millis(1100));
+    let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+    backdate_check(&env, &value);
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(show(&env, &id)["record"]["park"]["reason"], "timeout");
     let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
@@ -783,16 +793,8 @@ fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
         "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
     );
     let id = start(&env);
-    let value = until(&env, &id, |v| {
-        Path::new(v["dir"].as_str().unwrap())
-            .join("script.pid")
-            .exists()
-    });
-    let pid: u32 = fs::read_to_string(Path::new(value["dir"].as_str().unwrap()).join("script.pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let value = until(&env, &id, |v| script_pid(v).is_some());
+    let pid = script_pid(&value).unwrap();
     success(command(&env, &["workflow", "cancel", &id]));
     let deadline = Instant::now() + Duration::from_secs(3);
     while rimz::proc::process_is_live(pid, None) {
