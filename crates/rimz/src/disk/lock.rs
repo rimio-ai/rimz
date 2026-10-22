@@ -92,12 +92,12 @@ impl Drop for RoomLock {
     }
 }
 
-/// Shared, blocking guard for ingress appends; excludes snapshots and truncation.
-pub struct IngressAppendLock {
+/// Shared, blocking append guard; excludes exclusive reads and rewrites.
+pub struct SharedAppendLock {
     file: File,
 }
 
-impl IngressAppendLock {
+impl SharedAppendLock {
     /// Lock the current named inode, reopening if GC unlinked it while waiting.
     pub fn acquire(path: &Path) -> Result<Self> {
         let mut file = open_lock_file(path)?;
@@ -112,7 +112,7 @@ impl IngressAppendLock {
     }
 }
 
-impl Drop for IngressAppendLock {
+impl Drop for SharedAppendLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
@@ -310,16 +310,16 @@ mod tests {
     }
 
     #[test]
-    fn ingress_appenders_hold_the_lock_together() {
+    fn shared_appenders_hold_the_lock_together() {
         use std::sync::mpsc;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hook-ingress.lock");
-        let first = IngressAppendLock::acquire(&path).unwrap();
+        let first = SharedAppendLock::acquire(&path).unwrap();
         let (held_tx, held_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let second = std::thread::spawn(move || {
-            let _second = IngressAppendLock::acquire(&path).unwrap();
+            let _second = SharedAppendLock::acquire(&path).unwrap();
             held_tx.send(()).unwrap();
             release_rx.recv().unwrap();
         });
@@ -331,10 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn ingress_appender_excludes_an_exclusive_holder() {
+    fn shared_appender_excludes_an_exclusive_holder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hook-ingress.lock");
-        let appender = IngressAppendLock::acquire(&path).unwrap();
+        let appender = SharedAppendLock::acquire(&path).unwrap();
         let excluded = WorkspaceLock::try_acquire(&path).unwrap().is_none();
         drop(appender);
         assert!(
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn ingress_exclusive_holder_blocks_an_appender() {
+    fn exclusive_holder_blocks_a_shared_appender() {
         use std::sync::mpsc;
 
         let dir = tempfile::tempdir().unwrap();
@@ -355,7 +355,7 @@ mod tests {
         let (held_tx, held_rx) = mpsc::channel();
         let appender = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            let _appender = IngressAppendLock::acquire(&path).unwrap();
+            let _appender = SharedAppendLock::acquire(&path).unwrap();
             held_tx.send(()).unwrap();
         });
         started_rx.recv_timeout(Duration::from_secs(5)).unwrap();

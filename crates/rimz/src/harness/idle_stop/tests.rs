@@ -44,7 +44,7 @@ const DUE: i64 = 1_180;
 
 #[test]
 fn pending_ingress_holds_only_newer_same_kind_frames_until_applied() {
-    use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use crate::disk::lock::{SharedAppendLock, WorkspaceLock};
     use crate::store::ingress::{self, HookDrainCursor, HookIngress};
     for (kind, at, holds) in [
         ("claude", 501, true),
@@ -66,7 +66,7 @@ fn pending_ingress_holds_only_newer_same_kind_frames_until_applied() {
             env: Default::default(),
         };
         let end = {
-            let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+            let lock = SharedAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
             ingress::append(store.paths(), &frame, &lock).unwrap()
         };
         let decision = verdict(&store, &agent, &stop, DUE);

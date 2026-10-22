@@ -21,7 +21,7 @@ use rimz::agents::{
     AgentDefinition, AgentHookClass, AgentLifecycleObservation, HookIngressAcceptance,
     HookIngressDecision, HookOutput, definition_by_kind,
 };
-use rimz::disk::lock::{IngressAppendLock, WorkspaceLock};
+use rimz::disk::lock::{SharedAppendLock, WorkspaceLock};
 use rimz::harness::hook_drain;
 use rimz::ids::{EventId, MuxName, PaneId};
 use rimz::store::ingress::{self, HookIngress};
@@ -696,7 +696,7 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         None
     };
     let through = {
-        let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock)?;
+        let lock = SharedAppendLock::acquire(&store.paths().hook_ingress_lock)?;
         ingress::append(store.paths(), &frame, &lock)?
     };
     if source == "antigravity"
