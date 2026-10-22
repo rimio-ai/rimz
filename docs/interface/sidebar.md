@@ -96,6 +96,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `◔ 8m` | an age, never a duration. The face rounds down to completed quarters of the scale (eighths with Nerd Font), with a minimum first face. The full face appears only at the ceiling, then becomes `◉` past it: the provider's prompt-cache lifetime for a card's own age, `stalled_after_secs` for child quiet, and an hour for waits. |
 | `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
 | `200k`, `1M` | the model's context window size |
+| `ϟ` (Nerd Font: ``) | fast mode, immediately after the model: bold electric, still at rest and crackling only while running |
 | `↪` beside the model | tier routing passed over an earlier entry; `rimz agents show @<handle>` names the tier and every reason. The default mark is the same in both glyph sets (`card.tier_move`). |
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
@@ -297,12 +298,32 @@ The selected card includes its stats line:
 
 | line | shows |
 |------|-------|
-| identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context window size. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
+| identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context window size. From L1, when it fits without shortening the handle, a fast model adds a bold electric bolt immediately after its name, before reasoning or window size: still at rest, crackling only while running. A provider's live fast-mode reading wins; a fast launch supplies the badge only while the live reading is unknown. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
 | description | The open ask while waiting for input, when available, led by its first question and wrapped over at most two lines. Otherwise the displayed error or pause reason in italics, else the first working wait's label while working through a wait or first sleeping wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
 | context meter | The percent of the context window in use, as a bar. The fill shows where the window went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the window fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` wears the same expired-cache tone. After a compaction completes, the meter shows the provider's post-compaction figure where it reports one and an empty `0%` otherwise, until the next model call reports usage. |
 | stats line | On a selected or held engaged card, or under `expanded` density: `▤` tokens in the window, the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. From 46 columns the age is on the meter; below that it pins right on this line. |
 | cache line | Wherever the stats line shows, after stats: a countdown once the cache warning band starts, then the expired-cache notice and available rebuild estimate. |
 | subagents and waits | Present once the session has spawned a subagent or armed a wait, except on closed, unreached idle and done cards. See [Subagents and waits](#subagents-and-waits). |
+
+A resting fast-mode card at L2 (54 columns):
+
+```
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 1                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 0   ○ 1
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌○ codex · GPT 6.1 Sol ϟ · xhigh                $1.00▐
+▌  Ship the badge                                    ▐
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help
+```
 
 A waiting description selects the first sentence ending in `?`, or the whole ask when none does. Sentences end at `.`, `!`, or `?` followed by whitespace or the end of the text; a colon stays with its question. The selected text word-wraps at the description's two-cell indent. Short asks stay one line; text beyond two lines, or a word wider than a line, leaves `…` at the end of the last shown line. The separate queued-question line keeps its one-line form.
 

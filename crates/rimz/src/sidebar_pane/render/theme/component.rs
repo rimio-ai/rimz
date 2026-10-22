@@ -119,6 +119,8 @@ pub(crate) enum Component {
     /// The context meter's expired prompt-cache fill: greyed `alarm`, red
     /// enough to read as lost without looking like the full bar.
     CacheExpired,
+    /// Provider fast mode: an icy accent, independent of lifecycle state.
+    FastMode,
 }
 
 #[cfg(test)]
@@ -167,6 +169,7 @@ impl Component {
         Component::WindowLarge,
         Component::WindowHuge,
         Component::CacheExpired,
+        Component::FastMode,
     ];
 }
 
@@ -192,6 +195,7 @@ impl Component {
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
+            FastMode => palette.electric(),
             WorktreeQualifier | WorktreeMerged | LandedChip | WindowMedium | RemoteControlOff => {
                 palette.muted
             }
