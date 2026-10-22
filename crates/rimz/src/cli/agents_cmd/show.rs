@@ -371,6 +371,17 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
     }
     if let Some(model) = &agent.model.label {
         let mut model = model.clone();
+        if agent.model.fast {
+            let config = crate::cli::machine_config();
+            let glyph = rimz::theme::theme_glyphs(&config.theme);
+            model.push_str(&format!(
+                " {}",
+                render::paint(
+                    render::palette::electric(),
+                    &glyph(rimz::config::GlyphRole::CardFast)
+                )
+            ));
+        }
         if let Some(tier) = &agent.model.tier {
             let passes: String = tier.passes().map(|pass| format!("; {pass:#}")).collect();
             model.push_str(&format!(" ({}{passes})", tier.tier));

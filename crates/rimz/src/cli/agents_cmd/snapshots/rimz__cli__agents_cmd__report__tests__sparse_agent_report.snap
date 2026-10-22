@@ -26,6 +26,7 @@ expression: entry
   "model": {
     "id": null,
     "effort": null,
+    "fast": false,
     "label": null
   },
   "context": {

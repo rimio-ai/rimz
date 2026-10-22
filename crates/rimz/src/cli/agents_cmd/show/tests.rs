@@ -16,6 +16,34 @@ fn entry() -> AgentReportEntry {
     )
 }
 
+#[test]
+fn fast_show_header_marks_only_a_resolved_model() {
+    let config = crate::cli::machine_config();
+    let glyph = rimz::theme::theme_glyphs(&config.theme);
+    let bolt = glyph(rimz::config::GlyphRole::CardFast);
+    for fast in [true, false] {
+        for model in [Some("gpt-6.1-sol"), None] {
+            let mut state =
+                rimz::testkit::agent_state("codex", "fast", jiff::Timestamp::UNIX_EPOCH);
+            state.model = model.map(str::to_owned);
+            state.context = Some(rimz::agents::AgentContext {
+                fast: Some(fast),
+                ..Default::default()
+            });
+            let mut report = entry();
+            report.model = super::super::report::model_report(&state);
+            let text = strip(|w| render_agent_section(w, &report));
+            match (model, fast) {
+                (Some(_), true) => {
+                    assert!(text.ends_with(&format!("GPT 6.1 Sol {bolt}\n")), "{text}")
+                }
+                (Some(_), false) => assert!(text.ends_with("GPT 6.1 Sol\n"), "{text}"),
+                (None, _) => assert!(!text.contains(&bolt), "{text}"),
+            }
+        }
+    }
+}
+
 fn run(status: RunStatus) -> RunRecord {
     let mut run = RunRecord::new(
         WorkspaceId::from_project_root(Path::new("/repo")),

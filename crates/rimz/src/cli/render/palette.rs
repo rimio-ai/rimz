@@ -81,6 +81,10 @@ pub(crate) fn accent() -> anstyle::Style {
     THEME.style(THEME.palette.accent())
 }
 
+pub(crate) fn electric() -> anstyle::Style {
+    THEME.style(THEME.palette.electric()).bold()
+}
+
 pub(crate) fn cool() -> anstyle::Style {
     THEME.style(THEME.palette.cool())
 }
