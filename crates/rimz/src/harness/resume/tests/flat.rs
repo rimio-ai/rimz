@@ -85,11 +85,12 @@ fn provider_resume_adopts_one_session_with_profile_login_and_handle() {
             projection: crate::agents::LocalSessionProjection::IdentityOnly,
         };
         let profiles = profiles("solo", profile(kind));
-        let (name, plan) = plan_provider_resume(
+        let (name, plan, _) = plan_provider_resume(
             &observation,
             Some("solo"),
             &[],
             ctx(1, Some(Path::new("/repo")), &profiles),
+            &SingleResumeOptions::default(),
         );
         assert_eq!(plan.tabs.len(), 1, "one flat resume tab");
         assert!(crate::agents::petname::valid_agent_name(&name));

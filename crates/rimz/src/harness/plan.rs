@@ -267,6 +267,34 @@ pub struct ResumeLaunchPosture {
 }
 
 impl ResumeLaunchPosture {
+    pub(super) fn into_cell(self, kind: AgentKind, profile: Option<String>) -> AgentCell {
+        AgentCell {
+            kind,
+            empty_dir: None,
+            auto_compact: None,
+            resume_model_override: self.resume_model_override,
+            isolation_default: self.isolation_default,
+            args: self.args,
+            system_prompt_file: self.system_prompt_file,
+            append_system_prompt_files: self.append_system_prompt_files,
+            team_prompt: self.team_prompt,
+            skills: self.skills,
+            allowed_tools: self.allowed_tools,
+            launch: crate::agents::LaunchParams {
+                profile,
+                tier: self.tier,
+                record: self.record,
+                isolation: self.isolation,
+                mode: self.mode,
+                model: self.model,
+                effort: self.effort,
+                fast: self.fast,
+                budget: self.budget,
+                ..Default::default()
+            },
+        }
+    }
+
     /// Apply the posture's arguments and prompt/skill defaults to a launch action.
     pub fn exec_request(
         &self,

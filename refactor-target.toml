@@ -1067,7 +1067,8 @@ path = "crates/rimz/src/harness"
 # scratch::holding_team supplies read-only board holds to automatic worktree callers (+1).
 # hook_drain::spawn_refresh_detached shares helper spawn discipline with hooks and resumed wrappers (+1).
 # hook_drain::DrainerLease::{prepare_handoff, handover} share exec socket mechanics with the CLI (+1).
-surface-budget = 944
+# SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve the single-session CLI (+3).
+surface-budget = 947
 
 [[verdict]]
 kind = "item"
@@ -2275,7 +2276,8 @@ allowed-dependencies = [
 # `validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # `ResolvedSingleAgentLaunch::for_booking` keeps loop account admission independent of live routing (+1).
 # PermissionClamp, PermissionClampSource, ChildPermissionErr, and check_child_permission_mode share child-mode notes and resume refusal (+4).
-surface-budget = 48
+# ResumeLaunchPosture::into_cell shares finalization with single-session restore (+1).
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -2317,7 +2319,8 @@ allowed-dependencies = [
 # plan_provider_resume adopts an exact session through the flat resume planner (+1).
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
 # RecoveryPlan::skip_agent and planned_team_matches_agent let rebirth retain unavailable candidates and whole cohorts (+2).
-surface-budget = 70
+# SingleResumeOptions, ResumeLaunchFacts, and plan_recorded_resume serve explicit session restore (+3).
+surface-budget = 73
 
 [[verdict]]
 kind = "item"
@@ -5125,6 +5128,26 @@ reason = "Integration suites plan flat resume from the separate test crate; prod
 kind = "item"
 key = "harness::resume::plan_provider_resume"
 reason = "The CLI adopts an exact provider session through the same flat planner as lane discovery, with a solo profile and minted handle."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::plan_recorded_resume"
+reason = "The CLI restores one recorded session with explicit launch overrides and preflight facts."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::SingleResumeOptions"
+reason = "Single-session CLI callers pass launch overrides and current machine isolation to the planner."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::ResumeLaunchFacts"
+reason = "The single-session CLI preflights the isolation and skills the planner resolved before placing any pane."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ResumeLaunchPosture::into_cell"
+reason = "Single-session restore passes replayed posture through the cohort's shared override finalization rules."
 
 [[verdict]]
 kind = "item"
