@@ -614,7 +614,9 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "run_timeout.rs",
         "schedule/fire.rs",
         "schedule/when.rs",
+        "schedule/launch_ledger.rs",
         "schedule/pending.rs",
+        "workflow/spec.rs",
     ]
     .map(|name| harness_root.join(name));
     for needle in [
