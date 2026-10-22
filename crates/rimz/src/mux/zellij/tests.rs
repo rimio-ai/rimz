@@ -2839,6 +2839,179 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn reconcile_preserves_completed_counts_after_post_plan_read_failures() {
+    for (failed_reads, post_reads, restored) in [
+        (&[1][..], 2, true),
+        (&[2][..], 3, true),
+        (&[3][..], 4, true),
+        (&[4][..], 5, true),
+        (&[5][..], 5, false),
+        (&[1, 2][..], 2, false),
+    ] {
+        let room = TestRoom::new();
+        let (temp, shim) = replacement_shim_with_failed_post_plan_reads(failed_reads);
+        let mut opts = room.sidebar_options(240);
+        opts.rimz_bin = shim.clone();
+        opts.extra_env.insert(
+            "RIMZ_TEST_ASSUME_SIDEBAR_HEARTBEAT".to_owned(),
+            "1".to_owned(),
+        );
+        let warnings_path = temp.path().join("warnings.log");
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(std::sync::Mutex::new(
+                std::fs::File::create(&warnings_path).unwrap(),
+            ))
+            .finish();
+        let result = tracing::subscriber::with_default(subscriber, || {
+            room.backend(&shim)
+                .reconcile_sidebars(&opts, &SidebarLiveness::default())
+        });
+        assert!(
+            result.is_ok(),
+            "post-plan read failures must retain the repair report: {failed_reads:?}: {result:?}"
+        );
+        assert_eq!(
+            result.unwrap(),
+            crate::mux::SidebarRecovery {
+                recovered: 1,
+                closed: 1,
+                failed: 1,
+                ..Default::default()
+            },
+            "failed reads: {failed_reads:?}"
+        );
+        let log = shim_log(&temp);
+        for (endpoint, count) in [
+            ("--version", 1),
+            ("action list-panes --all --json", 6 + post_reads),
+            ("action new-pane --tab-id 40", 1),
+            ("action close-pane --pane-id terminal_8", 1),
+            ("action close-pane --pane-id terminal_9", 0),
+            ("action go-to-tab", usize::from(restored)),
+            (
+                "action focus-pane-id terminal_7",
+                if restored { 5 } else { 0 },
+            ),
+            ("action resize", 0),
+            ("action move-pane", 0),
+        ] {
+            assert_eq!(command_count(&log, endpoint), count, "{endpoint}: {log}");
+        }
+        assert!(
+            command_count(&log, "action list-clients") >= 2 + usize::from(restored),
+            "{log}"
+        );
+        let warnings = std::fs::read_to_string(warnings_path).unwrap();
+        assert_eq!(warnings.lines().count(), 1, "{warnings}");
+        assert!(
+            warnings.contains(&format!("post-plan listing {} failed", failed_reads[0])),
+            "the first error must be retained: {warnings}"
+        );
+        assert!(!warnings.contains("post-plan listing 2 failed") || failed_reads[0] == 2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_reports_missing_mount_heartbeat_without_a_parse_error() {
+    let room = TestRoom::new();
+    let (temp, shim) = replacement_shim_with_failed_post_plan_reads(&[]);
+    let mut opts = room.sidebar_options(240);
+    opts.rimz_bin = shim.clone();
+    let warnings_path = temp.path().join("warnings.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::sync::Mutex::new(
+            std::fs::File::create(&warnings_path).unwrap(),
+        ))
+        .finish();
+    let report = tracing::subscriber::with_default(subscriber, || {
+        room.backend(&shim)
+            .reconcile_sidebars(&opts, &SidebarLiveness::default())
+    })
+    .expect("failed mount proof is reported");
+    assert_eq!(
+        report,
+        crate::mux::SidebarRecovery {
+            failed: 1,
+            ..Default::default()
+        }
+    );
+    let warnings = std::fs::read_to_string(warnings_path).unwrap();
+    assert!(
+        !warnings.contains("could not parse mux output"),
+        "{warnings}"
+    );
+    assert!(
+        warnings.contains(
+            "multiplexer command failed: zellij new-pane: sidebar zellij:terminal_9 \
+             mounted in tab 40 without a current-build heartbeat"
+        ),
+        "{warnings}"
+    );
+    let log = shim_log(&temp);
+    for (endpoint, count) in [
+        ("--version", 1),
+        ("action list-panes --all --json", 7),
+        ("action new-pane --tab-id 40", 1),
+        ("action close-pane --pane-id terminal_9", 1),
+        ("action close-pane --pane-id terminal_8", 0),
+        ("action focus-pane-id terminal_7", 5),
+    ] {
+        assert_eq!(command_count(&log, endpoint), count, "{endpoint}: {log}");
+    }
+}
+
+#[cfg(unix)]
+fn replacement_shim_with_failed_post_plan_reads(
+    failed_reads: &[usize],
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let failures = if failed_reads.is_empty() {
+        "never".to_owned()
+    } else {
+        failed_reads
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n'; exit 0 ;;
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
+  *" action close-pane --pane-id terminal_8 "*) touch "$dir/closed"; exit 0 ;;
+  *" action close-pane --pane-id terminal_9 "*) rm "$dir/spawned"; exit 0 ;;
+  *" action list-panes --all --json "*)
+    if [ -f "$dir/closed" ]; then
+      reads=0; if [ -f "$dir/post-reads" ]; then read -r reads < "$dir/post-reads"; fi
+      reads=$((reads + 1)); printf '%s\n' "$reads" > "$dir/post-reads"
+      case "$reads" in {failures}) printf 'post-plan listing %s failed\n' "$reads" >&2; exit 1 ;; esac
+    fi
+    printf '['
+    if [ ! -f "$dir/closed" ]; then
+      x=0; if [ -f "$dir/spawned" ]; then x=60; fi
+      printf '{{"id":8,"tab_id":40,"tab_position":1,"title":"rimz-sidebar","pane_x":%s,"pane_columns":60}},' "$x"
+    fi
+    if [ -f "$dir/spawned" ]; then
+      printf '{{"id":9,"tab_id":40,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":60}},'
+    fi
+    printf '{{"id":7,"tab_id":40,"tab_position":1,"title":"work","pane_x":60,"pane_columns":180}}]\n'; exit 0 ;;
+esac
+exit 0
+"#,
+    ))
+}
+
+#[cfg(unix)]
+#[test]
 fn completed_replacement_is_verified_even_when_a_later_add_fails() {
     let room = TestRoom::new();
     room.write_cache(
