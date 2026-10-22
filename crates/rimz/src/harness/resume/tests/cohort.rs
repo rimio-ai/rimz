@@ -935,7 +935,7 @@ fn team_hold_table() {
         (
             vec![ended.clone()],
             Some("Stage: Plan (@planner)"),
-            board_hold,
+            board_hold.clone(),
         ),
         (vec![ended.clone()], Some("Stage: Done"), None),
         (vec![ended.clone()], None, None),
@@ -975,7 +975,7 @@ fn team_hold_table() {
             }),
         ),
         (
-            vec![ended, ended_other],
+            vec![ended.clone(), ended_other],
             Some("Stage: Plan"),
             Some(TeamHold {
                 team: "other".into(),
@@ -985,7 +985,62 @@ fn team_hold_table() {
             }),
         ),
     ];
-    for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
+    let placeholder = AgentState {
+        agent_id: "launch_unregistered".into(),
+        ..ended.clone()
+    };
+    let dead_placeholder = AgentState {
+        ended_at: None,
+        runtime_owner: Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "launch_unregistered",
+            u32::MAX,
+            None,
+        )),
+        ..placeholder.clone()
+    };
+    let unknown_placeholder = AgentState {
+        ended_at: None,
+        pane: None,
+        ..placeholder.clone()
+    };
+    let placeholder_cases = [placeholder.clone(), dead_placeholder, unknown_placeholder]
+        .into_iter()
+        .flat_map(|agent| {
+            [
+                (vec![agent.clone()], Some("Stage: Plan"), board_hold.clone()),
+                (vec![agent.clone()], Some("Stage: Done"), None),
+                (vec![agent.clone()], None, None),
+                (vec![agent], Some("No stage"), None),
+            ]
+        })
+        .chain([
+            (
+                vec![AgentState {
+                    ended_at: None,
+                    ..placeholder.clone()
+                }],
+                None,
+                live_hold,
+            ),
+            (
+                vec![
+                    ended.clone(),
+                    AgentState {
+                        team: Some("other".into()),
+                        last_activity: Timestamp::now(),
+                        ..placeholder
+                    },
+                ],
+                Some("Stage: Plan"),
+                Some(TeamHold {
+                    team: "other".into(),
+                    ..board_hold.clone().unwrap()
+                }),
+            ),
+        ]);
+    for (index, (agents, board, expected)) in cases.into_iter().chain(placeholder_cases).enumerate()
+    {
         let board_path = root.path().join(".rimz/team/blackboard.md");
         std::fs::create_dir_all(board_path.parent().unwrap()).unwrap();
         if let Some(board) = board {
@@ -1061,7 +1116,7 @@ fn channel_hold_table() {
                 ..live_hold.clone()
             }),
         ),
-        (vec![ended], None, None),
+        (vec![ended.clone()], None, None),
         (
             vec![AgentState {
                 channel: None,
@@ -1091,12 +1146,76 @@ fn channel_hold_table() {
             None,
             Some(TeamHold {
                 team: "other".into(),
-                ..live_hold
+                ..live_hold.clone()
             }),
         ),
         (vec![], Some("Stage: Build"), None),
     ];
-    for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
+    let placeholder = AgentState {
+        agent_id: "launch_unregistered".into(),
+        ..ended.clone()
+    };
+    let board_hold = TeamHold {
+        reason: TeamHoldReason::BoardStage("Build".into()),
+        ..live_hold.clone()
+    };
+    let dead_placeholder = AgentState {
+        ended_at: None,
+        runtime_owner: Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "launch_unregistered",
+            u32::MAX,
+            None,
+        )),
+        ..placeholder.clone()
+    };
+    let unknown_placeholder = AgentState {
+        ended_at: None,
+        pane: None,
+        ..placeholder.clone()
+    };
+    let placeholder_cases = [placeholder.clone(), dead_placeholder, unknown_placeholder]
+        .into_iter()
+        .flat_map(|agent| {
+            [
+                (
+                    vec![agent.clone()],
+                    Some("Stage: Build"),
+                    Some(board_hold.clone()),
+                ),
+                (vec![agent.clone()], Some("Stage: Done"), None),
+                (vec![agent.clone()], None, None),
+                (vec![agent], Some("No stage"), None),
+            ]
+        })
+        .chain([
+            (
+                vec![AgentState {
+                    ended_at: None,
+                    ..placeholder.clone()
+                }],
+                None,
+                Some(live_hold),
+            ),
+            (
+                vec![
+                    ended,
+                    AgentState {
+                        team: Some("other".into()),
+                        last_activity: Timestamp::now(),
+                        ..placeholder.clone()
+                    },
+                ],
+                Some("Stage: Build"),
+                Some(TeamHold {
+                    team: "other".into(),
+                    ..board_hold.clone()
+                }),
+            ),
+            (vec![placeholder, ended_on_y(0)], Some("Stage: Build"), None),
+        ]);
+    for (index, (agents, board, expected)) in cases.into_iter().chain(placeholder_cases).enumerate()
+    {
         let board_path = checkout.join(".rimz/team/blackboard.md");
         std::fs::create_dir_all(board_path.parent().unwrap()).unwrap();
         if let Some(board) = board {

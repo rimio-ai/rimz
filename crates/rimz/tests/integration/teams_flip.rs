@@ -278,32 +278,102 @@ fn stage_wake_crosses_an_ended_molt_intermediate() {
 
 #[test]
 fn stop_receipt_names_the_cohort_and_held_board() {
+    for registered in [true, false] {
+        let fixture = Fixture::new();
+        if registered {
+            fixture.running("coder", Some("terminal_3"));
+        } else {
+            fixture.unregistered(false);
+        }
+        fixture.live_panes(&["terminal_3"]);
+        std::fs::write(fixture.board(), BOARD).unwrap();
+        let receipt = success(
+            fixture
+                .command()
+                .args(["teams", "stop", "forge#feature-team"])
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            receipt.starts_with("stopped forge#feature-team (1 member)\n"),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains("board at Build; the checkout stays held"),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains("rimz teams resume 'forge#feature-team'"),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains("rimz teams flip 'forge#feature-team' Done"),
+            "{receipt}"
+        );
+    }
+}
+
+#[test]
+fn addressed_flip_releases_a_stopped_unregistered_cohort() {
+    finish_unregistered_board(true);
+}
+
+#[test]
+fn unaddressed_flip_releases_a_stopped_unregistered_cohort() {
+    finish_unregistered_board(false);
+}
+
+fn finish_unregistered_board(addressed: bool) {
     let fixture = Fixture::new();
-    fixture.running("coder", Some("terminal_3"));
-    fixture.live_panes(&["terminal_3"]);
+    fixture.unregistered(true);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let mut command = fixture.command();
+    command.args(["teams", "flip"]);
+    if addressed {
+        command.arg("forge#feature-team");
+    }
+    let receipt = success(command.args(["Done", "Abandoned."]).output().unwrap());
+    assert!(receipt.contains("no live members"), "{receipt}");
+    assert!(receipt.contains("checkout released"), "{receipt}");
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Stage: Done")
+    );
+    let audit = fixture
+        .env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    assert!(
+        rimz::harness::resume::inspect_team_hold(&audit.agents, &fixture.env.project_root)
+            .is_none()
+    );
+}
+
+#[test]
+fn addressed_record_reaches_a_stopped_unregistered_cohort() {
+    let fixture = Fixture::new();
+    fixture.unregistered(true);
     std::fs::write(fixture.board(), BOARD).unwrap();
     let receipt = success(
         fixture
             .command()
-            .args(["teams", "stop", "forge#feature-team"])
+            .args([
+                "teams",
+                "record",
+                "forge#feature-team",
+                "Result",
+                "Abandoned before registration.",
+            ])
             .output()
             .unwrap(),
     );
+    assert_eq!(receipt, "recorded Result @user\n");
     assert!(
-        receipt.starts_with("stopped forge#feature-team (1 member)\n"),
-        "{receipt}"
-    );
-    assert!(
-        receipt.contains("board at Build; the checkout stays held"),
-        "{receipt}"
-    );
-    assert!(
-        receipt.contains("rimz teams resume 'forge#feature-team'"),
-        "{receipt}"
-    );
-    assert!(
-        receipt.contains("rimz teams flip 'forge#feature-team' Done"),
-        "{receipt}"
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Abandoned before registration.")
     );
 }
 
@@ -744,6 +814,64 @@ impl Fixture {
             "feature-team",
             &self.env.project_root,
         );
+    }
+
+    fn unregistered(&self, ended: bool) {
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        let launch = rimz::store::writer::AgentLaunchIdentity {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "launch_coder".into(),
+            name: "coder".into(),
+            name_explicit: true,
+            launch: rimz::agents::LaunchParams {
+                team: Some("forge".into()),
+                role: Some("coder".into()),
+                channel: Some("feature-team".into()),
+                ..Default::default()
+            },
+            run_id: None,
+            prompt: None,
+        };
+        if ended {
+            self.seed("coder", None);
+            let observation =
+                AgentLifecycleObservation::new(Some(launch.agent_id), LifecycleSignal::Ended);
+            self.env
+                .store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    "claude",
+                    "seed",
+                    &observation,
+                ))
+                .unwrap();
+            let audit = self
+                .env
+                .store()
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap();
+            assert_eq!(audit.agents.len(), 1);
+            assert!(audit.agents[0].agent_id.is_provisional());
+            assert!(audit.agents[0].ended_at.is_some());
+            assert_eq!(
+                rimz::store::runtime::agent_liveness(&audit.agents[0]),
+                rimz::store::runtime::AgentLiveness::Unknown
+            );
+            let snapshot = self.env.store().snapshot().unwrap();
+            assert!(rimz::address::team_cohorts(snapshot.agents.iter()).is_empty());
+        } else {
+            self.env
+                .store()
+                .bind_agent_launch(
+                    &launch,
+                    &workspace.session_name,
+                    &self.env.project_root,
+                    &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+                    None,
+                )
+                .unwrap();
+        }
     }
 
     fn seed_member(
