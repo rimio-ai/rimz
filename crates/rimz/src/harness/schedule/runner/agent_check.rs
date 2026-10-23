@@ -26,14 +26,16 @@ pub(super) fn execute(
     let group = Cell::new(None);
     let terminated = Cell::new(false);
     let poll = || {
-        // The host owns reaping; a non-reaping liveness check lets an exited
-        // judge keep its verdict without releasing its PID before pipe drain.
+        // Drain stops before reading liveness, so a judge that exited before
+        // the stop read keeps its verdict. The host reaps after pipe drain,
+        // so this exit read must not reap.
+        let pending: Vec<_> = signals.borrow_mut().pending().collect();
         let judge_exited = !terminated.get()
             && group
                 .get()
                 .is_some_and(|pid| !crate::proc::process_is_live(pid, None));
-        for _ in signals.borrow_mut().pending() {
-            // A judge that exited first keeps its verdict, but a child of it
+        for _ in pending {
+            // A judge that exited keeps its verdict, but a child of it
             // still holding the output pipes gets the stop, so the drain ends.
             if !judge_exited {
                 terminated.set(true);

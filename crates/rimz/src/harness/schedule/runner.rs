@@ -3345,6 +3345,8 @@ impl CheckSignals {
     }
 
     fn pending(&mut self) -> impl Iterator<Item = i32> + '_ {
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_CHECK_BEFORE_SIGNAL_READ");
         self.signals.pending()
     }
 }
@@ -3468,16 +3470,8 @@ pub(crate) fn run_command(
                 .with_context(|| format!("reaping interrupted hosted check `{cmd}`"))?;
             break (status, false);
         }
-        if !forwarded
-            && (!hosted || (stdout.is_finished() && stderr.is_finished()))
-            && let Some(status) = child
-                .try_wait()
-                .with_context(|| format!("waiting for loop check `{cmd}`"))?
-        {
-            interrupted = false;
-            terminated = false;
-            break (status, false);
-        }
+        // Read stops before exit so a completed check is not judged against
+        // liveness sampled before the stop read.
         if let Some(interrupts) = &mut interrupts {
             for signal in interrupts.pending() {
                 interrupted = true;
@@ -3493,6 +3487,16 @@ pub(crate) fn run_command(
                     pending_signals.push(signal);
                 }
             }
+        }
+        if !forwarded
+            && (!hosted || (stdout.is_finished() && stderr.is_finished()))
+            && let Some(status) = child
+                .try_wait()
+                .with_context(|| format!("waiting for loop check `{cmd}`"))?
+        {
+            interrupted = false;
+            terminated = false;
+            break (status, false);
         }
         pending_signals.retain(
             |signal| match killpg(Pid::from_raw(child.id() as i32), *signal) {

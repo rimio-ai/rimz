@@ -2588,6 +2588,8 @@ surface-budget = 14
 path = "crates/rimz/src/harness/schedule/runner.rs"
 # The recorded-room predicate gates room-dependent locks; cold checks take runtime-only run locks.
 allowed-dependencies = [
+    # The testkit signal-read rendezvous is a crate-root dependency.
+    "(crate)",
     "agents",
     "config",
     # Run claims and liveness reads share the directory-gated lease protocol with watcher and GC attempts.

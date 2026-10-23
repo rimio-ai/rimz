@@ -114,19 +114,53 @@ fn wait_for_process_state(pid: u32, state: &str) {
 }
 
 #[cfg(target_os = "linux")]
-fn exit_check_with_pending_sigterm(env: &Env, runner: &std::process::Child) {
-    let pid = nix::unistd::Pid::from_raw(runner.id() as i32);
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
-    wait_for_process_state(runner.id(), "T");
-    let check_pid = std::fs::read_to_string(env.project_root.join("check-pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
-    wait_for_process_state(check_pid, "Z");
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).unwrap();
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+fn exit_check_with_pending_sigterm(
+    env: &Env,
+    runner: &mut std::process::Child,
+    barrier: &std::os::unix::net::UnixListener,
+) {
+    barrier.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    let mut stopped = false;
+    loop {
+        if runner.try_wait().unwrap().is_some() {
+            assert!(stopped, "runner exited before the held signal read");
+            return;
+        }
+        match barrier.accept() {
+            Ok((mut release, _)) => {
+                let peer = nix::sys::socket::getsockopt(
+                    &release,
+                    nix::sys::socket::sockopt::PeerCredentials,
+                )
+                .unwrap();
+                assert_eq!(peer.pid(), runner.id() as i32, "a child read check signals");
+                if !stopped && env.project_root.join("check-ready").exists() {
+                    let check_pid = std::fs::read_to_string(env.project_root.join("check-pid"))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+                    wait_for_process_state(check_pid, "Z");
+                    // The runner polls on its main thread, so its SIGTERM handler runs
+                    // before that thread's rendezvous read can resume with the release.
+                    nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(runner.id() as i32),
+                        nix::sys::signal::Signal::SIGTERM,
+                    )
+                    .unwrap();
+                    stopped = true;
+                }
+                release.write_all(&[1]).unwrap();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "runner never finished its check");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("accepting the held signal read: {error}"),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -135,8 +169,17 @@ fn a_sigterm_after_check_exit_preserves_its_status_before_the_next_poll() {
     for code in [0, 7] {
         let env = fixture("skip", None);
         gated_check(&env, code);
-        let mut runner = start_check(&env);
-        exit_check_with_pending_sigterm(&env, &runner);
+        let barrier_path = env.runtime_paths().sock_dir.join("check-read.sock");
+        let barrier = std::os::unix::net::UnixListener::bind(&barrier_path).unwrap();
+        let mut runner = env
+            .rimz()
+            .env("RIMZ_TEST_CHECK_BEFORE_SIGNAL_READ", &barrier_path)
+            .args(["loop", "run", "busy"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        exit_check_with_pending_sigterm(&env, &mut runner, &barrier);
         assert_eq!(runner.wait().unwrap().code(), Some(0));
         let rows = read_loop_run_records(&env);
         assert_eq!(rows.len(), 1, "{rows:?}");
@@ -249,8 +292,11 @@ while ! test -e allow-exit; do sleep 0.025; done
             env.project_root
         ),
     );
+    let barrier_path = env.runtime_paths().sock_dir.join("check-read.sock");
+    let barrier = std::os::unix::net::UnixListener::bind(&barrier_path).unwrap();
     let mut runner = env
         .rimz()
+        .env("RIMZ_TEST_CHECK_BEFORE_SIGNAL_READ", &barrier_path)
         .env("PATH", path_with_front(&bin))
         .env(
             "SHELL",
@@ -261,8 +307,7 @@ while ! test -e allow-exit; do sleep 0.025; done
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    wait_for_path(&env.project_root.join("check-ready"));
-    exit_check_with_pending_sigterm(&env, &runner);
+    exit_check_with_pending_sigterm(&env, &mut runner, &barrier);
     assert_eq!(runner.wait().unwrap().code(), Some(0));
     let rows = read_loop_run_records(&env);
     assert_eq!(rows.len(), 1, "{rows:?}");
