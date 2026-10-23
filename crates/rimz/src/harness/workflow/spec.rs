@@ -22,11 +22,18 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
-    /// `Some(empty)` demands checkout facts; `None` means no case reads the forge.
+    /// `Some(empty)` demands checkout facts; `None` means no condition or wake needs them.
     pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
         let mut branches = None;
         for check in self.checks.values() {
             if !matches!(check.kind(), Some(CheckKind::Condition)) {
+                for wake in check.wake.iter().flatten() {
+                    let (selector, matches) = wake.subscription()?;
+                    if schedule::arm::default_signal_match_key(&selector, &matches) == Some("path")
+                    {
+                        branches.get_or_insert_with(BTreeSet::new);
+                    }
+                }
                 continue;
             }
             for case in &check.cases {
