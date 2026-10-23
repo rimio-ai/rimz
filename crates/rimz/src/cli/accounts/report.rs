@@ -1303,8 +1303,11 @@ fn status_label(report: &AccountRow, cause: bool) -> String {
 fn missing_reading(report: &AccountRow, now: Timestamp, time_zone: &TimeZone) -> Option<String> {
     if report.metered == Some(false)
         || (report.windows.is_empty()
-            && rimz::agents::spec_by_kind(report.kind.as_str())
-                .is_none_or(|spec| spec.expected_windows.is_empty()))
+            && !rimz::agents::expects_usage_reading(
+                &report.kind,
+                report.metered,
+                report.sub_provider.as_deref(),
+            ))
         || report
             .windows
             .iter()

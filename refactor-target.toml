@@ -253,7 +253,13 @@ upward-dependencies = ["address"]
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
 # AgentState::fast_mode shares live-over-launch truth with the CLI and sidebar projection (+1).
-surface-budget = 1124
+# expects_usage_reading and its re-export share per-login quota expectations with the CLI (+2).
+surface-budget = 1126
+
+[[verdict]]
+kind = "item"
+key = "agents::delegated_account::expects_usage_reading"
+reason = "The accounts CLI needs the agents-owned per-login quota-surface decision."
 
 [[verdict]]
 kind = "item"
