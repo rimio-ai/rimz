@@ -242,18 +242,6 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>, ShareErr> {
     }
 }
 
-/// Resolve existing text from the real account home before the stale scan's
-/// lexical comparison, without requiring the target to exist.
-fn link_target(named_home: &Path, link: &Path) -> Result<PathBuf, ShareErr> {
-    if link.is_absolute() {
-        return Ok(normalize_path_lexical(link));
-    }
-    let real_home = named_home
-        .canonicalize()
-        .map_err(|error| io_err(named_home, error))?;
-    Ok(normalize_path_lexical(&real_home.join(link)))
-}
-
 /// Only matching text is current. A spelling change that reaches the same
 /// existing entry needs no migration or live-writer gate.
 fn classify(slot: &Path, target: &Path, link_text: &Path) -> Result<Action, ShareErr> {
@@ -392,10 +380,9 @@ struct Homes<'a> {
     daemon_writes: &'a dyn Fn() -> DaemonSessions,
 }
 
-fn relative_prefix(named_home: &Path, default_home: &Path, user: Option<&Path>) -> Option<PathBuf> {
+fn relative_prefix(real_named: &Path, default_home: &Path, user: Option<&Path>) -> Option<PathBuf> {
     let user = user.filter(|home| !home.as_os_str().is_empty())?;
     let real_user = user.canonicalize().ok()?;
-    let real_named = named_home.canonicalize().ok()?;
     let below_user = real_named.strip_prefix(real_user).ok()?;
     let configured_user = normalize_path_lexical(&std::path::absolute(user).ok()?);
     let provider = default_home.strip_prefix(configured_user).ok()?;
@@ -420,8 +407,14 @@ fn reconcile_homes(
         .map(|home| normalize_path_lexical(&home))
         .map_err(|error| io_err(homes.default, error))?;
     let _lock = WorkspaceLock::acquire(homes.lock)?;
-    let prefix = relative_prefix(&named_home, &default_home, homes.user)
+    let real_named = named_home.canonicalize().ok();
+    let prefix = real_named
+        .as_deref()
+        .and_then(|real_named| relative_prefix(real_named, &default_home, homes.user))
         .unwrap_or_else(|| default_home.clone());
+    // The kernel resolves relative link text from the account home's real
+    // location; one that does not canonicalize is read where it is configured.
+    let real_home = real_named.as_deref().unwrap_or(&named_home);
 
     let included = adapter.shared_home_entries();
     let mut names: Vec<String> = included.iter().map(|entry| entry.name.to_owned()).collect();
@@ -468,8 +461,10 @@ fn reconcile_homes(
             continue;
         }
         let link = fs::read_link(&slot).map_err(|error| io_err(&slot, error))?;
+        // Absolute text replaces the join, and the lexical comparison never
+        // needs the target to exist.
         if link.as_os_str() == prefix.join(&name).as_os_str()
-            || link_target(&named_home, &link)?.starts_with(&default_home)
+            || normalize_path_lexical(&real_home.join(&link)).starts_with(&default_home)
         {
             stale.push((name, slot));
         }
@@ -549,6 +544,7 @@ fn reconcile_homes(
     let applied = apply(
         adapter,
         &named_home,
+        real_home,
         &default_home,
         &dirs,
         plan,
@@ -565,9 +561,14 @@ fn reconcile_homes(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "reports name the configured account home; set-aside reads from its real location"
+)]
 fn apply(
     adapter: &AgentDefinition,
     named_home: &Path,
+    real_home: &Path,
     default_home: &Path,
     dirs: &[&str],
     plan: Vec<PlannedLink>,
@@ -638,7 +639,7 @@ fn apply(
                     None => aside_dir.insert(new_aside_dir(named_home)?),
                 };
                 let aside = dir.join(&name);
-                set_aside(named_home, &slot, &aside, &kind)?;
+                set_aside(real_home, &slot, &aside, &kind)?;
                 report.set_aside.push((slot.clone(), aside));
             }
         }
@@ -657,10 +658,10 @@ fn apply(
 }
 
 /// Move the entry at `slot` to `aside`. A relative link resolves against the
-/// real directory holding it, so it is rewritten against the canonical
-/// account home without folding `..`, preserving the kernel's resolution.
+/// real directory holding it, so it is rewritten against the account home's
+/// real location without folding `..`, preserving the kernel's resolution.
 fn set_aside(
-    named_home: &Path,
+    real_home: &Path,
     slot: &Path,
     aside: &Path,
     kind: &fs::FileType,
@@ -668,9 +669,6 @@ fn set_aside(
     if kind.is_symlink() {
         let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
         if link.is_relative() {
-            let real_home = named_home
-                .canonicalize()
-                .map_err(|error| io_err(named_home, error))?;
             std::os::unix::fs::symlink(real_home.join(link), aside)
                 .map_err(|error| io_err(aside, error))?;
             return fs::remove_file(slot).map_err(|error| io_err(slot, error));
