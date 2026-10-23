@@ -86,6 +86,7 @@ fn draw_into(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
+    view: &mut ViewState,
     ui: &mut UiState,
     area: Rect,
 ) {
@@ -97,14 +98,15 @@ fn draw_into(
     // The composed maps and the resolved scroll offset are byproducts of the
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
-    prune_expanded_groups(snapshot, ui);
-    prune_delegation_state(snapshot, ui);
+    prune_expanded_groups(snapshot, view);
+    prune_delegation_state(snapshot, view);
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
     let mut card_heights = std::mem::take(&mut ui.card_heights);
     let composed = compose_lines_with_meter(
         snapshot,
         alert,
+        view,
         ui,
         theme.as_ref(),
         area.width,
@@ -128,40 +130,38 @@ fn draw_into(
         .collect();
     ui.sections
         .resize(usize::from(area.height), SectionLabel::default());
-    ui.painted_roster = ui
+    ui.painted_roster = view
         .visible_roster(snapshot)
         .rows()
         .iter()
         .map(|row| row.id.clone())
         .collect();
     ui.interactions = composed.interactions;
-    ui.scrollbar.shift(composed.correction);
-    ui.view
-        .scrollbar
-        .observe(composed.visible_scroll_offset, ui.animation_phase);
-    ui.scroll_ease = composed.scroll_ease;
-    ui.view
-        .scroll_ease
-        .observe(composed.scroll_offset, ui.frame_ms);
-    ui.scroll_offset = composed.scroll_offset;
+    view.scrollbar.shift(composed.correction);
+    view.scrollbar
+        .observe(composed.visible_scroll_offset, view.animation_phase);
+    view.scroll_ease = composed.scroll_ease;
+    view.scroll_ease
+        .observe(composed.scroll_offset, view.frame_ms);
+    view.scroll_offset = composed.scroll_offset;
     ui.drawn_scroll_max = Some(composed.scroll_max);
     ui.painted_rows = composed.painted_rows;
-    ui.anchored_rows = composed.anchored_rows;
-    ui.anchor_banner_shown = composed.banner_shown;
-    ui.drawn_selection = composed.drawn_selection;
-    ui.held_expansions = composed.held_expansions;
+    view.anchored_rows = composed.anchored_rows;
+    view.anchor_banner_shown = composed.banner_shown;
+    view.drawn_selection = composed.drawn_selection;
+    view.held_expansions = composed.held_expansions;
     ui.scroll_zone_top = top_height;
     ui.banner_shown = composed.banner_shown;
     ui.anchor_clamped = composed.anchor_clamped;
-    ui.offset_authoritative = false;
-    ui.landed_reveal = false;
-    ui.reveal_row = None;
-    ui.focus_placement = None;
-    ui.own_input_reveal = false;
+    view.offset_authoritative = false;
+    view.landed_reveal = false;
+    view.reveal_row = None;
+    view.focus_placement = None;
+    view.own_input_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     paint_hyperlinks(frame, &ui.interactions, area);
-    if ui.help_visible
+    if view.help_visible
         && let Some(rect) = draw_help_overlay(
             frame,
             theme.as_ref(),
@@ -272,7 +272,7 @@ fn draw_help_overlay(
     Some(rect)
 }
 
-fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     let roster = VisibleRoster::baseline(snapshot);
     ui.expanded_groups.retain(|key| {
         roster
@@ -284,7 +284,7 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
 
 /// An override lives as long as its row; the `+K older` history also expires
 /// when the parent's user turn moves.
-fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut ViewState) {
     let agent = |id: &str| {
         snapshot
             .worktree_groups
@@ -304,7 +304,7 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &ViewState) -> Option<&'a
 
 /// Only the live-selected, not-yet-prompted idle card draws compose dots and
 /// needs their breath animation grid.
-fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool {
     selected_row(snapshot, ui).is_some_and(sections::awaiting_first_prompt_affordance)
 }
 
@@ -312,7 +312,7 @@ fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) 
 /// a live child's head or a running shell job's working animation. Either
 /// needs the fast grid whatever the parent's own status, so a sleeping parent
 /// waiting on its children still animates them.
-fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool {
     let roster = ui.visible_roster(snapshot);
     let density = snapshot.theme.display.card_density;
     roster.groups().iter().any(|group| {
@@ -361,7 +361,7 @@ pub(in crate::sidebar_pane) fn selected_agent_kind(
 
 pub(in crate::sidebar_pane) fn selected_pet_action(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
 ) -> PetAction {
     selected_row(snapshot, ui).map_or(PetAction::Idle, row_pet_action)
 }
@@ -426,7 +426,7 @@ pub(in crate::sidebar_pane) fn unread_pet_row_ids(
 /// dashboard is empty.
 pub(in crate::sidebar_pane) fn active_dashboard_tab(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
 ) -> Option<crate::ids::LoginKey> {
     let panels = &snapshot.providers;
     if let Some(tab) = &ui.dashboard_tab
@@ -525,14 +525,15 @@ pub(in crate::sidebar_pane) fn pet_motion_enabled(
 
 /// The repaint grid while something on screen moves, `None` when nothing does.
 /// `phase` is the observed animation phase, which the serve loop may take from
-/// the wall clock ahead of `ui.animation_phase`.
+/// the wall clock ahead of `view.animation_phase`.
 pub(in crate::sidebar_pane) fn animation_interval(
     snapshot: &SidebarSnapshot,
+    view: &ViewState,
     ui: &UiState,
     phase: u64,
     alert_active: bool,
 ) -> Option<Duration> {
-    if ui.scroll_ease.in_flight() {
+    if view.scroll_ease.in_flight() {
         return Some(SCROLL_EASE_FRAME);
     }
     let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
@@ -543,11 +544,11 @@ pub(in crate::sidebar_pane) fn animation_interval(
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.
-    if ui.help_visible || ui.scrollbar.fading(phase) {
+    if view.help_visible || view.scrollbar.fading(phase) {
         return Some(base);
     }
     let cadence = animation_cadence(snapshot, &theme.animations);
-    if visible_delegation_motion(snapshot, ui) || cadence == AnimationCadence::Fast {
+    if visible_delegation_motion(snapshot, view) || cadence == AnimationCadence::Fast {
         return Some(base);
     }
     // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
@@ -557,7 +558,7 @@ pub(in crate::sidebar_pane) fn animation_interval(
     // holds across the extra frames. A slow-cadence room drops to the money
     // grid while a climb is in flight — the cosmetic breath repaints
     // idempotently, and the climb window bounds the extra paints.
-    let money_rolling = ui.tally.any_rolling(phase) || ui.cost_rolls.any_rolling(phase);
+    let money_rolling = view.tally.any_rolling(phase) || view.cost_rolls.any_rolling(phase);
     let money_grid = || crate::sidebar::timing::money_animation_frame(refresh_ms, CLICK_PHASES);
     // The dashboard pet paints on its track cadence, but a money climb in the
     // still-visible cockpit must keep sampling on the money grid, so a rolling
@@ -574,7 +575,7 @@ pub(in crate::sidebar_pane) fn animation_interval(
     if money_rolling {
         return Some(money_grid());
     }
-    if cadence == AnimationCadence::Breath || expanded_row_awaiting_first_prompt(snapshot, ui) {
+    if cadence == AnimationCadence::Breath || expanded_row_awaiting_first_prompt(snapshot, view) {
         return Some(crate::sidebar::timing::breath_animation_frame(refresh_ms));
     }
     None
@@ -584,10 +585,11 @@ pub(in crate::sidebar_pane) fn draw_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
+    view: &mut ViewState,
     ui: &mut UiState,
 ) -> Result<(), B::Error> {
     terminal
-        .draw(|frame| draw_into(frame, snapshot, alert, ui, frame.area()))
+        .draw(|frame| draw_into(frame, snapshot, alert, view, ui, frame.area()))
         .map(|_| ())
 }
 
@@ -605,13 +607,11 @@ pub fn render_fixed<W: Write>(
         &mut terminal,
         snapshot,
         None,
-        &mut UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &mut ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &mut UiState::default(),
     )?;
     Ok(())
 }
@@ -660,21 +660,19 @@ fn render_line_ansi<W: Write>(
         snapshot.theme.display.card_density = CardDensityMode::Expanded;
     }
     let snapshot = expanded.as_ref().unwrap_or(snapshot);
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut view = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
+    let mut ui = UiState::default();
     if height.is_none() {
-        ui.landed_open = true;
-        ui.expanded_groups = snapshot
+        view.landed_open = true;
+        view.expanded_groups = snapshot
             .worktree_groups
             .iter()
             .map(|group| group.key.clone())
             .collect();
-        ui.delegation_history = snapshot
+        view.delegation_history = snapshot
             .worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter())
@@ -690,6 +688,7 @@ fn render_line_ansi<W: Write>(
         let composed = compose_lines_with_meter(
             snapshot,
             None,
+            &view,
             &ui,
             theme.as_ref(),
             width,
@@ -703,7 +702,13 @@ fn render_line_ansi<W: Write>(
     let backend = TestBackend::new(width, height);
     let mut terminal = infallible(Terminal::new(backend));
     infallible(terminal.clear());
-    infallible(draw_to_terminal(&mut terminal, snapshot, None, &mut ui));
+    infallible(draw_to_terminal(
+        &mut terminal,
+        snapshot,
+        None,
+        &mut view,
+        &mut ui,
+    ));
     let buffer = terminal.backend().buffer();
     if let Some(section) = section {
         for row in ui

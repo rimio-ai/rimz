@@ -964,15 +964,13 @@ fn selected_agent_without_context_keeps_bare_token_total() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         44,
         17,
     );
@@ -1019,15 +1017,13 @@ fn codex_card_renders_the_per_call_composition() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         44,
         17,
     );
@@ -1092,13 +1088,11 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         snapshot_to_screen_with_alert_and_ui(
             &snapshot_with(vec![agent]),
             None,
-            &UiState {
-                view: ViewState {
-                    selected_index: Some(0),
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                selected_index: Some(0),
+                ..Default::default()
             },
+            &UiState::default(),
             52,
             17,
         )
@@ -1165,15 +1159,13 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         44,
         17,
     );
@@ -1277,13 +1269,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         48,
         17,
     );
@@ -1318,13 +1308,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot_with(vec![copilot.clone()]),
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         48,
         17,
     );
@@ -1350,13 +1338,11 @@ fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &compact,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(1),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(1),
+            ..Default::default()
         },
+        &UiState::default(),
         48,
         19,
     );
@@ -1460,15 +1446,13 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         48,
         17,
     );
@@ -1864,15 +1848,13 @@ fn codex_app_server_context_links_to_rich_card() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         17,
     );

@@ -38,8 +38,8 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     rig.state.observe_tx = tx;
     rig.state.clicked_row = None;
     rig.state.ui.painted_rows.clear();
-    rig.view().ui.selected_index = Some(0);
-    rig.view().ui.selected_pane = Some(pane.clone());
+    rig.view().presentation.selected_index = Some(0);
+    rig.view().presentation.selected_pane = Some(pane.clone());
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
@@ -72,7 +72,7 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     .unwrap();
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     rig.state.apply_focus_anchor();
-    assert!(rig.view().ui.focus_placement.is_some());
+    assert!(rig.view().presentation.focus_placement.is_some());
     (rig, rx, id)
 }
 
@@ -125,7 +125,7 @@ fn exact_landing_emits_no_displacement() {
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.view().ui.focus_placement.is_none());
+    assert!(rig.view().presentation.focus_placement.is_none());
     assert!(rx.try_recv().is_err());
 }
 
@@ -133,14 +133,14 @@ fn exact_landing_emits_no_displacement() {
 fn landing_paints_rearm_the_freeze_after_adoption() {
     for requested_row in [None, Some(1_000)] {
         let (mut rig, _, _) = landing(requested_row, false);
-        layout_freeze::arm_freeze(&mut rig.view().ui, 0);
+        layout_freeze::arm_freeze(&mut rig.view().presentation, 0);
         let before = Timestamp::now().as_millisecond();
         rig.state.dirty = true;
         rig.state
             .paint_now(&mut rig.terminal, Instant::now())
             .unwrap();
         let after = Timestamp::now().as_millisecond();
-        let armed = rig.view().ui.freeze.as_ref().unwrap().armed_ms;
+        let armed = rig.view().presentation.freeze.as_ref().unwrap().armed_ms;
         assert!(
             (before..=after).contains(&armed),
             "landing paint, not adoption, starts the timer: {armed}"
@@ -174,16 +174,16 @@ fn same_tab_landing_keeps_the_local_click_watch_without_a_second_record() {
 #[test]
 fn landing_is_judged_only_at_the_paint_that_consumed_it() {
     let (mut rig, rx, _) = landing(Some(1_000), false);
-    let pane = rig.view().ui.selected_pane.take();
-    rig.view().ui.selected_index = None;
+    let pane = rig.view().presentation.selected_pane.take();
+    rig.view().presentation.selected_index = None;
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
         .unwrap();
-    assert!(rig.view().ui.focus_placement.is_none());
+    assert!(rig.view().presentation.focus_placement.is_none());
 
-    rig.view().ui.selected_index = Some(0);
-    rig.view().ui.selected_pane = pane;
+    rig.view().presentation.selected_index = Some(0);
+    rig.view().presentation.selected_pane = pane;
     rig.state.dirty = true;
     rig.state
         .paint_now(&mut rig.terminal, Instant::now() + LAYOUT_FREEZE)
@@ -194,8 +194,8 @@ fn landing_is_judged_only_at_the_paint_that_consumed_it() {
 #[test]
 fn missing_landing_row_records_null_from_the_post_paint_zone() {
     let (mut rig, rx, id) = landing(Some(3), false);
-    rig.view().ui.focus_placement = None;
-    rig.view().ui.drawn_selection = Some(id);
+    rig.view().presentation.focus_placement = None;
+    rig.view().presentation.drawn_selection = Some(id);
     rig.state.ui.painted_rows.clear();
     rig.state.ui.scroll_zone_top = 7;
     {
@@ -227,7 +227,7 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         rig.state.ui.anchor_clamped = cause == "no_room_clamp";
         if matches!(cause, "no_room_clamp" | "hold_expired") {
             rig.state.clock = LoopClock::play(Timestamp::UNIX_EPOCH);
-            super::super::super::layout_freeze::arm_freeze(&mut rig.view().ui, 0);
+            super::super::super::layout_freeze::arm_freeze(&mut rig.view().presentation, 0);
             let prev = rig.state.current.clone();
             rig.state.reconcile_selection_and_order(
                 &prev,
@@ -244,7 +244,7 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         if cause == "selection_changed" {
             rig.state.ui.banner_shown = false;
         }
-        rig.view().ui.drawn_selection =
+        rig.view().presentation.drawn_selection =
             (cause != "height_above_changed").then(|| "another-row".into());
         rig.state.ui.painted_rows[0].1 = 3;
         rig.observe_paint(now + Duration::from_millis(120));

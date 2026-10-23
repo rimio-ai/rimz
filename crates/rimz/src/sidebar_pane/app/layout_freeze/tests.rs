@@ -1,10 +1,10 @@
 use super::*;
 use crate::sidebar::timing::LAYOUT_FREEZE;
-use crate::sidebar_pane::render::UiState;
+use crate::sidebar_pane::render::ViewState;
 
 #[test]
 fn arrivals_append_within_the_agent_and_process_partitions() {
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![
@@ -43,7 +43,7 @@ fn freeze_deadline_counts_from_arming_for_both_focus_states() {
 #[test]
 fn freeze_releases_at_the_deadline_including_parked_ties() {
     for (parked, deadline) in [(false, 6_000), (true, 31_000)] {
-        let mut ui = UiState::default();
+        let mut ui = ViewState::default();
         let mut current = snapshot_with_groups(vec![group("a", vec![row("a1", "terminal_1")])]);
         arm_freeze(&mut ui, 1_000);
         apply_freeze(&mut ui, &mut current, false, deadline - 1, parked);
@@ -175,7 +175,7 @@ fn already_frozen_order_keeps_groups_and_rows_shared() {
         group("a", vec![row("a1", "terminal_1"), row("a2", "terminal_2")]),
         group("b", vec![row("b1", "terminal_3")]),
     ]);
-    let frozen = capture_order(&original, &UiState::default());
+    let frozen = capture_order(&original, &ViewState::default());
     let mut current = original.clone();
     reorder_to_frozen(&mut current, &frozen);
     assert!(std::sync::Arc::ptr_eq(
@@ -197,7 +197,7 @@ fn frozen_reorder_detaches_only_changed_rows() {
         group("a", vec![row("a2", "terminal_2"), row("a1", "terminal_1")]),
         group("b", vec![row("b1", "terminal_3")]),
     ]);
-    let mut frozen = capture_order(&original, &UiState::default());
+    let mut frozen = capture_order(&original, &ViewState::default());
     frozen.rows.swap(0, 1);
     let mut current = original.clone();
     reorder_to_frozen(&mut current, &frozen);
@@ -540,7 +540,7 @@ fn capture_order_collects_group_keys_flat_row_ids_and_visible_ids() {
             .map(|index| row(&format!("a{index}"), &format!("terminal_{index}")))
             .collect(),
     )]);
-    let ui = UiState::default();
+    let ui = ViewState::default();
 
     let order = capture_order(&current, &ui);
 
@@ -565,16 +565,13 @@ fn capture_order_collects_group_keys_flat_row_ids_and_visible_ids() {
 
 #[test]
 fn apply_freeze_arms_holds_and_expires() {
-    let mut ui = UiState {
-        view: crate::sidebar_pane::render::ViewState {
-            last_order: FrozenOrder {
-                groups: vec!["a".to_owned()],
-                rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
-                visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
-            },
-            ..Default::default()
+    let mut ui = crate::sidebar_pane::render::ViewState {
+        last_order: FrozenOrder {
+            groups: vec!["a".to_owned()],
+            rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
+            visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
         },
-        ..UiState::default()
+        ..Default::default()
     };
     let mut current = snapshot_with_groups(vec![group(
         "a",
@@ -616,7 +613,7 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
         groups[2].finished = was_finished;
         groups[3].kind = SidebarWorktreeKind::External;
         let mut current = snapshot_with_groups(groups);
-        let mut ui = UiState::default();
+        let mut ui = ViewState::default();
         ui.last_order = capture_order(&current, &ui);
         apply_freeze(&mut ui, &mut current, true, 1_000, false);
 
@@ -631,20 +628,17 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
 
 #[test]
 fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
-    let mut ui = UiState {
-        view: crate::sidebar_pane::render::ViewState {
-            last_order: FrozenOrder {
-                groups: vec![
-                    "main".to_owned(),
-                    "finished".to_owned(),
-                    "external".to_owned(),
-                ],
-                rows: vec![frozen_paneless_row("zsh")],
-                visible: HashSet::from(["zsh".to_owned()]),
-            },
-            ..Default::default()
+    let mut ui = crate::sidebar_pane::render::ViewState {
+        last_order: FrozenOrder {
+            groups: vec![
+                "main".to_owned(),
+                "finished".to_owned(),
+                "external".to_owned(),
+            ],
+            rows: vec![frozen_paneless_row("zsh")],
+            visible: HashSet::from(["zsh".to_owned()]),
         },
-        ..UiState::default()
+        ..Default::default()
     };
     let groups = || {
         let mut finished = group("finished", vec![]);
@@ -692,7 +686,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
 
 #[test]
 fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![
@@ -733,24 +727,21 @@ fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
 
 #[test]
 fn freeze_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
-    let mut ui = UiState {
-        view: crate::sidebar_pane::render::ViewState {
-            last_order: FrozenOrder {
-                groups: vec!["team".to_owned()],
-                rows: vec![
-                    frozen_row("launch-planner", "terminal_1"),
-                    frozen_row("launch-coder", "terminal_2"),
-                    frozen_row("launch-reviewer", "terminal_3"),
-                ],
-                visible: HashSet::from([
-                    "launch-planner".to_owned(),
-                    "launch-coder".to_owned(),
-                    "launch-reviewer".to_owned(),
-                ]),
-            },
-            ..Default::default()
+    let mut ui = crate::sidebar_pane::render::ViewState {
+        last_order: FrozenOrder {
+            groups: vec!["team".to_owned()],
+            rows: vec![
+                frozen_row("launch-planner", "terminal_1"),
+                frozen_row("launch-coder", "terminal_2"),
+                frozen_row("launch-reviewer", "terminal_3"),
+            ],
+            visible: HashSet::from([
+                "launch-planner".to_owned(),
+                "launch-coder".to_owned(),
+                "launch-reviewer".to_owned(),
+            ]),
         },
-        ..UiState::default()
+        ..Default::default()
     };
     let mut current = snapshot_with_groups(vec![group(
         "team",

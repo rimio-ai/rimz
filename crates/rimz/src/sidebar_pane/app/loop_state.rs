@@ -27,7 +27,7 @@ use crate::sidebar::timing::TAB_READ_DWELL;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
-use crate::sidebar_pane::render::{self, UiState};
+use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
@@ -193,6 +193,7 @@ pub(super) struct LoopState {
     observe_tx: SyncSender<ObserveMsg>,
     self_close: SelfCloseState,
     pub(super) ui: UiState,
+    pub(super) presentation: ViewState,
     paint: FramePainter,
     pub(super) room_caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) focus_peers: Option<FocusPeers>,
@@ -232,6 +233,7 @@ impl std::ops::DerefMut for LoopState {
 
 pub(super) fn handle_wakeup(
     wakeup: Wakeup,
+    view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     keymap: &super::NavKeymap,
@@ -239,9 +241,9 @@ pub(super) fn handle_wakeup(
 ) -> InputOutcome {
     let wakeup = match wakeup {
         Wakeup::Press { code, mods } => {
-            let mode = if ui.help_visible {
+            let mode = if view.help_visible {
                 InputMode::Help
-            } else if ui.search_draft.is_some() {
+            } else if view.search_draft.is_some() {
                 InputMode::Typing
             } else {
                 InputMode::Normal
@@ -253,48 +255,48 @@ pub(super) fn handle_wakeup(
     // The help popup is a transient modal: while it is up, the next
     // interaction dismisses it and is consumed, never also acting on the
     // sidebar beneath.
-    if ui.help_visible
+    if view.help_visible
         && matches!(
             wakeup,
             Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
         )
     {
-        ui.help_visible = false;
+        view.help_visible = false;
         return InputOutcome::redraw();
     }
     match wakeup {
         Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
-        Wakeup::Key(action) => handle_key(action, ui, snapshot),
+        Wakeup::Key(action) => handle_key(action, view, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
             if let Some(render::HitTarget::Row(index)) = ui.interactions.target_at(column, row)
                 && !ui
                     .painted_roster
                     .get(index)
-                    .is_some_and(|id| ui.visible_roster(snapshot).ordinal_of_id(id).is_some())
+                    .is_some_and(|id| view.visible_roster(snapshot).ordinal_of_id(id).is_some())
             {
                 return InputOutcome::default();
             }
-            if ui.search_draft.is_some() {
+            if view.search_draft.is_some() {
                 // Resolve the pane against the painted draft before clearing widens the roster.
                 let pane = ui
                     .interactions
                     .target_at(column, row)
-                    .and_then(|target| click_focus_pane(&target, ui, snapshot));
+                    .and_then(|target| click_focus_pane(&target, view, ui, snapshot));
                 if pane.is_some() {
-                    let click = handle_mouse_click(column, row, ui, snapshot);
-                    let mut outcome = finish_search(ui, snapshot, false);
+                    let click = handle_mouse_click(column, row, view, ui, snapshot);
+                    let mut outcome = finish_search(view, snapshot, false);
                     outcome.redraw |= click.redraw;
                     outcome.effects.extend(click.effects);
                     return outcome;
                 }
             }
-            let mut outcome = finish_search(ui, snapshot, true);
-            let click = handle_mouse_click(column, row, ui, snapshot);
+            let mut outcome = finish_search(view, snapshot, true);
+            let click = handle_mouse_click(column, row, view, ui, snapshot);
             outcome.redraw |= click.redraw;
             outcome.effects.extend(click.effects);
             outcome
         }
-        Wakeup::Scroll { down } => handle_scroll(down, ui),
+        Wakeup::Scroll { down } => handle_scroll(down, view, ui),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
@@ -417,7 +419,9 @@ impl LoopState {
 
     #[cfg(feature = "testkit")]
     pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
-        self.paint.prepare_play_pet(&mut self.ui, snapshot)
+        let presentation = self.inspect_view(|ui, _| ui.clone());
+        self.paint
+            .prepare_play_pet(&presentation, &mut self.ui, snapshot)
     }
 
     #[cfg(feature = "testkit")]
@@ -543,13 +547,11 @@ impl LoopState {
             hold_expired_since_paint: false,
             observe_tx,
             self_close: SelfCloseState::default(),
-            ui: UiState {
-                view: render::ViewState {
-                    make_up_filter,
-                    baseline_pane: baseline_pane.clone(),
-                    ..Default::default()
-                },
-                ..UiState::default()
+            ui: UiState::default(),
+            presentation: ViewState {
+                make_up_filter,
+                baseline_pane: baseline_pane.clone(),
+                ..Default::default()
             },
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             room_caps: Arc::default(),
@@ -690,7 +692,7 @@ impl LoopState {
         if self.view_scope.is_none() {
             return self.with_projected_view(false, false, |state| state.freeze_remaining(now_ms));
         }
-        let hold = self.ui.freeze.as_ref()?;
+        let hold = self.presentation.freeze.as_ref()?;
         Some(Duration::from_millis(
             (hold.deadline_ms(self.parked(now_ms as u64)) - now_ms).max(0) as u64,
         ))
@@ -708,8 +710,14 @@ impl LoopState {
         let alert_active = self.alert_active();
         let watched = self.watched();
         let animating = watched
-            && render::animation_interval(&self.view.current, &self.ui, clock.phase, alert_active)
-                .is_some();
+            && render::animation_interval(
+                &self.view.current,
+                &self.presentation,
+                &self.ui,
+                clock.phase,
+                alert_active,
+            )
+            .is_some();
         let active = !self.self_close.confirming_empty()
             && (watched && (animating || self.dirty || self.focus_marker_due(self.clock.now())));
         let mut timeout = if active {
@@ -897,6 +905,7 @@ impl LoopState {
             baseline_seed: _,
             view_token: _,
             ui: _,
+            presentation: _,
             self_close,
             pending_focus_repair,
             #[cfg(test)]
@@ -1050,9 +1059,9 @@ impl LoopState {
         if self.view.pending_input_focus.as_ref() == Some(&pane) {
             self.view.pending_input_focus = None;
         }
-        let Some(label) = self
-            .view
-            .roll_back_focus(&mut self.ui.view, &pane, self.clock.now())
+        let Some(label) =
+            self.view
+                .roll_back_focus(&mut self.presentation, &pane, self.clock.now())
         else {
             return;
         };
@@ -1296,7 +1305,7 @@ impl LoopState {
             .replace(Arc::new(super::fetch::FoldInputs {
                 sampled_at,
                 anchor: Some(anchor),
-                filter: self.ui.make_up_filter.clone(),
+                filter: self.presentation.make_up_filter.clone(),
             }));
         self.fold_fused_now();
         self.view.fold_inputs = previous;
@@ -1431,7 +1440,7 @@ impl LoopState {
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
                 self.with_projected_view(false, false, |state| {
                     state.view.filter_observed_at = Some(state.clock.now());
-                    if set_make_up_filter(&mut state.ui, &state.view.current, filter) {
+                    if set_make_up_filter(&mut state.presentation, &state.view.current, filter) {
                         state.dirty = true;
                     }
                 });
@@ -1615,7 +1624,7 @@ impl LoopState {
         let verdict = self.with_projected_view(false, false, |state| {
             focus_stranded_target(
                 &state.view.current,
-                &state.ui,
+                &state.presentation,
                 &repair.pane_id,
                 &repair.clients,
                 own_pane.as_ref(),
@@ -1650,7 +1659,10 @@ impl LoopState {
             }),
         };
         let (placement, order) = self.with_projected_view(false, false, |state| {
-            (state.focus_placement(&target), state.ui.last_order.clone())
+            (
+                state.focus_placement(&target),
+                state.presentation.last_order.clone(),
+            )
         });
         spawn_pane_focus(
             &self.clock,
@@ -1768,9 +1780,9 @@ impl LoopState {
         } else if own_unfocused {
             self.optimistic_watch_until = None;
             self.with_projected_view(false, false, |state| {
-                state.ui.help_visible = false;
-                if state.ui.search_draft.take().is_some() {
-                    reconcile_selection(&mut state.ui, &state.view.current, None);
+                state.presentation.help_visible = false;
+                if state.presentation.search_draft.take().is_some() {
+                    reconcile_selection(&mut state.presentation, &state.view.current, None);
                     state.dirty = true;
                 }
             });
@@ -1937,7 +1949,10 @@ impl LoopState {
                         .and_then(FocusPeers::clicked)
                         .unwrap_or_else(|| self.clock.now());
                     let (placement, order) = self.with_projected_view(false, false, |state| {
-                        (state.focus_placement(&pane), state.ui.last_order.clone())
+                        (
+                            state.focus_placement(&pane),
+                            state.presentation.last_order.clone(),
+                        )
                     });
                     spawn_pane_focus(
                         &self.clock,
@@ -2051,14 +2066,15 @@ impl LoopState {
                     .any(|effect| matches!(effect, InputEffect::Focus(_)))
                 {
                     layout_freeze::arm_freeze(
-                        &mut state.ui,
+                        &mut state.presentation,
                         state.clock.timestamp_at(now).as_millisecond(),
                     );
                 }
                 let interval = render::animation_interval(
                     &state.view.current,
+                    &state.presentation,
                     &state.ui,
-                    state.ui.animation_phase,
+                    state.presentation.animation_phase,
                     state.alert_active(),
                 )
                 .unwrap_or(animation_frame(&state.view.current));
@@ -2092,14 +2108,19 @@ impl LoopState {
                         std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
                     )
                 });
-            let previous_selection = self.ui.selected_pane.clone();
+            let previous_selection = self.presentation.selected_pane.clone();
             let previous_row = self
-                .ui
+                .presentation
                 .selected_index
-                .and_then(|index| self.ui.visible_roster(&self.view.current).row(index))
+                .and_then(|index| {
+                    self.presentation
+                        .visible_roster(&self.view.current)
+                        .row(index)
+                })
                 .map(|row| row.id.clone());
             let applied = handle_wakeup(
                 wakeup,
+                &mut self.presentation,
                 &mut self.ui,
                 &self.view.current,
                 &self.nav_keys.1,
@@ -2111,24 +2132,28 @@ impl LoopState {
             }
             self.clicked_row = None;
             let selected_row = self
-                .ui
+                .presentation
                 .selected_index
-                .and_then(|index| self.ui.visible_roster(&self.view.current).row(index))
+                .and_then(|index| {
+                    self.presentation
+                        .visible_roster(&self.view.current)
+                        .row(index)
+                })
                 .map(|row| row.id.clone());
             if selected_row != previous_row {
                 self.view.pending_input_focus = None;
-                self.ui.own_input_reveal = true;
+                self.presentation.own_input_reveal = true;
                 self.view.focus_marker = None;
-                self.ui.focus_marker_ready = false;
+                self.presentation.focus_marker_ready = false;
             }
-            if self.ui.selected_pane != previous_selection {
+            if self.presentation.selected_pane != previous_selection {
                 self.view.focus_rollback = None;
             }
             for effect in &applied.effects {
                 if let InputEffect::Focus(pane) = effect {
                     self.view.pending_input_focus = Some(pane.clone());
                     let owner = self
-                        .ui
+                        .presentation
                         .selected_pane
                         .as_ref()
                         .and_then(|selected| self.view.current.row_owning_pane(selected))
@@ -2136,14 +2161,14 @@ impl LoopState {
                         .or_else(|| self.view.current.row_owning_pane(pane));
                     self.view.focus_rollback = owner.map(|row| FocusRollback {
                         target: pane.clone(),
-                        baseline: self.ui.baseline_pane.clone(),
+                        baseline: self.presentation.baseline_pane.clone(),
                         label: row.display_name().to_owned(),
                     });
                     self.arm_clicked_row(pane, now);
                 }
             }
             if applied.redraw && !wheel {
-                self.ui.scroll_ease.cancel();
+                self.presentation.scroll_ease.cancel();
             }
             if applied.effects.contains(&InputEffect::DismissAlert) {
                 self.view.health.alert = None;
@@ -2155,7 +2180,10 @@ impl LoopState {
             && (outcome.redraw || !outcome.effects.is_empty())
             && !outcome.effects.contains(&InputEffect::Reload)
         {
-            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
+            layout_freeze::arm_freeze(
+                &mut self.presentation,
+                self.clock.timestamp_at(now).as_millisecond(),
+            );
         }
         outcome
     }
@@ -2169,8 +2197,8 @@ impl LoopState {
         let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
         let clear = self.with_projected_view(false, false, |state| {
-            if state.ui.unread_guard.as_deref() == Some(row_id) {
-                state.ui.unread_guard = None;
+            if state.presentation.unread_guard.as_deref() == Some(row_id) {
+                state.presentation.unread_guard = None;
             }
             read_receipt_for_row(
                 &state.view.current,
@@ -2210,7 +2238,7 @@ impl LoopState {
         let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
         let clear = self.with_projected_view(false, false, |state| {
-            state.ui.unread_guard = None;
+            state.presentation.unread_guard = None;
             read_receipts_for_all(&state.view.current, UnreadClearCause::MarkRead, &marks, now)
         });
         self.apply_read_clear(clear, now, fetch);
@@ -2241,7 +2269,7 @@ impl LoopState {
             };
         self.with_projected_view(false, false, |state| {
             set_rows_unread(&mut state.view.current, std::slice::from_ref(&row.id), true);
-            state.ui.unread_guard = Some(row.id.clone());
+            state.presentation.unread_guard = Some(row.id.clone());
         });
         for item in &opened {
             self.diag.trace_notify(item.trace_event());
@@ -2468,11 +2496,12 @@ impl LoopState {
                 state.view.anim_start,
                 state.view.current.theme.display.resolved_refresh_ms(),
             )
-            .stamp(&mut state.ui);
+            .stamp(&mut state.presentation);
             let interval = render::animation_interval(
                 &state.view.current,
+                &state.presentation,
                 &state.ui,
-                state.ui.animation_phase,
+                state.presentation.animation_phase,
                 state.alert_active(),
             );
             (
@@ -2513,18 +2542,16 @@ impl LoopState {
                     state.view.anim_start,
                     state.view.current.theme.display.resolved_refresh_ms(),
                 )
-                .stamp(&mut state.ui);
+                .stamp(&mut state.presentation);
                 (
                     state.view_token,
                     state.view.current.clone(),
-                    state.ui.view.clone(),
+                    state.presentation.clone(),
                     state.alert_active(),
                 )
             });
-            let scratch = std::mem::replace(&mut self.ui.view, view);
             self.paint
-                .refresh_view(&mut self.ui, &snapshot, alert_active);
-            self.ui.view = scratch;
+                .refresh_view(&mut self.ui, &view, &snapshot, alert_active);
             let nonce = self.inspect_view(|_, view| view.last_folded_focus_intent);
             let permit = self
                 .focus_peers
@@ -2567,11 +2594,11 @@ impl LoopState {
         user_input: bool,
         events: &EventStore,
     ) -> (std::io::Result<()>, BufferedFrame) {
-        if self.shared_view_id().is_some() && self.ui.baseline_pane.is_none() {
-            self.ui.baseline_pane = self.baseline_seed.take();
-            reconcile_selection(&mut self.ui, &self.view.current, None);
+        if self.shared_view_id().is_some() && self.presentation.baseline_pane.is_none() {
+            self.presentation.baseline_pane = self.baseline_seed.take();
+            reconcile_selection(&mut self.presentation, &self.view.current, None);
         }
-        self.ui.focus_marker_ready = self.watched()
+        self.presentation.focus_marker_ready = self.watched()
             && match self.view.focus_marker {
                 Some(FocusMarker::Ready) => true,
                 Some(FocusMarker::Dwelling(until)) => now >= until,
@@ -2579,7 +2606,7 @@ impl LoopState {
             };
         // The notice is pane chrome over the borrowed view's gate, which another pane may have moved.
         self.ui.gate_notice = self.view.gate.rule.map(|rule| render::GateNotice { rule });
-        let user_input = user_input || self.ui.scroll_ease.in_flight();
+        let user_input = user_input || self.presentation.scroll_ease.in_flight();
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
         let rows = std::mem::take(&mut self.ui.painted_rows);
@@ -2587,6 +2614,7 @@ impl LoopState {
             terminal,
             &self.view.current,
             self.view.health.alert.as_ref(),
+            &mut self.presentation,
             &mut self.ui,
         );
         if result.is_err() {
@@ -2595,22 +2623,25 @@ impl LoopState {
         self.painted_at = self.clock.now();
         self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
-        self.painted_baseline.clone_from(&self.ui.baseline_pane);
+        self.painted_baseline
+            .clone_from(&self.presentation.baseline_pane);
         self.baseline_seed = None;
-        self.painted_selection.clone_from(&self.ui.drawn_selection);
+        self.painted_selection
+            .clone_from(&self.presentation.drawn_selection);
         let selected_visible = self
-            .ui
+            .presentation
             .drawn_selection
             .as_ref()
             .is_some_and(|selected| self.ui.painted_rows.iter().any(|(id, _)| id == selected));
         if selected_visible {
             self.view.focus_marker = None;
-            self.ui.focus_marker_ready = false;
-        } else if self.ui.focus_marker_ready {
+            self.presentation.focus_marker_ready = false;
+        } else if self.presentation.focus_marker_ready {
             self.view.focus_marker = Some(FocusMarker::Ready);
         }
-        self.ui.last_order = layout_freeze::capture_order(&self.view.current, &self.ui);
-        self.ui.arrival_pending = false;
+        self.presentation.last_order =
+            layout_freeze::capture_order(&self.view.current, &self.presentation);
+        self.presentation.arrival_pending = false;
         if user_input || !self.watched() {
             self.click_guard = None;
         } else if self
@@ -2655,8 +2686,9 @@ impl LoopState {
         let (update, _) = update.into_parts();
         let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
         let now = self.clock.timestamp();
-        let searching = self.ui.search_draft.is_some();
-        let (prev_good, rejected, diagnostics) = self.view.commit_fetch(update, &mut self.ui, now);
+        let searching = self.presentation.search_draft.is_some();
+        let (prev_good, rejected, diagnostics) =
+            self.view.commit_fetch(update, &mut self.presentation, now);
         self.fold_effects.diagnostics.extend(diagnostics);
         self.ui.gate_notice = self.view.gate.rule.map(|rule| render::GateNotice { rule });
         if let Some(alert) = self
@@ -2668,7 +2700,7 @@ impl LoopState {
         {
             self.fold_effects.degraded = Some(alert.reason.clone());
         }
-        self.dirty |= searching && self.ui.search_draft.is_none();
+        self.dirty |= searching && self.presentation.search_draft.is_none();
         let authoritative_filter_fold = allow_shared_filter_sync
             && snapshot_ok
             && !rejected
@@ -2677,7 +2709,7 @@ impl LoopState {
                     .filter_observed_at
                     .is_none_or(|observed| inputs.sampled_at > observed)
             });
-        let prev_selected = self.ui.selected_pane.clone();
+        let prev_selected = self.presentation.selected_pane.clone();
         let (focused_pane, cleared) = self.sweep_read_receipts(now);
         self.reconcile_selection_and_order(
             &prev_good,
@@ -2687,7 +2719,8 @@ impl LoopState {
             authoritative_filter_fold,
             self.clock.instant_at(now),
         );
-        self.view.fold_spend_rolls(&mut self.ui, &self.clock);
+        self.view
+            .fold_spend_rolls(&mut self.presentation, &self.clock);
         self.exit_verdict(rejected)
     }
 
@@ -2724,7 +2757,7 @@ impl LoopState {
             .clone();
         self.prepare_tab_arrival();
         let (focused, clear) = self.view.read_receipts(
-            &mut self.ui,
+            &mut self.presentation,
             &ReadContext {
                 own_pane: self.config.own_pane.as_ref(),
                 marks: &marks,
@@ -2741,7 +2774,7 @@ impl LoopState {
     }
 
     fn prepare_tab_arrival(&mut self) {
-        let arriving = self.ui.viewing_own_tab == Some(false)
+        let arriving = self.presentation.viewing_own_tab == Some(false)
             && self
                 .view
                 .current
@@ -2766,7 +2799,7 @@ impl LoopState {
     ) {
         self.prepare_tab_arrival();
         self.view.sweep_tab_read_receipts(
-            &mut self.ui,
+            &mut self.presentation,
             focused_row_id,
             &ReadContext {
                 own_pane: self.config.own_pane.as_ref(),
@@ -2815,7 +2848,7 @@ impl LoopState {
         });
         let parked = self.parked(self.clock.timestamp_at(now).as_millisecond() as u64);
         let (persist_filter, expired) = self.view.reconcile_selection_and_order(
-            &mut self.ui,
+            &mut self.presentation,
             SelectionFold {
                 previous: prev_good,
                 selected: prev_selected,
@@ -2830,7 +2863,7 @@ impl LoopState {
         );
         self.hold_expired_since_paint |= expired;
         if persist_filter {
-            self.fold_effects.filter = Some(self.ui.make_up_filter.clone());
+            self.fold_effects.filter = Some(self.presentation.make_up_filter.clone());
         }
     }
 
@@ -2845,7 +2878,7 @@ impl LoopState {
             FetchUpdate::Snapshot { source, phase, .. } => Some((*source, *phase)),
             _ => None,
         };
-        let selected_before = self.ui.selected_pane.clone();
+        let selected_before = self.presentation.selected_pane.clone();
         let applied = self.apply_fetch_outcome(update, allow_shared_filter_sync);
         if let Some((source, phase)) = trace {
             self.fold_effects.traces.push(FocusTraceEvent::FoldDecided {
@@ -2867,7 +2900,7 @@ impl LoopState {
                 own_view: self.view.current.own_view.is_some(),
                 baseline: session_focus_baseline(&self.view.current, self.config.own_pane.as_ref()),
                 selected_before,
-                selected_after: self.ui.selected_pane.clone(),
+                selected_after: self.presentation.selected_pane.clone(),
             });
         }
         self.should_exit = applied.should_exit;
@@ -2972,7 +3005,7 @@ impl LoopState {
         let drawn_selection = if self.view_scope.is_none() {
             &self.painted_selection
         } else {
-            &self.ui.drawn_selection
+            &self.presentation.drawn_selection
         };
         if drawn_selection.as_ref() != Some(&row.id) {
             return None;
@@ -3001,7 +3034,7 @@ impl LoopState {
         };
         if self
             .view
-            .apply_focus_anchor(&mut self.ui, &anchor, &self.clock)
+            .apply_focus_anchor(&mut self.presentation, &anchor, &self.clock)
         {
             self.fold_effects.retirements.push((anchor, None));
         }
@@ -3093,15 +3126,15 @@ impl LoopState {
                     row_id: id.clone(),
                     y: *y,
                     clicked_at: now,
-                    selection: self.ui.drawn_selection.clone(),
+                    selection: self.presentation.drawn_selection.clone(),
                     banner_shown: self.ui.banner_shown,
-                    gliding: self.ui.scroll_ease.in_flight(),
+                    gliding: self.presentation.scroll_ease.in_flight(),
                 })
         });
     }
 
     fn observe_paint(&mut self, now: Instant, events: &EventStore) {
-        self.painted_focus_anchor_ms = self.ui.last_focus_anchor_ms;
+        self.painted_focus_anchor_ms = self.presentation.last_focus_anchor_ms;
         let live_landing = self
             .view
             .focus_landing
@@ -3121,7 +3154,10 @@ impl LoopState {
                 Some((verdict, anchor.placement?, applied_at))
             });
         if landing.is_some() && !live_landing {
-            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
+            layout_freeze::arm_freeze(
+                &mut self.presentation,
+                self.clock.timestamp_at(now).as_millisecond(),
+            );
         }
         let mut seeded_landing = false;
         if let Some((PushVerdict::Displaced, placement, applied_at)) = landing
@@ -3134,7 +3170,7 @@ impl LoopState {
                 row_id: placement.row_id,
                 y: self.ui.scroll_zone_top as isize + placement.viewport_row,
                 clicked_at: applied_at,
-                selection: self.ui.drawn_selection.clone(),
+                selection: self.presentation.drawn_selection.clone(),
                 banner_shown: self.ui.banner_shown,
                 gliding: false,
             });
@@ -3157,7 +3193,7 @@ impl LoopState {
                 .view
                 .current
                 .row_owning_pane(&push.anchor.pane_id)
-                .is_some_and(|row| self.ui.drawn_selection.as_ref() == Some(&row.id))
+                .is_some_and(|row| self.presentation.drawn_selection.as_ref() == Some(&row.id))
             {
                 push.peer.misplaced_paints = push.peer.misplaced_paints.saturating_add(1);
             }
@@ -3182,14 +3218,17 @@ impl LoopState {
             ClickedRowDisplacementCause::HoldExpired
         } else if watch.banner_shown != self.ui.banner_shown {
             ClickedRowDisplacementCause::BannerToggled
-        } else if watch.selection != self.ui.drawn_selection {
+        } else if watch.selection != self.presentation.drawn_selection {
             ClickedRowDisplacementCause::SelectionChanged
         } else {
             ClickedRowDisplacementCause::HeightAboveChanged
         };
         watch.banner_shown = self.ui.banner_shown;
-        watch.selection = self.ui.drawn_selection.clone();
-        let glided = std::mem::replace(&mut watch.gliding, self.ui.scroll_ease.in_flight());
+        watch.selection = self.presentation.drawn_selection.clone();
+        let glided = std::mem::replace(
+            &mut watch.gliding,
+            self.presentation.scroll_ease.in_flight(),
+        );
         let kind = (!glided && to_y != Some(watch.y)).then(|| AnomalyKind::ClickedRowDisplaced {
             row_id: watch.row_id.clone(),
             from_y: watch.y,
@@ -3230,7 +3269,7 @@ impl LoopState {
 
 fn focus_stranded_target(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
     stranded_pane_id: &PaneId,
     evidence: &[crate::pane::ClientPaneView],
     own_pane_id: Option<&PaneId>,

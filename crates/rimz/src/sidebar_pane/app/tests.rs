@@ -89,9 +89,10 @@ fn pixel_churn_and_restarts_stay_in_one_slot_with_one_placement() {
                 kitty_clients: true,
             },
         );
+        let view_ui = render::ViewState::default();
         let mut ui = UiState::default();
         for frame in 0..800 {
-            painter.refresh_view(&mut ui, &snapshot, false);
+            painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
             compose_test_meters(&mut ui, restart * 800 + frame);
             let mut bytes = Vec::new();
             painter
@@ -130,8 +131,9 @@ fn pixel_slot_sweep_precedes_first_transmit_once() {
             },
         );
         let snapshot = snapshot(&workspace());
+        let view_ui = render::ViewState::default();
         let mut ui = UiState::default();
-        painter.refresh_view(&mut ui, &snapshot, false);
+        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
         compose_test_meters(&mut ui, 1);
         let mut bytes = Vec::new();
         painter
@@ -191,8 +193,9 @@ fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
         .unwrap();
         card.usage.context_pct = Some(50);
         card.usage.context_window = Some(200_000);
+        let mut view_ui = render::ViewState::default();
         let mut ui = UiState::default();
-        painter.refresh_view(&mut ui, &snapshot, false);
+        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
         assert!(ui.pet.is_none());
         assert!(
             ui.meter_pixels
@@ -212,7 +215,7 @@ fn pixel_meter_only_frame_brackets_draw_sweep_and_transmit() {
         .unwrap();
 
         painter
-            .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+            .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
             .unwrap();
         let bytes = output.0.lock().unwrap().clone();
         let text = String::from_utf8_lossy(&bytes);
@@ -243,10 +246,11 @@ fn an_unsized_pixel_frame_writes_no_sync_markers() {
         },
     );
     let snapshot = snapshot(&workspace());
+    let mut view_ui = render::ViewState::default();
     let mut ui = UiState::default();
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     painter
-        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
         .unwrap();
     assert!(pty.drain().is_empty(), "an unsized frame ships no bytes");
 }
@@ -274,6 +278,7 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
             kitty_clients: true,
         },
     );
+    let mut view_ui = render::ViewState::default();
     let mut ui = UiState::default();
     let mut snapshot = snapshot(&workspace());
     snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
@@ -285,7 +290,7 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
             ..Default::default()
         }],
     )];
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     assert!(ui.meter_pixels.is_none(), "exhaustion selects cell meters");
     let mut bytes = Vec::new();
     painter
@@ -294,6 +299,7 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
     assert!(bytes.is_empty());
     let draw = |painter: &mut paint::FramePainter,
                 snapshot: &crate::store::snapshot::SidebarSnapshot,
+                view: &mut render::ViewState,
                 ui: &mut UiState| {
         let output = SharedBuffer::default();
         let mut terminal = Terminal::with_options(
@@ -304,12 +310,12 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
         )
         .unwrap();
         painter
-            .draw_and_paint(&mut terminal, snapshot, None, ui)
+            .draw_and_paint(&mut terminal, snapshot, None, view, ui)
             .unwrap();
         drop(terminal);
         output.0.lock().unwrap().clone()
     };
-    let exhausted_frame = draw(&mut painter, &snapshot, &mut ui);
+    let exhausted_frame = draw(&mut painter, &snapshot, &mut view_ui, &mut ui);
     assert!(
         !String::from_utf8_lossy(&exhausted_frame).contains("\x1b[?2026"),
         "a disabled pixel session emits no synchronized-output markers"
@@ -322,11 +328,17 @@ fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
             kitty_clients: true,
         },
     );
+    let mut view_cell_ui = render::ViewState::default();
     let mut cell_ui = UiState::default();
-    cell_painter.refresh_view(&mut cell_ui, &snapshot, false);
+    cell_painter.refresh_view(&mut cell_ui, &view_cell_ui, &snapshot, false);
     assert_eq!(
         exhausted_frame,
-        draw(&mut cell_painter, &snapshot, &mut cell_ui)
+        draw(
+            &mut cell_painter,
+            &snapshot,
+            &mut view_cell_ui,
+            &mut cell_ui
+        )
     );
     assert!(
         String::from_utf8_lossy(&exhausted_frame).contains("5h"),
@@ -351,10 +363,11 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
         },
     );
     let mut snapshot = snapshot(&workspace());
+    let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
     for disable in [true, false] {
         snapshot.theme.display.pixel = crate::config::PixelMode::Auto;
-        painter.refresh_view(&mut ui, &snapshot, false);
+        painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
         compose_test_meters(&mut ui, 1);
         let mut bytes = Vec::new();
         painter
@@ -369,7 +382,7 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
         bytes.clear();
         if disable {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
-            painter.refresh_view(&mut ui, &snapshot, false);
+            painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
             painter
                 .ensure_meters_transmitted(&mut bytes, &ui, 1)
                 .unwrap();
@@ -411,6 +424,7 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
     );
     let mut snapshot = snapshot(&workspace());
     snapshot.theme.pets.enabled = true;
+    let view_ui = render::ViewState::default();
     let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Pixel(PetPixelView {
@@ -439,7 +453,7 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
         Vec::new(),
     )];
     let saved_pet = ui.pet.clone();
-    painter.refresh_view(&mut ui, &snapshot, true);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, true);
     bytes.clear();
     painter
         .ensure_pixel_transmitted(&mut bytes, &ui, 1)
@@ -450,7 +464,7 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
     );
     ui.pet = saved_pet;
     snapshot.theme.pets.enabled = false;
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     bytes.clear();
     painter
         .ensure_pixel_transmitted(&mut bytes, &ui, 1)
@@ -587,30 +601,30 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
         Wakeup::MouseClick { column: 1, row: 0 },
         Wakeup::Scroll { down: true },
     ] {
-        let mut ui = UiState {
-            view: render::ViewState {
-                help_visible: true,
-                make_up_filter: crate::sidebar_pane::view::BodyLens {
-                    query: Some("kept".to_owned()),
-                    ..Default::default()
-                },
-                selected_index: Some(0),
-                scroll_offset: 4,
+        let mut view = render::ViewState {
+            help_visible: true,
+            make_up_filter: crate::sidebar_pane::view::BodyLens {
+                query: Some("kept".to_owned()),
                 ..Default::default()
             },
+            selected_index: Some(0),
+            scroll_offset: 4,
+            ..Default::default()
+        };
+        let mut ui = UiState {
             interactions: render::FrameInteractions::from_parts(vec![Some(1)], Vec::new()),
             ..Default::default()
         };
 
-        let outcome = handle_wakeup(wakeup, &mut ui, &snapshot, &keymap, false);
+        let outcome = handle_wakeup(wakeup, &mut view, &mut ui, &snapshot, &keymap, false);
 
         assert_eq!(outcome, InputOutcome::redraw());
-        assert!(!ui.help_visible);
-        assert_eq!(ui.make_up_filter.query.as_deref(), Some("kept"));
-        assert_eq!(ui.selected_index, Some(0), "key input was consumed");
-        assert_eq!(ui.scroll_offset, 4, "scroll input was consumed");
-        assert!(!ui.offset_authoritative, "scroll input was consumed");
-        assert_eq!(ui.browse, None, "key input was consumed");
+        assert!(!view.help_visible);
+        assert_eq!(view.make_up_filter.query.as_deref(), Some("kept"));
+        assert_eq!(view.selected_index, Some(0), "key input was consumed");
+        assert_eq!(view.scroll_offset, 4, "scroll input was consumed");
+        assert!(!view.offset_authoritative, "scroll input was consumed");
+        assert_eq!(view.browse, None, "key input was consumed");
     }
 
     let outcome = handle_wakeup(
@@ -618,6 +632,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         },
+        &mut render::ViewState::default(),
         &mut UiState::default(),
         &snapshot,
         &keymap,
@@ -631,6 +646,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
+    let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
     let mut painter = paint::FramePainter::new(
         PixelRenderCaps::default(),
@@ -638,7 +654,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.body, None);
@@ -658,6 +674,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
 fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);
+    let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
     let mut painter = paint::FramePainter::new(
         PixelRenderCaps {
@@ -668,7 +685,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     let raster = crate::sidebar_pane::pixel::meter::MeterRaster::new(
         2,
         0.5,
@@ -683,7 +700,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
         .intern(raster.clone())
         .expect("first raster");
 
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     assert_eq!(
         ui.meter_pixels
             .as_mut()
@@ -694,7 +711,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     );
 
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     assert!(ui.meter_pixels.is_none());
 }
 
@@ -702,6 +719,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
 fn meter_transmission_paints_visible_rasters_once() {
     let ws = workspace();
     let snapshot = snapshot(&ws);
+    let view_ui = render::ViewState::default();
     let mut ui = UiState::default();
     let mut painter = paint::FramePainter::new(
         PixelRenderCaps {
@@ -712,7 +730,7 @@ fn meter_transmission_paints_visible_rasters_once() {
         Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
-    painter.refresh_view(&mut ui, &snapshot, false);
+    painter.refresh_view(&mut ui, &view_ui, &snapshot, false);
     let image_id = ui
         .meter_pixels
         .as_mut()
@@ -776,6 +794,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         image_id: 0x520000,
         size: crate::sidebar_pane::pets::PetGridSize { cols: 2, rows: 1 },
     };
+    let mut view_ui = render::ViewState::default();
     let mut ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Pixel(pixel.clone())),
@@ -796,7 +815,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).expect("terminal");
 
     painter
-        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
         .expect("first draw");
     let first_len = output.0.lock().unwrap().len();
 
@@ -813,12 +832,12 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         },
     ];
     painter
-        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
         .expect("shifted draw");
     let second_len = output.0.lock().unwrap().len();
 
     painter
-        .draw_and_paint(&mut terminal, &snapshot, None, &mut ui)
+        .draw_and_paint(&mut terminal, &snapshot, None, &mut view_ui, &mut ui)
         .expect("steady draw");
     let output = output.0.lock().unwrap().clone();
     let second = String::from_utf8_lossy(&output[first_len..second_len]);

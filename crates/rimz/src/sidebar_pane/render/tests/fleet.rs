@@ -131,15 +131,13 @@ fn unread_banner_counts_two_actionable_teammates_as_one_unit() {
     sibling.name.push_str("-sibling");
     rows.insert(1, sibling);
     group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
-    let ui = UiState {
-        view: ViewState {
-            scroll_offset: 99,
-            offset_authoritative: true,
-            ..selected_ui().view
-        },
+    let ui = ViewState {
+        scroll_offset: 99,
+        offset_authoritative: true,
         ..selected_ui()
     };
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let pane_ui = UiState::default();
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(screen.contains("↑ 1 need you"), "{screen}");
 }
 
@@ -862,8 +860,12 @@ fn cockpit_spend_has_only_agents_prs_and_spend() {
         "live-agent summary carries no unread chip:\n{screen}"
     );
 
-    let top =
-        super::super::compose::top_lines(&snapshot, &UiState::default(), 38, &Theme::fixed(false));
+    let top = super::super::compose::top_lines(
+        &snapshot,
+        &ViewState::default(),
+        38,
+        &Theme::fixed(false),
+    );
     assert!(
         !top.interactions
             .regions()
@@ -1062,16 +1064,14 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
         "banner stays hidden when the top-ranked lead is visible:\n{screen}"
     );
 
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 99,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 99,
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let pane_ui = UiState::default();
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(
         screen.contains("↑ 1 need you"),
         "banner appears when wheel-pinned past the lead:\n{screen}"
@@ -1086,19 +1086,17 @@ fn unread_banner_points_below_or_to_the_filter_hidden_lead() {
     let rows = std::sync::Arc::make_mut(&mut group.rows);
     let lead = rows.remove(0);
     rows.push(lead);
-    let mut ui = UiState {
-        view: ViewState {
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let pane_ui = UiState::default();
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(screen.contains("↓ 1 need you"), "{screen}");
     assert_snapshot("unread_banner_below", screen);
 
     ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(screen.contains("↑ 1 need you"), "{screen}");
 }
 
@@ -1132,15 +1130,13 @@ fn render_make_up_filter_narrows_the_body() {
             crate::store::snapshot::ProcessCard::default(),
         ),
     });
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Failed)),
+        ..Default::default()
     };
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let pane_ui = UiState::default();
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(
         screen.contains("! claude"),
         "the failed card is the body:\n{screen}"
@@ -1173,16 +1169,14 @@ fn render_unread_filter_narrows_the_body() {
         .find(|row| row.status() == Some(AgentStatus::Failed))
         .expect("failed row");
     failed.unread = true;
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            make_up_filter: BodyLens::from(BodyFilter::Unread),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        make_up_filter: BodyLens::from(BodyFilter::Unread),
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
 
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     assert!(
         screen.contains("! claude"),
         "the unread failed card is the body:\n{screen}"

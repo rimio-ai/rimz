@@ -441,7 +441,7 @@ fn hidden_expired_freeze_neither_folds_nor_spins() {
     let mut rig = hidden_rig();
     let clock = LoopClock::play(Timestamp::now());
     rig.state.clock = clock.clone();
-    layout_freeze::arm_freeze(&mut rig.view().ui, clock.now_ms() as i64);
+    layout_freeze::arm_freeze(&mut rig.view().presentation, clock.now_ms() as i64);
     {
         let mut guard = rig.view();
         let state = &mut *guard;
@@ -512,7 +512,10 @@ fn hidden_intent_only_drains_its_owner() {
             rig.view().last_folded_focus_intent == Some(anchor.nonce),
             own
         );
-        assert_eq!(rig.view().ui.selected_pane.as_ref() == Some(&target), own);
+        assert_eq!(
+            rig.view().presentation.selected_pane.as_ref() == Some(&target),
+            own
+        );
     }
 }
 
@@ -575,7 +578,7 @@ fn hidden_peer_does_not_clear_a_watched_manual_unread_guard() {
     let mut unfocused = snapshot.clone();
     unfocused.focused_pane = None;
     watched.fold(unfocused, SnapshotSource::Produced);
-    watched.view().ui.unread_guard = Some("agent-1".into());
+    watched.view().presentation.unread_guard = Some("agent-1".into());
     watched.fold(snapshot.clone(), SnapshotSource::Produced);
     snapshot.own_view.as_mut().unwrap().working_pane_ids =
         vec![PaneId::from_parts(MuxName::Zellij, "terminal_500")];

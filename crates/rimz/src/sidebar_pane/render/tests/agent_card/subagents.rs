@@ -371,13 +371,11 @@ fn selected_parent_marks_both_focused_child_entry_lines() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         24,
     );
@@ -403,8 +401,14 @@ fn selected_parent_marks_both_focused_child_entry_lines() {
 fn unselected_parent_does_not_mark_the_focused_child_entry() {
     let mut snapshot = focused_child_snapshot();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 24);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &ViewState::default(),
+        &UiState::default(),
+        54,
+        24,
+    );
     assert!(rendered.lines().any(|line| line.contains("explorer")));
     assert!(!rendered.contains("  ▌ "));
     assert_snapshot("focused_child_unselected", rendered);
@@ -553,13 +557,11 @@ fn paused_child_parks_parent_head_and_pet() {
     });
     child.context = Some(context);
     let snapshot = snapshot_with(vec![parent, child]);
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     assert_eq!(
         selected_pet_action(&snapshot, &ui),
         crate::sidebar_pane::pets::PetAction::Waiting
@@ -568,7 +570,7 @@ fn paused_child_parks_parent_head_and_pet() {
         animation_cadence_for_test(&snapshot),
         AnimationCadence::Fast
     );
-    let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
+    let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 28);
     let mut parser = vt100::Parser::new(28, 54, 0);
     parser.process(&bytes);
     let screen = parser.screen().contents();
@@ -620,18 +622,16 @@ fn paused_child_headline_stays_in_live_band() {
     running.registered_at = Some(fixed_now() - Duration::from_secs(50));
     running.context = None;
     let snapshot = snapshot_with(vec![parent, paused, running]);
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     for (width, name) in [
         (54, "paused_child_entry"),
         (28, "paused_child_entry_narrow"),
     ] {
-        let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, width, 28);
+        let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 28);
         let mut parser = vt100::Parser::new(28, width, 0);
         parser.process(&bytes);
         let screen = parser.screen().contents();
@@ -731,20 +731,18 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         (usize::MAX, None, false, "delegation_bands_unselected"),
         (0, Some(false), false, "delegation_bands_override_closed"),
     ] {
-        let mut ui = UiState {
-            view: ViewState {
-                selected_index: Some(selected_index),
-                ..Default::default()
-            },
-            ..UiState::default()
+        let mut ui = ViewState {
+            selected_index: Some(selected_index),
+            ..Default::default()
         };
+        let pane_ui = UiState::default();
         if let Some(open) = open {
             ui.delegation_overrides.insert(row.id.clone(), open);
         }
         if history {
             ui.delegation_history.insert(row.id.clone(), turn);
         }
-        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 44);
+        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 44);
         assert!(rendered.contains("subagents (9)"), "{rendered}");
         assert_snapshot(name, rendered.clone());
         screens.push(rendered);
@@ -837,13 +835,11 @@ fn render_selected_card_keeps_finished_metadata_and_frozen_runtime() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         23,
     );
@@ -965,13 +961,11 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         60,
         20,
     );
@@ -1061,13 +1055,11 @@ fn subagent_stats_line_outlives_the_turn() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(usize::MAX),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(usize::MAX),
+            ..Default::default()
         },
+        &UiState::default(),
         60,
         20,
     );
@@ -1104,16 +1096,14 @@ fn all_older_children_open_in_one_click_without_a_lone_fold() {
         agents.push(child);
     }
     let snapshot = snapshot_with(agents);
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     ui.delegation_overrides
         .insert(snapshot.worktree_groups[0].rows[0].id.clone(), true);
-    let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 30);
+    let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30);
     assert!(text.contains("subagents (3)"), "{text}");
     assert!(!text.contains("older"), "{text}");
     for index in 0..3 {
@@ -1165,13 +1155,11 @@ fn narrow_subagent_line_truncates_description_before_exact_cost() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         34,
         23,
     );
@@ -1214,13 +1202,11 @@ fn metadata_free_finished_subagent_stays_one_line() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         21,
     );
@@ -1300,13 +1286,11 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         27,
     );
@@ -1377,13 +1361,11 @@ fn subagent_model_column_is_sized_by_display_width() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
+        &ViewState {
+            selected_index: Some(0),
             ..Default::default()
         },
+        &UiState::default(),
         54,
         27,
     );
@@ -1436,13 +1418,11 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         60,
         20,
     );

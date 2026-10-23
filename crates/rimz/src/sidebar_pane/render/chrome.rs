@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use super::fmt::age_short;
 use super::labels::{status_glyph, status_rest_style};
 use super::theme::{Component, Theme};
-use super::{Alert, GateNotice, UiState, layout};
+use super::{Alert, GateNotice, ViewState, layout};
 use crate::remote::link::link_badge_heat;
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
@@ -158,7 +158,7 @@ fn gate_rule_label(rule: crate::diag::record::GateRule) -> &'static str {
 
 pub(super) fn search_line(
     theme: &Theme,
-    ui: &UiState,
+    ui: &ViewState,
     roster: &VisibleRoster<'_>,
     snapshot: &SidebarSnapshot,
     cells: usize,

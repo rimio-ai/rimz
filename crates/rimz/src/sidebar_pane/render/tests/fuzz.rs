@@ -34,14 +34,15 @@ proptest! {
         provider in prop::option::of(provider_spec()),
     ) {
         let snapshot = build_adversarial_snapshot(display_name, rows, provider);
-        let ui = UiState { view: ViewState {
+        let ui = ViewState {
             selected_index,
             scroll_offset,
             ..Default::default()
-        }, ..UiState::default() };
+        };
+        let pane_ui = UiState::default();
 
         let theme = Theme::for_sidebar(&snapshot.theme);
-        let composed = compose_lines(&snapshot, None, &ui, &theme, width, height);
+        let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, width, height);
         prop_assert_eq!(composed.interactions.line_count(), composed.lines.len());
 
         if width > 0 && height > 0 {

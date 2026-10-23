@@ -362,7 +362,9 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
     {
         let mut guard = rig.view();
         let state = &mut *guard;
-        state.paint.refresh_view(&mut state.ui, &snapshot, false);
+        state
+            .paint
+            .refresh_view(&mut state.ui, &state.presentation, &snapshot, false);
     }
 
     assert!(rig.state.ui.meter_pixels.is_none());

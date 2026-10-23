@@ -10,12 +10,15 @@ fn resize_does_not_arm_or_retime_a_layout_freeze() {
     rig.state
         .apply_input([Wakeup::Resize], &mut rig.terminal)
         .unwrap();
-    assert!(rig.view().ui.freeze.is_none(), "resize is not user input");
-    layout_freeze::arm_freeze(&mut rig.view().ui, 1);
+    assert!(
+        rig.view().presentation.freeze.is_none(),
+        "resize is not user input"
+    );
+    layout_freeze::arm_freeze(&mut rig.view().presentation, 1);
     rig.state
         .apply_input([Wakeup::Resize], &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().armed_ms, 1);
+    assert_eq!(rig.view().presentation.freeze.as_ref().unwrap().armed_ms, 1);
 }
 
 #[test]
@@ -41,7 +44,7 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
         now,
         now,
     );
-    layout_freeze::arm_freeze(&mut rig.view().ui, now as i64 - 6_000);
+    layout_freeze::arm_freeze(&mut rig.view().presentation, now as i64 - 6_000);
     assert!(rig.state.frame_timing().1 > FRAME_MIN_TIMEOUT);
     rig.maintenance();
     assert!(
@@ -53,7 +56,7 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
         unfocused: vec![own],
     });
     assert!(
-        rig.view().ui.freeze.is_none(),
+        rig.view().presentation.freeze.is_none(),
         "unfocus releases the old freeze in its own fold"
     );
 }
@@ -84,7 +87,7 @@ fn frozen_parked_timing_reads_live_overlays_outside_a_borrow() {
         let mut view = rig.view();
         let state = &mut *view;
         state.ui.theme(&state.view.current.theme);
-        layout_freeze::arm_freeze(&mut state.ui, now as i64 - 6_000);
+        layout_freeze::arm_freeze(&mut state.presentation, now as i64 - 6_000);
     }
     rig.state.events().append(
         SidebarEvent::FocusChanged {
@@ -122,7 +125,7 @@ fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
         state.ui.theme(&state.view.current.theme);
     }
     layout_freeze::arm_freeze(
-        &mut rig.view().ui,
+        &mut rig.view().presentation,
         Timestamp::now().as_millisecond() - 29_800,
     );
     let timeout = rig.state.frame_timing().1;
@@ -188,7 +191,7 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
 #[test]
 fn maintenance_requests_releasing_fetch_when_freeze_expires() {
     let mut rig = Rig::new();
-    rig.view().ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
+    rig.view().presentation.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
         frozen: crate::sidebar_pane::render::FrozenOrder::default(),
         armed_ms: jiff::Timestamp::now().as_millisecond() - 5_001,
     });
@@ -490,7 +493,7 @@ fn frame_timing_caps_idle_timeout_at_freeze_expiry() {
     rig.state.dirty = false;
     let theme = rig.view().current.theme.clone();
     rig.view().ui.theme(&theme);
-    rig.view().ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
+    rig.view().presentation.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
         frozen: crate::sidebar_pane::render::FrozenOrder::default(),
         armed_ms: jiff::Timestamp::now().as_millisecond() - 4_800,
     });

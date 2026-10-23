@@ -1,27 +1,31 @@
 use super::*;
 use crate::ids::LinkTier;
 
-fn search_ui(query: &str) -> UiState {
-    UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            make_up_filter: BodyLens {
-                query: Some(query.to_owned()),
-                ..Default::default()
-            },
+fn search_ui(query: &str) -> ViewState {
+    ViewState {
+        selected_index: Some(0),
+        make_up_filter: BodyLens {
+            query: Some(query.to_owned()),
             ..Default::default()
         },
-        ..UiState::default()
+        ..Default::default()
     }
 }
 
-fn bottom(snapshot: &SidebarSnapshot, ui: &UiState, theme: &Theme, cells: usize) -> RenderedBlock {
+fn bottom(
+    snapshot: &SidebarSnapshot,
+    ui: &ViewState,
+    pane_ui: &UiState,
+    theme: &Theme,
+    cells: usize,
+) -> RenderedBlock {
     build_bottom_chrome(
         snapshot,
         None,
         theme,
         cells,
         ui,
+        pane_ui,
         &ui.visible_roster(snapshot),
     )
 }
@@ -50,8 +54,9 @@ fn assert_search_style(typing: bool, no_color: bool) {
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(no_color);
     let mut ui = search_ui("auth");
+    let mut pane_ui = UiState::default();
     ui.search_draft = typing.then(|| "auth".to_owned());
-    let block = bottom(&snapshot, &ui, &theme, 36);
+    let block = bottom(&snapshot, &ui, &pane_ui, &theme, 36);
     let line = &block.lines[0];
     assert!(line.to_string().starts_with(" / auth"), "{line}");
     assert!(line.to_string().trim_end().ends_with("0/0"));
@@ -93,14 +98,14 @@ fn assert_search_style(typing: bool, no_color: bool) {
             theme.picked_chip(theme.body_tone(), Modifier::empty())
         );
     }
-    ui.theme_cache = Some((snapshot.theme.clone(), Rc::new(theme)));
+    pane_ui.theme_cache = Some((snapshot.theme.clone(), Rc::new(theme)));
     assert_snapshot(
         &format!(
             "search_line_{}_{}",
             if typing { "typing" } else { "committed" },
             if no_color { "no_color" } else { "color" }
         ),
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 36, 12),
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 36, 12),
     );
 }
 
@@ -114,7 +119,13 @@ fn search_line_resolves_nerd_font_glyph() {
             ..Default::default()
         },
     );
-    let block = bottom(&snapshot, &search_ui("auth"), &theme, 36);
+    let block = bottom(
+        &snapshot,
+        &search_ui("auth"),
+        &UiState::default(),
+        &theme,
+        36,
+    );
     assert!(
         block.lines[0].to_string().starts_with(" \u{f002} auth"),
         "{}",
@@ -168,10 +179,11 @@ fn search_line_count_uses_all_rows_and_live_projection() {
         ("auth-", Some(BodyFilter::Status(AgentStatus::Idle)), 8),
     ] {
         let mut ui = search_ui("not-the-draft");
+        let pane_ui = UiState::default();
         ui.search_draft = Some(query.to_owned());
         ui.make_up_filter.filter = filter;
         assert_eq!(ui.visible_roster(&snapshot).len(), matches);
-        let block = bottom(&snapshot, &ui, &theme, 40);
+        let block = bottom(&snapshot, &ui, &pane_ui, &theme, 40);
         assert!(
             block.lines[0]
                 .to_string()
@@ -188,8 +200,9 @@ fn search_line_empty_draft_has_cursor_without_count() {
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(false);
     let mut ui = search_ui("old-query");
+    let pane_ui = UiState::default();
     ui.search_draft = Some(String::new());
-    let block = bottom(&snapshot, &ui, &theme, 36);
+    let block = bottom(&snapshot, &ui, &pane_ui, &theme, 36);
     let line = &block.lines[0];
     assert!(line.to_string().starts_with(" / "), "{line}");
     assert!(!line.to_string().contains("0/0"));
@@ -203,10 +216,11 @@ fn search_line_drops_count_before_clipping_and_preserves_cursor() {
     let theme = Theme::fixed(false);
     for typing in [false, true] {
         let mut ui = search_ui("auth");
+        let pane_ui = UiState::default();
         ui.search_draft = typing.then(|| "auth".to_owned());
         let threshold = if typing { 13 } else { 12 };
         for cells in [threshold - 1, threshold, threshold + 1] {
-            let block = bottom(&snapshot, &ui, &theme, cells);
+            let block = bottom(&snapshot, &ui, &pane_ui, &theme, cells);
             let line = &block.lines[0];
             assert_eq!(line.width(), cells);
             assert!(line.to_string().starts_with(" / auth"), "{line}");
@@ -216,7 +230,7 @@ fn search_line_drops_count_before_clipping_and_preserves_cursor() {
                 "count boundary at {cells}: {line}"
             );
         }
-        let block = bottom(&snapshot, &ui, &theme, 6);
+        let block = bottom(&snapshot, &ui, &pane_ui, &theme, 6);
         let line = &block.lines[0];
         assert_eq!(line.width(), 6);
         assert!(line.to_string().starts_with(" / a"), "{line}");
@@ -231,7 +245,7 @@ fn search_line_drops_count_before_clipping_and_preserves_cursor() {
             ui.make_up_filter.query = Some(query.to_owned());
             ui.search_draft = typing.then(|| query.to_owned());
             for cells in 1..=15 {
-                let block = bottom(&snapshot, &ui, &theme, cells);
+                let block = bottom(&snapshot, &ui, &pane_ui, &theme, cells);
                 let line = &block.lines[0];
                 assert_eq!(line.width(), cells, "one row at {cells}: {line}");
                 if typing && cells >= 3 {
@@ -249,11 +263,15 @@ fn search_line_reuses_dashboard_separator_and_leaves_folded_footer() {
     let theme = Theme::fixed(false);
     for pets in [false, true] {
         snapshot.theme.pets.enabled = pets;
-        let mut ui = search_ui("not-a-match");
-        ui.pet = pets.then(|| cell_pet(8, 12, "ready"));
+        let ui = search_ui("not-a-match");
+        let pane_ui = UiState {
+            pet: pets.then(|| cell_pet(8, 12, "ready")),
+            ..Default::default()
+        };
         let mut baseline_ui = ui.clone();
+        let pane_baseline_ui = pane_ui.clone();
         baseline_ui.make_up_filter.query = None;
-        let block = bottom(&snapshot, &ui, &theme, 54);
+        let block = bottom(&snapshot, &ui, &pane_ui, &theme, 54);
         assert!(block.lines[0].to_string().contains("/ not-a-match"));
         assert!(
             block.lines[1]
@@ -261,10 +279,19 @@ fn search_line_reuses_dashboard_separator_and_leaves_folded_footer() {
                 .contains(theme.glyph(crate::config::GlyphRole::ChromeHairline))
         );
         assert!(!block.lines.last().unwrap().to_string().contains('/'));
-        let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 30);
+        let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 30);
         assert_eq!(
             composed.bottom_height,
-            compose_lines(&snapshot, None, &baseline_ui, &theme, 54, 30).bottom_height
+            compose_lines(
+                &snapshot,
+                None,
+                &baseline_ui,
+                &pane_baseline_ui,
+                &theme,
+                54,
+                30
+            )
+            .bottom_height
         );
         assert!(composed.lines.iter().any(|line| {
             line.spans
@@ -274,7 +301,7 @@ fn search_line_reuses_dashboard_separator_and_leaves_folded_footer() {
         if pets {
             assert_snapshot(
                 "search_line_zero_match_folded_dashboard",
-                snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 30),
+                snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 30),
             );
         }
     }
@@ -285,25 +312,43 @@ fn search_line_without_dashboard_reserves_one_row_and_help_stays_above() {
     let mut snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let ui = search_ui("auth");
-    let empty_baseline = compose_lines(&snapshot, None, &selected_ui(), &theme, 42, 24);
+    let pane_ui = UiState::default();
+    let empty_baseline = compose_lines(
+        &snapshot,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        &theme,
+        42,
+        24,
+    );
     assert_eq!(
-        compose_lines(&snapshot, None, &ui, &theme, 42, 24).bottom_height,
+        compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 42, 24).bottom_height,
         empty_baseline.bottom_height + 1
     );
     snapshot.value_tally = Some(bottom_tally().into());
     let mut ui = search_ui("auth");
-    let block = bottom(&snapshot, &ui, &theme, 42);
+    let pane_ui = UiState::default();
+    let block = bottom(&snapshot, &ui, &pane_ui, &theme, 42);
     assert!(block.lines[0].to_string().contains("/ auth"));
     assert!(
         block.lines[1]
             .to_string()
             .contains(theme.glyph(crate::config::GlyphRole::ChromeHairline))
     );
-    let baseline = compose_lines(&snapshot, None, &selected_ui(), &theme, 42, 24);
+    let baseline = compose_lines(
+        &snapshot,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        &theme,
+        42,
+        24,
+    );
     ui.help_visible = true;
-    let composed = compose_lines(&snapshot, None, &ui, &theme, 42, 24);
+    let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 42, 24);
     assert_eq!(composed.bottom_height, baseline.bottom_height + 1);
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 42, 24);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 42, 24);
     let rows: Vec<_> = screen.lines().collect();
     let search_row = rows
         .iter()
@@ -336,9 +381,13 @@ fn search_line_keeps_plain_and_folded_footer_badge_admission() {
             freshness: crate::store::snapshot::SidebarLinkFreshness::Fresh,
             sampled_at_ms: 1_700_000_000_000,
         });
-        let mut ui = search_ui("auth");
-        ui.pet = folded.then(|| cell_pet(8, 12, "ready"));
+        let ui = search_ui("auth");
+        let pane_ui = UiState {
+            pet: folded.then(|| cell_pet(8, 12, "ready")),
+            ..Default::default()
+        };
         let mut baseline_ui = ui.clone();
+        let pane_baseline_ui = pane_ui.clone();
         baseline_ui.make_up_filter.query = None;
         let widths: &[usize] = if folded {
             &[44, 45, 46, 53, 54, 55]
@@ -346,8 +395,14 @@ fn search_line_keeps_plain_and_folded_footer_badge_admission() {
             &[31, 32, 33, 40, 41, 42]
         };
         for &inner in widths {
-            let searched = bottom(&snapshot, &ui, &theme, inner + 2);
-            let baseline = bottom(&snapshot, &baseline_ui, &theme, inner + 2);
+            let searched = bottom(&snapshot, &ui, &pane_ui, &theme, inner + 2);
+            let baseline = bottom(
+                &snapshot,
+                &baseline_ui,
+                &pane_baseline_ui,
+                &theme,
+                inner + 2,
+            );
             let footer = searched.lines.last().unwrap().to_string();
             assert_eq!(
                 footer,
@@ -376,6 +431,7 @@ fn search_line_stays_visible_during_active_alert() {
     let snapshot = tabbed_provider_snapshot();
     let theme = Theme::fixed(false);
     let ui = search_ui("auth");
+    let pane_ui = UiState::default();
     let alert = Alert {
         reason: "snapshot unavailable".to_owned(),
         since: fixed_now(),
@@ -387,6 +443,7 @@ fn search_line_stays_visible_during_active_alert() {
         &theme,
         54,
         &ui,
+        &pane_ui,
         &ui.visible_roster(&snapshot),
     );
     assert_eq!(block.lines.len(), 2);

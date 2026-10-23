@@ -131,7 +131,7 @@ impl Drop for RigView<'_> {
     fn drop(&mut self) {
         if let Some(pane) = &self.pane {
             let (_, entry) = self.views.presentation(pane, self.state.clock.now(), false);
-            std::mem::swap(&mut self.state.ui.view, &mut entry.state);
+            std::mem::swap(&mut self.state.presentation, &mut entry.state);
             let context = entry.context.as_mut().unwrap();
             std::mem::swap(&mut self.state.view, context);
             self.state.view.current.clone_from(&context.current);
@@ -158,7 +158,7 @@ impl Rig {
             .filter(|pane| views.peek(pane).is_some());
         if let Some(pane) = &pane {
             let (id, entry) = views.presentation(pane, self.state.clock.now(), false);
-            std::mem::swap(&mut self.state.ui.view, &mut entry.state);
+            std::mem::swap(&mut self.state.presentation, &mut entry.state);
             std::mem::swap(&mut self.state.view, entry.context.as_mut().unwrap());
             self.state.view_scope = Some(ViewScope::Shared(id));
         }
@@ -593,24 +593,36 @@ fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
     high.today_spend_live_usd = Some(5.0);
     high.today_spend_epoch_secs = Some(10);
     rig.fold(high, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui.spend_ratchet.display(Some(10), 5.0), 5.0);
+    assert_eq!(
+        rig.view().presentation.spend_ratchet.display(Some(10), 5.0),
+        5.0
+    );
 
     let mut lower = agent_snapshot(&rig.ws);
     lower.today_spend_live_usd = Some(3.0);
     lower.today_spend_epoch_secs = Some(10);
     rig.fold(lower, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui.spend_ratchet.display(Some(10), 3.0), 5.0);
+    assert_eq!(
+        rig.view().presentation.spend_ratchet.display(Some(10), 3.0),
+        5.0
+    );
 
     let mut older = agent_snapshot(&rig.ws);
     older.today_spend_live_usd = Some(1.0);
     rig.fold(older, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui.spend_ratchet.display(None, 1.0), 1.0);
+    assert_eq!(
+        rig.view().presentation.spend_ratchet.display(None, 1.0),
+        1.0
+    );
 
     let mut next = agent_snapshot(&rig.ws);
     next.today_spend_live_usd = Some(2.0);
     next.today_spend_epoch_secs = Some(11);
     rig.fold(next, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui.spend_ratchet.display(Some(11), 2.0), 2.0);
+    assert_eq!(
+        rig.view().presentation.spend_ratchet.display(Some(11), 2.0),
+        2.0
+    );
 }
 
 #[test]
@@ -636,5 +648,8 @@ fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
 
     let (usd, epoch) = render::cockpit_spend_target(&rig.state.current).expect("tripped spend");
     assert_eq!((usd, epoch), (3.0, Some(20)));
-    assert_eq!(rig.view().ui.spend_ratchet.display(epoch, usd), 5.0);
+    assert_eq!(
+        rig.view().presentation.spend_ratchet.display(epoch, usd),
+        5.0
+    );
 }

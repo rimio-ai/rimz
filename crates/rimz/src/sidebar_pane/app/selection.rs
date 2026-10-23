@@ -104,7 +104,7 @@ impl InputOutcome {
 }
 
 /// Step the inbox triage list `forward` or backward from the current selection and focus its attention pane: the `n`/`N` (and `Space`) walk through rows that need you in the visible roster, oldest episode first. A walk with nothing to triage does nothing.
-fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
+fn inbox_jump(ui: &mut ViewState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
         && let Some(pane) = roster.row(index).and_then(|row| row.attention_pane())
@@ -123,7 +123,7 @@ enum End {
 /// Move the browse pick to the first or last visible row — the `g`/`G` Vim
 /// jump. Selection only, no focus, over the same filtered row universe ordinary
 /// selection walks. A no-op when already there or the body is empty.
-fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
+fn select_end_row(ui: &mut ViewState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     let len = roster.len();
     if len == 0 {
@@ -136,12 +136,16 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
     select_to_index_in(ui, &roster, target)
 }
 
-fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
+fn select_to_index(ui: &mut ViewState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     select_to_index_in(ui, &roster, target)
 }
 
-fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usize) -> InputOutcome {
+fn select_to_index_in(
+    ui: &mut ViewState,
+    roster: &VisibleRoster<'_>,
+    target: usize,
+) -> InputOutcome {
     let len = roster.len();
     if len == 0 {
         return InputOutcome::default();
@@ -155,7 +159,12 @@ fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usiz
     InputOutcome::redraw()
 }
 
-fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
+fn select_screen_edge(
+    view: &mut ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    end: End,
+) -> InputOutcome {
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
@@ -163,12 +172,17 @@ fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) ->
         End::Top => first,
         End::Bottom => last,
     };
-    select_to_index(ui, snapshot, target)
+    select_to_index(view, snapshot, target)
 }
 
-fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
-    let Some(selected) = ui.selected_index else {
-        return select_to_index(ui, snapshot, 0);
+fn select_page(
+    view: &mut ViewState,
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    down: bool,
+) -> InputOutcome {
+    let Some(selected) = view.selected_index else {
+        return select_to_index(view, snapshot, 0);
     };
     let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
@@ -179,49 +193,50 @@ fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> Inpu
     } else {
         selected.saturating_sub(page)
     };
-    select_to_index(ui, snapshot, target)
+    select_to_index(view, snapshot, target)
 }
 
 pub(super) fn handle_key(
     action: KeyAction,
+    view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
     match action {
         KeyAction::Search => {
-            ui.search_draft = Some(ui.make_up_filter.query.clone().unwrap_or_default());
-            select_first_search_match(ui, snapshot);
+            view.search_draft = Some(view.make_up_filter.query.clone().unwrap_or_default());
+            select_first_search_match(view, snapshot);
             InputOutcome::redraw()
         }
         KeyAction::QueryChar(ch) => {
-            if let Some(draft) = &mut ui.search_draft {
+            if let Some(draft) = &mut view.search_draft {
                 draft.push(ch);
-                select_first_search_match(ui, snapshot);
+                select_first_search_match(view, snapshot);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
         }
         KeyAction::Backspace => {
-            let Some(draft) = &mut ui.search_draft else {
+            let Some(draft) = &mut view.search_draft else {
                 return InputOutcome::default();
             };
             if draft.pop().is_none() {
-                return finish_search(ui, snapshot, false);
+                return finish_search(view, snapshot, false);
             }
-            select_first_search_match(ui, snapshot);
+            select_first_search_match(view, snapshot);
             InputOutcome::redraw()
         }
         KeyAction::CancelSearch => {
-            if ui.search_draft.is_some() {
-                return finish_search(ui, snapshot, false);
+            if view.search_draft.is_some() {
+                return finish_search(view, snapshot, false);
             }
-            let mut lens = ui.make_up_filter.clone();
+            let mut lens = view.make_up_filter.clone();
             if lens.query.take().is_none() {
                 return InputOutcome::default();
             }
-            set_make_up_filter(ui, snapshot, lens);
-            reconcile_selection(ui, snapshot, None);
-            InputOutcome::sync_filter(ui.make_up_filter.clone())
+            set_make_up_filter(view, snapshot, lens);
+            reconcile_selection(view, snapshot, None);
+            InputOutcome::sync_filter(view.make_up_filter.clone())
         }
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
@@ -230,29 +245,31 @@ pub(super) fn handle_key(
             ..InputOutcome::default()
         },
         KeyAction::Up => select_to_index(
-            ui,
+            view,
             snapshot,
-            ui.selected_index.map_or(0, |index| index.saturating_sub(1)),
+            view.selected_index
+                .map_or(0, |index| index.saturating_sub(1)),
         ),
         KeyAction::Down => select_to_index(
-            ui,
+            view,
             snapshot,
-            ui.selected_index.map_or(0, |index| index.saturating_add(1)),
+            view.selected_index
+                .map_or(0, |index| index.saturating_add(1)),
         ),
-        KeyAction::WorktreeUp => select_adjacent_worktree(ui, snapshot, -1),
-        KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
-        KeyAction::Top => select_end_row(ui, snapshot, End::Top),
-        KeyAction::Bottom => select_end_row(ui, snapshot, End::Bottom),
-        KeyAction::PageUp => select_page(ui, snapshot, false),
-        KeyAction::PageDown => select_page(ui, snapshot, true),
-        KeyAction::ScreenTop => select_screen_edge(ui, snapshot, End::Top),
-        KeyAction::ScreenBottom => select_screen_edge(ui, snapshot, End::Bottom),
+        KeyAction::WorktreeUp => select_adjacent_worktree(view, snapshot, -1),
+        KeyAction::WorktreeDown => select_adjacent_worktree(view, snapshot, 1),
+        KeyAction::Top => select_end_row(view, snapshot, End::Top),
+        KeyAction::Bottom => select_end_row(view, snapshot, End::Bottom),
+        KeyAction::PageUp => select_page(view, ui, snapshot, false),
+        KeyAction::PageDown => select_page(view, ui, snapshot, true),
+        KeyAction::ScreenTop => select_screen_edge(view, ui, snapshot, End::Top),
+        KeyAction::ScreenBottom => select_screen_edge(view, ui, snapshot, End::Bottom),
         KeyAction::Enter => {
-            if let Some(draft) = &ui.search_draft {
+            if let Some(draft) = &view.search_draft {
                 let pane = (!draft.is_empty())
-                    .then(|| ui.selected_pane.clone())
+                    .then(|| view.selected_pane.clone())
                     .flatten();
-                let mut outcome = finish_search(ui, snapshot, true);
+                let mut outcome = finish_search(view, snapshot, true);
                 if let Some(pane) = pane {
                     outcome.effects.push(InputEffect::Focus(pane));
                 }
@@ -260,16 +277,16 @@ pub(super) fn handle_key(
             }
             // Focus the current visible row without moving the highlight — it
             // follows once the derived baseline catches up.
-            match ui.selected_pane.clone() {
-                Some(pane) if ui.selected_index.is_some() => InputOutcome::focus(pane),
+            match view.selected_pane.clone() {
+                Some(pane) if view.selected_index.is_some() => InputOutcome::focus(pane),
                 _ => InputOutcome::default(),
             }
         }
-        KeyAction::InboxNext => inbox_jump(ui, snapshot, true),
-        KeyAction::InboxPrev => inbox_jump(ui, snapshot, false),
-        KeyAction::MarkToggle => match ui
+        KeyAction::InboxNext => inbox_jump(view, snapshot, true),
+        KeyAction::InboxPrev => inbox_jump(view, snapshot, false),
+        KeyAction::MarkToggle => match view
             .selected_index
-            .and_then(|index| agent_row_mark_target_at(snapshot, ui, index))
+            .and_then(|index| agent_row_mark_target_at(snapshot, view, index))
         {
             Some(target) if target.unread => InputOutcome::mark_read(target.row_id),
             Some(target) => InputOutcome::mark_unread(target.row_id),
@@ -277,16 +294,16 @@ pub(super) fn handle_key(
         },
         KeyAction::MarkAllRead => InputOutcome::mark_all_read(),
         KeyAction::Help => {
-            ui.help_visible = true;
+            view.help_visible = true;
             InputOutcome::redraw()
         }
         KeyAction::Filter(filter) => {
             let changed = match filter {
-                None => set_make_up_filter(ui, snapshot, BodyLens::default()),
-                Some(filter) => toggle_make_up_filter(ui, snapshot, filter),
+                None => set_make_up_filter(view, snapshot, BodyLens::default()),
+                Some(filter) => toggle_make_up_filter(view, snapshot, filter),
             };
             if changed {
-                InputOutcome::sync_filter(ui.make_up_filter.clone())
+                InputOutcome::sync_filter(view.make_up_filter.clone())
             } else {
                 InputOutcome::default()
             }
@@ -294,25 +311,25 @@ pub(super) fn handle_key(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = ui.visible_roster(snapshot).pane_at_ordinal(index) {
+            if let Some(pane) = view.visible_roster(snapshot).pane_at_ordinal(index) {
                 return InputOutcome::focus(pane);
             }
             InputOutcome::default()
         }
-        KeyAction::TabPrev => cycle_dashboard_tab(ui, snapshot, -1),
-        KeyAction::TabNext => cycle_dashboard_tab(ui, snapshot, 1),
+        KeyAction::TabPrev => cycle_dashboard_tab(view, snapshot, -1),
+        KeyAction::TabNext => cycle_dashboard_tab(view, snapshot, 1),
         KeyAction::Other => InputOutcome::default(),
     }
 }
 
-fn select_first_search_match(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+fn select_first_search_match(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
     let roster = ui.visible_roster(snapshot);
     select_row_in(ui, &roster, 0);
     ui.browse = None;
 }
 
 pub(super) fn finish_search(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     commit: bool,
 ) -> InputOutcome {
@@ -336,7 +353,11 @@ pub(super) fn finish_search(
 /// Step the dashboard's tab `step` entries left or right of the currently
 /// active one, wrapping at the ends — the manual layer over the dashboard
 /// default. A dashboard with fewer than two tabs has nothing to cycle.
-fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize) -> InputOutcome {
+fn cycle_dashboard_tab(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    step: isize,
+) -> InputOutcome {
     if !dashboard_tabbed(snapshot) {
         return InputOutcome::default();
     }
@@ -357,7 +378,7 @@ fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize
 /// selection-derived kind it began from — the clear condition — and a later
 /// pick only moves the tab, so a browse through the tabs keeps one anchor and
 /// a genuine selection change still ends it (the [`Browse`] discipline).
-fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, login: crate::ids::LoginKey) {
+fn pick_dashboard_tab(ui: &mut ViewState, snapshot: &SidebarSnapshot, login: crate::ids::LoginKey) {
     let derived_at_start = match ui.dashboard_tab.take() {
         Some(tab) => tab.derived_at_start,
         None => selected_agent_kind(snapshot, ui),
@@ -371,72 +392,73 @@ fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, login: crate
 pub(super) fn handle_mouse_click(
     column: u16,
     row: u16,
+    view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
     let target = ui.interactions.target_at(column, row);
     let pane = target
         .as_ref()
-        .and_then(|target| click_focus_pane(target, ui, snapshot));
+        .and_then(|target| click_focus_pane(target, view, ui, snapshot));
     let mut outcome = match target {
         Some(HitTarget::ProviderTab(kind)) => {
-            pick_dashboard_tab(ui, snapshot, kind);
+            pick_dashboard_tab(view, snapshot, kind);
             InputOutcome::redraw()
         }
         Some(HitTarget::BodyFilter(filter)) => {
-            if toggle_make_up_filter(ui, snapshot, filter) {
-                InputOutcome::sync_filter(ui.make_up_filter.clone())
+            if toggle_make_up_filter(view, snapshot, filter) {
+                InputOutcome::sync_filter(view.make_up_filter.clone())
             } else {
                 InputOutcome::default()
             }
         }
         Some(HitTarget::UnreadBanner) => {
-            ui.offset_authoritative = true;
-            ui.scroll_ease.cancel();
-            let roster = ui.visible_roster(snapshot);
-            ui.reveal_row = lead_unread_row(&snapshot.worktree_groups)
+            view.offset_authoritative = true;
+            view.scroll_ease.cancel();
+            let roster = view.visible_roster(snapshot);
+            view.reveal_row = lead_unread_row(&snapshot.worktree_groups)
                 .filter(|row| roster.ordinal_of_id(&row.id).is_some())
                 .map(|row| row.id.clone());
-            if ui.reveal_row.is_none() {
-                ui.scroll_offset = 0;
+            if view.reveal_row.is_none() {
+                view.scroll_offset = 0;
             }
             InputOutcome::redraw()
         }
         Some(HitTarget::FocusMarker) => {
-            ui.reveal_row = ui
+            view.reveal_row = view
                 .selected_index
-                .and_then(|index| ui.visible_roster(snapshot).row(index))
+                .and_then(|index| view.visible_roster(snapshot).row(index))
                 .map(|row| row.id.clone());
-            ui.offset_authoritative = true;
-            ui.scroll_ease.cancel();
+            view.offset_authoritative = true;
+            view.scroll_ease.cancel();
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleGroup(group_key)) => {
-            toggle_group_expanded(ui, snapshot, group_key);
+            toggle_group_expanded(view, snapshot, group_key);
             InputOutcome::redraw()
         }
         Some(HitTarget::ExpandGroup { key, row }) => {
-            ui.expanded_groups.insert(key);
-            anchor_selection(ui, snapshot);
-            ui.offset_authoritative = true;
-            ui.scroll_ease.cancel();
-            ui.reveal_row = pane.is_some().then_some(row);
+            view.expanded_groups.insert(key);
+            anchor_selection(view, snapshot);
+            view.offset_authoritative = true;
+            view.scroll_ease.cancel();
+            view.reveal_row = pane.is_some().then_some(row);
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleLanded) => {
-            ui.landed_open = !ui.landed_open;
-            ui.landed_reveal = ui.landed_open;
-            anchor_selection(ui, snapshot);
-            ui.offset_authoritative = true;
-            ui.scroll_ease.cancel();
+            view.landed_open = !view.landed_open;
+            view.landed_reveal = view.landed_open;
+            anchor_selection(view, snapshot);
+            view.offset_authoritative = true;
+            view.scroll_ease.cancel();
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleDelegation { row, open }) => {
-            set_delegation_open(ui, snapshot, row, open);
+            set_delegation_open(view, snapshot, row, open);
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleDelegationHistory(row_id)) => {
-            toggle_delegation_history(ui, snapshot, row_id);
+            toggle_delegation_history(view, snapshot, row_id);
             InputOutcome::redraw()
         }
         Some(HitTarget::Row(_) | HitTarget::SubAgentPane(_) | HitTarget::Hyperlink(_)) | None => {
@@ -444,7 +466,7 @@ pub(super) fn handle_mouse_click(
         }
     };
     if let Some(pane) = pane {
-        let focus = select_clicked_pane(ui, snapshot, pane);
+        let focus = select_clicked_pane(view, snapshot, pane);
         outcome.redraw |= focus.redraw;
         outcome.effects.extend(focus.effects);
     }
@@ -453,12 +475,13 @@ pub(super) fn handle_mouse_click(
 
 pub(super) fn click_focus_pane(
     target: &HitTarget,
+    view: &ViewState,
     ui: &UiState,
     snapshot: &SidebarSnapshot,
 ) -> Option<PaneId> {
     match target {
         HitTarget::Row(index) => {
-            let roster = ui.visible_roster(snapshot);
+            let roster = view.visible_roster(snapshot);
             ui.painted_roster
                 .get(*index)
                 .and_then(|id| roster.ordinal_of_id(id))
@@ -482,7 +505,11 @@ pub(super) fn click_focus_pane(
     }
 }
 
-fn select_clicked_pane(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputOutcome {
+fn select_clicked_pane(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    pane: PaneId,
+) -> InputOutcome {
     let roster = ui.visible_roster(snapshot);
     let Some(index) = snapshot
         .row_owning_pane(&pane)
@@ -508,20 +535,20 @@ fn select_clicked_pane(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneI
 /// this offset as authoritative, then anchors the cards in its target window.
 /// Clamp to the last drawn range so queued ticks can reverse at the bottom
 /// without an intervening paint. The draw still resolves geometry changes.
-pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
-    ui.offset_authoritative = true;
-    ui.scroll_ease.arm();
-    ui.scroll_offset = if down {
-        ui.scroll_offset
+pub(super) fn handle_scroll(down: bool, view: &mut ViewState, ui: &mut UiState) -> InputOutcome {
+    view.offset_authoritative = true;
+    view.scroll_ease.arm();
+    view.scroll_offset = if down {
+        view.scroll_offset
             .saturating_add(SCROLL_STEP)
             .min(ui.drawn_scroll_max.unwrap_or(usize::MAX))
     } else {
-        ui.scroll_offset.saturating_sub(SCROLL_STEP)
+        view.scroll_offset.saturating_sub(SCROLL_STEP)
     };
     InputOutcome::redraw()
 }
 
-fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key: String) {
+fn toggle_group_expanded(ui: &mut ViewState, snapshot: &SidebarSnapshot, group_key: String) {
     if !ui.expanded_groups.remove(&group_key) {
         ui.expanded_groups.insert(group_key);
     }
@@ -532,7 +559,7 @@ fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key
 
 /// A header click sets the section open or closed for the renderer's life. A
 /// close also folds the `+K older` history, so reopening starts from the bands.
-fn set_delegation_open(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String, open: bool) {
+fn set_delegation_open(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String, open: bool) {
     if !open {
         ui.delegation_history.remove(&row_id);
     }
@@ -542,7 +569,7 @@ fn set_delegation_open(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: Str
     ui.scroll_ease.cancel();
 }
 
-fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String) {
+fn toggle_delegation_history(ui: &mut ViewState, snapshot: &SidebarSnapshot, row_id: String) {
     let Some(agent) = snapshot
         .worktree_groups
         .iter()
@@ -566,7 +593,11 @@ fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_i
 /// baseline, unlike [`DashboardTab`], because there is no derived default to
 /// fall back to. The body reshapes and the selection re-anchors at once: a
 /// highlight whose row the filter hides clears, or clamps during a search draft.
-fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
+fn toggle_make_up_filter(
+    ui: &mut ViewState,
+    snapshot: &SidebarSnapshot,
+    filter: BodyFilter,
+) -> bool {
     let target = if ui.make_up_filter.filter == Some(filter) {
         None
     } else if filter.total(&snapshot.worktree_groups) > 0 {
@@ -597,7 +628,7 @@ pub(super) fn set_make_up_filter(
 /// active make-up filter skips groups it emptied and the line map stays 1:1
 /// with the highlighted row.
 fn select_adjacent_worktree(
-    ui: &mut UiState,
+    ui: &mut ViewState,
     snapshot: &SidebarSnapshot,
     step: isize,
 ) -> InputOutcome {
@@ -617,7 +648,7 @@ fn select_adjacent_worktree(
 /// motion and click browse; focus keys resolve their target through the active
 /// roster instead. A changed pick reveals on the
 /// next draw only if no line of its card is visible.
-fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
+fn select_row_in(ui: &mut ViewState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_pane = roster.pane_at_ordinal(index);
     ui.selected_index = (ui.selected_pane.is_some()
         || (ui.search_draft.is_some() && index < roster.len()))
@@ -632,7 +663,7 @@ struct RowMarkTarget {
 
 fn agent_row_mark_target_at(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
     index: usize,
 ) -> Option<RowMarkTarget> {
     ui.visible_roster(snapshot)
@@ -648,7 +679,7 @@ fn agent_row_mark_target_at(
 /// browse captures the baseline it began from — the clear condition — and a
 /// later arrow only moves the pick, so a long browse keeps one anchor and a
 /// mid-browse baseline change still ends it. Roams matching rows, other tabs' rows included.
-fn begin_or_continue_browse(ui: &mut UiState) {
+fn begin_or_continue_browse(ui: &mut ViewState) {
     if let Some(pane) = ui.selected_pane.clone() {
         let baseline_at_start = match ui.browse.take() {
             Some(browse) => browse.baseline_at_start,
@@ -875,7 +906,7 @@ fn step_attention_in(
 }
 
 #[cfg(test)]
-fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
+fn select_row(ui: &mut ViewState, snapshot: &SidebarSnapshot, index: usize) {
     let roster = ui.visible_roster(snapshot);
     select_row_in(ui, &roster, index);
 }

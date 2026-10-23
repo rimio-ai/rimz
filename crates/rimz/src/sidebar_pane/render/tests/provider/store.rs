@@ -326,11 +326,11 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         fg: Color::Rgb(200, 20, 20),
         bg: Color::Rgb(20, 20, 200),
     };
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let pane_ui = UiState {
         pet: Some(crate::sidebar_pane::pets::PetView {
             body: Some(crate::sidebar_pane::pets::PetBody::Cell(
                 (0..usize::from(
@@ -348,7 +348,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         ..Default::default()
     };
 
-    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 60, 34);
+    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 60, 34);
     let lines = rendered.lines().collect::<Vec<_>>();
     let footer_index = lines
         .iter()
