@@ -473,7 +473,7 @@ fn produce_local_serves_published_within_grace() {
         &runtime.shared_provider_spending_path(),
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
-            day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None).unwrap(),
+            day_cutoff_secs: super::super::local_day_start_secs(now_ms / 1000, None).unwrap(),
             spending: spending.clone(),
             ..Default::default()
         },
