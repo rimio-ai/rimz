@@ -165,7 +165,7 @@ fn cold_runtime_holder_is_visible_without_a_room_record() {
     let runtime = RuntimePaths::for_state(&paths).unwrap();
     let path = runtime.lock_path(run_lock_file_name("pending", None));
     let RunLockAttempt::Acquired(_guard) =
-        acquire_run_lock_file(&path, Some(TaskKind::Routine)).unwrap()
+        acquire_run_lock_file(&path, Some(TaskKind::Routine), None).unwrap()
     else {
         panic!("fixture takes lock")
     };
@@ -343,7 +343,7 @@ fn a_drainer_claims_nothing_while_held_then_pops_exactly_one_when_free() {
     seed_backlog(root.path());
     let lock_path = run_lock_path("loop-run-pending.lock", &fire_entry(root.path())).unwrap();
     let RunLockAttempt::Acquired(held) =
-        acquire_run_lock_file(&lock_path, Some(TaskKind::Routine)).unwrap()
+        acquire_run_lock_file(&lock_path, Some(TaskKind::Routine), None).unwrap()
     else {
         panic!("fixture takes lock")
     };
@@ -1134,7 +1134,7 @@ fn run_lock_probes_never_defeat_a_starting_run() {
         });
         start.wait();
         for _ in 0..10_000 {
-            let claim = acquire_run_lock_file(&path, None).unwrap();
+            let claim = acquire_run_lock_file(&path, None, None).unwrap();
             assert!(
                 matches!(claim, RunLockAttempt::Acquired(_)),
                 "a probe must not make a run look overlapped"
@@ -1158,7 +1158,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     );
 
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -1166,7 +1166,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         serde_json::from_slice(&std::fs::read(&path).expect("read lock")).expect("parse lock info");
     assert_eq!(written.pid, std::process::id());
 
-    match acquire_run_lock_file(&path, None).expect("contend for lock") {
+    match acquire_run_lock_file(&path, None, None).expect("contend for lock") {
         RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
         RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
         RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
@@ -1206,7 +1206,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
 fn wait_for_run_lock_release_observes_guard_drop() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(&path, None).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(&path, None, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };

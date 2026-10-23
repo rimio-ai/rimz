@@ -388,7 +388,7 @@ The task's previous runner still owns its overlap lock. By default later fires r
 rimz loop stop <name>
 ```
 
-Stop gives durable cancellation a grace period, sends SIGTERM only when the same holder still owns the lock, and reports success once that holder releases it. During a shell or headless-judge check, the runner forwards SIGTERM to the check's process group and waits for its exit, bounded by the check's own timeout. A lock that survives both stop steps exits with status `1` and prints its path and holder PID; inspect that process and terminate it yourself when safe. Stop never escalates to SIGKILL. Waiting triggers are kept and start after release; the receipt names `rimz loop pause <name>` to drop them instead.
+Stop gives durable cancellation a grace period, except for check-only runs, which receive SIGTERM immediately. It sends SIGTERM only when the same holder still owns the lock, and reports success once that holder releases it. During a shell or headless-judge check, the runner forwards SIGTERM to the check's process group and waits for its exit, bounded by the check's own timeout. A lock that survives both stop steps exits with status `1` and prints its path and holder PID; inspect that process and terminate it yourself when safe. Stop never escalates to SIGKILL. Waiting triggers are kept and start after release; the receipt names `rimz loop pause <name>` to drop them instead.
 
 ### A clock task never fired
 
