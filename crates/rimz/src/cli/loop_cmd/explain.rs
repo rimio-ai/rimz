@@ -32,6 +32,13 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
         account: args.account,
         ..Default::default()
     };
+    if args.json {
+        return if condition::write_json(&entry, &expr)? {
+            Ok(())
+        } else {
+            Err(ui::AlreadyReported.into())
+        };
+    }
     let verdict = condition::reading(&entry, &expr);
     let mut out = ui::out();
     writeln!(out, "when: {expr}")?;

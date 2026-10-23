@@ -214,7 +214,7 @@ rimz loop add follow-up --when 'pr[sidebar-ordering]=merged && pr[sidebar-cards]
 
 Both branches belong to the origin repository of the checkout where you add the task. The room sidebar keeps those branch readings live without local checkouts; removing `follow-up` releases them.
 
-Before adding a task, use `rimz loop explain 'ci=passed && pr=open'` to inspect its current readings and truth without creating it. For selected branches, add the task first so the sidebar starts probing them.
+Before adding a task, use `rimz loop explain 'ci=passed && pr=open'` to inspect its current readings and truth without creating it. A script can add `--json` to read the same facts and their probe timestamp without parsing the display; [loop explain](../reference/cli/loop.md#loop-explain) lists the fields and exit codes. For selected branches, add the task first so the sidebar starts probing them.
 
 ## Guard a turn with a check
 
