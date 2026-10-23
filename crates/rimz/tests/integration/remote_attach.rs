@@ -27,7 +27,7 @@ use crate::common::ssh_trace::{
     master_invocation_count, remote_connect_pty, remote_connect_pty_command, shim_invocations,
     ssh_shim,
 };
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
 fn stdout_line(out: &Output) -> String {
     assert!(
@@ -344,13 +344,8 @@ fn run_pty_command(pair: PtyPair, cmd: CommandBuilder) -> (String, Termios) {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     let tty_name = pair.master.tty_name().expect("remote connect pty name");
     drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let terminal = FakeTerminal::new(pair.master, Duration::ZERO, Answers::StatusOnly);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll remote connect") {
             break Some(status);
@@ -363,9 +358,7 @@ fn run_pty_command(pair: PtyPair, cmd: CommandBuilder) -> (String, Termios) {
         std::thread::sleep(Duration::from_millis(10));
     };
     let settings = read_tty_termios(&tty_name);
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let output = String::from_utf8_lossy(&terminal.finish()).into_owned();
     let status = status.unwrap_or_else(|| panic!("remote connect timed out; output:\n{output}"));
     assert!(
         status.success(),
@@ -667,7 +660,7 @@ fn write_link_notify_command_config(env: &Env) {
 }
 
 fn wait_for_notify_log(path: &Path, needles: &[&str]) -> String {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         if needles.iter().all(|needle| text.contains(needle)) {
@@ -830,6 +823,21 @@ fn wait_for_main_invocations(
         if count >= expected {
             return;
         }
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            let count = main_invocation_count(log);
+            if count >= expected {
+                return;
+            }
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            let trace = std::fs::read_to_string(log).unwrap_or_default();
+            panic!(
+                "remote connect exited with {status} before {expected} main ssh invocations; \
+                 saw {count}\ntrace:\n{trace}\nstderr:\n{stderr}"
+            );
+        }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
@@ -847,7 +855,7 @@ fn wait_for_main_invocations(
 }
 
 fn wait_for_tunnel_invocation(child: &mut std::process::Child, log: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     while tunnel_invocation_count(log) == 0 {
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -1191,7 +1199,7 @@ fn one_shot_connect_mirrors_the_ssh_clients_suspend() {
         .expect("spawn remote connect");
     let pid = Pid::from_raw(i32::try_from(child.id()).expect("pid fits i32"));
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         match waitpid(pid, Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED))
             .expect("poll launcher job control")
@@ -1400,7 +1408,7 @@ fn host_text_lands_in_scrollback_without_holding_for_input() {
                 .extend_from_slice(&chunk[..count]);
         }
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll remote connect") {
             break Some(status);
@@ -1682,25 +1690,31 @@ fn supervised_unpainted_mux_error_is_replayed_as_text_on_the_main_screen() {
 
 #[test]
 fn supervised_drain_does_not_wait_for_a_descendant_or_leak_its_late_bytes() {
+    const SSH_TRACE_LATE_OUTPUT_HOLD: Duration = Duration::from_secs(3);
+
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
     std::fs::write(&plan, "255\n0\n").unwrap();
-    let started = Instant::now();
-    let out = remote_connect_command(&env, &log)
+    let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_LATE_OUTPUT", "1")
         .env("RIMZ_TEST_SSH_STDOUT", "current attach\n")
-        .bounded_output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
+    wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
+    let first_attach_seen = Instant::now();
+    let out = child.wait_with_output().unwrap();
+    let drained_after = first_attach_seen.elapsed();
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("LATE-OLD-ATTACH"),
         "an ended attach must stop forwarding"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "inherited writers cannot hold the drain: {:?}",
-        started.elapsed()
+        drained_after < SSH_TRACE_LATE_OUTPUT_HOLD,
+        "inherited writers cannot hold the drain: {drained_after:?}"
     );
     assert!(out.status.success());
     assert_eq!(out.stdout, b"current attach\ncurrent attach\n");
@@ -1718,7 +1732,7 @@ fn supervised_idle_output_relay_sleeps_until_output_or_stop() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let task = loop {
         let tasks = std::fs::read_dir(format!("/proc/{}/task", child.id())).unwrap();
         if let Some(task) = tasks.filter_map(Result::ok).find(|task| {
@@ -1754,18 +1768,24 @@ fn supervised_idle_output_relay_sleeps_until_output_or_stop() {
 
 #[test]
 fn supervised_output_relay_failure_kills_ssh_and_never_reconnects() {
+    // The bound is the only proof of the kill, so ssh parks far past it: a lost kill fails by
+    // seconds, not by poll lag.
+    const KILL_BOUND: Duration = Duration::from_secs(3);
+    const PARKED: Duration = Duration::from_secs(10);
+
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_STDOUT", "host text\n")
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "3000")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", PARKED.as_millis().to_string())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     drop(child.stdout.take());
-    let started = Instant::now();
-    let deadline = started + Duration::from_secs(5);
+    wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
+    let first_attach_seen = Instant::now();
+    let deadline = first_attach_seen + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -1776,6 +1796,7 @@ fn supervised_output_relay_failure_kills_ssh_and_never_reconnects() {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    let killed_after = first_attach_seen.elapsed();
     let mut stderr = String::new();
     child
         .stderr
@@ -1786,8 +1807,8 @@ fn supervised_output_relay_failure_kills_ssh_and_never_reconnects() {
     assert!(stderr.contains("local output relay"), "{stderr}");
     assert_eq!(status.code(), Some(1));
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "ssh was killed promptly"
+        killed_after < KILL_BOUND,
+        "ssh was killed promptly: {killed_after:?}"
     );
     assert_eq!(
         main_invocation_count(&log),
@@ -1987,7 +2008,7 @@ fn supervised_clean_exit_preserves_shell_typeahead() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     drop(pair.slave);
     let mut writer = pair.master.take_writer().expect("take pty writer");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     while main_invocation_count(&log) < 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -2048,7 +2069,7 @@ fn supervised_reconnect_discards_stale_terminal_replies_and_preserves_user_input
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     drop(pair.slave);
     let terminal = FakeTerminal::new(pair.master, Duration::ZERO, Answers::StatusOnly);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
 
     while main_invocation_count(&log) < 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -2132,7 +2153,7 @@ fn supervised_reconnect_fences_replies_that_arrive_after_the_quiet_window() {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
     drop(pair.slave);
     let terminal = FakeTerminal::new(pair.master, Duration::from_millis(400), Answers::StatusOnly);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
 
     while main_invocation_count(&log) < 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -2426,7 +2447,7 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
         .stderr(std::fs::File::create(&stderr_path).expect("capture stderr"))
         .spawn()
         .expect("spawn remote connect");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
         let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr");
         if stderr.contains("rimz: connect to dev-box failed — preparing SSH control socket:") {
@@ -2441,7 +2462,7 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
     }
     assert_eq!(master_invocation_count(&log), 0);
     std::fs::remove_file(&blocker).expect("unblock control directory");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll retry") {
             break status;
@@ -2721,7 +2742,7 @@ fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
         .spawn()
         .expect("spawn supervised remote connect");
 
-    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
+    wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
     wait_for_notify_log(
         &stderr_path,
         &["network to dev-box lost — waiting for network"],
@@ -2771,7 +2792,7 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
         .spawn()
         .expect("spawn supervised remote connect");
 
-    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    wait_for_main_invocations(&mut child, &log, 2, COMMAND_TIMEOUT);
     let out = child.wait_with_output().expect("wait for capped retry");
 
     assert!(
@@ -2814,7 +2835,7 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
         .spawn()
         .expect("spawn supervised remote connect");
 
-    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    wait_for_main_invocations(&mut child, &log, 2, COMMAND_TIMEOUT);
     let out = child.wait_with_output().expect("wait for clean reattach");
     assert!(
         out.status.success(),
@@ -2840,6 +2861,8 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
 
 #[test]
 fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
+    const PARKED: Duration = Duration::from_millis(3000);
+
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let stderr_path = env.project_root.join("stderr.log");
@@ -2854,12 +2877,11 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
     .expect("write ssh config fixture");
     let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
 
-    let started = Instant::now();
     let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
         .env("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS", "2")
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "3000")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", PARKED.as_millis().to_string())
         .env("RIMZ_REMOTE_PROBE_MS", "20")
         .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
         .env("RIMZ_REMOTE_BLACKOUT_MS", "100")
@@ -2870,9 +2892,11 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
         .spawn()
         .expect("spawn supervised remote connect");
 
-    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
+    let first_attach_seen = Instant::now();
+    wait_for_main_invocations(&mut child, &log, 2, COMMAND_TIMEOUT);
     assert!(
-        started.elapsed() < Duration::from_secs(2),
+        first_attach_seen.elapsed() < PARKED,
         "the replacement attach must beat the parked three-second ssh child"
     );
     child
