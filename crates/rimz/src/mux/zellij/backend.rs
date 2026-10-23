@@ -1163,12 +1163,7 @@ impl MuxBackend for ZellijBackend {
     fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec {
         self.cmd()
             .without_mux_context()
-            .args([
-                "attach".to_owned(),
-                "--create".to_owned(),
-                name.to_owned(),
-                "options".to_owned(),
-            ])
+            .args(["attach".to_owned(), name.to_owned(), "options".to_owned()])
             .args(super::zellij_client_options_args(&config.zellij))
     }
 
@@ -1668,8 +1663,8 @@ impl MuxBackend for ZellijBackend {
         //             method after rejecting the heartbeat, the pane may be a
         //             stale renderer with an incompatible snapshot schema.
         //   - Live, no sidebar: the renderer self-closed or crashed (or a launch
-        //             was skipped and the session was born by a plain `attach
-        //             --create`). A sidebar-less rimz session is non-functional
+        //             was skipped and the session was born outside RimZ).
+        //             A sidebar-less rimz session is non-functional
         //             and cannot gain a left pane in place, so rebirth it.
         match self.session_state(&opts.session_name) {
             SessionLiveness::Absent => self.create_session_with_sidebar(opts, daemon),
@@ -1701,7 +1696,7 @@ impl MuxBackend for ZellijBackend {
         Ok(match self.session_state(name) {
             // Nothing to attach to — a fresh birth will produce a clean room.
             SessionLiveness::Absent => SessionHealth::Healthy,
-            // `attach --create` would resurrect a serialized, suspended layout.
+            // Even a plain `attach` would resurrect a serialized, suspended layout.
             SessionLiveness::Exited => SessionHealth::Stuck,
             SessionLiveness::Live => self.live_session_health(name),
         })

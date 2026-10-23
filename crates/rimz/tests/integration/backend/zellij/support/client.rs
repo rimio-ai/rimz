@@ -86,7 +86,7 @@ impl AttachedClient {
         client
     }
 
-    /// Attach one exact `attach --create` process carrying remote lineage.
+    /// Attach one managed client carrying remote lineage.
     /// This mode never respawns because the reaper test asserts its PID.
     pub(in crate::backend::zellij) fn attach_with_lineage(
         session: &LiveZellijSession,
@@ -528,9 +528,12 @@ fn spawn_process_at(
     }
     match mode {
         AttachMode::Normal => command.args(["attach", name]),
-        AttachMode::Create | AttachMode::ExactLineage(_) => {
-            command.args(["attach", "--create", name])
-        }
+        AttachMode::Create => command.args(["attach", "--create", name]),
+        AttachMode::ExactLineage(_) => command.args(
+            ZellijBackend::with_runtime_dir(xdg)
+                .attach_command(name, &rimz::config::MultiplexerConfig::default())
+                .args,
+        ),
         AttachMode::RemoteWrapper => {
             command.env(rimz::proc::REMOTE_LINEAGE_ENV, "0123456789abcdef");
             command.env(rimz::remote::REMOTE_SUPERVISED_ENV, "1");

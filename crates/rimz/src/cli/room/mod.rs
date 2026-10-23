@@ -230,7 +230,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // A same-mux room can't be nested: if we're already inside this backend's
     // session, report the directory's room and stop before any launch side
     // effect — hook install, session birth, sidebar, or the doomed nested
-    // `attach --create`.
+    // `attach`.
     if should_report_already_inside(args.attach.mode(), inside_selected_mux(mux)) {
         let in_room = crate::cli::pinned_room_root().is_some_and(|pin| {
             pin.canonicalize().ok() == workspace.project_root.canonicalize().ok()

@@ -2646,7 +2646,7 @@ fn supervised_remote_attach_ends_when_the_session_disappears() {
         );
         let trace = std::fs::read_to_string(&zellij_log).expect("read zellij watchdog trace");
         assert!(
-            trace.contains("\tattach\t--create\twatchdog-room"),
+            trace.contains("\tattach\twatchdog-room\toptions"),
             "{trace}"
         );
         assert!(
@@ -2713,7 +2713,7 @@ fn watchdog_sentinel_reaches_the_local_clean_exit_policy() {
     );
     let trace = std::fs::read_to_string(&zellij_log).expect("read zellij watchdog trace");
     assert!(
-        trace.contains("\tattach\t--create\twatchdog-room"),
+        trace.contains("\tattach\twatchdog-room\toptions"),
         "{trace}"
     );
     let pid = std::fs::read_to_string(watchdog_state.with_extension("pid"))

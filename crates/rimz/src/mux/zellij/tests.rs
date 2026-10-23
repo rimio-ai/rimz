@@ -724,16 +724,19 @@ fn existing_session_attach_has_no_creation_or_options_tail() {
 }
 
 #[test]
-fn creating_attach_removes_outer_mux_context() {
+fn managed_attach_never_creates_and_removes_outer_mux_context() {
     let spec = ZellijBackend::default()
         .attach_command("rimz-test", &crate::config::MultiplexerConfig::default());
     for key in crate::mux::AMBIENT_MUX_ENV {
         assert!(
             spec.env_remove.contains(key),
-            "{key} remains inherited at birth"
+            "{key} remains inherited by the attach client"
         );
     }
-    assert!(spec.args.iter().any(|arg| arg == "--create"));
+    assert_eq!(
+        spec.args,
+        ["attach", "rimz-test", "options", "--default-mode", "locked"]
+    );
     assert!(
         !spec.env_remove.contains("RIMZ_REMOTE_LINEAGE"),
         "the attach client must keep its lineage for predecessor reaping"
