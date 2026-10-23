@@ -132,7 +132,7 @@ fn resume_resolved(
     let provider_login =
         rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
     crate::cli::folder_trust::preflight_hooks(
-        provider_login.health(&catalog.native_ambient(&child.kind, &rimz::agents::ambient_env())),
+        provider_login.health(&rimz::agents::ambient_env()),
         || Some(crate::cli::folder_trust::Unattended::Subagent),
         || rimz::config::definitions::hook_trust_fix(&child.kind, child.profile.as_deref(), None),
         &mut Default::default(),

@@ -1220,10 +1220,7 @@ fn preflight_cell(
         (!isolation.is_scoped()).then_some(runtime),
     )?;
     crate::cli::folder_trust::preflight_hooks(
-        login.health(
-            &rimz::agents::machine_login_catalog()
-                .native_ambient(&cell.kind, &rimz::agents::ambient_env()),
-        ),
+        login.health(&rimz::agents::ambient_env()),
         || unattended,
         hook_fix,
         noticed_hook_trust,
