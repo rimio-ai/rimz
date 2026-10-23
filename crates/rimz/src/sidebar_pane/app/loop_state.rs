@@ -405,12 +405,14 @@ impl LoopState {
     }
 
     fn event_snapshot(&self) -> EventStore {
-        self.fold_preparation
+        if self.view_scope.is_none() {
+            return self.events().clone();
+        }
+        // Every routed borrow installs its event cut before taking a view lock.
+        self.view_events
             .as_ref()
-            .map(|prepared| &prepared.events)
-            .or(self.view_events.as_ref())
-            .cloned()
-            .unwrap_or_else(|| self.events().clone())
+            .expect("event cut installed for view borrow")
+            .clone()
     }
 
     #[cfg(feature = "testkit")]
