@@ -562,6 +562,20 @@ fn subagent_zone_failed_tab_is_not_retried() {
     assert!(matches!(result, super::pane::SubagentZoneOpen::Failed(_)));
 }
 
+#[test]
+fn failure_tail_keeps_scrollback_for_collapsed_members() {
+    let backend = zone_backend::Backend::default();
+    let pane = PaneId::parse("tmux:%1").unwrap();
+    assert_eq!(
+        super::pane::capture_failure_tail(&backend, &pane, "room").as_deref(),
+        Some("earlier-line\nlast-line"),
+    );
+    assert_eq!(
+        backend.captures.lock().unwrap().as_slice(),
+        &[(Some(60), false)]
+    );
+}
+
 fn assert_zone_fallback(lookup: &str) {
     let fixture = RunFixture::new(RunStatus::Running);
     let after = if lookup == "pane_listing" {
@@ -673,6 +687,7 @@ mod zone_backend {
         pub(super) appends: Mutex<Vec<m::SplitPaneOptions>>,
         pub(super) append_outcomes:
             Mutex<std::collections::VecDeque<m::Result<m::CompanionPaneAppend>>>,
+        pub(super) captures: Mutex<Vec<(Option<u16>, bool)>>,
     }
 
     impl m::MuxBackend for Backend {
@@ -803,12 +818,22 @@ mod zone_backend {
         }
         fn capture_pane(
             &self,
-            _pane: &PaneId,
+            pane: &PaneId,
             _session: &str,
-            _lines: Option<u16>,
-            _ansi: bool,
+            lines: Option<u16>,
+            ansi: bool,
         ) -> m::Result<m::PaneCapture> {
-            panic!("unexpected capture_pane")
+            self.captures.lock().unwrap().push((lines, ansi));
+            let raw_text = if lines.is_some() {
+                "earlier-line\nlast-line\n"
+            } else {
+                "last-line\n"
+            };
+            Ok(m::PaneCapture {
+                pane_id: pane.clone(),
+                raw_text: raw_text.to_owned(),
+                lines: raw_text.lines().map(str::to_owned).collect(),
+            })
         }
         fn send_keys(&self, _pane: &PaneId, _session: &str, _text: &str) -> m::Result<()> {
             panic!("unexpected send_keys")
