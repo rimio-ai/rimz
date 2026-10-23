@@ -1135,6 +1135,47 @@ fn human_show_wait_and_journal_are_readable() {
 }
 
 #[test]
+fn human_show_lists_json_keys_only_for_steps_with_per_key_caps() {
+    let spec = format!(
+        "{HEADER}{WAIT}[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\nmax-visits-per-key=2\n[steps.plain]\nagent='claude'\nprompt-file='prompt.md'\nthen='pr'\nmax-visits=5\n"
+    );
+    let (env, _) = fixture(&spec, PENDING);
+    let id = start(&env);
+    let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+    let mut record = value["record"].clone();
+    record["visit_grant"] = json!(3);
+    record["visits"] = json!({
+        "build": {"total":4,"keys":[
+            {"key":"lint","visits":2}, {"key":8,"visits":1}, {"key":null,"visits":1}
+        ]},
+        "plain": {"total":1,"keys":[{"key":"hidden","visits":1}]}
+    });
+    let paths = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap());
+    fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    let text = success(command(&env, &["workflow", "show", &id]));
+    assert!(
+        text.contains(concat!(
+            "step build: 4 visits of 5 + 3 grant\n",
+            "  key \"lint\": 2 visits of 2 + 3 grant\n",
+            "  key 8: 1 visits of 2 + 3 grant\n",
+            "  key null: 1 visits of 2 + 3 grant\n",
+            "step plain: 1 visits of 5 + 3 grant\n"
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("  key "))
+            .count(),
+        3
+    );
+    assert_eq!(show(&env, &id)["record"]["visits"], record["visits"]);
+    success(command(&env, &["workflow", "cancel", &id]));
+}
+
+#[test]
 fn human_window_wait_includes_evidence_and_omits_missing_recheck() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     let id = start(&env);

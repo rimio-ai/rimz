@@ -50,6 +50,8 @@ Read the graph from `start`. The run begins at the `tests` check. An answer of `
 
 Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Durations take `s`, `m`, `h`, and `d`.
 
+For distinct failures to get their own tries while the same failure stops retrying, add `max-visits-per-key = 2` to the step. A `run` script's answer can name the failure in `key`, and a condition case can fix its `key`; a shell check passes the run's key through unchanged. A key's count never resets during the run, even after the run works on other keys; without a key, all visits share one count. Keep `max-visits` to cap the total: a check naming a new key each time must not retry forever, and a per-key bound alone does not bound a cycle. Both fields must be positive, and when both are set the per-key bound must be below the total. The total cap is checked first and wins if both trip. Either cap follows `on.cap` (default `@user`), and its `input.bound` names the field that tripped, `"max-visits"` or `"max-visits-per-key"`, so a `run` or agent check can route the two apart. The reference gives the [whole cap input](../reference/cli/workflow.md#json-shapes).
+
 Select exactly one of `run`, `shell`, `agent`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
 
 Run, shell, and agent checks accept an optional `wake` list of signal subscriptions. Condition checks derive their subscriptions from their terms and refuse `wake`; see [waiting on the outside world](#wait-on-the-outside-world).
@@ -225,7 +227,7 @@ Put the cheap case in a script and the unclear case in a judge. A script that an
 
 A run parks when it would otherwise have to guess:
 
-- a step reached `max-visits`,
+- a step reached `max-visits` or `max-visits-per-key`, and `on.cap` defaults or routes to `@user`,
 - a check's `timeout` passed,
 - a `run` script exited nonzero or printed a bad answer, or a shell command could not start or its log could not open,
 - a judge failed twice,
@@ -246,11 +248,11 @@ Fix what the reason names, then send the run back to work:
 ```sh
 rimz workflow resume "$RUN"                          # the same node, with a fresh timeout
 rimz workflow resume "$RUN" --at tests               # another node
-rimz workflow resume "$RUN" --extend visits=+2       # two more visits for every step
+rimz workflow resume "$RUN" --extend visits=+2       # raise both visit caps for every step and key
 rimz workflow resume "$RUN" --extend deadline=2026-11-08
 ```
 
-A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. `show` then counts visits against both, as in `step fix: 3 visits of 3 + 2 grant`.
+A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. A visit grant raises both `max-visits` and `max-visits-per-key` for every step and key. `show` prints the total as `step fix: 3 visits of 3 + 2 grant`. If the step declares `max-visits-per-key`, it adds rows such as `  key "lint": 2 visits of 2 + 2 grant`, with keys rendered as JSON (`null` for unkeyed visits); otherwise it prints no key rows.
 
 ## Stop a run and clean up
 
@@ -307,7 +309,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
 | `reason` | no | Text for the history, and the park text when the outcome routes to `@user`. |
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a subscribed signal arrives. |
-| `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later context files carry it. |
+| `key` | no | A string or integer naming the item or failure the run now works on, such as an issue number or `"lint"`. Later context files carry it. |
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
@@ -321,7 +323,7 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | `prompt` | The run's `--prompt`, or null. |
 | `input` | The answer that routed here, or the engine's object after a cap, timeout, or deadline. |
 | `key` | The current item key, or null. |
-| `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits` counts the total. |
+| `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits-per-key` caps `visit`; `max-visits` caps `visits`. |
 | `output_path` | Judges only: the file to write the answer to. Null for other checks and steps. |
 | `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |

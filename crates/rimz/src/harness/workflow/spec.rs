@@ -208,6 +208,8 @@ pub struct Step {
     pub on: StepEdges,
     #[schemars(range(min = 1))]
     pub max_visits: Option<u64>,
+    #[schemars(range(min = 1))]
+    pub max_visits_per_key: Option<u64>,
     pub timeout: Option<String>,
 }
 

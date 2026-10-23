@@ -34,7 +34,7 @@ When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has
 
 `rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`, which is the [waiting line](#the-waiting-line) for a waiting run and the [park reason](#park-reasons) for a parked one. Finished runs are omitted.
 
-`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per step, and the history. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
+`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
 
 ### The waiting line
 
@@ -67,7 +67,7 @@ waiting: sweep, takeover, since 09:10, ×3
 
 | Grant | Effect |
 | --- | --- |
-| `visits=+N` | Adds N to every step's `max-visits` for this run. |
+| `visits=+N` | Adds N to every step's `max-visits` and `max-visits-per-key` for this run, for every key. |
 | `deadline=<WHEN>` | Replaces the run's deadline and arms it again. `WHEN` is an RFC 3339 instant or a local date or date-time; a bare date is local midnight. |
 
 An active run accepts `--extend` alone; `--at` needs a parked run. A finished run refuses. The definition stays sealed: grants live on the run record.
@@ -107,7 +107,7 @@ A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar c
 | Reason | Cause |
 | --- | --- |
 | `user` | An edge routed to `@user`; the text is the check's `reason`. |
-| `cap` | A step reached `max-visits` with no `on.cap` edge. |
+| `cap` | A step reached `max-visits` or `max-visits-per-key`, and `on.cap` defaults or routes to `@user`. |
 | `deadline` | The run's deadline passed with no `on.deadline` edge. |
 | `timeout` | A check's `timeout` passed with no `on.timeout` edge. |
 | `invalid` | A script check failed or printed a bad object with no `on.invalid` edge. |
@@ -121,6 +121,8 @@ Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./st
 `list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line or park reason as printed. The human column remains `CHECKOUT` for both kinds.
 
 `show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
+
+A visit cap routes `on.cap` with `{outcome: "cap", step, bound: "max-visits" | "max-visits-per-key", visits, max}`, plus the inherited `key` when present. The total cap is checked first and wins when both trip. `visits` is the tripped bound's count; `max` is its limit plus the run's visit grant. The journal's route input carries the same object.
 
 A shell answer is `{outcome, code, log}` plus an inherited `key` when present. Exit 0 is `pass`; another exit or signal is `fail`. `code` is an integer, or null after a signal. `log` is the absolute `work/<seq>.check.log` path, containing stdout and stderr together. Only `fail` has `reason` (`exited N` or `killed by signal`); output tails are not journaled. Both `on.pass` and `on.fail` are required. The only additional routes are `on.timeout` and `on.invalid`, each defaulting to `@user`; command spawn or log-open errors are `invalid`. The check's optional timeout spans waits and evaluations, without inheriting the loop's default timeout. A timeout routes `timeout`; a run deadline follows `workflow.on.deadline`. Both stop the shell's process group rather than answering `fail`. A `fail` routed to `@wait` shows `said fail` in the waiting line.
 
