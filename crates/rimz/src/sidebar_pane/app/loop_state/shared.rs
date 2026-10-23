@@ -10,7 +10,6 @@ pub(in crate::sidebar_pane::app) struct ViewAccess {
     scratch_context: ViewContext,
     was_resolved: bool,
     view_advanced: bool,
-    transition_view: Option<ViewId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +77,6 @@ impl ViewAccess {
             scratch_context,
             was_resolved: false,
             view_advanced: false,
-            transition_view: None,
         }
     }
 
@@ -249,7 +247,6 @@ impl ViewAccess {
                 entry.unpainted = false;
             }
             self.view_advanced |= route.advancing;
-            self.transition_view = Some(id);
             let mut borrow = ViewBorrow {
                 state: &mut entry.state,
                 context,
@@ -315,27 +312,24 @@ impl ViewAccess {
         }
     }
 
-    pub(super) fn take_transition(&mut self) -> Option<ViewId> {
-        self.transition_view.take()
-    }
-
     pub(super) fn retire_anchor(
         &mut self,
-        id: Option<ViewId>,
+        target: ViewTarget,
         anchor: &crate::mux::focus_anchor::FocusAnchor,
         now: impl FnOnce() -> Instant,
     ) {
-        if let Some(id) = id {
-            if let Some(context) = self
-                .registry
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .retained(id)
-            {
-                context.retire_anchor(anchor, now());
+        match target {
+            ViewTarget::Scratch => self.scratch_context.retire_anchor(anchor, now()),
+            ViewTarget::Shared(id) => {
+                if let Some(context) = self
+                    .registry
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .retained(id)
+                {
+                    context.retire_anchor(anchor, now());
+                }
             }
-        } else {
-            self.scratch_context.retire_anchor(anchor, now());
         }
     }
 

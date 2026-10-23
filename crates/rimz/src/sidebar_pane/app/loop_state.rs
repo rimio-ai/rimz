@@ -78,7 +78,7 @@ const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
 
 mod shared;
 
-use shared::{Route, ViewAccess, ViewBorrow};
+use shared::{Route, ViewAccess, ViewBorrow, ViewTarget};
 
 pub(super) type BaselineReporter = Box<dyn Fn(Option<&PaneId>) + Send>;
 
@@ -154,6 +154,7 @@ struct FoldEffects {
     receipts: Vec<(ReadClear, Timestamp)>,
     filter: Option<BodyLens>,
     retirements: Vec<(
+        ViewTarget,
         crate::mux::focus_anchor::FocusAnchor,
         Option<FocusObservationOutcome>,
     )>,
@@ -381,7 +382,6 @@ impl LoopState {
     }
 
     fn finish_view_effects(&mut self) {
-        let transition_view = self.views.take_transition();
         let effects = std::mem::take(&mut self.pane.fold_effects);
         emit_diagnostics(&self.pane.diag, effects.diagnostics);
         for trace in effects.traces {
@@ -397,10 +397,10 @@ impl LoopState {
         if let Some(filter) = effects.filter {
             self.persist_body_filter(filter);
         }
-        for (anchor, outcome) in effects.retirements {
+        for (target, anchor, outcome) in effects.retirements {
             if crate::mux::focus_anchor::clear_matching(&self.pane.runtime, anchor.nonce) {
                 self.views
-                    .retire_anchor(transition_view, &anchor, || self.pane.clock.now());
+                    .retire_anchor(target, &anchor, || self.pane.clock.now());
                 if let Some(outcome) = outcome {
                     self.pane.record_focus_resolution(&anchor, outcome);
                 }
@@ -3107,7 +3107,7 @@ impl PaneState {
             return;
         };
         if v.context.apply_focus_anchor(v.state, &anchor, &self.clock) {
-            self.fold_effects.retirements.push((anchor, None));
+            self.fold_effects.retirements.push((v.target, anchor, None));
         }
     }
 
@@ -3124,7 +3124,9 @@ impl PaneState {
             v.context
                 .pending_focus_intent(anchor.as_ref(), &events, now_ms);
         if let (Some(anchor), Some(outcome)) = (anchor, retirement) {
-            self.fold_effects.retirements.push((anchor, Some(outcome)));
+            self.fold_effects
+                .retirements
+                .push((v.target, anchor, Some(outcome)));
         }
         presentation
     }
