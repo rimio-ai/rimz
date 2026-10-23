@@ -1057,6 +1057,75 @@ fn list_panes_scopes_session_without_server_wide_flag() {
     assert_eq!(&verb_args(&server_spec)[..3], ["list-panes", "-a", "-F"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn reconcile_samples_liveness_once_after_the_native_listing() {
+    use crate::mux::{SidebarLiveness, SidebarLivenessSource, SidebarPaneOptions};
+    use std::cell::Cell;
+
+    struct AfterListing<'a> {
+        temp: &'a tempfile::TempDir,
+        samples: Cell<usize>,
+    }
+    impl SidebarLivenessSource for AfterListing<'_> {
+        fn sample(&self) -> SidebarLiveness {
+            self.samples.set(self.samples.get() + 1);
+            let log = std::fs::read_to_string(self.temp.path().join("argv")).unwrap_or_default();
+            let mut live = SidebarLiveness::default();
+            if log.lines().any(|line| line == "list-panes") {
+                live.young_panes
+                    .insert(crate::PaneId::from_parts(MuxName::Tmux, "%1"));
+            }
+            live
+        }
+    }
+
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$4" >> "$dir/argv"
+if [ "$4" = list-panes ]; then
+  printf '%s\n' 'rimz-test,@0,%1,rimz,/,1,work,rimz-sidebar,0' 'rimz-test,@0,%2,sh,/,2,work,shell,0'
+fi
+"#,
+    );
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim.clone());
+    let workspace_id = crate::WorkspaceId::from_project_root(temp.path());
+    let opts = SidebarPaneOptions {
+        runtime: crate::RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap(),
+        session_name: "rimz-test".to_owned(),
+        workspace_id,
+        project_root: temp.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: temp.path().to_path_buf(),
+        target: crate::mux::SidebarTarget {
+            share: crate::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(72).unwrap(),
+            pinned: false,
+        },
+        detected_view_size: None,
+        rimz_bin: shim,
+        pristine_birth: false,
+        config: Default::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let live = AfterListing {
+        temp: &temp,
+        samples: Cell::new(0),
+    };
+    let report = backend.reconcile_sidebars(&opts, &live).unwrap();
+    let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(live.samples.get(), 1);
+    assert!(
+        !log.contains("split-window") && !log.contains("kill-pane"),
+        "{log}"
+    );
+    assert_eq!(log.lines().filter(|line| *line == "list-panes").count(), 1);
+    assert_eq!(report, crate::mux::SidebarRecovery::default());
+}
+
 #[test]
 fn client_view_uses_a_printable_field_separator() {
     let spec = TmuxBackend::default().client_view_command(Some("rimz-room"));

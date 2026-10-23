@@ -31,6 +31,17 @@ pub struct SidebarLiveness {
     pub young_panes: HashSet<PaneId>,
 }
 
+/// Liveness evidence sampled by a backend for its native pane listing.
+pub trait SidebarLivenessSource {
+    fn sample(&self) -> SidebarLiveness;
+}
+
+impl SidebarLivenessSource for SidebarLiveness {
+    fn sample(&self) -> SidebarLiveness {
+        self.clone()
+    }
+}
+
 /// One view's sidebar panes in mux order and whether the view contains work or
 /// managed daemon hosts. A view with neither is an orphan sidebar-only view.
 pub(super) struct ViewSidebars {

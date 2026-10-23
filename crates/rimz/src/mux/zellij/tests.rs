@@ -2538,6 +2538,52 @@ fn reconcile_sidebars_requires_a_live_listing_before_any_mutation() {
 
 #[cfg(unix)]
 #[test]
+fn reconcile_samples_liveness_once_after_the_native_listing() {
+    use crate::mux::SidebarLivenessSource;
+    use std::cell::Cell;
+
+    struct AfterListing<'a> {
+        temp: &'a tempfile::TempDir,
+        samples: Cell<usize>,
+    }
+    impl SidebarLivenessSource for AfterListing<'_> {
+        fn sample(&self) -> SidebarLiveness {
+            self.samples.set(self.samples.get() + 1);
+            let mut live = SidebarLiveness::default();
+            if shim_log(self.temp).contains("action list-panes --all --json") {
+                live.young_panes
+                    .insert(PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"));
+            }
+            live
+        }
+    }
+
+    let room = TestRoom::new();
+    let (temp, shim) = support::pane_roster_shim(
+        r#"[{"id":1,"tab_id":0,"tab_position":0,"pane_columns":50,"pane_x":0,"title":"rimz-sidebar"},{"id":2,"tab_id":0,"tab_position":0,"pane_columns":150,"pane_x":50,"title":"work"}]"#,
+    );
+    let live = AfterListing {
+        temp: &temp,
+        samples: Cell::new(0),
+    };
+    let mut opts = room.sidebar_options(200);
+    opts.rimz_bin = shim.clone();
+    let report = room
+        .backend(&shim)
+        .reconcile_sidebars(&opts, &live)
+        .unwrap();
+    let log = shim_log(&temp);
+    assert_eq!(live.samples.get(), 1);
+    assert_eq!(command_count(&log, "action list-panes --all --json"), 1);
+    assert!(
+        !log.contains("new-pane") && !log.contains("close-pane"),
+        "{log}"
+    );
+    assert_eq!(report, crate::mux::SidebarRecovery::default());
+}
+
+#[cfg(unix)]
+#[test]
 fn reconcile_rejects_a_terminal_without_a_stable_tab_id() {
     let room = TestRoom::new();
     room.write_cache(9_999_999_999_999, None, None, vec![]);

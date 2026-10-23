@@ -66,7 +66,7 @@ sleep 600
     for _ in 0..2 {
         let report = server
             .backend
-            .reconcile_sidebars(&opts, &Default::default())
+            .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
             .unwrap();
         assert_eq!(
             report.failed, 0,
@@ -172,7 +172,7 @@ fn recovered_sidebar_starts_in_session_directory() {
     server.tmux(&["kill-pane", "-t", sidebar.raw()]);
     let report = server
         .backend
-        .reconcile_sidebars(&opts, &Default::default())
+        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
         .unwrap();
     assert_eq!(report.recovered, 1);
     let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);

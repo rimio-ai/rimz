@@ -739,7 +739,7 @@ mod zone_backend {
         fn reconcile_sidebars(
             &self,
             _opts: &m::SidebarPaneOptions,
-            _live: &m::SidebarLiveness,
+            _live: &dyn m::SidebarLivenessSource,
         ) -> m::Result<m::SidebarRecovery> {
             panic!("unexpected reconcile_sidebars")
         }
