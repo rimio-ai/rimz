@@ -521,9 +521,9 @@ pub struct MessageRecord {
     /// this message can enter its receiver's FIFO lane.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub when: Vec<WhenCondition>,
-    /// Wait-only retry floor set by the elder sweep when a ready queued head
-    /// cannot deliver. This never gates FIFO readiness or turn-boundary
-    /// delivery.
+    /// Wake hint when a ready queued head cannot deliver; it never gates queued
+    /// readiness or claim leases. On `Sent`, a reconciliation deferral sets the
+    /// shared deadline for reconciliation and read-side holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<Timestamp>,
     /// The once-only sender notice for this message's long-queued state.
@@ -857,17 +857,19 @@ impl MessageRecord {
         self.status == MessageStatus::Queued && self.expires_at().is_some_and(|at| now >= at)
     }
 
+    /// Shared reconciliation and read-side deadline, including any compaction or ingress deferral.
     pub fn sent_reconcile_deadline(&self) -> Option<Timestamp> {
-        (self.status == MessageStatus::Sent)
-            .then_some(self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window())
+        (self.status == MessageStatus::Sent).then(|| {
+            self.retry_after.unwrap_or_else(|| {
+                self.last_sent_at.unwrap_or(self.updated_at) + self.body.delivery_window()
+            })
+        })
     }
 
     /// Read-side mirror of the reconciler's deadline, including a compaction or ingress deferral.
     pub(crate) fn sent_hold_expired(&self, now: Timestamp) -> bool {
-        self.status == MessageStatus::Sent
-            && self
-                .wake_deadline(now)
-                .is_some_and(|deadline| now >= deadline)
+        self.sent_reconcile_deadline()
+            .is_some_and(|deadline| now >= deadline)
     }
 
     /// Whether a prior unconfirmed pane write can still be acknowledged.
@@ -899,7 +901,7 @@ impl MessageRecord {
                         .fold(deadline, Timestamp::min),
                 )
             }
-            MessageStatus::Sent => self.retry_after.or_else(|| self.sent_reconcile_deadline()),
+            MessageStatus::Sent => self.sent_reconcile_deadline(),
             MessageStatus::Claimed => {
                 Some(self.last_attempt_at.unwrap_or(self.updated_at) + CLAIM_TTL)
             }
