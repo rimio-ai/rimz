@@ -1,4 +1,5 @@
-//! Renderer state transitions and loop-lifetime context, including fetch application, focus repair, maintenance deadlines, and paint eligibility.
+//! `LoopState` lends client views through `ViewAccess` to pane-local `PaneState` transitions.
+//! Fetch application, focus repair, maintenance deadlines, and paint eligibility stay pane-local.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

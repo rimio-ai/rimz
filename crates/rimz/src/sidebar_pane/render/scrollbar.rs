@@ -5,16 +5,16 @@
 //! reveal, or jump — then hides once the view settles. Anchor corrections
 //! translate the baseline without stamping activity. Like the
 //! odometer's [`super::odometer::Roll`], motion is driven purely by the
-//! wall-clock animation phase ([`super::UiState::animation_phase`]): every
+//! wall-clock animation phase ([`super::ViewState::animation_phase`]): every
 //! draw [`observe`](ScrollbarFade::observe)s the visible viewport offset, a
 //! change stamps the phase, and visibility is a pure read over that stamp —
 //! so golden tests pin the bar deterministically and render never touches the
 //! wall clock.
 //!
-//! The baseline lives here rather than in a `prev != ui.scroll_offset`
-//! compare because a wheel tick mutates the target `ui.scroll_offset`
+//! The baseline lives here rather than in a `prev != view.scroll_offset`
+//! compare because a wheel tick mutates the target `view.scroll_offset`
 //! *before* the draw ([`crate::sidebar_pane::app::selection`]), and
-//! `ui.scroll_ease` then moves the visible row over the following frames.
+//! `view.scroll_ease` then moves the visible row over the following frames.
 //! `last_offset` advances only at `observe`, which takes the visible row, so
 //! the fade and thumb follow the cards rather than the input target.
 
