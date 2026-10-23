@@ -73,6 +73,111 @@ fn publish(rig: &mut Rig, update: FetchUpdate) {
 }
 
 #[test]
+fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
+    let own = PaneId::from_parts(MuxName::Zellij, "sidebar_0");
+    let mut rig = Rig::with_own_pane(own.clone());
+    rig.view().current.own_view = Some(own_view());
+    rig.view().current.viewed_panes.clear();
+    rig.state.optimistic_watch_until = None;
+    let dwell = rig.state.clock.now() + Duration::from_secs(60);
+    rig.state.with_projected_view(false, false, |state| {
+        state.ui.scroll_offset = 17;
+        state.ui.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
+        state.view.tab_read_dwell_until = Some(dwell);
+    });
+    rig.views.lock().unwrap().reconcile(
+        &[ClientPaneView {
+            client_id: MuxClientId::Zellij(0),
+            pane_id: own,
+        }],
+        true,
+        rig.state.clock.now(),
+        Duration::from_secs(60),
+    );
+    let current = rig.state.with_projected_view(false, false, |state| {
+        state.view.current.display_name = "shared current".into();
+        state.view.current.now += Duration::from_secs(1);
+        state.view.current.clone()
+    });
+    rig.views
+        .lock()
+        .unwrap()
+        .reconcile(&[], true, rig.state.clock.now(), Duration::from_secs(60));
+    rig.state.with_projected_view(false, false, |_| {});
+    rig.state.inspect_view(|ui, view| {
+        assert_eq!(ui.scroll_offset, 0);
+        assert_eq!(ui.selected_pane, None);
+        assert_eq!(view.current, current);
+        assert_eq!(view.tab_read_dwell_until, Some(dwell));
+    });
+}
+
+#[test]
+fn outside_decisions_read_the_routed_view_not_scratch() {
+    let views = views();
+    let own = PaneId::from_parts(MuxName::Zellij, "sidebar_0");
+    let other_pane = PaneId::from_parts(MuxName::Zellij, "sidebar_1");
+    let clock = LoopClock::play(Timestamp::now());
+    let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock.clone());
+    rig.share_views(views.clone());
+    rig.state.with_projected_view(false, false, |_| {});
+    let mut other = Rig::with_own_pane(other_pane.clone());
+    other.share_views(views.clone());
+    other.state.with_projected_view(false, false, |_| {});
+    settle_width(&mut rig);
+    rig.state.dirty = false;
+    let dwell = clock.now() + Duration::from_millis(200);
+    {
+        let mut view = rig.view();
+        let state = &mut *view;
+        state.current.own_view = Some(own_view());
+        state.ui.theme(&state.view.current.theme);
+        layout_freeze::arm_freeze(&mut state.ui, clock.now_ms() as i64);
+        state.health.failure_streak = 1;
+        state.tab_read_dwell_until = Some(dwell);
+    }
+    rig.state.with_projected_view(false, false, |_| {});
+    assert_eq!(
+        rig.state.inspect_view(|ui, view| (
+            ui.freeze.is_some(),
+            view.health.failure_streak,
+            view.tab_read_dwell_until,
+        )),
+        (true, 1, Some(dwell))
+    );
+    assert!(!rig.state.admits_clock_only(false));
+    assert_eq!(
+        rig.state.frame_timing(),
+        (false, Duration::from_millis(200))
+    );
+    views.lock().unwrap().reconcile(
+        &[
+            ClientPaneView {
+                client_id: MuxClientId::Zellij(0),
+                pane_id: other_pane,
+            },
+            ClientPaneView {
+                client_id: MuxClientId::Zellij(1),
+                pane_id: own,
+            },
+        ],
+        true,
+        clock.now(),
+        Duration::from_secs(60),
+    );
+    assert_eq!(
+        rig.state.inspect_view(|ui, view| (
+            ui.freeze.is_some(),
+            view.health.failure_streak,
+            view.tab_read_dwell_until,
+        )),
+        (false, 0, None)
+    );
+    assert!(rig.state.admits_clock_only(false));
+    assert!(rig.state.frame_timing().1 > Duration::from_millis(200));
+}
+
+#[test]
 fn lagging_view_keeps_success_before_failure() {
     for newborn in [false, true] {
         let views = views();
