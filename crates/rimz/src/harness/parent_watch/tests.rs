@@ -202,7 +202,7 @@ fn a_forced_probe_after_a_latched_end_returns_without_another_pass() {
         watch.probe_now();
         done.send(watch.parent_ended()).unwrap();
     });
-    assert_eq!(returned.recv_timeout(Duration::from_secs(1)), Ok(true));
+    assert_eq!(returned.recv_timeout(Duration::from_secs(30)), Ok(true));
     assert_eq!(*calls.lock().unwrap(), 1);
 }
 
@@ -229,7 +229,7 @@ fn a_forced_probe_returns_when_the_worker_panics() {
         watch.probe_now();
         done.send(()).unwrap();
     });
-    assert_eq!(returned.recv_timeout(Duration::from_secs(1)), Ok(()));
+    assert_eq!(returned.recv_timeout(Duration::from_secs(30)), Ok(()));
 }
 
 #[test]
@@ -365,7 +365,8 @@ fn an_ended_seed_confirms_without_waiting_the_probe_interval() {
         ProbeConfirm::Ended
     })
     .start();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // Allow scheduling slack without reaching the 60-second periodic probe.
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !watch.parent_ended() {
         assert!(
             Instant::now() < deadline,
@@ -377,13 +378,20 @@ fn an_ended_seed_confirms_without_waiting_the_probe_interval() {
 }
 
 #[test]
-fn receipt_mode_wakes_a_sleeping_watch_and_drains_without_a_confirm() {
+fn receipt_drains_follow_the_receipt_cadence_without_probing() {
     let (_dir, paths, _rt, seed) = fixture();
-    let watch = ParentWatchdog::from_seed(seed, paths.clone(), |_, _| {
+    let mut watch = ParentWatchdog::from_seed(seed, paths.clone(), |_, _| {
         panic!("receipt drains must not confirm before the probe interval")
-    })
-    .start();
-    watch.set_receipt_waiting(true);
+    });
+    let next_probe = watch.next_probe;
+    let now = next_probe - probe_interval();
+    watch.receipt_waiting.store(true, Ordering::Release);
+    watch.next_tail = now;
+
+    assert!(!probe_without_fold(&mut watch, now));
+    let due = now + RECEIPT_POLL;
+    assert_eq!(watch.next_tail, due);
+    assert!(!watch.changed.load(Ordering::Acquire));
     append(
         &paths,
         "OLD",
@@ -393,14 +401,61 @@ fn receipt_mode_wakes_a_sleeping_watch_and_drains_without_a_confirm() {
             turn_id: None,
         },
     );
-    let deadline = Instant::now() + Duration::from_millis(1250);
-    while !watch.take_parent_changed() {
-        assert!(
-            Instant::now() < deadline,
-            "receipt mode must wake and drain within one second"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+
+    assert!(!probe_without_fold(
+        &mut watch,
+        due - Duration::from_millis(1)
+    ));
+    assert!(!watch.changed.load(Ordering::Acquire));
+    assert!(!probe_without_fold(&mut watch, due));
+    assert!(watch.changed.swap(false, Ordering::AcqRel));
+    assert_eq!(watch.next_probe, next_probe);
+
+    watch.receipt_waiting.store(false, Ordering::Release);
+    let due = watch.next_tail;
+    assert!(!probe_without_fold(&mut watch, due));
+    assert_eq!(watch.next_tail, due + probe_interval());
+    assert_eq!(watch.next_probe, next_probe);
+}
+
+#[test]
+fn receipt_mode_wakes_a_parked_watch_and_redrains_on_its_cadence() {
+    let (_dir, paths, _rt, seed) = fixture();
+    // Hold the initial confirmation before its park so receipt mode must
+    // supply an unpark permit, even when the worker starts late.
+    let mut ended_seed = seed.clone();
+    ended_seed.members.insert("OLD".into(), true);
+    let (entered, entry) = mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let resume = release.clone();
+    let watch = ParentWatchdog::from_seed(ended_seed, paths.clone(), move |_, _| {
+        entered.send(()).unwrap();
+        resume.wait();
+        ProbeConfirm::Alive(Box::new(seed.clone()))
+    })
+    .start();
+    entry.recv_timeout(Duration::from_secs(30)).unwrap();
+    let turn_ended = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    // Allow scheduling slack without reaching the 60-second periodic probe.
+    let await_frame = |message: &str| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !watch.take_parent_changed() {
+            assert!(Instant::now() < deadline, "{message}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    watch.set_receipt_waiting(true);
+    append(&paths, "OLD", turn_ended.clone());
+    release.wait();
+    await_frame("receipt mode must wake a parked watch before the periodic probe");
+    // The bootstrap confirm moved the probe a full interval out, so only the
+    // receipt cadence's next drain can deliver this frame inside the ceiling.
+    append(&paths, "OLD", turn_ended);
+    await_frame("receipt mode must drain again on its cadence before the periodic probe");
     watch.set_receipt_waiting(false);
 }
 

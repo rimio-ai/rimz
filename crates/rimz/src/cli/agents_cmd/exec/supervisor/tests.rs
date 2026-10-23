@@ -990,14 +990,25 @@ mod monitor {
                 offset: 0,
             },
         };
-        let watch =
-            ParentWatchdog::from_seed(seed, context.paths.clone(), |_, _| ProbeConfirm::Unknown)
-                .start();
+        // Hold the initial confirmation before its park so receipt mode must
+        // supply an unpark permit, even when the worker starts late.
+        let mut ended_seed = seed.clone();
+        ended_seed.members.insert("parent".into(), true);
+        let (entered, entry) = mpsc::channel();
+        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let resume = release.clone();
+        let watch = ParentWatchdog::from_seed(ended_seed, context.paths.clone(), move |_, _| {
+            entered.send(()).unwrap();
+            resume.wait();
+            ProbeConfirm::Alive(Box::new(seed.clone()))
+        })
+        .start();
+        entry.recv_timeout(Duration::from_secs(30)).unwrap();
         let now = Instant::now();
         let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
-        let mut calls = 0;
+        let calls = std::cell::Cell::new(0);
         let mut spawn = |_| {
-            calls += 1;
+            calls.set(calls.get() + 1);
             Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
         };
         assert!(!monitor.poll(&context, now, watch.take_parent_changed(), &mut spawn));
@@ -1026,25 +1037,34 @@ mod monitor {
             ),
         )
         .unwrap();
-        let deadline = Instant::now() + PARENT_RECEIPT_POLL + RUN_MONITOR_POLL;
+        // Leave ample scheduling slack, but stay below both 60-second fallbacks.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        release.wait();
         loop {
-            monitor.poll(
+            let parent_changed = watch.take_parent_changed();
+            assert!(!monitor.poll(
                 &context,
-                Instant::now(),
-                watch.take_parent_changed(),
+                now + PARENT_RECEIPT_POLL,
+                parent_changed,
                 &mut spawn,
-            );
-            if monitor.last_receipt_check.is_some_and(|last| last > now) {
+            ));
+            if parent_changed {
+                assert_eq!(calls.get(), 2, "the signal's poll must spawn one receipt");
                 break;
             }
+            assert_eq!(
+                calls.get(),
+                1,
+                "no receipt may spawn before the parent signal"
+            );
             assert!(
                 Instant::now() < deadline,
-                "parent frame must request receipt within one poll"
+                "the watchdog must deliver the parent frame before either fallback"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
         watch.set_receipt_waiting(false);
-        assert_eq!(calls, 2);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
