@@ -8799,8 +8799,8 @@ reason = "Condition presentation asks a parsed leaf whether it reads forge inste
 
 [[verdict]]
 kind = "item"
-key = "disk::atomic::symlink_dir_atomically"
-reason = "Team archive links publish atomically and durably without exposing raw rename mechanics to the harness."
+key = "disk::atomic::symlink_atomically"
+reason = "Team archive links and account links publish atomically and durably without exposing raw rename mechanics to their callers."
 
 [[verdict]]
 kind = "item"

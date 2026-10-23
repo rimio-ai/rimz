@@ -111,7 +111,7 @@ pub fn register(
                     .map_err(|source| RegisterErr::Io { path: run, source })?,
                 None => create_run(store, &checkout, name)?,
             };
-            atomic::symlink_dir_atomically(&run, &link)?;
+            atomic::symlink_atomically(&run, &link)?;
             atomic::sync_dir(&checkout)?;
             run
         }
