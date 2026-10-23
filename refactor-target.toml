@@ -1088,8 +1088,10 @@ path = "crates/rimz/src/harness"
 # Workflow Case and WhenExpr::truth share condition specifications and three-valued truth (+2).
 # condition_stages and unread_reason share admission and prose with the loop CLI (+2).
 # WatchDeadline, run_command and CheckOutcome::{code,interrupted} share hosted shell execution (+4).
+# WhenExpr::forge_branches shares parsed selectors with workflow demand (+1).
+# WorkflowSpec::forge_branches exposes read-only sealed-spec demand to the sidebar (+1).
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
-surface-budget = 971
+surface-budget = 973
 
 [[verdict]]
 kind = "item"
@@ -8065,6 +8067,16 @@ reason = "Workflow condition cases share ordered predicates, hold durations, and
 kind = "item"
 key = "harness::schedule::when::WhenExpr::truth"
 reason = "Workflow conditions project three-valued truth without changing loop evaluation."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenExpr::forge_branches"
+reason = "Loop and workflow demand share the parser's forge selector extraction."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::WorkflowSpec::forge_branches"
+reason = "The sidebar reads sealed workflow demand without reaching transition or execution code."
 
 [[verdict]]
 kind = "item"

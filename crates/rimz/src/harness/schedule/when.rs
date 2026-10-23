@@ -33,7 +33,7 @@ fn probe_paths(
         .collect()
 }
 
-/// Checkout scopes and branch selectors whose live conditions need forge probes.
+/// Checkout scopes and branch selectors needed by live loops and Active workflows.
 pub(crate) fn probe_demand(
     runtime: &crate::RuntimePaths,
     project_root: Option<&Path>,
@@ -93,10 +93,7 @@ pub(crate) fn probe_demand(
         else {
             continue;
         };
-        let branches = expr
-            .terms()
-            .filter_map(|term| ForgeKey::parse(&term.key)?.branch())
-            .collect::<BTreeSet<_>>();
+        let branches = expr.forge_branches().collect::<BTreeSet<_>>();
         for scope in probe_paths(task.entry(), &name, &owned, &ledger)
             .into_iter()
             .filter(|scope| scope.is_dir())
@@ -106,6 +103,46 @@ pub(crate) fn probe_demand(
                 .or_default()
                 .extend(branches.iter().map(|branch| (*branch).to_owned()));
         }
+    }
+    let Some(project_root) = project_root else {
+        tracing::warn!("workflow probe demand has no project root");
+        return demand;
+    };
+    let state = match crate::StatePaths::for_project_root(project_root) {
+        Ok(state) => state,
+        Err(error) => {
+            tracing::warn!(%error, "workflow probes could not resolve state paths");
+            return demand;
+        }
+    };
+    let records = match crate::store::workflow::list(&state) {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "workflow probes could not read runs");
+            return demand;
+        }
+    };
+    for record in records
+        .into_iter()
+        .filter(|record| record.state == crate::store::workflow::RunState::Active)
+    {
+        let paths = state.workflow(&record.id);
+        let branches = match crate::harness::workflow::load(&paths.home)
+            .and_then(|spec| spec.forge_branches())
+        {
+            Ok(Some(branches)) => branches,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    path = %paths.spec.display(), %error, "workflow probe spec unavailable"
+                );
+                continue;
+            }
+        };
+        demand
+            .entry(record.scope.path.to_string_lossy().into_owned())
+            .or_default()
+            .extend(branches);
     }
     demand
 }
@@ -652,6 +689,12 @@ impl WhenExpr {
     /// Whether any term reads the room's forge cache.
     pub fn reads_forge(&self) -> bool {
         self.terms().any(WhenTerm::reads_forge)
+    }
+
+    /// Branch selectors named by forge terms, including repeats.
+    pub(crate) fn forge_branches(&self) -> impl Iterator<Item = &str> {
+        self.terms()
+            .filter_map(|term| ForgeKey::parse(&term.key)?.branch())
     }
 
     /// The first key that reads the scope checkout rather than a named branch.

@@ -137,6 +137,142 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
 }
 
 #[test]
+fn active_workflows_supply_pane_free_forge_scopes_and_branches() {
+    use crate::config::{TaskEntry, Tasks};
+    use crate::harness::schedule::when;
+    use crate::ids::WorkflowRunId;
+    use crate::store::workflow::RunState;
+
+    let root = tempfile::tempdir().unwrap();
+    let state = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+    let checkout = root.path().join("checkout");
+    let unscoped = root.path().join("unscoped");
+    let now = Timestamp::now();
+    for (scope, status, condition) in [
+        (
+            "checkout",
+            RunState::Active,
+            "ci=passed && (pr[feat/x]=merged || pr.queue[queue/x]=queued)",
+        ),
+        (
+            "checkout",
+            RunState::Active,
+            "ci[other]=passed && pr[feat/x]=open",
+        ),
+        ("unscoped", RunState::Active, "pr=open"),
+        ("stage", RunState::Active, "team.stage=Done"),
+        ("window", RunState::Active, "window.5h.left>=40"),
+        ("parked", RunState::Parked, "ci=passed"),
+        ("done", RunState::Done, "pr=open"),
+        ("failed", RunState::Failed, "pr=open"),
+        ("canceled", RunState::Canceled, "pr=open"),
+        ("unloadable", RunState::Active, "unloadable"),
+        ("invalid", RunState::Active, "ci=typo"),
+    ] {
+        let scope = root.path().join(scope);
+        std::fs::create_dir_all(&scope).unwrap();
+        let id = WorkflowRunId::new();
+        let paths = state.workflow(&id);
+        std::fs::create_dir_all(&paths.home).unwrap();
+        let provider = if condition.starts_with("window.") {
+            "provider = \"codex\""
+        } else {
+            ""
+        };
+        let spec = format!(
+            r#"[workflow]
+scope = "worktree"
+start = "work"
+[steps.work]
+agent = "codex"
+prompt-file = "work.md"
+then = "probe"
+[checks.probe]
+timeout = "1h"
+else = "pending"
+{provider}
+on = {{ ready = "@done", pending = "@wait" }}
+[[checks.probe.cases]]
+when = ["team.stage=Done"]
+outcome = "ready"
+[[checks.probe.cases]]
+when = ["{condition}"]
+outcome = "ready"
+"#
+        );
+        std::fs::write(
+            paths.spec,
+            if condition == "unloadable" {
+                "["
+            } else {
+                &spec
+            },
+        )
+        .unwrap();
+        let record = serde_json::json!({
+            "version": 1, "id": id, "workflow": "review",
+            "spec_dir": root.path().join("unsealed-definition"), "spec_digest": "abc",
+            "scope": {"kind": "worktree", "path": scope.canonicalize().unwrap()},
+            "project_root": root.path(), "created_at": now, "state": status,
+            "node": "work", "entered_at": now, "visits": {}, "visit_grant": 0,
+            "deadline_fired": false, "next_seq": 1
+        });
+        std::fs::write(paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+    let catalog_path = crate::StatePaths::class_path(
+        &state.root,
+        crate::disk::paths::Class::Records,
+        "loop-instances.json",
+    );
+    let tasks = Tasks(BTreeMap::from([(
+        "loop".to_owned(),
+        TaskEntry {
+            root: root.path().to_owned(),
+            dir: Some(checkout.clone()),
+            when: Some(vec!["ci[loop]=passed".into()]),
+            check: Some("true".into()),
+            ..TaskEntry::default()
+        },
+    )]));
+    std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+    std::fs::write(catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+
+    let demand = when::probe_demand(&runtime, Some(root.path()));
+    assert_eq!(
+        demand,
+        BTreeMap::from([
+            (
+                checkout.display().to_string(),
+                BTreeSet::from_iter(["feat/x", "loop", "other", "queue/x"].map(str::to_owned))
+            ),
+            (unscoped.display().to_string(), BTreeSet::new())
+        ])
+    );
+    let snapshot = SidebarSnapshot::build(runtime.workspace_id.clone(), vec![], now);
+    assert_eq!(
+        needed_worktree_paths(&snapshot, demand.into_keys().collect()),
+        vec![
+            checkout.display().to_string(),
+            unscoped.display().to_string()
+        ]
+    );
+    assert!(when::probe_demand(&runtime, None).is_empty());
+
+    let runs = state.workflow(&WorkflowRunId::new());
+    let runs_dir = runs.home.parent().unwrap();
+    std::fs::remove_dir_all(runs_dir).unwrap();
+    std::fs::write(runs_dir, "not a directory").unwrap();
+    assert_eq!(
+        when::probe_demand(&runtime, Some(root.path())),
+        BTreeMap::from([(
+            checkout.display().to_string(),
+            BTreeSet::from(["loop".to_owned()])
+        )])
+    );
+}
+
+#[test]
 fn git_cache_freshness_boundaries_are_inclusive() {
     let entry = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
