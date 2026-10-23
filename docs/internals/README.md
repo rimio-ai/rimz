@@ -46,7 +46,7 @@ The sidebar spans two source trees. `sidebar/` is the data plane, the view model
 | --- | --- |
 | [sidebar.md](./sidebar/sidebar.md) | From store to screen: the presence model and binding ladder, ranking and grouping, the cards, process rows, frame composition, the serve loop, reload and repair, and resume on rebirth. |
 | [state.md](./sidebar/state.md) | The data plane: the shared room host, one fetch cycle, the published lanes, realtime events and push channels, fusion rules, focus intent, cadences, and failure modes. |
-| [notifications.md](./sidebar/notifications.md) | Notifications over unread episodes: the producer's policy, the renderer's bell and banner, unread reminders, remote link alerts, handlers, and the trace log. |
+| [notifications.md](./sidebar/notifications.md) | Notifications over unread episodes: the host's push policy and delivery, the renderer's bell and banner targeting, unread reminders, remote link alerts, handlers and their validation, and the trace log with its gaps. |
 | [pets.md](./sidebar/pets.md) | The dashboard pet: from card state to animation, captions, asset loading and its state machine, the cell-art and pixel render tiers, and `rimz list-pets`. |
 
 ## Single-file subsystems
