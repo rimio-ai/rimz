@@ -340,7 +340,7 @@ fn stats_json<'a>(
             .then_with(|| b.tokens.cmp(&a.tokens))
     });
 
-    let providers = provider_breakdown(stats, active, None)
+    let providers = provider_breakdown(stats, active)
         .into_iter()
         .map(|provider| ProviderJson {
             cache_hit_pct: provider.window.cache_hit_percent(),

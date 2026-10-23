@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 
 use rimz::agents::spending::{unix_secs_now, utc_date};
 
-use super::stats_refresh_resize::{
-    StatsRefreshHarness, screen, short_tempdir, wait_for_tagline_col,
-};
+use super::stats_refresh_resize::{StatsRefreshHarness, screen, short_tempdir, wait_for_screen};
 use crate::common::ScrubSessionEnvExt;
 
 const ROOT_KEYS: [&str; 10] = [
@@ -91,8 +89,12 @@ fn accounts_of_one_pool_share_the_held_spend_service() {
     }
 
     let harness = StatsRefreshHarness::launch_in(80, root, &[("CLAUDE_CONFIG_DIR", one.as_path())]);
-    wait_for_tagline_col(&harness.parser, |_| true, Duration::from_secs(5))
-        .unwrap_or_else(|| panic!("held stats never rendered:\n{}", screen(&harness.parser)));
+    wait_for_screen(
+        &harness.parser,
+        |text| text.contains("Today $"),
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|| panic!("held stats never rendered:\n{}", screen(&harness.parser)));
     let publication = wait_for_file(&base, "provider-spending.json");
     wait_for_file(&base, ".sock");
 

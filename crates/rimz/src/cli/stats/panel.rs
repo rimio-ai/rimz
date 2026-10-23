@@ -3,11 +3,6 @@ use super::*;
 use rimz::theme::theme_glyphs;
 
 pub(super) struct PanelGlyphs {
-    pub(super) sessions: String,
-    pub(super) total: String,
-    pub(super) input: String,
-    pub(super) output: String,
-    pub(super) cache_read: String,
     pub(super) bar_filled: String,
     pub(super) bar_track: String,
 }
@@ -15,11 +10,6 @@ pub(super) struct PanelGlyphs {
 pub(super) fn resolve_panel_glyphs(theme: &ThemeConfig) -> PanelGlyphs {
     let glyph = theme_glyphs(theme);
     PanelGlyphs {
-        sessions: glyph(GlyphRole::CockpitSessions),
-        total: glyph(GlyphRole::TokensTotal),
-        input: glyph(GlyphRole::TokensInput),
-        output: glyph(GlyphRole::TokensOutput),
-        cache_read: glyph(GlyphRole::TokensCacheRead),
         bar_filled: glyph(GlyphRole::MeterBarFilled),
         bar_track: glyph(GlyphRole::MeterBarTrack),
     }
@@ -123,324 +113,6 @@ pub(super) fn level(t: f64) -> usize {
         return 0;
     }
     (1 + (t * 3.0).round() as usize).min(4)
-}
-
-// ── Rendering ────────────────────────────────────────────────────────────────
-
-pub(super) struct PanelGeometry {
-    pub(super) weeks: usize,
-    pub(super) panel_width: usize,
-    pub(super) outer: usize,
-    pub(super) rows: Option<usize>,
-}
-
-impl PanelGeometry {
-    pub(super) fn current() -> Self {
-        let cols = render::terminal_columns(80);
-        let weeks = weeks_for_terminal(cols);
-        let panel_width = GUTTER + weeks * 2;
-        let outer = cols.saturating_sub(panel_width) / 2;
-        let rows = std::io::stdout()
-            .is_terminal()
-            .then(|| render::terminal_rows(24));
-        PanelGeometry {
-            weeks,
-            panel_width,
-            outer,
-            rows,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PanelPlan {
-    pub(super) header: bool,
-    pub(super) model_rows: usize,
-    pub(super) provider_rows: usize,
-    pub(super) agent_rows: usize,
-    pub(super) team_rows: usize,
-    pub(super) subagent_rows: usize,
-}
-
-pub(super) const PANEL_FIXED_ROWS: usize = 19;
-pub(super) const PANEL_HEADER_ROWS: usize = 9;
-pub(super) const SECTION_CHROME_ROWS: usize = 2;
-const SECTION_FLOOR_ROWS: usize = 3;
-
-pub(super) fn fit(
-    rows: Option<usize>,
-    want_header: bool,
-    natural: [usize; 5],
-    assist_rows: usize,
-    role_note_rows: usize,
-) -> PanelPlan {
-    let [models, providers, agents, teams, subagents] = natural;
-    let caps = [
-        models.min(MAX_MODELS),
-        providers.min(MAX_SPEND_ROWS),
-        agents.min(MAX_SPEND_ROWS),
-        teams.min(MAX_SPEND_ROWS),
-        subagents.min(MAX_SPEND_ROWS),
-    ];
-    if !want_header {
-        return PanelPlan {
-            header: false,
-            model_rows: caps[0],
-            provider_rows: caps[1],
-            agent_rows: caps[2],
-            team_rows: caps[3],
-            subagent_rows: caps[4],
-        };
-    }
-    let Some(rows) = rows else {
-        return PanelPlan {
-            header: true,
-            model_rows: caps[0],
-            provider_rows: caps[1],
-            agent_rows: caps[2],
-            team_rows: caps[3],
-            subagent_rows: caps[4],
-        };
-    };
-
-    let budget = rows.saturating_sub(1);
-    let assists = usize::from(assist_rows > 0) * (2 + assist_rows);
-    let mut weights = natural;
-    let mut floors = caps.map(|cap| cap.min(SECTION_FLOOR_ROWS));
-    let section_chrome = SECTION_CHROME_ROWS * weights.iter().filter(|&&rows| rows > 0).count();
-    let note_rows = usize::from(agents > 0 || teams > 0 || subagents > 0) * role_note_rows;
-    let mut fixed = PANEL_FIXED_ROWS + assists + section_chrome + note_rows;
-    let floor_rows = floors.iter().sum();
-    let with_header = budget.saturating_sub(fixed + PANEL_HEADER_ROWS);
-
-    if budget >= fixed + PANEL_HEADER_ROWS && with_header >= floor_rows {
-        let [
-            model_rows,
-            provider_rows,
-            agent_rows,
-            team_rows,
-            subagent_rows,
-        ] = allocate_breakdown_rows(with_header, weights, caps, floors);
-        return PanelPlan {
-            header: true,
-            model_rows,
-            provider_rows,
-            agent_rows,
-            team_rows,
-            subagent_rows,
-        };
-    }
-
-    for i in [4, 2, 3] {
-        let minimum_rows = weights.iter().filter(|&&rows| rows > 0).count();
-        if budget >= fixed + minimum_rows {
-            break;
-        }
-        if weights[i] == 0 {
-            continue;
-        }
-        weights[i] = 0;
-        floors[i] = 0;
-        fixed -= SECTION_CHROME_ROWS;
-        if weights[2..].iter().all(|&rows| rows == 0) {
-            fixed -= note_rows;
-        }
-    }
-    let without_header = budget.saturating_sub(fixed);
-    let [
-        model_rows,
-        provider_rows,
-        agent_rows,
-        team_rows,
-        subagent_rows,
-    ] = allocate_breakdown_rows(
-        without_header,
-        weights,
-        floors,
-        weights.map(|rows| usize::from(rows > 0)),
-    );
-    PanelPlan {
-        header: false,
-        model_rows,
-        provider_rows,
-        agent_rows,
-        team_rows,
-        subagent_rows,
-    }
-}
-
-fn allocate_breakdown_rows(
-    available: usize,
-    weights: [usize; 5],
-    caps: [usize; 5],
-    floors: [usize; 5],
-) -> [usize; 5] {
-    let usable = available.min(caps.iter().sum()).max(floors.iter().sum());
-    let weight: usize = weights.iter().sum();
-    if weight == 0 {
-        return [0; 5];
-    }
-
-    let mut rows =
-        std::array::from_fn(|i| (usable * weights[i] / weight).clamp(floors[i], caps[i]));
-    while rows.iter().sum::<usize>() > usable {
-        // The sum exceeds usable, which is at least the sum of the floors.
-        let i = (0..5)
-            .find(|&i| rows[i] > floors[i])
-            .expect("a row exceeds its floor");
-        rows[i] -= 1;
-    }
-    while rows.iter().sum::<usize>() < usable {
-        let Some(i) = (0..5)
-            .filter(|&i| rows[i] < caps[i])
-            .max_by_key(|&i| (weights[i], 5 - i))
-        else {
-            break;
-        };
-        rows[i] += 1;
-    }
-    rows
-}
-
-pub(super) struct PanelStats<'a> {
-    pub(super) usage: &'a Stats,
-    pub(super) assists: &'a AssistStats,
-    pub(super) active: Window,
-}
-
-pub(super) fn render_panel(
-    w: &mut impl Write,
-    stats: PanelStats<'_>,
-    today_day: i64,
-    dollars: bool,
-    glyphs: &PanelGlyphs,
-    include_header: bool,
-    nl: &str,
-) -> Result<()> {
-    let PanelStats {
-        usage: stats,
-        assists,
-        active,
-    } = stats;
-    let geometry = PanelGeometry::current();
-    let assist_categories =
-        assists::category_rows(&assists.rollup, assists::CategoryMode::Dashboard);
-    let mut lines: Vec<String> = Vec::new();
-    let agent_tallies = RoleView::Agents.rows(stats, active);
-    let team_tallies = RoleView::Teams.rows(stats, active);
-    let subagent_tallies = RoleView::Subagents.rows(stats, active);
-
-    if stats.by_day.is_empty()
-        && agent_tallies
-            .values()
-            .chain(team_tallies.values())
-            .chain(subagent_tallies.values())
-            .all(|row| !row.has_usage())
-    {
-        if include_header {
-            lines.extend(header_lines(geometry.panel_width));
-        }
-        let message = "No token usage recorded yet - run an agent and check back.";
-        lines.push(center(
-            &render::paint(render::palette::muted(), message),
-            message.chars().count(),
-            geometry.panel_width,
-        ));
-        if !assist_categories.is_empty() {
-            lines.push(String::new());
-            assists::panel_lines(&mut lines, assists, geometry.panel_width);
-        }
-        return emit(w, &lines, geometry.outer, nl);
-    }
-
-    let selected = active;
-    let notes = recording_notes(stats, today_day, active);
-    let natural_models = model_breakdown_size(stats, selected);
-    let natural_providers = provider_breakdown_size(stats, selected);
-    let natural_agents = if show_agents(stats, selected, has_usage) {
-        natural_size(profile_rows(&agent_tallies))
-    } else {
-        0
-    };
-    let natural_teams = natural_size(profile_rows(&team_tallies));
-    let natural_subagents = natural_size(profile_rows(&subagent_tallies));
-    let plan = fit(
-        geometry.rows,
-        include_header,
-        [
-            natural_models,
-            natural_providers,
-            natural_agents,
-            natural_teams,
-            natural_subagents,
-        ],
-        assist_categories.len().div_ceil(2),
-        notes
-            .iter()
-            .map(|note| display_width(note).div_ceil(geometry.panel_width))
-            .sum(),
-    );
-    if plan.header && include_header {
-        lines.extend(header_lines(geometry.panel_width));
-    }
-
-    heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
-    let total_usd = selected.select(&stats.total).usd;
-    let models = model_breakdown(stats, selected, plan.model_rows);
-    let providers = provider_breakdown(stats, selected, Some(plan.provider_rows));
-    let agents = profile_breakdown(&agent_tallies, total_usd, Some(plan.agent_rows));
-    let teams = profile_breakdown(&team_tallies, total_usd, Some(plan.team_rows));
-    let subagents = profile_breakdown(&subagent_tallies, total_usd, Some(plan.subagent_rows));
-    let name_w = models
-        .iter()
-        .map(|(name, _, _)| display_width(name))
-        .chain(
-            providers
-                .iter()
-                .map(|provider| display_width(&provider.name)),
-        )
-        .chain(agents.iter().map(|agent| display_width(&agent.name)))
-        .chain(teams.iter().map(|team| display_width(&team.name)))
-        .chain(subagents.iter().map(|agent| display_width(&agent.name)))
-        .max()
-        .unwrap_or(0);
-
-    lines.push(String::new());
-    windows_lines(&mut lines, stats, Some(active));
-    let model_rows = model_cells(&models, name_w, glyphs, total_usd);
-    let provider_rows = provider_cells(&providers, name_w, glyphs);
-    let agent_rows = spend_cells(&agents, name_w, glyphs, false);
-    let team_rows = spend_cells(&teams, name_w, glyphs, false);
-    let subagent_rows = spend_cells(&subagents, name_w, glyphs, false);
-    let sections = [
-        &model_rows[..],
-        &provider_rows[..],
-        &agent_rows[..],
-        &team_rows[..],
-        &subagent_rows[..],
-    ];
-    let pct_w = stat_pct_width(&sections);
-    let layout = stat_section_layout(&sections, pct_w, geometry.panel_width);
-    for (label, rows) in ["Models", "Providers", "Agents", "Teams", "Subagents"]
-        .into_iter()
-        .zip(sections)
-    {
-        if !rows.is_empty() {
-            lines.push(String::new());
-            emit_stat_section(&mut lines, label, rows, layout, glyphs);
-        }
-    }
-    if plan.agent_rows > 0 || plan.team_rows > 0 || plan.subagent_rows > 0 {
-        lines.extend(notes);
-    }
-    lines.push(String::new());
-    insights_lines(&mut lines, stats, today_day, geometry.panel_width, selected);
-    if !assist_categories.is_empty() {
-        lines.push(String::new());
-        assists::panel_lines(&mut lines, assists, geometry.panel_width);
-    }
-
-    emit(w, &lines, geometry.outer, nl)
 }
 
 #[derive(Clone, Copy)]
@@ -601,7 +273,7 @@ pub(super) fn render_spend(
             &mut lines,
             stats,
             today_day,
-            PanelGeometry::current().weeks,
+            weeks_for_terminal(render::terminal_columns(80)),
             dollars,
         );
     }
@@ -623,7 +295,7 @@ fn has_spend(window: &SpendWindow) -> bool {
     window.usd > 0.0
 }
 
-/// Held sections list the rows with dollars or work tokens.
+/// JSON providers include dollars or work tokens.
 fn has_usage(window: &SpendWindow) -> bool {
     window.usd > 0.0 || window.tokens > 0
 }
@@ -830,7 +502,7 @@ fn spend_section(
     true
 }
 
-fn messages_label(row: &RoleWindow) -> String {
+pub(super) fn messages_label(row: &RoleWindow) -> String {
     match (row.messages(), row.effort.from_user) {
         (0, _) => "-".into(),
         (total, 0) => total.to_string(),
@@ -839,18 +511,20 @@ fn messages_label(row: &RoleWindow) -> String {
 }
 
 pub(super) fn render_unavailable(w: &mut impl Write, error: &str, nl: &str) -> Result<()> {
-    let geometry = PanelGeometry::current();
-    let mut lines = header_lines(geometry.panel_width);
+    let cols = render::terminal_columns(80);
+    let panel_width = GUTTER + weeks_for_terminal(cols) * 2;
+    let outer = cols.saturating_sub(panel_width) / 2;
+    let mut lines = header_lines(panel_width);
     let message = ellipsize(
         &format!("Spending refresh unavailable - retrying. {error}"),
-        geometry.panel_width,
+        panel_width,
     );
     lines.push(center(
         &render::paint(render::palette::muted(), &message),
         display_width(&message),
-        geometry.panel_width,
+        panel_width,
     ));
-    emit(w, &lines, geometry.outer, nl)
+    emit(w, &lines, outer, nl)
 }
 
 pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
@@ -977,716 +651,70 @@ pub(super) fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
     s
 }
 
-/// The windows row: a static totals row in reports, a tab bar in held dashboards.
-pub(super) fn windows_lines(lines: &mut Vec<String>, stats: &Stats, active: Option<Window>) {
-    let cells = Window::TABS.map(|window| {
-        let tokens = window.select(&stats.total).display_tokens();
-        (window, window.label(), fmt_tokens(tokens))
-    });
-    let sep = render::paint(render::palette::muted(), "  ·  ");
-    let Some(active) = active else {
-        let row = cells
-            .into_iter()
-            .map(|(_, label, tokens)| {
-                format!(
-                    "{} {}",
-                    render::paint(render::palette::muted(), label),
-                    render::paint(render::palette::cool(), &tokens)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(&sep);
-        lines.push(format!("  {row}"));
-        return;
-    };
-
-    let inner_w = cells
-        .iter()
-        .map(|(_, label, tokens)| label.chars().count() + 1 + tokens.chars().count())
-        .max()
-        .unwrap_or(0);
-    let row = cells
-        .into_iter()
-        .map(|(window, label, tokens)| {
-            let pad = " "
-                .repeat(inner_w.saturating_sub(label.chars().count() + 1 + tokens.chars().count()));
-            if window == active {
-                render::paint(active_tab(), &format!(" {label} {tokens}{pad} "))
-            } else {
-                format!(
-                    " {} {}{pad} ",
-                    render::paint(render::palette::muted(), label),
-                    render::paint(render::palette::cool(), &tokens)
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(&sep);
-    lines.push(format!("  {row}"));
-}
-
-pub(super) struct StatCell {
-    left_full: String,
-    left_compact: String,
-    share_pct: f64,
-}
-
-impl StatCell {
-    fn left(&self, compact: bool) -> &str {
-        if compact {
-            &self.left_compact
-        } else {
-            &self.left_full
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct StatSectionLayout {
-    pub(super) compact: bool,
-    pub(super) left_w: usize,
-    pub(super) pct_w: usize,
-    pub(super) bar_w: usize,
-}
-
-/// The per-model token breakdown, before the shared share column is appended.
-pub(super) fn model_cells(
-    models: &[(String, SpendWindow, String)],
-    name_w: usize,
-    glyphs: &PanelGlyphs,
-    total_usd: f64,
-) -> Vec<StatCell> {
-    struct ModelRow {
-        name: String,
-        kind: String,
-        usd: String,
-        input: String,
-        output: String,
-        cache_read: String,
-        cache_hit: Option<(u8, String)>,
-        rate: Option<String>,
-        share_pct: f64,
-    }
-
-    let rows = models
-        .iter()
-        .map(|(name, spend, kind)| {
-            let pct = if total_usd > 0.0 {
-                spend.usd / total_usd * 100.0
-            } else {
-                0.0
-            };
-            ModelRow {
-                name: name.clone(),
-                kind: kind.clone(),
-                usd: fmt_usd(spend.usd),
-                input: fmt_tokens_precise(spend.input),
-                output: fmt_tokens_precise(spend.output),
-                cache_read: fmt_tokens_precise(spend.cache_read),
-                cache_hit: spend
-                    .cache_hit_percent()
-                    .map(|percent| (percent, format!("{percent}%"))),
-                rate: spend.tokens_per_sec().map(|rate| rate.to_string()),
-                share_pct: pct,
-            }
-        })
-        .collect::<Vec<_>>();
-    let usd_w = rows
-        .iter()
-        .map(|row| display_width(&row.usd))
-        .max()
-        .unwrap_or(0);
-    let input_w = rows
-        .iter()
-        .map(|row| display_width(&row.input))
-        .max()
-        .unwrap_or(0);
-    let output_w = rows
-        .iter()
-        .map(|row| display_width(&row.output))
-        .max()
-        .unwrap_or(0);
-    let cache_w = rows
-        .iter()
-        .map(|row| display_width(&row.cache_read))
-        .max()
-        .unwrap_or(0);
-    let cache_hit_w = rows
-        .iter()
-        .filter_map(|row| {
-            row.cache_hit
-                .as_ref()
-                .map(|(_, label)| display_width(label))
-        })
-        .max()
-        .unwrap_or(0);
-    let sep = render::paint(render::palette::muted(), "·");
-
-    let rate_w = rows
-        .iter()
-        .filter_map(|row| row.rate.as_ref())
-        .map(|rate| display_width(rate) + " tok/s".len())
-        .max()
-        .unwrap_or(0);
-
-    rows.iter()
-        .map(|row| {
-            let identity = if row.kind.is_empty() {
-                render::palette::muted()
-            } else {
-                render::palette::identity(&row.kind)
-            };
-            let name = pad_to(&render::paint(identity, &row.name), name_w);
-            let mut left_full = format!(
-                "{} {name} {} {sep} {} {} {sep} {} {} {sep} {} {}",
-                render::paint(render::palette::cool(), "●"),
-                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
-                render::paint(render::palette::muted(), &glyphs.input),
-                pad_left(&row.input, input_w),
-                render::paint(render::palette::muted(), &glyphs.output),
-                pad_left(&row.output, output_w),
-                render::paint(render::palette::muted(), &glyphs.cache_read),
-                pad_left(&row.cache_read, cache_w),
-            );
-            if let Some((percent, cache_hit)) = row.cache_hit.as_ref() {
-                let style = match rimz::agents::CacheHealth::classify(*percent) {
-                    rimz::agents::CacheHealth::Good => render::palette::good(),
-                    rimz::agents::CacheHealth::Caution => render::palette::warn(),
-                    rimz::agents::CacheHealth::Alarm => render::palette::alarm(),
-                };
-                left_full.push_str(&format!(
-                    " {sep} {}",
-                    render::paint(style, &pad_left(cache_hit, cache_hit_w))
-                ));
-            } else if rate_w > 0 && cache_hit_w > 0 {
-                left_full.push_str(&format!(" {sep} {}", " ".repeat(cache_hit_w)));
-            }
-            if rate_w > 0 {
-                let rate = row.rate.as_ref().map_or_else(
-                    || pad_left("-", rate_w),
-                    |rate| {
-                        format!(
-                            "{} {}",
-                            pad_left(rate, rate_w - " tok/s".len()),
-                            render::paint(render::palette::muted(), "tok/s")
-                        )
-                    },
-                );
-                left_full.push_str(&format!(" {sep} {rate}"));
-            }
-            let left_compact = format!(
-                "{} {name} {}",
-                render::paint(render::palette::cool(), "●"),
-                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
-            );
-            StatCell {
-                left_full,
-                left_compact,
-                share_pct: row.share_pct,
-            }
-        })
-        .collect()
-}
-
-pub(super) fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
-    natural_size(model_rows(stats, active))
-}
-
-pub(super) fn model_breakdown(
-    stats: &Stats,
-    active: Window,
-    cap: usize,
-) -> Vec<(String, SpendWindow, String)> {
-    fold_breakdown(model_rows(stats, active), cap.min(MAX_MODELS))
-        .into_iter()
-        .map(|row| match row.key {
-            Some((id, kind)) => (
-                rimz::agents::model_display::display_model(id),
-                row.window,
-                kind.to_owned(),
-            ),
-            None => ("Other".to_owned(), row.window, String::new()),
-        })
-        .collect()
-}
-
-/// Models keyed by id and producing kind; the empty id has no key, so it
-/// always folds.
-fn model_rows(stats: &Stats, active: Window) -> Vec<BreakdownRow<(&str, &str)>> {
-    breakdown_rows(stats.by_model.iter().map(|(id, model)| {
-        (
-            (!id.is_empty()).then_some((id.as_str(), model.kind.as_str())),
-            active.select(&model.tally),
-        )
-    }))
-}
-
 pub(super) struct SpendBreakdown<'a> {
     pub(super) kind: &'a str,
     pub(super) name: String,
     pub(super) window: SpendWindow,
     pub(super) share: f64,
-    pub(super) folded: bool,
 }
 
-pub(super) fn provider_breakdown_size(stats: &Stats, active: Window) -> usize {
-    breakdown_size(&stats.by_provider, active)
-}
-
-fn breakdown_size(tallies: &BTreeMap<String, SpendTally>, active: Window) -> usize {
-    natural_size(tally_rows(tallies, active))
-}
-
-/// With `cap: None`, every admitted row unfolded (the JSON path).
-pub(super) fn provider_breakdown(
-    stats: &Stats,
-    active: Window,
-    cap: Option<usize>,
-) -> Vec<SpendBreakdown<'_>> {
-    let total_usd = active.select(&stats.total).usd;
-    let mut rows = tally_rows(&stats.by_provider, active);
-    if let Some(cap) = cap {
-        rows = fold_breakdown(rows, cap.min(MAX_SPEND_ROWS));
-    }
-    rows.into_iter()
-        .map(|row| SpendBreakdown {
-            kind: row.key.unwrap_or(""),
-            name: row
-                .key
-                .map(agent_display_name)
-                .unwrap_or_else(|| "Other".to_owned()),
-            share: share_of(row.window.usd, total_usd),
-            window: row.window,
-            folded: row.key.is_none(),
-        })
-        .collect()
-}
-
-/// Profiles measure significance against their own dollars and work tokens,
-/// not the fleet totals used for displayed shares.
-pub(super) fn profile_breakdown(
-    tallies: &BTreeMap<String, RoleWindow>,
-    total_usd: f64,
-    cap: Option<usize>,
-) -> Vec<SpendBreakdown<'_>> {
-    let mut rows = profile_rows(tallies);
-    if let Some(cap) = cap {
-        rows = fold_breakdown(rows, cap.min(MAX_SPEND_ROWS));
-    }
-    rows.into_iter()
-        .map(|row| SpendBreakdown {
-            kind: "",
-            name: row.key.unwrap_or("Other").to_owned(),
-            share: share_of(row.window.usd, total_usd),
-            window: row.window,
-            folded: row.key.is_none(),
-        })
-        .collect()
-}
-
-fn profile_rows(tallies: &BTreeMap<String, RoleWindow>) -> Vec<BreakdownRow<&str>> {
-    let mut rows: Vec<_> = tallies
+/// Unfolded providers for JSON, independent of held row admission and fitting.
+pub(super) fn provider_breakdown(stats: &Stats, active: Window) -> Vec<SpendBreakdown<'_>> {
+    let total = active.select(&stats.total).usd;
+    let mut rows: Vec<_> = stats
+        .by_provider
         .iter()
-        .filter(|(_, row)| row.has_usage())
-        .map(|(key, row)| BreakdownRow {
-            key: Some(key.as_str()),
-            window: row.spend.clone(),
+        .filter_map(|(kind, tally)| {
+            let window = active.select(tally);
+            has_usage(&window).then(|| SpendBreakdown {
+                kind,
+                name: agent_display_name(kind),
+                share: share_of(window.usd, total),
+                window,
+            })
         })
         .collect();
-    rows.sort_by(BreakdownRow::display_cmp);
-    rows
-}
-
-struct BreakdownRow<K> {
-    key: Option<K>,
-    window: SpendWindow,
-}
-
-impl<K: Ord> BreakdownRow<K> {
-    fn display_cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .window
+    rows.sort_by(|a, b| {
+        b.window
             .usd
-            .total_cmp(&self.window.usd)
-            .then_with(|| other.window.tokens.cmp(&self.window.tokens))
-            .then_with(|| self.key.cmp(&other.key))
-    }
-}
-
-/// Admits the rows with dollars or work tokens, in display order.
-fn breakdown_rows<K: Ord>(
-    rows: impl Iterator<Item = (Option<K>, SpendWindow)>,
-) -> Vec<BreakdownRow<K>> {
-    let mut rows: Vec<_> = rows
-        .filter(|(_, window)| has_usage(window))
-        .map(|(key, window)| BreakdownRow { key, window })
-        .collect();
-    rows.sort_by(BreakdownRow::display_cmp);
+            .total_cmp(&a.window.usd)
+            .then_with(|| b.window.tokens.cmp(&a.window.tokens))
+            .then_with(|| a.kind.cmp(b.kind))
+    });
     rows
 }
 
-fn tally_rows(tallies: &BTreeMap<String, SpendTally>, active: Window) -> Vec<BreakdownRow<&str>> {
-    breakdown_rows(
-        tallies
-            .iter()
-            .map(|(key, tally)| (Some(key.as_str()), active.select(tally))),
-    )
-}
-
-/// A section's row count before any cap cut: `fit`'s proportional weight.
-fn natural_size<K: Ord>(rows: Vec<BreakdownRow<K>>) -> usize {
-    fold_breakdown(rows, usize::MAX).len()
-}
-
-/// Names the rows holding `MIN_BREAKDOWN_SHARE` of the section's dollars or
-/// work tokens and merges the rest, keyless rows included, into a trailing
-/// `Other` (key `None`). Past `cap`, the least significant named rows join it.
-fn fold_breakdown<K: Ord>(rows: Vec<BreakdownRow<K>>, cap: usize) -> Vec<BreakdownRow<K>> {
-    if cap == 0 {
-        return Vec::new();
-    }
-    let total_usd: f64 = rows.iter().map(|row| row.window.usd).sum();
-    let total_tokens: u64 = rows.iter().map(|row| row.window.tokens).sum();
-    let significance = |row: &BreakdownRow<K>| {
-        share_of(row.window.usd, total_usd)
-            .max(share_of(row.window.tokens as f64, total_tokens as f64))
-    };
-    let (mut named, mut folded): (Vec<_>, Vec<_>) = rows
-        .into_iter()
-        .partition(|row| row.key.is_some() && significance(row) >= MIN_BREAKDOWN_SHARE);
-    if named.len() + usize::from(!folded.is_empty()) > cap {
-        named.sort_by(|a, b| significance(b).total_cmp(&significance(a)));
-        folded.extend(named.split_off(cap - 1));
-        named.sort_by(BreakdownRow::display_cmp);
-    }
-    if !folded.is_empty() {
-        let mut window = SpendWindow::default();
-        for row in &folded {
-            window.merge(&row.window);
-        }
-        named.push(BreakdownRow { key: None, window });
-    }
-    named
-}
-
-pub(super) fn provider_cells(
-    providers: &[SpendBreakdown<'_>],
-    name_w: usize,
-    glyphs: &PanelGlyphs,
-) -> Vec<StatCell> {
-    spend_cells(providers, name_w, glyphs, true)
-}
-
-fn spend_cells(
-    agents: &[SpendBreakdown<'_>],
-    name_w: usize,
-    glyphs: &PanelGlyphs,
-    show_rate: bool,
-) -> Vec<StatCell> {
-    if agents.is_empty() {
-        return Vec::new();
-    }
-
-    struct AgentRow {
-        kind: String,
-        name: String,
-        sessions: String,
-        tokens: String,
-        usd: String,
-        cache_hit: Option<(u8, String)>,
-        share_pct: f64,
-        folded: bool,
-        rate: Option<String>,
-    }
-
-    let rows = agents
-        .iter()
-        .map(|agent| AgentRow {
-            kind: agent.kind.to_owned(),
-            name: agent.name.clone(),
-            sessions: agent.window.sessions.to_string(),
-            tokens: fmt_tokens(agent.window.display_tokens()),
-            usd: fmt_usd(agent.window.usd),
-            cache_hit: agent
-                .window
-                .cache_hit_percent()
-                .map(|percent| (percent, format!("{percent}%"))),
-            share_pct: agent.share * 100.0,
-            folded: agent.folded,
-            rate: if show_rate {
-                agent.window.tokens_per_sec().map(|rate| rate.to_string())
-            } else {
-                None
-            },
-        })
-        .collect::<Vec<_>>();
-    let sess_w = rows
-        .iter()
-        .map(|row| display_width(&row.sessions))
-        .max()
-        .unwrap_or(0);
-    let tok_w = rows
-        .iter()
-        .map(|row| display_width(&row.tokens))
-        .max()
-        .unwrap_or(0);
-    let usd_w = rows
-        .iter()
-        .map(|row| display_width(&row.usd))
-        .max()
-        .unwrap_or(0);
-    let cache_hit_w = rows
-        .iter()
-        .filter_map(|row| {
-            row.cache_hit
-                .as_ref()
-                .map(|(_, label)| display_width(label))
-        })
-        .max()
-        .unwrap_or(0);
-    let sep = render::paint(render::palette::muted(), "·");
-    let rate_w = rows
-        .iter()
-        .filter_map(|row| row.rate.as_ref())
-        .map(|rate| display_width(rate) + " tok/s".len())
-        .max()
-        .unwrap_or(0);
-
-    rows.iter()
-        .map(|row| {
-            let identity = if row.folded || row.kind.is_empty() {
-                render::palette::muted()
-            } else {
-                render::palette::identity(&row.kind)
-            };
-            let name = pad_to(&render::paint(identity, &row.name), name_w);
-            let left_compact = format!(
-                "{} {name} {} {sep} {} {} {sep} {} {}",
-                render::paint(identity, "●"),
-                render::paint(render::palette::money(), &pad_left(&row.usd, usd_w)),
-                render::paint(render::palette::muted(), &glyphs.sessions),
-                pad_left(&row.sessions, sess_w),
-                render::paint(render::palette::muted(), &glyphs.total),
-                pad_left(&row.tokens, tok_w),
-            );
-            let mut left_full = left_compact.clone();
-            if let Some((percent, cache_hit)) = row.cache_hit.as_ref() {
-                let style = match rimz::agents::CacheHealth::classify(*percent) {
-                    rimz::agents::CacheHealth::Good => render::palette::good(),
-                    rimz::agents::CacheHealth::Caution => render::palette::warn(),
-                    rimz::agents::CacheHealth::Alarm => render::palette::alarm(),
-                };
-                left_full.push_str(&format!(
-                    " {sep} {}",
-                    render::paint(style, &pad_left(cache_hit, cache_hit_w))
-                ));
-            } else if rate_w > 0 && cache_hit_w > 0 {
-                left_full.push_str(&format!(" {sep} {}", " ".repeat(cache_hit_w)));
-            }
-            if rate_w > 0 {
-                let rate = row.rate.as_ref().map_or_else(
-                    || pad_left("-", rate_w),
-                    |rate| {
-                        format!(
-                            "{} {}",
-                            pad_left(rate, rate_w - " tok/s".len()),
-                            render::paint(render::palette::muted(), "tok/s")
-                        )
-                    },
-                );
-                left_full.push_str(&format!(" {sep} {rate}"));
-            }
-            StatCell {
-                left_full,
-                left_compact,
-                share_pct: row.share_pct,
-            }
-        })
-        .collect()
-}
-
-pub(super) fn stat_pct_width(sections: &[&[StatCell]]) -> usize {
-    sections
-        .iter()
-        .flat_map(|rows| rows.iter())
-        .map(|cell| display_width(&format!("{:.1}", cell.share_pct)))
-        .max()
-        .unwrap_or(0)
-}
-
-pub(super) fn stat_section_layout(
-    sections: &[&[StatCell]],
-    pct_w: usize,
-    panel_width: usize,
-) -> StatSectionLayout {
-    let full_left_w = stat_left_width(sections, false);
-    let prefix_w = stat_prefix_width(full_left_w, pct_w);
-    if prefix_w + 1 + MIN_SHARE_BAR_WIDTH <= panel_width {
-        StatSectionLayout {
-            compact: false,
-            left_w: full_left_w,
-            pct_w,
-            bar_w: panel_width - prefix_w - 1,
-        }
-    } else if prefix_w <= panel_width {
-        StatSectionLayout {
-            compact: false,
-            left_w: full_left_w,
-            pct_w,
-            bar_w: 0,
-        }
-    } else {
-        let compact_left_w = stat_left_width(sections, true);
-        StatSectionLayout {
-            compact: true,
-            left_w: compact_left_w,
-            pct_w,
-            bar_w: 0,
-        }
-    }
-}
-
-pub(super) fn stat_left_width(sections: &[&[StatCell]], compact: bool) -> usize {
-    sections
-        .iter()
-        .flat_map(|rows| rows.iter())
-        .map(|cell| display_width(cell.left(compact)))
-        .max()
-        .unwrap_or(0)
-}
-
-/// The stat row up to and including the `%`, before the share bar.
-pub(super) fn stat_prefix_width(left_w: usize, pct_w: usize) -> usize {
-    2 + left_w + STAT_GUTTER + pct_w + 1
-}
-
-pub(super) fn share_bar(share_pct: f64, width: usize, glyphs: &PanelGlyphs) -> String {
-    let filled = ((share_pct / 100.0) * width as f64)
-        .round()
-        .clamp(0.0, width as f64) as usize;
-    format!(
-        "{}{}",
-        render::paint(render::palette::cool(), &glyphs.bar_filled.repeat(filled)),
-        render::paint(
-            render::palette::faint(),
-            &glyphs.bar_track.repeat(width - filled)
-        ),
-    )
-}
-
-pub(super) fn emit_stat_section(
-    lines: &mut Vec<String>,
-    header: &str,
-    cells: &[StatCell],
-    layout: StatSectionLayout,
-    glyphs: &PanelGlyphs,
-) {
-    if cells.is_empty() {
-        return;
-    }
-
-    lines.push(format!(
-        "  {}",
-        render::paint(render::palette::header(), header)
-    ));
-    let gutter = " ".repeat(STAT_GUTTER);
-    for cell in cells {
-        let pct = format!("{:.1}", cell.share_pct);
-        let mut line = format!(
-            "  {}{gutter}{}%",
-            pad_to(cell.left(layout.compact), layout.left_w),
-            pad_left(&pct, layout.pct_w),
-        );
-        if layout.bar_w > 0 {
-            line.push(' ');
-            line.push_str(&share_bar(cell.share_pct, layout.bar_w, glyphs));
-        }
-        lines.push(line);
-    }
-}
-
-pub(super) fn insights_lines(
-    lines: &mut Vec<String>,
-    stats: &Stats,
+pub(super) fn per_active_day(
+    by_day: &BTreeMap<i64, DaySpend>,
     today_day: i64,
-    panel_width: usize,
-    active: Window,
-) {
-    let activity = Activity::of(&stats.by_day, today_day, active);
-    let selected = active.select(&stats.total);
+    window: Window,
+) -> Option<f64> {
+    if window == Window::Today {
+        return None;
+    }
+    let mut usd = 0.0;
+    let mut count = 0;
+    for day in by_day
+        .range((today_day - i64::from(window.span_days()) + 1)..=today_day)
+        .map(|(_, day)| day)
+    {
+        usd += day.usd;
+        count += usize::from(day.tokens > 0);
+    }
+    Some(if count == 0 { 0.0 } else { usd / count as f64 })
+}
 
-    let most = activity
-        .most_active
-        .map(fmt_day)
-        .unwrap_or_else(|| "—".to_string());
-    let cost_per_session = if selected.sessions > 0 {
-        rimz::theme::fmt::dollars2(selected.usd / f64::from(selected.sessions))
+pub(super) fn trend_label(trend: f64) -> String {
+    let arrow = if trend >= 0.0 { '↑' } else { '↓' };
+    if trend.abs() > 999.0 {
+        format!("{arrow}999%+")
     } else {
-        "—".to_owned()
-    };
-    let (average_span, average_usd) = match active {
-        Window::Today => (Window::Year.span_days(), stats.total.year.usd),
-        _ => (active.span_days(), selected.usd),
-    };
-    let average_cutoff = today_day - i64::from(average_span - 1);
-    let average_active_days = stats
-        .by_day
-        .iter()
-        .filter(|(day, spend)| **day >= average_cutoff && **day <= today_day && spend.tokens > 0)
-        .count();
-    let daily_average = if average_active_days > 0 {
-        rimz::theme::fmt::dollars2(average_usd / average_active_days as f64)
-    } else {
-        "—".to_owned()
-    };
-    let left = [
-        kv(
-            "Sessions:",
-            &rimz::theme::fmt::group_thousands(selected.sessions as u64),
-        ),
-        kv(
-            "Active days:",
-            &format!("{}/{}", activity.active_count, activity.window_days),
-        ),
-        kv("Most active day:", &most),
-        kv("Cost/session:", &cost_per_session),
-    ];
-    let trend = spend_trend(&stats.by_day, today_day, active)
-        .map(|trend| {
-            let rounded = trend.round() as i64;
-            let (arrow, magnitude) = if rounded > 0 {
-                ('↑', rounded)
-            } else if rounded < 0 {
-                ('↓', -rounded)
-            } else {
-                ('→', 0)
-            };
-            format!(
-                " ({arrow}{magnitude}% vs prior {})",
-                match active {
-                    Window::Week => "week",
-                    Window::Month => "month",
-                    Window::Today | Window::Year => "window",
-                }
-            )
-        })
-        .unwrap_or_default();
-    let right = [
-        format!(
-            "{} {}{}",
-            render::paint(render::palette::muted(), "Spend:"),
-            render::paint(
-                render::palette::money(),
-                &rimz::theme::fmt::dollars2(selected.usd)
-            ),
-            render::paint(render::palette::muted(), &trend),
-        ),
-        kv("Longest streak:", &plural_days(activity.longest_streak)),
-        kv("Current streak:", &plural_days(activity.current_streak)),
-        kv("Daily avg:", &daily_average),
-    ];
+        format!("{arrow}{:.0}%", trend.abs())
+    }
+}
 
-    two_column(lines, &left, &right, panel_width);
+pub(super) fn plural_days(days: u32) -> String {
+    format!("{days} day{}", if days == 1 { "" } else { "s" })
 }
 
 pub(super) fn spend_trend(
@@ -1723,7 +751,7 @@ pub(super) fn two_column(
         .map(|line| display_width(line))
         .max()
         .unwrap_or(0)
-        + 6;
+        + 2;
     let right_w = right
         .iter()
         .map(|line| display_width(line))
@@ -1734,30 +762,25 @@ pub(super) fn two_column(
             let left = left.get(index).map(String::as_str).unwrap_or_default();
             let right = right.get(index).map(String::as_str).unwrap_or_default();
             lines.push(
-                format!("  {}{}", pad_to(left, split), right)
+                format!("{}{}", pad_to(left, split), right)
                     .trim_end()
                     .to_string(),
             );
         }
     } else {
         for line in left.iter().chain(right) {
-            lines.push(format!("  {line}"));
+            lines.push(line.clone());
         }
     }
 }
 
-/// A muted `label` followed by its value — the insight line shape.
+/// A muted label followed by its value.
 pub(super) fn kv(label: &str, value: &str) -> String {
     format!("{} {value}", render::paint(render::palette::muted(), label))
 }
 
-/// A day count with a pluralized unit: `1 day`, `27 days`.
-pub(super) fn plural_days(n: u32) -> String {
-    format!("{n} day{}", if n == 1 { "" } else { "s" })
-}
-
-/// The month-abbrev header: a label sits over the column where each new month
-/// begins, like the GitHub graph.
+/// The month-abbrev header: a label sits over the column where each new month begins, like the
+/// GitHub graph.
 pub(super) fn month_row(grid: &Grid) -> String {
     let mut buf = vec![' '; grid.weeks * 2];
     let months = (0..grid.weeks)
@@ -1919,10 +942,6 @@ pub(super) fn streaks(active: &BTreeSet<i64>, today_day: i64) -> (u32, u32) {
 }
 
 // ── Styling ────────────────────────────────────────────────────────────────────
-
-pub(super) fn active_tab() -> anstyle::Style {
-    render::palette::human_chip().bold()
-}
 
 /// A continuous cool ramp, held distinct from the status reds and greens so a
 /// busy day reads as volume, not as good or wrong. Density carries the reading

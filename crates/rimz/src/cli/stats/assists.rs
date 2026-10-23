@@ -1043,15 +1043,17 @@ impl Window {
     }
 }
 
-pub(super) fn panel_lines(lines: &mut Vec<String>, stats: &AssistStats, panel_width: usize) {
+pub(super) fn panel_lines(
+    lines: &mut Vec<String>,
+    stats: &AssistStats,
+    panel_width: usize,
+    title: &str,
+) {
     let rows = category_rows(&stats.rollup, CategoryMode::Dashboard);
     if rows.is_empty() {
         return;
     }
-    lines.push(format!(
-        "  {}",
-        render::paint(render::palette::header(), "Assists")
-    ));
+    lines.push(render::paint(render::palette::header(), title));
     let split = rows.len().div_ceil(2);
     two_column(lines, &rows[..split], &rows[split..], panel_width);
 }
