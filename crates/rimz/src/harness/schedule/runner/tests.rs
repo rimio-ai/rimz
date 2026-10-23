@@ -1812,7 +1812,10 @@ fn hosted_check_interrupt_kills_the_group_without_a_timeout() {
         .trim()
         .parse()
         .unwrap();
-    assert!(!crate::proc::process_is_live(descendant, None));
+    assert!(
+        wait_for_process_exit(descendant, Duration::from_secs(2)),
+        "descendant {descendant} outlived the group kill"
+    );
 }
 
 #[test]
@@ -1849,7 +1852,10 @@ fn hosted_check_interrupts_pipe_holders_after_the_shell_exits() {
         .trim()
         .parse()
         .unwrap();
-    assert!(!crate::proc::process_is_live(descendant, None));
+    assert!(
+        wait_for_process_exit(descendant, Duration::from_secs(2)),
+        "descendant {descendant} outlived the group kill"
+    );
 }
 
 #[test]
@@ -1890,7 +1896,10 @@ fn hosted_check_publication_error_kills_the_group_and_returns_the_error() {
         .trim()
         .parse()
         .unwrap();
-    assert!(!crate::proc::process_is_live(descendant, None));
+    assert!(
+        wait_for_process_exit(descendant, Duration::from_secs(2)),
+        "descendant {descendant} outlived the group kill"
+    );
 }
 
 #[test]
