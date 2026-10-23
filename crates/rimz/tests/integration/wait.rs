@@ -319,7 +319,27 @@ fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
         );
         let rows: serde_json::Value =
             serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        assert_eq!(rows[0]["state"], "starting");
+        assert!(wait_ok(&env, &["wait", "list"]).contains("starting"));
+        let loops: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["loop", "list", "--json"])).unwrap();
+        assert!(loops["rooms"][0]["tasks"][0].get("attention").is_none());
+        let mut tasks = wait_instances(&env);
+        for entry in tasks.0.values_mut() {
+            entry.wait_meta.as_mut().unwrap().armed_at =
+                jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60);
+        }
+        std::fs::write(
+            loop_instances_path(&env),
+            serde_json::to_vec(&tasks).unwrap(),
+        )
+        .unwrap();
+        let rows: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
         assert_eq!(rows[0]["state"], "lost");
+        let loops: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["loop", "list", "--json"])).unwrap();
+        assert_eq!(loops["rooms"][0]["tasks"][0]["attention"], "lost");
         assert!(rows[0]["elapsed_s"].is_u64());
         assert_eq!(rows[0]["check_in"], timeout, "keepalive {switch}");
         assert_eq!(rows[0]["check_in_s"], timeout_s, "keepalive {switch}");

@@ -1106,7 +1106,8 @@ path = "crates/rimz/src/harness"
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
-surface-budget = 976
+# DeliveryOwner, delivery_owner and watch_lost share record provenance and watcher grace (+3).
+surface-budget = 979
 
 [[verdict]]
 kind = "item"
@@ -8751,6 +8752,21 @@ reason = "GcPolicy shares the machine's typed forever-or-duration history and te
 kind = "item"
 key = "harness::schedule::TaskKind"
 reason = "The harness classifies compiled tasks once for lifecycle presentation and durable history."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::DeliveryOwner"
+reason = "Wait and loop views share the recorded delivery provenance vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::delivery_owner"
+reason = "Lists and cancellation classify delivery provenance once from the row's name and entry."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::watch_lost"
+reason = "Both listings share the host's lost-watcher grace without changing its firing decision."
 
 [[verdict]]
 kind = "item"

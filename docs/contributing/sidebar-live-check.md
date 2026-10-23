@@ -553,7 +553,7 @@ armed wait-simple-lane: check: true → @coder#probe
 
 This check proves caller resolution, not delivery of the wait's result to the agent. To inspect hook attribution, use `sidebar snapshot --json` and read the selected agent's `runtime_owner` under `agents`: `agents show --json` does not expose that field.
 
-The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming. `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm.
+The listing that follows `armed` can read `starting` before the detached watcher takes its lock. A watch without a live watcher reads `lost` only after the host's 30-second startup grace; `wait list` and `loop list` use the same grace.
 
 ## Cache clock band
 

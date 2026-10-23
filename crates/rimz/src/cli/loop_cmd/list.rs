@@ -607,19 +607,17 @@ impl TaskRow {
         });
         let dir = entry.dir.as_ref().map(|_| entry.run_dir());
         let worktree = worktree_name(entry);
-        let owner = entry
-            .team
-            .as_ref()
-            .map(|team| Owner {
+        let owner = match schedule::delivery_owner(name, entry) {
+            schedule::DeliveryOwner::Team(team) => Some(Owner {
                 kind: OwnerKind::Team,
                 name: team.to_string(),
-            })
-            .or_else(|| {
-                entry.loop_task.as_ref().map(|name| Owner {
-                    kind: OwnerKind::Loop,
-                    name: name.clone(),
-                })
-            });
+            }),
+            schedule::DeliveryOwner::Resident(name) => Some(Owner {
+                kind: OwnerKind::Loop,
+                name: name.to_owned(),
+            }),
+            schedule::DeliveryOwner::SelfWait | schedule::DeliveryOwner::Loop(_) => None,
+        };
         let held = if running.is_some() {
             schedule::throttle::held(name, &entry.resolved_root())
         } else {
@@ -1139,7 +1137,7 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             format!("✗ failing{strikes}{exit}"),
         );
     }
-    if task.entry().watch.is_some() && !row.watcher_live {
+    if schedule::watch_lost(task.entry(), row.watcher_live, now) {
         let wake = task
             .entry()
             .wait

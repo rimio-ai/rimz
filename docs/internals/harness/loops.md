@@ -576,7 +576,7 @@ For terminal outcomes, `to_check_outcome` folds the verdict into the check machi
 
 `TaskEntry.watch` is an untagged `WatchSpec`: a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. A file mark records size, modification time, device, and inode; no mark means absent at arm time. `WatchSpec::describe` owns trigger text and `headline` owns the delivered first line.
 
-`arm_delivery` stores the arming agent's handle as `WaitMeta.reader`, creates `out/<reader>/<name>.output` with its directory, and spawns a detached `rimz wait watch <name>` with null stdin and stdout, the output file as stderr, and `process_group(0)`, through `child_process::spawn_detached_reaped_as_agent`: the watcher runs the agent's own command, so it keeps the agent's environment, temp unit included, where every other detached child gets the user's `TMPDIR` back. A spawn failure rolls the row back.
+`arm_delivery` stores the arming agent's name (a petname for a launched child) as `WaitMeta.reader`, creates `out/<reader>/<name>.output` with its directory, and spawns a detached `rimz wait watch <name>` with null stdin and stdout, the output file as stderr, and `process_group(0)`, through `child_process::spawn_detached_reaped_as_agent`: the watcher runs the agent's own command, so it keeps the agent's environment, temp unit included, where every other detached child gets the user's `TMPDIR` back. A spawn failure rolls the row back.
 
 `signal::run_watcher` takes `locks/loop-watch-<name>.lock` in the room state directory before it reloads and checks the catalog row, which closes the race with a cancel that lands before the watcher starts. The lock holds `{pid, started_at}`, and a second watcher for the same task exits without running the command. Claims, probes, and GC removal reach the lease only under its directory's `lease-gate.lock`; the gate covers the attempt and body I/O, not the lifetime hold. Gated holders publish a complete body before probes can read it, and a transient probe or GC attempt cannot make a starting watcher exit. Gate acquisition waits up to five seconds; a timeout is an error naming the gate path and a `fuser` hint, never another claimant.
 
@@ -602,9 +602,10 @@ A wait is a session-pinned delivery row: a `Deliver` task whose target is one li
 | --- | --- | --- |
 | `SelfWait` | a delay or a watch spec; no prompt, separate check guard, surplus gate, or deadline | minted, workspace-unique `wait-<petname>` |
 | `Loop` | a named clock or signal delivery | given |
+| `Resident(task)` | a standing signal subscription | generated for the resident loop |
 | `Team(instance)` | a standing signal subscription | generated ([Team bindings](#team-bindings)) |
 
-`SelfWait` is the only provenance that writes `wait_meta`: `armed_at` and the optional `delay`. A name that belongs to a project task, or for a team row to a machine task, is refused as configuration-owned.
+`SelfWait` is the only provenance that writes `wait_meta`: `armed_at` and the optional `delay`. `schedule::delivery_owner` classifies records in order: team, resident loop, self wait, then a plain loop named after its row. `schedule::watch_lost` shares the host's `WATCH_LOST_GRACE_SECS`: a missing watcher with self-wait metadata reads `starting` through 30 seconds after arming, then `lost`; rows without that metadata have no grace. The host's firing decision is unchanged. A name that belongs to a project task, or for a team row to a machine task, is refused as configuration-owned.
 
 `rimz wait` accepts a positive delay under 24 hours, a positive `--pid`, a polled `--check`, a `--file` with optional `--grep`, or `--run`, and resolves the live calling agent through `@me`; a user shell cannot arm or cancel. `DeliveryTrigger::Watch` carries the spec, row polarity, and check-in timeout. PID watches observe existence, not process identity or exit status, and reject `--on`.
 

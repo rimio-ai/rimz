@@ -174,7 +174,7 @@ A silent command reads `· no output` after its verdict and names no file. A `--
 
 ### The output file
 
-The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors, where `<reader>` is the handle of the agent that armed the wait. A check truncates it before each run; a file pattern watch writes its matched line. The message shows that host path in every isolation.
+The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors, where `<reader>` is the name of the agent that armed the wait (a petname for a launched child). A check truncates it before each run; a file pattern watch writes its matched line. The message shows that host path in every isolation.
 
 Closing the room keeps the file. `rimz gc` removes it once no watcher runs and the file has not been written for 7 days; `rimz reset --hard` removes it at once. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 
@@ -194,7 +194,7 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 | --- | --- |
 | `NAME` | The wait or task name. |
 | `TYPE` | `timer`, `watch` (command), `check`, `pid`, `file`, `signal`, or `schedule` (loop clock). |
-| `STATE` | `pending` for a timer; `waiting` for a signal or loop clock; `watching` or `lost` for a command, PID, check, or file row; `disabled` or `paused` for a held row. A check-in leaves the state `watching`. |
+| `STATE` | `pending` for a timer; `waiting` for a signal or loop clock; `watching`, `starting` (no watcher within the 30-second startup grace), or `lost` for a command, PID, check, or file row; `disabled` or `paused` for a held row. A check-in leaves the state `watching`. |
 | `TARGET` | The target agent's handle. |
 | `ELAPSED` | Time since the self wait was armed, including lost watches; `-` for signal and loop clock rows. |
 | `CHECK-IN` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
