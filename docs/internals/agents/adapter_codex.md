@@ -173,6 +173,17 @@ RimZ reads the one resolved config file, not Codex's merged layer stack. Provide
 
 The preview edits TOML through `toml_edit`, preserving existing comments and order, and sets only `projects.<key>.trust_level` to `trusted`. Its key is the main repository root when supplied, otherwise the nearest marker root. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer compares the current bytes with the preview's original before publication through the symlink-following provider-file writer. Detection never grants trust; callers own consent. This is a freshness check before replacement, not a filesystem transaction with an upstream process writing concurrently.
 
+### Headless form
+
+`CodexHeadless` ([`codex/headless.rs`](../../../crates/rimz/src/agents/adapters/codex/headless.rs)) is the [headless form](./adapter.md#the-spec) that loop and workflow judges run. Its argv keeps the profile args except `--no-daemon`, then appends `-c features.hooks=false exec --json`, then `--output-schema <schema file>` unless the request's schema is open, then `-o <verdict file>` and `-- <prompt>`. Hooks are off, so the check fires no RimZ hook.
+
+`read_result` reads two places:
+
+- Usage comes from the `turn.completed` events on stdout, the last one winning, and lines that do not parse are skipped. Input tokens include cached input. The cost prices that split for the launch model, at the fast multiplier when the launch posture had fast on ([cost](#cost)). A model name that is not priceable, or has no price, leaves the cost unknown.
+- The value is the verdict file `-o` wrote. A file that cannot be read or does not hold JSON is an `Other` error, and the usage read from stdout still lands.
+
+The Codex form never reports `ProviderLimit`.
+
 ## Session registration and launch quirks
 
 Codex registers its session lazily. A plain launch fires no hook; the first prompt fires `SessionStart` and `UserPromptSubmit` together. Until then the pane is an instance with no session, and the sidebar shows its [idle placeholder row](./instances.md#before-a-session-binds). A `codex resume <id>` launch already knows its id, so the exec wrapper attaches the card before Codex registers ([binding](./instances.md#binding-a-session)).
