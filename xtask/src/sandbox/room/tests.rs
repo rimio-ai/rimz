@@ -212,7 +212,11 @@ esac
         sandbox: &sandbox,
         binary: &binary,
         mux: "tmux",
-        path: std::env::var_os("PATH").unwrap(),
+        path: std::env::join_paths(
+            std::iter::once(cwd.clone())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap(),
         cwd,
     };
     room.ready().unwrap();
@@ -526,6 +530,68 @@ exit 1
             assert_eq!(queries, expected);
         });
     }
+}
+
+#[test]
+fn tmux_waits_for_a_pty_client_after_errors_and_control_clients() {
+    with_ready_room(|room, record| {
+        let tmux = room.cwd.join("tmux");
+        std::fs::write(
+            &tmux,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> client-queries
+if test ! -f client-error; then
+    touch client-error
+    printf '%s\n' 'session not ready' >&2
+    exit 1
+fi
+if test ! -f client-control; then
+    touch client-control
+    printf '1\n'
+    exit 0
+fi
+printf '1\n0\n'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(room.cwd.join("client-queries"), "").unwrap();
+
+        room.wait_for_client(&record.session, 0, Duration::from_secs(30))
+            .unwrap();
+        let queries = std::fs::read_to_string(room.cwd.join("client-queries")).unwrap();
+        let expected = format!(
+            "-S {} list-clients -t private -F #{{client_control_mode}}",
+            room.sandbox.root.join("runtime/rimz/tmux/server").display()
+        );
+        assert_eq!(queries.lines().collect::<Vec<_>>(), [expected.as_str(); 3]);
+    });
+}
+
+#[test]
+fn tmux_client_wait_reports_the_last_listing_error_at_its_deadline() {
+    with_ready_room(|room, record| {
+        let tmux = room.cwd.join("tmux");
+        std::fs::write(
+            &tmux,
+            "#!/bin/sh\nprintf '%s\\n' 'error connecting to server (No such file or directory)' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = room
+            .wait_for_client(&record.session, 0, Duration::ZERO)
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("no pty client attached to private"),
+            "{message}"
+        );
+        assert!(
+            message.contains("error connecting to server (No such file or directory)"),
+            "{message}"
+        );
+    });
 }
 
 #[cfg(target_os = "linux")]

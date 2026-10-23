@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use super::{Agent, DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
@@ -30,6 +30,9 @@ struct TeamInstance {
     channel: String,
     members: Vec<Agent>,
 }
+
+/// The room's tmux server socket under the sandbox root, whose `XDG_RUNTIME_DIR` is `runtime`.
+const TMUX_SOCKET: &str = "runtime/rimz/tmux/server";
 
 #[derive(Deserialize)]
 struct Renderer {
@@ -206,9 +209,9 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
         quote(binary.as_os_str()),
         quote(OsStr::new(&session))
     );
-    // Zellij materializes a new tab's layout panes only while a client is attached, so the
-    // client comes up before the team: without it `teams` fails in the backend's
-    // `wait_for_named_tab_materialized`.
+    // The client comes up before the team on both backends: Zellij materializes a new tab's
+    // layout panes only for a client, and tmux's attach reconciles the session's sidebars during
+    // its room entry, which can replace a sidebar the team's tab docks meanwhile.
     let client_pane = output(
         "sized client attach",
         room.command("tmux").args([
@@ -230,7 +233,7 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
         .trim()
         .parse()
         .context("parsing client pane PID")?;
-    room.wait_for_client(&session, pane_pid)?;
+    room.wait_for_client(&session, pane_pid, Duration::from_secs(30))?;
     room.rimz(
         "team launch",
         &["teams", "forge", "-w", "probe", "--isolation", "host"],
@@ -251,7 +254,7 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
     };
     let panes = room.ready()?;
     // Warm every tab, the team's last, so each sidebar has been watched once and hands over
-    // at the client's width.
+    // at the width of the client `wait_for_client` saw attach.
     let mut tabs: Vec<_> = panes.tabs.iter().enumerate().collect();
     tabs.sort_by_key(|(_, tab)| tab.panes.iter().any(|pane| pane.kind == "agent"));
     for (index, tab) in tabs {
@@ -408,27 +411,60 @@ impl Room<'_> {
         }
     }
 
-    /// The client attaches asynchronously, and Zellij materializes a new tab's layout panes
-    /// only while one is attached; tmux needs no client, so only Zellij waits.
-    fn wait_for_client(&self, session: &str, pane_pid: u32) -> Result<()> {
-        if self.mux != "zellij" {
-            return Ok(());
-        }
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            // An id listed for the whole window is an attached client, not a bootstrap or action
-            // row, and the same own attach process alive on both sides of it makes that client
-            // ours.
-            if let Some(pid) = client_pid(pane_pid, session)
-                && self.client_stays_listed(session)
-                && client_pid(pane_pid, session) == Some(pid)
-            {
-                return Ok(());
+    /// The client attaches asynchronously, and the team must wait for it on both backends.
+    /// Zellij materializes a new tab's layout panes only while a client is attached. A tmux
+    /// attach reconciles the session's sidebars during its room entry, before its client
+    /// exists, and can replace a sidebar that a tab launch docks meanwhile.
+    fn wait_for_client(&self, session: &str, pane_pid: u32, patience: Duration) -> Result<()> {
+        let deadline = Instant::now() + patience;
+        if self.mux == "zellij" {
+            loop {
+                // An id listed for the whole window is an attached client, not a bootstrap or
+                // action row, and the same own attach process alive on both sides of it makes
+                // that client ours.
+                if let Some(pid) = client_pid(pane_pid, session)
+                    && self.client_stays_listed(session)
+                    && client_pid(pane_pid, session) == Some(pid)
+                {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    bail!(
+                        "no client attached to {session}; Zellij materializes a new tab's layout panes only for one"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(200));
             }
+        }
+        let mut list = self.command("tmux");
+        list.arg("-S")
+            .arg(self.sandbox.root.join(TMUX_SOCKET))
+            .args([
+                "list-clients",
+                "-t",
+                session,
+                "-F",
+                "#{client_control_mode}",
+            ]);
+        loop {
+            // Keep the last listing, failed or not, so a dead multiplexer surfaces its own error.
+            let last = match output("client list", &mut list) {
+                Ok(clients) => {
+                    let clients = String::from_utf8_lossy(&clients);
+                    // The presence watch holds a control-mode client on the session from its
+                    // start, so only a pty client shows that the attach has finished its room
+                    // entry.
+                    if clients.lines().any(|mode| mode == "0") {
+                        return Ok(());
+                    }
+                    anyhow!("client list printed {:?}", clients.trim_end())
+                }
+                Err(error) => error,
+            };
             if Instant::now() >= deadline {
-                bail!(
-                    "no client attached to {session}; Zellij materializes a new tab's layout panes only for one"
-                );
+                return Err(last.context(format!(
+                    "no pty client attached to {session}; the tmux attach must finish room-entry sidebar reconciliation before a tab launch, or it can replace that tab's new sidebar"
+                )));
             }
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -809,7 +845,7 @@ fn render_card(
         writeln!(
             card,
             "Focus: {sandbox} tmux -S {} display -p '#{{pane_id}}'",
-            quote(root.join("runtime/rimz/tmux/server").as_os_str())
+            quote(root.join(TMUX_SOCKET).as_os_str())
         )?;
     } else {
         writeln!(
