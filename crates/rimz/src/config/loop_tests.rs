@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn shell_watch_previews_preserve_trailing_redirects() {
+    let short = "cargo test > /tmp/gate.log 2>&1";
+    assert_eq!(WatchSpec::Command(short.into()).subject(), short);
+    let path = format!("/long/{}/gate.log", "directory/".repeat(7));
+    for operator in [">", ">>", "2>", "&>"] {
+        let clause = format!("{operator} {path} 2>&1");
+        let command = format!("cargo xtask test {} {clause}", "argument ".repeat(7));
+        for spec in [
+            WatchSpec::Command(command.clone()),
+            WatchSpec::Check {
+                check: command.clone(),
+                every: "1s".into(),
+                on: CheckOn::Success,
+            },
+        ] {
+            let preview = spec.subject();
+            assert!(preview.starts_with("cargo xtask test "), "{preview}");
+            assert!(preview.ends_with(&clause), "{preview}");
+            assert!(preview.contains('…'), "{preview}");
+            assert!(preview.ends_with(&format!("… {clause}")), "{preview}");
+            assert!(spec.headline().contains(&clause), "{}", spec.headline());
+        }
+    }
+    for command in [
+        format!("echo '{}'", "x".repeat(150)),
+        format!("echo {} '>' {path}", "x".repeat(90)),
+        format!("echo {} \">\" {path}", "x".repeat(90)),
+        format!("echo {} \\> {path}", "x".repeat(90)),
+        format!("echo {} > file && echo done", "x".repeat(150)),
+    ] {
+        assert_eq!(
+            WatchSpec::Command(command.clone()).subject(),
+            crate::theme::fmt::command_preview(&command)
+        );
+    }
+}
+
+#[test]
 fn guard_reads_judge_table_array_and_legacy_check_in_order() {
     for source in [
         "check = 'cargo test'\ncheck-timeout = '10m'\njudge = { agent = 'haiku', prompt = 'q' }",
