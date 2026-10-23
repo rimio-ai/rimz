@@ -181,7 +181,7 @@ The heading names the provider and CLI version: the active account's version, el
 | `RESET CREDITS` | Only when some row reports reset credits: count plus the nearest expiry (`2 · exp 9d14h`), `2 · due` after expiry, a bare count without an expiry, `-` at zero, or `–` when unknown. |
 | `AGENTS` | Live cross-room agent count, `-` for none, or `–` when rooms or a live room's agents could not be read. Remote-control daemons are not agents. |
 | `SPEND 7d` | Only when some account is standalone: its own trailing-week spend, `-` when unrecorded, or `shared` for default-pool members. |
-| `READING` | Only when some row lacks an expected usage reading: `never read` or `no reading since <date>`. |
+| `READING` | Only when some row lacks an expected usage reading: `never read` or `no reading since <date>`. Claude, Codex and Kimi expect their declared windows unless unmetered. Other accounts must be known-metered and support direct usage reads; Pi and OpenCode also need a backing login with readable quotas. OpenCode OpenAI OAuth qualifies; Pi OpenAI OAuth does not. An observed window also establishes the expectation, except on unmetered accounts. |
 
 `PLAN` applies this precedence: `not installed`; a setup problem (`home missing`, `hooks missing`, `hooks untrusted`, `hooks disabled`, `unavailable`); `lapsed`; `no login check` for providers without a login check; `logged out`; `not probed` or `probe failed`; then the plan label. Setup problems use warning tones, lapses the failure tone, and login states their provider-status tones. A setup problem takes precedence over a lapse in both `PLAN` and its repair line.
 
@@ -230,7 +230,7 @@ Blocks use the table's state precedence in their titles, alongside the plan and 
 | `account` | Non-secret provider account id, when known. |
 | `provider`, `scope` | Backing provider and scoped provider/variant, when applicable. |
 | One row per window | Percentage left, reset countdown, pace when available, and observation age when known; `no limit` for a lifted window. |
-| `usage` | `no limit` for an unmetered account, or its missing-reading reason when expected. |
+| `usage` | `no limit` for an unmetered account, or its missing-reading reason under the per-account [`READING` rule](#provider-tables). Accounts without readable quotas omit a missing-reading reason. |
 | `extra` | `off`, `unlimited`, or known dollars used, left, and limit; ` · paying` when paid credit is next. Without a reported limit, the ceiling is `[accounts.usage_limit_usd]`. |
 | `reset credits` | Positive banked count and up to three known expiries as `YYYY-MM-DD HH:MM:SS ±HH:MM` in machine timezone, then `in <interval>` or `due`. |
 | `spend` | History pool's trailing 7- and 30-day spend on default and standalone accounts; shared named members omit it. Default without published spend reads `–`. |

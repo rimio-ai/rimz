@@ -1154,23 +1154,42 @@ fn shared_pool_spend_appears_once_with_standalone_spend_in_its_row() {
 }
 
 #[test]
-fn providers_without_expected_windows_do_not_claim_a_missing_reading() {
+fn missing_readings_follow_the_accounts_quota_surface() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
-    for kind in ["pi", "opencode", "copilot", "grok", "cursor"] {
+    for (kind, provider, metered, expected) in [
+        ("opencode", Some("openai"), true, true),
+        ("copilot", None, true, true),
+        ("pi", Some("openai"), true, false),
+        ("pi", Some("openai-codex"), false, false),
+        ("grok", None, true, false),
+        ("cursor", None, true, false),
+    ] {
         let mut reports = group(kind, vec![("default", panel(kind))]);
+        reports[0].sub_provider = provider.map(str::to_owned);
+        reports[0].metered = Some(metered);
         let text = overview(&reports, now, &BTreeMap::new(), false);
-        assert!(!text.contains("READING"), "{text}");
+        assert_eq!(text.contains("READING"), expected, "{kind}: {text}");
+        assert_eq!(text.contains("never read"), expected, "{kind}: {text}");
         let mut out = anstream::StripStream::new(Vec::new());
         write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
-        assert!(!text.contains("usage:"), "{text}");
+        if metered {
+            assert_eq!(text.contains("usage:"), expected, "{kind}: {text}");
+        } else {
+            assert!(text.contains("no limit"), "{text}");
+            assert!(!text.contains("never read"), "{text}");
+        }
 
         reports[0].windows.push(RateLimitWindow {
             observed_at: Some(now),
             ..Default::default()
         });
         let text = overview(&reports, now, &BTreeMap::new(), false);
-        assert!(text.contains("no reading since 2023-11-14"), "{text}");
+        assert_eq!(
+            text.contains("no reading since 2023-11-14"),
+            metered,
+            "{text}"
+        );
     }
 }
 

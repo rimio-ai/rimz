@@ -347,6 +347,32 @@ fn quota_surface(adapter: Adapter, provider: &str) -> Option<QuotaSurface> {
     }
 }
 
+/// Whether this login has an out-of-band quota reading RimZ can expect.
+pub fn expects_usage_reading(
+    kind: &crate::ids::AgentKind,
+    metered: Option<bool>,
+    sub_provider: Option<&str>,
+) -> bool {
+    if metered == Some(false) {
+        return false;
+    }
+    let Some(spec) = super::spec_by_kind(kind.as_str()) else {
+        return false;
+    };
+    if !spec.expected_windows.is_empty() {
+        return true;
+    }
+    if !spec.capabilities.direct_account_usage || metered != Some(true) {
+        return false;
+    }
+    let adapter = match kind.as_str() {
+        "pi" => Adapter::Pi,
+        "opencode" => Adapter::OpenCode,
+        _ => return true,
+    };
+    sub_provider.is_some_and(|provider| quota_surface(adapter, provider).is_some())
+}
+
 fn oauth_scope(adapter: Adapter, provider: &str) -> Option<ProviderAccountScope> {
     quota_surface(adapter, provider).map(|surface| match surface {
         QuotaSurface::Anthropic => ProviderAccountScope::sub_provider("anthropic", "oauth"),
@@ -388,6 +414,52 @@ fn hashed_account_key(domain: &[u8], secret_kind: &str, secret: &str) -> String 
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn delegated_readings_require_a_metered_quota_surface() {
+        for (kind, provider, expected) in [
+            ("pi", "openai", false),
+            ("pi", "openai-codex", true),
+            ("pi", "anthropic", true),
+            ("opencode", "openai", true),
+            ("opencode", "anthropic", true),
+            ("opencode", "other", false),
+        ] {
+            let kind = crate::ids::AgentKind::new_unchecked(kind);
+            assert_eq!(
+                expects_usage_reading(&kind, Some(true), Some(provider)),
+                expected,
+                "{kind}/{provider}"
+            );
+            assert!(!expects_usage_reading(&kind, Some(false), Some(provider)));
+            assert!(!expects_usage_reading(&kind, None, Some(provider)));
+        }
+    }
+
+    #[test]
+    fn reading_expectations_keep_static_windows_and_direct_metered_accounts() {
+        for kind in ["claude", "codex", "kimi"] {
+            let kind = crate::ids::AgentKind::new_unchecked(kind);
+            assert!(expects_usage_reading(&kind, None, None), "{kind}");
+            assert!(!expects_usage_reading(&kind, Some(false), None), "{kind}");
+        }
+        for (kind, expected) in [
+            ("copilot", true),
+            ("qwen", true),
+            ("antigravity", true),
+            ("grok", false),
+            ("cursor", false),
+            ("amp", false),
+        ] {
+            let kind = crate::ids::AgentKind::new_unchecked(kind);
+            assert_eq!(
+                expects_usage_reading(&kind, Some(true), None),
+                expected,
+                "{kind}"
+            );
+            assert!(!expects_usage_reading(&kind, None, None), "{kind}");
+        }
+    }
 
     fn no_used_provider() -> Option<String> {
         None

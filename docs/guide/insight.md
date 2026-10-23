@@ -86,7 +86,7 @@ Totals rows close the dashboard, summing every provider across the trailing week
 
 Outside the sidebar, `rimz accounts` compares account facts without recommending a switch. Providers with a logged-in account or [named accounts](./accounts.md) get a table; the rest fold into an `Also:` line, expanded by `--all`. The shared pool's 7-day spend appears once in the heading, with its members when every account shares it; standalone accounts have their own spend column. `●` marks what a launch from here uses, inside or outside a room; the footer names the deciding layer. `○` marks the default for new rooms only when that row is not already `●`. It probes every login and runs any usage read that is due, publishing what it learns into the caches the sidebar reads; it touches no agent and no room. The tables, freshness labels, per-provider blocks, flags, and JSON form are the [accounts reference](../reference/cli/accounts.md).
 
-Missing-reading labels appear only for usage windows RimZ expects from that provider or has already observed, not for every account without a usage reading.
+Missing-reading labels appear only for quotas RimZ can read on that account, or windows it has already observed, never for unmetered accounts. Pi's OpenAI OAuth login has no readable quota, so its blank label does not mean a failed read. The [reference](../reference/cli/accounts.md#provider-tables) names which accounts expect readings.
 
 #### Budget is not spend
 
