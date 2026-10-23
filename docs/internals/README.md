@@ -11,7 +11,7 @@ Read the shape before a subsystem. [DESIGN.md](../../DESIGN.md) states the atten
 | Page | What it owns |
 | --- | --- |
 | [model.md](./agents/model.md) | The agent model: status and phase, the rollup and its field lifetimes, the state machine, publishing transitions, the displayed status, activity clocks, and enrichment. |
-| [instances.md](./agents/instances.md) | Agent instances: recognizing a hosted CLI, binding a session to a pane, same-pane ownership, launch identity across conversations, instance exit, and session death. |
+| [instances.md](./agents/instances.md) | Agent instances: recognizing a hosted CLI, binding a session to a pane (including local session observations), same-pane ownership, launch identity across conversations, instance exit, and session death with supersession. |
 | [attribution.md](./agents/attribution.md) | Effort attribution: record selection by lane and lifetime, the seat fold, where each figure comes from, and membership. |
 | [adapter.md](./agents/adapter.md) | The adapter layer: the registry, the spec and the capability traits, the hook path, hook install, context sources, declared coverage, and adding an agent. |
 | [plugin.md](./agents/plugin.md) | Process plugins: loading, the derived spec, canonical hook ingest, probes, invalid-manifest handling at each entry point, and the authoring commands. |
