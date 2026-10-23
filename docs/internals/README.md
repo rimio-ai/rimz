@@ -55,15 +55,16 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 
 | Page | What it owns |
 | --- | --- |
-| [theme.md](./theme.md) | The theme core: the four-layer color pipeline and its three renderers, perceptual color math, palette resolution, color depth and degradation, glyphs, provider identity, the interface language, shared value formats, and the theme boundaries. |
-| [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, hook ingress, the write path and write classes, the read path, session death, maintenance, and what survives what. |
-| [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation and the subagent cap, provider sandbox flags, bubblewrap preflight, the launch plan, mount order, reachable host paths, environment pins, temp units, the system SSH-config mirror, the launch reminder, toolchain homes, and profile skill views. |
-| [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle and room admission, both backends, and the Zellij presence plugin. |
-| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, how the rest of the room treats them, the content supervisor, reconciliation, repair, and who repairs when. |
-| [remote.md](./remote.md) | SSH attach: targets and aliases, the command RimZ runs on the host and its entry gates, the connect loop and reconnect pacing, terminal hygiene, the connection panel, link health, port forwarding, web tunnels, and bandwidth attribution. |
-| [web.md](./web.md) | Browser access: the writable and broadcast daemons, the token gate, room attach and the session picker, sharing a room, the token store, the browser client, configuration, remote rooms, and the security boundaries. |
-| [stats.md](./stats.md) | The `rimz stats` surfaces (one-shot report, held dashboard, JSON): where the figures come from, windows, the heatmap, breakdowns, insights, terminal fitting, and the assist rollup. |
-| [lsp.md](./lsp.md) | Shared language servers: lifecycle and stop reasons, memory pressure, learned cost, the broker, freshness, editors, state and query usage, configuration, what agents see, the query surface, anchor checks, and the status commands. |
+| [theme.md](./theme.md) | The theme core: the four-layer color pipeline and its three renderers, palette resolution and the ramp accessors, color depth and graceful degradation, glyphs, provider identity, the interface language and CLI state roles, shared value formats, and the theme boundaries with their known breaks. |
+| [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, hook ingress and its drain cursor, the write path and write classes, the read path, session death, maintenance, and what survives what. |
+| [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation and the subagent cap, provider sandbox flags, bubblewrap preflight, mount order and protected paths, reachable host paths, environment pins and hook-frame mapping, temp units, toolchain homes, and profile skill views. |
+| [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle with the `room/` birth, health gate, and reset, both backends, and the Zellij presence plugin. |
+| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, how the rest of the room classifies them, the content supervisor, reconciliation, repair and the shape check, and who repairs when. |
+| [remote.md](./remote.md) | SSH attach: targets and aliases, the connect loop and reconnect pacing, terminal hygiene, the connection panel, link health, port forwarding, web tunnels, and bandwidth attribution. |
+| [web.md](./web.md) | Browser access: the writable and broadcast daemons, the named-token and trusted-header gate, room attach and the session picker, sharing a room, the token store, the browser client, remote rooms, and the security boundaries. |
+| [stats.md](./stats.md) | The `rimz stats` panel: where its figures come from, windows, the heatmap and breakdowns, terminal fitting, the held dashboard, and the machine-readable surfaces. |
+| [lsp.md](./lsp.md) | Shared language servers: per-checkout queries, editor attachment, launch-time admission, process leases, memory watchdog, learned cost, and the broker. |
+| [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable log and its record envelope, the event taxonomy, the frame-stream observer, retention, frame captures, reading an episode, and off-box error reporting. |
 
 ## Cost and profiling
 
