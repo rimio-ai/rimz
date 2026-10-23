@@ -1333,7 +1333,7 @@ fn classify_diagnostic(
         | DiagEvent::SidebarWidthSettle { .. }
         | DiagEvent::WorkPaneBoundaryMoved { .. }
         | DiagEvent::HiddenViewsFitted { .. }
-        | DiagEvent::FetchDeliveryStats { .. }
+        | DiagEvent::FetchReductionStats { .. }
         | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
         DiagEvent::HookDrainLag { .. }

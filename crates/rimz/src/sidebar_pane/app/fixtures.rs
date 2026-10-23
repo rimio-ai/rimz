@@ -6,6 +6,91 @@ use crate::sidebar_pane::app::ServeConfig;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use jiff::Timestamp;
+use std::sync::Arc;
+
+pub(super) fn fold(
+    snapshot: SidebarSnapshot,
+    own: Option<&PaneId>,
+    sidebars: Vec<(PaneId, String)>,
+) -> super::fetch::WorkspaceFold {
+    let frame = snapshot.own_view.as_ref().map(|view| {
+        let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
+        let tab = panes
+            .iter()
+            .find(|pane| view.working_pane_ids.contains(&pane.pane_id))
+            .and_then(|pane| pane.view_id.clone())
+            .unwrap_or_else(|| "tab_sidebar".into());
+        // The own view names the sidebar's tab; fixture rows default every pane onto
+        // one tab, so move the rest off it.
+        for other in panes
+            .iter_mut()
+            .filter(|pane| !view.working_pane_ids.contains(&pane.pane_id))
+            .filter(|pane| pane.view_id.as_deref() == Some(tab.as_str()))
+        {
+            other.view_id = Some(format!("{tab}_other"));
+        }
+        for working in panes
+            .iter_mut()
+            .filter(|pane| view.working_pane_ids.contains(&pane.pane_id))
+        {
+            working.view_id = Some(tab.clone());
+        }
+        for id in &view.working_pane_ids {
+            if !panes.iter().any(|pane| pane.pane_id == *id) {
+                let mut working = pane(id.raw(), &tab, false);
+                working.pane_id = id.clone();
+                panes.push(working);
+            }
+        }
+        for (id, tab) in own
+            .cloned()
+            .map(|own| (own, tab.clone()))
+            .into_iter()
+            .chain(sidebars)
+        {
+            if !panes.iter().any(|pane| pane.pane_id == id) {
+                let mut sidebar = pane(id.raw(), &tab, false);
+                sidebar.pane_id = id;
+                sidebar.command = Some("rimz-sidebar".into());
+                panes.push(sidebar);
+            }
+        }
+        let siblings = panes
+            .iter()
+            .filter(|pane| pane.view_id.as_ref() == Some(&tab) && Some(&pane.pane_id) != own)
+            .count();
+        for index in siblings..view.sibling_count {
+            let mut chrome = pane(&format!("fixture_chrome_{index}"), &tab, false);
+            if let Some(own) = own {
+                chrome.pane_id = PaneId::from_parts(own.mux(), chrome.pane_id.raw());
+            }
+            chrome.command = Some("rimz-sidebar".into());
+            panes.push(chrome);
+        }
+        let mut frame = crate::sidebar::frame::assemble_frame(
+            panes,
+            snapshot.panes_observed_at_ms.unwrap_or(1),
+            "rimz-test",
+        );
+        frame.client_views = snapshot.client_views.clone();
+        frame.presence = snapshot.presence.map(|presence| {
+            use crate::store::snapshot::{PresenceSample, SidebarPresence};
+            PresenceSample {
+                human_clients: usize::from(presence != SidebarPresence::Detached),
+                last_input_ms: match presence {
+                    SidebarPresence::Idle { last_input_ms } => Some(last_input_ms),
+                    _ => None,
+                },
+                sampled_at_ms: snapshot.now.as_millisecond().max(0) as u64,
+            }
+        });
+        Arc::new(frame)
+    });
+    super::fetch::WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+        frame,
+    }
+}
 
 pub(super) fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
     let ws = workspace();
@@ -44,6 +129,17 @@ pub(in crate::sidebar_pane) fn remember_fold(
     plane.remember(super::fetch::WorkspaceFold {
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
         frame: Some(std::sync::Arc::new(frame)),
+    });
+}
+
+pub(in crate::sidebar_pane) fn publish_fold(
+    plane: &super::DataPlane,
+    snapshot: SidebarSnapshot,
+    frame: crate::sidebar::frame::PaneFrame,
+) {
+    plane.publish_fold(super::fetch::WorkspaceFold {
+        workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+        frame: Some(Arc::new(frame)),
     });
 }
 

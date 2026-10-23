@@ -59,8 +59,6 @@ fn deliver_sampled(
             workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
             frame: Some(Arc::new(frame)),
         }),
-        own_pane: rig.state.config.own_pane.clone(),
-        refresh_override: rig.state.config.refresh_ms_override,
         phase: FetchPhase::Final,
         source: SnapshotSource::Produced,
     });
@@ -1516,20 +1514,20 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
     rig.fold(snapshot, SnapshotSource::Produced);
+    let projections = rig.state.projections;
     let selected = rig.view().ui.selected_pane.clone();
     let anchor = requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     let mut pending = rig.state.current.clone();
     pending.display_name = "waiting fold".to_owned();
-    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
-        .unwrap();
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
     let (push, ack) = focus_push(&mut rig, anchor.clone());
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(
-        rig.state.projections, 0,
-        "non-owner must leave projection in the mailbox"
+        rig.state.projections, projections,
+        "non-owner must leave the publication unread"
     );
     assert_eq!(rig.view().last_folded_focus_intent, None);
     assert_eq!(rig.view().ui.selected_pane, selected);
@@ -1541,8 +1539,8 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
         nonce: anchor.nonce,
     });
     assert_eq!(
-        rig.state.projections, 0,
-        "a foreign intent leaves the mailbox untouched"
+        rig.state.projections, projections,
+        "a foreign intent leaves the publication unread"
     );
     assert_ne!(rig.view().current.display_name, "waiting fold");
     assert_eq!(rig.view().last_folded_focus_intent, None);
@@ -1558,8 +1556,8 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
     let mut seed = pending.clone();
     seed.own_view = Some(own_view());
     rig.fold(seed, SnapshotSource::Produced);
-    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
-        .unwrap();
+    let projections = rig.state.projections;
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
     rig.state
         .paint_hold
         .engage(Instant::now(), crate::utils::time::unix_now_ms());
@@ -1577,7 +1575,7 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
         "the pending owner must park, not report not_destination"
     );
     assert!(rig.state.pending_focus_push.is_some());
-    assert_eq!(rig.state.projections, 1);
+    assert_eq!(rig.state.projections, projections + 1);
     rig.state.paint_hold.release();
     rig.paint(true);
     assert_eq!(
@@ -1615,8 +1613,7 @@ fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
             .row_owning_pane(&zellij("terminal_2"))
             .is_none()
     );
-    rig.send(rig.lazy_update(pending, SnapshotSource::Produced))
-        .unwrap();
+    rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
     let anchor = requested_focus_anchor(
         zellij("terminal_2"),
         2,

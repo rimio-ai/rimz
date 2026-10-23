@@ -1,18 +1,19 @@
 //! Off-thread fast folds, pane production, and single-flight request coalescing.
 //! The host shares one warm rollup cursor across both lanes. Heavy cache
 //! refreshes run separately so render and input never block on production.
-//! Every admitted request folds; acknowledged equal content delivers only clocks.
+//! Every admitted request publishes a room fold; equal reductions apply only clocks.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::consumer::RollupCursor;
-use crate::sidebar::enrich::{WorkspaceSnapshot, project_local};
+use crate::sidebar::enrich::WorkspaceSnapshot;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
@@ -72,8 +73,6 @@ pub(super) enum FetchUpdate {
     },
     Fold {
         fold: Arc<WorkspaceFold>,
-        own_pane: Option<PaneId>,
-        refresh_override: Option<u16>,
         phase: FetchPhase,
         source: SnapshotSource,
     },
@@ -135,14 +134,7 @@ pub(super) struct WorkspaceFold {
 #[derive(Default)]
 pub(super) struct HostData {
     pub(super) views: Arc<Mutex<super::views::Views>>,
-    pub(super) last_fold: Option<Arc<WorkspaceFold>>,
     pub(super) inputs: Option<HostInputs>,
-}
-
-struct SnapshotPublication {
-    snapshot: SidebarSnapshot,
-    phase: FetchPhase,
-    source: SnapshotSource,
 }
 
 #[derive(Clone, Copy)]
@@ -191,14 +183,6 @@ impl FetchUpdate {
         )
     }
 
-    fn snapshot_mut(&mut self) -> Option<&mut SidebarSnapshot> {
-        match self {
-            Self::Shared { update, .. } => update.snapshot_mut(),
-            Self::Snapshot { snapshot, .. } => Some(snapshot),
-            Self::Fold { .. } | Self::Unchanged { .. } | Self::Failed { .. } => None,
-        }
-    }
-
     pub(super) fn is_success(&self) -> bool {
         match self {
             Self::Shared { update, .. } => update.is_success(),
@@ -238,10 +222,6 @@ impl FetchUpdate {
         }
     }
 
-    pub(super) fn into_unchanged(self) -> Self {
-        Self::unchanged(Arc::new(self))
-    }
-
     pub(super) fn unchanged(full: Arc<Self>) -> Self {
         let update = match full.as_ref() {
             Self::Shared { update, .. } => update.as_ref(),
@@ -259,51 +239,21 @@ impl FetchUpdate {
         }
     }
 
-    pub(super) fn into_full(self) -> Arc<Self> {
+    pub(super) fn preview_for(
+        &self,
+        pane: Option<&PaneId>,
+    ) -> Option<(Option<SidebarOwnView>, &[PaneId])> {
         match self {
-            Self::Unchanged { full, .. } => full,
-            update => Arc::new(update),
-        }
-    }
-
-    fn preview(&self) -> Option<(Option<SidebarOwnView>, &[PaneId])> {
-        match self {
-            Self::Shared { update, .. } => update.preview(),
+            Self::Shared { update, .. } => update.preview_for(pane),
             Self::Snapshot { snapshot, .. } => {
                 Some((snapshot.own_view.clone(), &snapshot.viewed_panes))
             }
-            Self::Fold { fold, own_pane, .. } => Some((
-                own_pane
-                    .as_ref()
-                    .zip(fold.frame.as_deref())
+            Self::Fold { fold, .. } => Some((
+                pane.zip(fold.frame.as_deref())
                     .and_then(|(own, frame)| SidebarOwnView::from_frame(own, frame)),
                 &fold.workspace.0.viewed_panes,
             )),
             _ => None,
-        }
-    }
-
-    fn project(
-        self,
-        project: &mut impl FnMut(&WorkspaceFold, Option<&PaneId>, Option<u16>) -> SidebarSnapshot,
-    ) -> Self {
-        match self {
-            Self::Shared { update, context } => Self::Shared {
-                update: Box::new(update.project(project)),
-                context,
-            },
-            Self::Fold {
-                fold,
-                own_pane,
-                refresh_override,
-                phase,
-                source,
-            } => Self::Snapshot {
-                snapshot: Box::new(project(&fold, own_pane.as_ref(), refresh_override)),
-                phase,
-                source,
-            },
-            update => update,
         }
     }
 
@@ -326,14 +276,9 @@ fn shared_eq<T: PartialEq + ?Sized>(left: &Arc<T>, right: &Arc<T>) -> bool {
     Arc::ptr_eq(left, right) || left == right
 }
 
-fn reuse_shared<T: PartialEq + ?Sized>(shared: &mut Arc<T>, local: &mut Arc<T>, prior: &Arc<T>) {
-    if Arc::ptr_eq(shared, prior) || shared != prior {
-        return;
-    }
-    let local_shares = Arc::ptr_eq(shared, local);
-    *shared = prior.clone();
-    if local_shares {
-        *local = prior.clone();
+fn reuse_shared<T: PartialEq + ?Sized>(shared: &mut Arc<T>, prior: &Arc<T>) {
+    if !Arc::ptr_eq(shared, prior) && shared == prior {
+        *shared = prior.clone();
     }
 }
 
@@ -528,13 +473,13 @@ struct FastFold {
     produce: bool,
 }
 
-/// A retained fetch worker and subscriber mailboxes, without a live multiplexer.
+/// A retained fetch worker and consumer cursors, without a live multiplexer.
 #[cfg(feature = "testkit")]
 pub struct IdleCycleFixture {
     worker: FetchWorker,
     sink: ResultSink,
     state: StatePaths,
-    receivers: Vec<ResultReceiver>,
+    cursors: Vec<super::views::Cursor>,
     renderers: Vec<(super::loop_state::LoopState, FetchDispatcher)>,
 }
 
@@ -572,10 +517,8 @@ impl IdleCycleFixture {
             inputs: Some(HostInputs::from_frame(frame)),
             ..Default::default()
         }));
-        let mut receivers = Vec::new();
         let mut subscriptions = BTreeMap::new();
         for index in 0..subscribers {
-            let (tx, rx) = result_channel();
             let (wake, _) = std::sync::mpsc::sync_channel(1);
             let instance_id = SidebarInstanceId::new();
             subscriptions.insert(
@@ -587,12 +530,10 @@ impl IdleCycleFixture {
                         format!("sidebar_{index}"),
                     )),
                     tick_seconds: 1,
-                    refresh_override: None,
-                    tx,
+                    completion: Arc::default(),
                     wake,
                 },
             );
-            receivers.push(rx);
         }
         Self {
             worker,
@@ -602,7 +543,7 @@ impl IdleCycleFixture {
                 host_data,
             ),
             state,
-            receivers,
+            cursors: vec![super::views::Cursor::default(); subscribers],
             renderers: Vec::new(),
         }
     }
@@ -612,15 +553,10 @@ impl IdleCycleFixture {
         self.sink.begin_cycle();
         let views = self.sink.host_data.lock().expect("host data").views.clone();
         self.renderers = self
-            .receivers
-            .drain(..)
-            .map(|rx| {
-                let subscriber = self
-                    .sink
-                    .cycle
-                    .iter()
-                    .find(|subscriber| subscriber.tx.0.ptr_eq(&Arc::downgrade(&rx.0)))
-                    .expect("every receiver has a subscriber");
+            .sink
+            .cycle
+            .iter()
+            .map(|subscriber| {
                 let mut config = self.worker.config.clone();
                 config.instance_id = subscriber.instance_id.clone();
                 config.own_pane = subscriber.own_pane.clone();
@@ -631,19 +567,20 @@ impl IdleCycleFixture {
                     self.worker.runtime.clone(),
                     std::path::PathBuf::new(),
                     crate::diag::DiagSink::disabled(),
-                    rx,
+                    subscriber.completion.clone(),
                     None,
                     std::sync::mpsc::sync_channel(1).0,
                     Default::default(),
                     None,
                 );
-                renderer.share_views(views.clone());
+                renderer.share_views(views.clone(), 0);
                 (
                     renderer,
                     FetchDispatcher::for_plane(std::sync::mpsc::channel().0, Covered::default()),
                 )
             })
             .collect();
+        self.cursors.clear();
     }
 
     /// Paint the watched consumer and verify the single-view benchmark topology.
@@ -729,7 +666,7 @@ impl IdleCycleFixture {
         }
     }
 
-    /// Fold once without production; count clock-only results after consumer take unless renderer application is enabled.
+    /// Fold without production; count clock-only replays unless renderer application is enabled.
     pub fn run_cycle(&mut self) -> usize {
         // A stamp ahead of the clock keeps production not-due however long the fold takes.
         self.worker.producer_cadence.last_attempt =
@@ -737,16 +674,27 @@ impl IdleCycleFixture {
         self.worker
             .run_cycle(&self.state, FetchRequest::default(), &mut self.sink);
         let mut unchanged = 0;
-        for receiver in &self.receivers {
-            let update = receiver
-                .take()
-                .pop()
-                .expect("cycle delivers to every subscriber");
-            assert!(update.is_final(), "idle cycle completes without production");
-            assert!(update.is_success(), "idle fold succeeds");
-            unchanged += usize::from(update.is_unchanged());
-            std::hint::black_box(&update);
-            receiver.acknowledge(update, true);
+        let views = self.sink.host_data.lock().expect("host data").views.clone();
+        for (cursor, subscriber) in self.cursors.iter_mut().zip(&self.sink.cycle) {
+            let views = views.lock().expect("views");
+            for update in views.latest.since(cursor.revision) {
+                let update = cursor.replay(
+                    update,
+                    |fold| {
+                        super::loop_state::LoopState::project_fold(
+                            fold,
+                            subscriber.own_pane.as_ref(),
+                            self.worker.config.refresh_ms_override,
+                        )
+                    },
+                    true,
+                );
+                assert!(update.is_final(), "idle cycle completes without production");
+                assert!(update.is_success(), "idle fold succeeds");
+                unchanged += usize::from(update.is_unchanged());
+                std::hint::black_box(update);
+            }
+            cursor.revision = views.revision;
         }
         for (renderer, dispatcher) in &mut self.renderers {
             let before = renderer.current.now;
@@ -802,17 +750,6 @@ impl FetchWorker {
             return;
         }
         self.window.cycles += 1;
-        if request.force_fold {
-            for subscriber in &sink.cycle {
-                if let Some(mailbox) = subscriber.tx.0.upgrade() {
-                    mailbox
-                        .delivery
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .reusable = false;
-                }
-            }
-        }
         let now_ms = crate::utils::time::unix_now_ms();
         let inputs = sink
             .host_data
@@ -841,7 +778,7 @@ impl FetchWorker {
             },
         );
         self.window.fold_time += fold_started.elapsed();
-        let tick = self.stand(sink).tick;
+        let tick = data_tick(sink.cycle.first(), &self.config);
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
         self.publish_fast_fold(
             state,
@@ -854,35 +791,15 @@ impl FetchWorker {
         if produce {
             self.publish_produced_fold(state, request, sink);
         }
-        if let Some(event) = self.window.finish(&sink.deliveries, Instant::now()) {
+        let views = sink
+            .host_data
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .views
+            .clone();
+        if let Some(event) = self.window.finish(&views, Instant::now()) {
             self.diag.emit_unlimited(event);
         }
-    }
-
-    /// The eldest renderer of the cycle in hand, which stands for the worker
-    /// in every decision made once per fold.
-    fn stand(&self, sink: &ResultSink) -> Stand {
-        Stand::of(sink.cycle.first(), &self.config)
-    }
-
-    /// Project one fold for the eldest renderer, which stands for the worker
-    /// in every decision made once per fold, and stage it for lazy projection
-    /// by each other renderer on take.
-    fn project_fold(&mut self, fold: WorkspaceFold, sink: &mut ResultSink) -> SidebarSnapshot {
-        sink.context = Some(Arc::new(FoldShared {
-            observation: self.observer.as_mut().map(|observer| {
-                observer.extract(fold.workspace.snapshot(), sink.cycle[0].instance_id.clone())
-            }),
-            inputs: sink.inputs.clone(),
-        }));
-        let own_pane = self.stand(sink).own_pane;
-        let snapshot = project_local(
-            fold.workspace.clone(),
-            fold.frame.as_deref(),
-            own_pane.as_ref(),
-        );
-        sink.staged = Some((fold, self.config.own_pane.clone()));
-        snapshot
     }
 
     fn start_produce_if_due(
@@ -907,21 +824,12 @@ impl FetchWorker {
     fn publish_fast_fold(&mut self, state: &StatePaths, fold: FastFold, sink: &mut ResultSink) {
         match fold.result {
             Ok(fast) => {
-                let snapshot = self.project_fold(fast, sink);
                 let phase = if fold.produce {
                     FetchPhase::Interim
                 } else {
                     FetchPhase::Final
                 };
-                self.publish_snapshot(
-                    state,
-                    SnapshotPublication {
-                        snapshot,
-                        phase,
-                        source: SnapshotSource::Cached,
-                    },
-                    sink,
-                );
+                self.publish_fold(state, fast, phase, SnapshotSource::Cached, sink);
             }
             Err(err) if !fold.produce => {
                 sink.publish(FetchUpdate::Failed {
@@ -942,7 +850,7 @@ impl FetchWorker {
         let opts = crate::sidebar::produce::ProduceOptions {
             mux: self.config.mux,
             session_name: self.config.session_name.clone(),
-            exclude: self.stand(sink).own_pane,
+            exclude: sink.witness(&self.config),
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: self.diag.clone(),
         };
@@ -974,21 +882,16 @@ impl FetchWorker {
         match result {
             Ok(produced) => {
                 let frame = produced.inputs.frame;
-                let snapshot = self.project_fold(
-                    WorkspaceFold {
-                        workspace: produced.workspace,
-                        frame: Some(frame.clone()),
-                    },
-                    sink,
-                );
-                self.update_tab_names(&snapshot, &frame);
-                self.publish_snapshot(
+                let fold = WorkspaceFold {
+                    workspace: produced.workspace,
+                    frame: Some(frame.clone()),
+                };
+                self.update_tab_names(fold.workspace.snapshot(), &frame);
+                self.publish_fold(
                     state,
-                    SnapshotPublication {
-                        snapshot,
-                        phase: FetchPhase::Final,
-                        source: SnapshotSource::Produced,
-                    },
+                    fold,
+                    FetchPhase::Final,
+                    SnapshotSource::Produced,
                     sink,
                 );
             }
@@ -1036,20 +939,23 @@ impl FetchWorker {
         });
     }
 
-    fn publish_snapshot(
+    fn publish_fold(
         &mut self,
         state: &StatePaths,
-        publication: SnapshotPublication,
+        mut fold: WorkspaceFold,
+        phase: FetchPhase,
+        source: SnapshotSource,
         sink: &mut ResultSink,
     ) {
-        let SnapshotPublication {
-            mut snapshot,
-            phase,
-            source,
-        } = publication;
+        sink.context = Some(Arc::new(FoldShared {
+            observation: self.observer.as_mut().map(|observer| {
+                observer.extract(fold.workspace.snapshot(), sink.cycle[0].instance_id.clone())
+            }),
+            inputs: sink.inputs.clone(),
+        }));
         let final_snapshot = phase == FetchPhase::Final;
         let roster = (final_snapshot && source == SnapshotSource::Produced)
-            .then(|| crate::sidebar::produce::live_roster_from_snapshot(&snapshot));
+            .then(|| crate::sidebar::produce::live_roster_from_snapshot(fold.workspace.snapshot()));
         let mut deliveries = if final_snapshot {
             evaluate_notifications(
                 &self.runtime,
@@ -1057,7 +963,7 @@ impl FetchWorker {
                 &mut self.notifications,
                 &mut self.link_notifications,
                 &self.diag,
-                &mut snapshot,
+                &mut fold.workspace.0,
             )
         } else {
             Vec::new()
@@ -1067,10 +973,11 @@ impl FetchWorker {
             if !deliveries.is_empty() {
                 self.remind.note_ring(now_ms);
             }
-            if let Some((notification, panes)) =
-                self.remind
-                    .evaluate(now_ms, &snapshot, &self.config.notification_prefs)
-            {
+            if let Some((notification, panes)) = self.remind.evaluate(
+                now_ms,
+                fold.workspace.snapshot(),
+                &self.config.notification_prefs,
+            ) {
                 deliveries.push(NotificationDelivery {
                     notification_kind: notification.kind_env().to_owned(),
                     notification,
@@ -1078,34 +985,12 @@ impl FetchWorker {
                 });
             }
         }
-        if final_snapshot && let Some((fold, _)) = &mut sink.staged {
-            let unread: HashMap<_, _> = snapshot
-                .rows()
-                .map(|row| (row.id.as_str(), row.unread))
-                .collect();
-            for index in 0..fold.workspace.0.worktree_groups.len() {
-                let group = &fold.workspace.0.worktree_groups[index];
-                if !group.rows.iter().any(|row| {
-                    unread
-                        .get(row.id.as_str())
-                        .is_some_and(|unread| row.unread != *unread)
-                }) {
-                    continue;
-                }
-                let group = &mut Arc::make_mut(&mut fold.workspace.0.worktree_groups)[index];
-                for row in Arc::make_mut(&mut group.rows) {
-                    if let Some(unread) = unread.get(row.id.as_str()) {
-                        row.unread = *unread;
-                    }
-                }
-            }
-        }
-        sink.publish(FetchUpdate::Snapshot {
-            snapshot: Box::new(snapshot),
+        sink.publish(FetchUpdate::Fold {
+            fold: Arc::new(fold),
             phase,
             source,
         });
-        // After the send: a narrowing write waits on a mux listing, which must
+        // After publication: a narrowing write waits on a mux listing, which must
         // not hold the frame.
         if let Some(roster) = roster {
             self.publish_live_roster(state, roster);
@@ -1376,59 +1261,6 @@ impl FetchRequest {
     }
 }
 
-#[derive(Default)]
-pub(super) struct PendingResults {
-    pub(super) snapshot: Option<FetchUpdate>,
-    pub(super) outcome: Option<FetchUpdate>,
-    pub(super) completed: bool,
-}
-
-impl PendingResults {
-    fn push(&mut self, update: FetchUpdate) {
-        let is_final = update.is_final();
-        self.completed |= is_final;
-        if !update.is_success() {
-            self.outcome = Some(update);
-            return;
-        }
-        // An unfinished cycle cannot displace a completed one the pane has
-        // not seen.
-        if !is_final && self.snapshot.as_ref().is_some_and(FetchUpdate::is_final) {
-            return;
-        }
-        self.snapshot = Some(update);
-        if is_final {
-            self.outcome = None;
-        }
-    }
-
-    #[cfg(any(test, feature = "testkit"))]
-    fn pop(&mut self) -> Option<FetchUpdate> {
-        self.snapshot.take().or_else(|| self.outcome.take())
-    }
-}
-
-#[derive(Default)]
-struct ResultMailbox {
-    pending: Mutex<PendingResults>,
-    delivery: Mutex<DeliveryMemo>,
-    #[cfg(test)]
-    ready: std::sync::Condvar,
-}
-
-#[derive(Default)]
-struct DeliveryMemo {
-    accepted: Option<Arc<FetchUpdate>>,
-    reusable: bool,
-    counts: Option<Arc<Mutex<DeliveryCounts>>>,
-}
-
-#[derive(Default)]
-struct DeliveryCounts {
-    content: u64,
-    unchanged: u64,
-}
-
 struct FetchWindow {
     started: Instant,
     cycles: u64,
@@ -1448,7 +1280,7 @@ impl Default for FetchWindow {
 impl FetchWindow {
     fn finish(
         &mut self,
-        counts: &Mutex<DeliveryCounts>,
+        views: &Mutex<super::views::Views>,
         now: Instant,
     ) -> Option<crate::diag::record::DiagEvent> {
         let interval = now.saturating_duration_since(self.started);
@@ -1456,261 +1288,38 @@ impl FetchWindow {
             return None;
         }
         let counts = std::mem::take(
-            &mut *counts
+            &mut views
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .reductions,
         );
         self.started = now;
-        Some(crate::diag::record::DiagEvent::FetchDeliveryStats {
+        Some(crate::diag::record::DiagEvent::FetchReductionStats {
             interval_ms: interval.as_millis() as u64,
             cycles: std::mem::take(&mut self.cycles),
-            content_deliveries: counts.content,
-            unchanged_deliveries: counts.unchanged,
+            content_reductions: counts.content,
+            unchanged_reductions: counts.unchanged,
             fold_ms: std::mem::take(&mut self.fold_time).as_millis() as u64,
         })
     }
 }
 
-#[derive(Clone)]
-pub(super) struct ResultSender(Weak<ResultMailbox>);
-
-pub(super) struct ResultReceiver(Arc<ResultMailbox>);
-
-pub(super) fn result_channel() -> (ResultSender, ResultReceiver) {
-    let mailbox = Arc::new(ResultMailbox::default());
-    (
-        ResultSender(Arc::downgrade(&mailbox)),
-        ResultReceiver(mailbox),
-    )
-}
-
-impl ResultSender {
-    #[cfg(any(test, feature = "testkit"))]
-    pub(super) fn send(
-        &self,
-        update: FetchUpdate,
-    ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
-        self.send_tracked(update, None)
-    }
-
-    /// Queue content without comparing the consumer's acknowledged baseline.
-    fn send_tracked(
-        &self,
-        update: FetchUpdate,
-        counts: Option<Arc<Mutex<DeliveryCounts>>>,
-    ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
-        let Some(mailbox) = self.0.upgrade() else {
-            return Err(std::sync::mpsc::SendError(update));
-        };
-        let mut pending = mailbox
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut delivery = mailbox
-            .delivery
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        delivery.counts = counts;
-        pending.push(update);
-        #[cfg(test)]
-        mailbox.ready.notify_one();
-        Ok(())
-    }
-}
-
-impl ResultReceiver {
-    #[cfg(any(test, feature = "testkit"))]
-    pub(super) fn take(&self) -> PendingResults {
-        self.take_unless(|_, _| false, super::loop_state::LoopState::project_fold)
-            .0
-    }
-
-    pub(super) fn preview(&self) -> Option<(Option<SidebarOwnView>, Vec<PaneId>)> {
-        self.0
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot
-            .as_ref()
-            .and_then(FetchUpdate::preview)
-            .map(|(own_view, viewed)| (own_view, viewed.to_vec()))
-    }
-
-    pub(super) fn has_pending_own_view_change(&self, current: &SidebarOwnView) -> bool {
-        self.0
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot
-            .as_ref()
-            .and_then(FetchUpdate::preview)
-            .is_some_and(|(own_view, _)| own_view.as_ref() != Some(current))
-    }
-
-    /// Preview before projecting; deferred content still releases completion.
-    /// Projection and equal-content comparison happen only on a consumer take.
-    pub(super) fn take_unless(
-        &self,
-        defer: impl FnOnce(Option<&SidebarOwnView>, &[PaneId]) -> bool,
-        mut project: impl FnMut(&WorkspaceFold, Option<&PaneId>, Option<u16>) -> SidebarSnapshot,
-    ) -> (PendingResults, bool) {
-        let mut pending = self
-            .0
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Completion is independent of application. Keep deferred content in
-        // the same latest-wins slot, without acknowledging a new baseline.
-        if pending.outcome.is_none()
-            && pending
-                .snapshot
-                .as_ref()
-                .and_then(FetchUpdate::preview)
-                .is_some_and(|(own_view, viewed)| defer(own_view.as_ref(), viewed))
-        {
-            return (
-                PendingResults {
-                    completed: std::mem::take(&mut pending.completed),
-                    ..Default::default()
-                },
-                true,
-            );
-        }
-        let mut taken = std::mem::take(&mut *pending);
-        drop(pending);
-        if let Some(update) = taken.snapshot.take() {
-            taken.snapshot = Some(self.compare(update.project(&mut project)));
-        }
-        if taken.outcome.is_some() {
-            self.allow_unchanged(false);
-        }
-        (taken, false)
-    }
-
-    fn compare(&self, update: FetchUpdate) -> FetchUpdate {
-        let prior = {
-            let mut delivery = self
-                .0
-                .delivery
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let prior = delivery
-                .accepted
-                .as_ref()
-                .filter(|_| delivery.reusable)
-                .cloned();
-            delivery.reusable = false;
-            prior
-        };
-        if prior.is_some_and(|prior| update.same_content(&prior)) {
-            return update.into_unchanged();
-        }
-        update
-    }
-
-    pub(super) fn acknowledge(&self, update: impl Into<Arc<FetchUpdate>>, reusable: bool) {
-        let update = update.into();
-        let mut delivery = self
-            .0
-            .delivery
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if update.is_success()
-            && let Some(counts) = &delivery.counts
-        {
-            let mut counts = counts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if update.is_unchanged() {
-                counts.unchanged += 1;
-            } else {
-                counts.content += 1;
-            }
-        }
-        if !update.is_unchanged() {
-            delivery.accepted = update.is_success().then_some(update);
-        }
-        delivery.reusable = reusable;
-    }
-
-    pub(super) fn allow_unchanged(&self, reusable: bool) {
-        self.0
-            .delivery
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .reusable = reusable;
-    }
-
-    /// Local reconciliation requires content at the next take; queued folds stay intact.
-    pub(super) fn invalidate(&self) {
-        self.allow_unchanged(false);
-    }
-
-    #[cfg(test)]
-    fn try_recv(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
-        let update = self
-            .0
-            .pending
-            .lock()
-            .unwrap()
-            .pop()
-            .ok_or(std::sync::mpsc::TryRecvError::Empty)?;
-        Ok(self.compare(update.project(&mut super::loop_state::LoopState::project_fold)))
-    }
-
-    #[cfg(test)]
-    fn try_iter(&self) -> impl Iterator<Item = FetchUpdate> + '_ {
-        std::iter::from_fn(|| self.try_recv().ok())
-    }
-
-    #[cfg(test)]
-    fn recv(&self) -> Result<FetchUpdate, std::sync::mpsc::RecvError> {
-        let pending = self.0.pending.lock().unwrap();
-        let pending = self
-            .0
-            .ready
-            .wait_while(pending, |pending| {
-                pending.snapshot.is_none() && pending.outcome.is_none()
-            })
-            .unwrap();
-        drop(pending);
-        self.try_recv().map_err(|_| std::sync::mpsc::RecvError)
-    }
-}
-
-/// One renderer a fetch worker feeds: where its folds go and how they are
-/// projected for it.
+/// A pane's lifecycle and production preferences; fetch content lives in the views.
 #[derive(Clone)]
 pub(super) struct Subscriber {
     pub(super) instance_id: SidebarInstanceId,
     pub(super) own_pane: Option<PaneId>,
     pub(super) tick_seconds: u64,
-    pub(super) refresh_override: Option<u16>,
-    pub(super) tx: ResultSender,
+    pub(super) completion: Arc<AtomicBool>,
     pub(super) wake: SyncSender<Wakeup>,
 }
 
-/// What the eldest renderer decides for every choice the worker makes once
-/// per fold: the pane the shared fold excludes and the data tick.
-pub(super) struct Stand {
-    pub(super) own_pane: Option<PaneId>,
-    pub(super) tick: Duration,
-}
-
-impl Stand {
-    /// `config` answers for a worker with no renderer, or one naming no pane.
-    pub(super) fn of(eldest: Option<&Subscriber>, config: &ServeConfig) -> Self {
-        Self {
-            own_pane: eldest
-                .and_then(|eldest| eldest.own_pane.clone())
-                .or_else(|| config.own_pane.clone()),
-            tick: tick_for(eldest.map_or(config.tick_seconds, |eldest| eldest.tick_seconds)),
-        }
-    }
+pub(super) fn data_tick(eldest: Option<&Subscriber>, config: &ServeConfig) -> Duration {
+    tick_for(eldest.map_or(config.tick_seconds, |eldest| eldest.tick_seconds))
 }
 
 /// The renderers one fetch worker feeds, keyed by instance id so they iterate
-/// oldest subscriber first, providing a stable representative for each cycle.
+/// oldest subscriber first, fixing cadence, frame witness and observation origin.
 pub(super) type Subscribers = Arc<Mutex<BTreeMap<String, Subscriber>>>;
 
 struct ResultSink {
@@ -1721,39 +1330,11 @@ struct ResultSink {
     covered: Covered,
     /// The cycle in hand, recorded as covered once its answer goes out.
     answering: Option<Coverage>,
-    /// The fold behind the next snapshot publication and the worker's
-    /// configured pane, kept so every renderer after the eldest gets its own
-    /// projection of it.
-    staged: Option<(WorkspaceFold, Option<PaneId>)>,
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
-    deliveries: Arc<Mutex<DeliveryCounts>>,
-    #[cfg(test)]
-    on_delivery: Option<Box<dyn Fn() + Send>>,
 }
 
 impl ResultSink {
-    /// A sink feeding one renderer that folds as the worker's configured pane.
-    #[cfg(test)]
-    fn new(tx: ResultSender, wake: SyncSender<Wakeup>, refresh_override: Option<u16>) -> Self {
-        let subscriber = Subscriber {
-            instance_id: SidebarInstanceId::new(),
-            own_pane: None,
-            tick_seconds: 1,
-            refresh_override,
-            tx,
-            wake,
-        };
-        Self::shared(
-            Arc::new(Mutex::new(BTreeMap::from([(
-                subscriber.instance_id.as_str().to_owned(),
-                subscriber,
-            )]))),
-            Covered::default(),
-            Arc::default(),
-        )
-    }
-
     fn shared(subscribers: Subscribers, covered: Covered, host_data: Arc<Mutex<HostData>>) -> Self {
         let mut sink = Self {
             subscribers,
@@ -1761,12 +1342,8 @@ impl ResultSink {
             cycle: Vec::new(),
             covered,
             answering: None,
-            staged: None,
             context: None,
             inputs: Arc::default(),
-            deliveries: Arc::default(),
-            #[cfg(test)]
-            on_delivery: None,
         };
         sink.begin_cycle();
         sink
@@ -1780,128 +1357,77 @@ impl ResultSink {
         subscribers.values().cloned().collect()
     }
 
-    /// Take the renderers one cycle serves. A pane that attaches later is
-    /// answered by its own first fetch, and one that leaves is still sent the
-    /// view it was folded for.
+    /// Freeze completion and wake membership; later arrivals can still read room content.
     fn begin_cycle(&mut self) {
         self.cycle = self.subscribers();
         self.context = None;
     }
 
-    /// Deliver one update: to the eldest renderer as given, and to every
-    /// other renderer as the shared staged fold for projection at take,
-    /// or as a copy (anything else).
+    fn witness(&self, config: &ServeConfig) -> Option<PaneId> {
+        self.cycle
+            .first()
+            .and_then(|eldest| eldest.own_pane.clone())
+            .or_else(|| config.own_pane.clone())
+    }
+
+    /// Publish content and completion atomically, then wake the frozen cycle members.
     fn publish(&mut self, mut update: FetchUpdate) {
-        let mut staged = self.staged.take();
-        if let (Some((fold, _)), Some(local)) = (&mut staged, update.snapshot_mut()) {
-            let prior = self
-                .host_data
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .last_fold
-                .as_ref()
-                .map(|fold| fold.workspace.clone());
-            if let Some(prior) = prior {
-                let shared = &mut fold.workspace.0;
-                reuse_shared(
-                    &mut shared.worktree_groups,
-                    &mut local.worktree_groups,
-                    &prior.0.worktree_groups,
-                );
-                reuse_shared(&mut shared.agents, &mut local.agents, &prior.0.agents);
-                reuse_shared(
-                    &mut shared.agent_panes,
-                    &mut local.agent_panes,
-                    &prior.0.agent_panes,
-                );
-                reuse_shared(
-                    &mut shared.fenced_sessions,
-                    &mut local.fenced_sessions,
-                    &prior.0.fenced_sessions,
-                );
-                if let (Some(shared), Some(local), Some(prior)) = (
-                    &mut shared.resume_outcomes,
-                    &mut local.resume_outcomes,
-                    &prior.0.resume_outcomes,
-                ) {
-                    reuse_shared(shared, local, prior);
-                }
-            }
-        }
-        let is_snapshot = matches!(update, FetchUpdate::Snapshot { .. });
-        // Before the first send: a pane that reads this answer and asks again
-        // must find its next request unanswered, or the worker would drop it.
-        if matches!(
-            update,
-            FetchUpdate::Snapshot {
-                phase: FetchPhase::Final,
-                ..
-            }
-        ) && let Some(cycle) = self.answering.take()
-        {
-            self.covered.record(cycle);
-        }
-        let staged = staged.map(|(fold, pane)| (Arc::new(fold), pane));
         let views = self
             .host_data
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .views
             .clone();
-        if is_snapshot && let Some((fold, _)) = &staged {
-            self.host_data
+        if let FetchUpdate::Fold { fold, .. } = &mut update {
+            // Compare unlocked: panes replay and paint under the views lock, and
+            // this worker is the only writer of the retained fold.
+            let prior = views
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .last_fold = Some(fold.clone());
-        }
-        let retained = match (&update, &staged) {
-            (FetchUpdate::Snapshot { phase, source, .. }, Some((fold, _))) => {
-                Some(FetchUpdate::Fold {
-                    fold: fold.clone(),
-                    own_pane: None,
-                    refresh_override: None,
-                    phase: *phase,
-                    source: *source,
-                })
-            }
-            (FetchUpdate::Failed { .. }, _) => Some(update.clone()),
-            _ => None,
-        };
-        if let Some(mut retained) = retained {
-            if let Some(context) = &self.context {
-                retained = FetchUpdate::Shared {
-                    update: Box::new(retained),
-                    context: context.clone(),
-                };
-            }
-            views
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .publish(staged.as_ref().map(|(fold, _)| fold.clone()), retained);
-        }
-        let Some((eldest, others)) = self.cycle.split_first() else {
-            return;
-        };
-        for subscriber in others {
-            match (&update, &staged) {
-                (FetchUpdate::Snapshot { phase, source, .. }, Some((fold, default_pane))) => {
-                    self.send(
-                        subscriber,
-                        FetchUpdate::Fold {
-                            fold: fold.clone(),
-                            own_pane: subscriber.own_pane.clone().or_else(|| default_pane.clone()),
-                            refresh_override: subscriber.refresh_override,
-                            phase: *phase,
-                            source: *source,
-                        },
-                    );
+                .fold
+                .clone();
+            if let Some(prior) = prior {
+                let shared = &mut Arc::make_mut(fold).workspace.0;
+                let prior = prior.workspace.snapshot();
+                reuse_shared(&mut shared.worktree_groups, &prior.worktree_groups);
+                reuse_shared(&mut shared.agents, &prior.agents);
+                reuse_shared(&mut shared.agent_panes, &prior.agent_panes);
+                reuse_shared(&mut shared.fenced_sessions, &prior.fenced_sessions);
+                if let (Some(shared), Some(prior)) =
+                    (&mut shared.resume_outcomes, &prior.resume_outcomes)
+                {
+                    reuse_shared(shared, prior);
                 }
-                // A snapshot with no fold behind it is the eldest renderer's alone.
-                (FetchUpdate::Snapshot { .. }, None) => {}
-                _ => self.send(subscriber, update.clone()),
+            }
+            if update.is_final()
+                && let Some(cycle) = self.answering.take()
+            {
+                self.covered.record(cycle);
+            }
+        } else {
+            // The worker publishes only room folds or failed final outcomes.
+            assert!(matches!(update, FetchUpdate::Failed { .. }));
+        }
+        let completed = update.is_final();
+        if let Some(context) = &self.context {
+            update = FetchUpdate::Shared {
+                update: Box::new(update),
+                context: context.clone(),
+            };
+        }
+        let mut views = views
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        views.publish(update);
+        if completed {
+            for subscriber in &self.cycle {
+                subscriber.completion.store(true, Ordering::Relaxed);
             }
         }
-        self.send(eldest, update);
+        drop(views);
+        for subscriber in &self.cycle {
+            let _ = subscriber.wake.try_send(Wakeup::Snapshot);
+        }
     }
 
     fn notify(&self, workspace_id: &crate::WorkspaceId, session_name: &str, event: SidebarEvent) {
@@ -1913,33 +1439,6 @@ impl ResultSink {
         );
         for subscriber in self.subscribers() {
             let _ = subscriber.wake.try_send(Wakeup::Event(envelope.clone()));
-        }
-    }
-
-    fn send(&self, subscriber: &Subscriber, mut update: FetchUpdate) {
-        if let (Some(refresh_ms), Some(snapshot)) =
-            (subscriber.refresh_override, update.snapshot_mut())
-        {
-            snapshot.theme.display.refresh_ms = refresh_ms;
-        }
-        if let Some(context) = &self.context {
-            update = FetchUpdate::Shared {
-                update: Box::new(update),
-                context: context.clone(),
-            };
-        }
-        // A renderer that already closed removes itself from the set. A full
-        // inbox already holds a wake, so a dropped one loses nothing.
-        if subscriber
-            .tx
-            .send_tracked(update, Some(self.deliveries.clone()))
-            .is_ok()
-        {
-            #[cfg(test)]
-            if let Some(on_delivery) = &self.on_delivery {
-                on_delivery();
-            }
-            let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
 }

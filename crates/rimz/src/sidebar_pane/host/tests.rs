@@ -536,7 +536,8 @@ fn attachment_diagnostics_name_the_renderer_and_share_the_limiter() {
     );
     Arc::get_mut(&mut room.host).unwrap().diag = diag.clone();
     let mut pty = Pty::open(40, 12);
-    let pane = room.attach(&pty);
+    let own = crate::PaneId::from_parts(MuxName::Zellij, "terminal_sidebar");
+    let pane = room.attach_as(&pty, Some(own.clone()));
     painted(&mut pty);
     let id = pane.instance_id.clone();
     eventually(
@@ -549,6 +550,7 @@ fn attachment_diagnostics_name_the_renderer_and_share_the_limiter() {
         working_pane_ids: Vec::new(),
         own_view_is_daemon: false,
     });
+    snapshot.viewed_panes = vec![own];
     room.host.plane.publish_snapshot(&id, snapshot.clone());
     let notify = crate::wakeup::events::SidebarEventEnvelope::new(
         workspace(),
@@ -575,6 +577,7 @@ fn attachment_diagnostics_name_the_renderer_and_share_the_limiter() {
         })
     });
     snapshot.panes_produced_at_ms = None;
+    snapshot.display_name = "missing pane cache".into();
     room.host.plane.publish_snapshot(&id, snapshot);
     // Wait on the gate-hold record itself: the log file exists as soon as any
     // diagnostic lands, which under load is before the hold is appended.
@@ -736,13 +739,29 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         own_view_is_daemon: false,
     });
     snapshot.presence = Some(presence);
-    snapshot.viewed_panes = vec![visible_id];
+    snapshot.viewed_panes = vec![visible_id.clone()];
     let publish = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
-        for pane in [&visible_pane, &hidden_pane] {
-            room.host
-                .plane
-                .publish_snapshot(&pane.instance_id, snapshot.clone());
+        use crate::sidebar_pane::app::fixtures::pane;
+        let mut panes: Vec<_> = snapshot.rows().filter_map(|row| row.pane.clone()).collect();
+        for (id, tab) in [(&visible_id, "tab_visible"), (&hidden_id, "tab_hidden")] {
+            let mut sidebar = pane(id.raw(), tab, false);
+            sidebar.command = Some("rimz-sidebar".into());
+            panes.push(sidebar);
+            if id == &visible_id || snapshot.own_view.as_ref().unwrap().sibling_count != 0 {
+                let mut sibling = pane(&format!("{}_peer", id.raw()), tab, false);
+                sibling.command = Some("rimz-sidebar".into());
+                panes.push(sibling);
+            }
         }
+        let mut frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
+        frame.presence = Some(crate::store::snapshot::PresenceSample {
+            human_clients: usize::from(
+                presence != crate::store::snapshot::SidebarPresence::Detached,
+            ),
+            last_input_ms: None,
+            sampled_at_ms: 1,
+        });
+        crate::sidebar_pane::app::fixtures::publish_fold(&room.host.plane, snapshot.clone(), frame);
     };
     publish(&snapshot);
     let mut parser = vt100::Parser::new(20, 40, 0);
@@ -817,9 +836,7 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
     hidden.drain();
     visible.drain();
     snapshot.own_view.as_mut().unwrap().sibling_count = 0;
-    room.host
-        .plane
-        .publish_snapshot(&hidden_pane.instance_id, snapshot);
+    publish(&snapshot);
     let instance_id = hidden_pane.instance_id.clone();
     assert_eq!(hidden_pane.controls(), [Control::SelfClose]);
     assert!(!room.has_runtime_files(&instance_id));

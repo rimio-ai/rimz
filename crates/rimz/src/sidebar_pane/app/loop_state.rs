@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
@@ -39,8 +40,7 @@ use tracing::{debug, trace, warn};
 use super::backend::{BufferedFrame, PaneBackend};
 use super::clock::LoopClock;
 use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, ResultReceiver, SnapshotSource,
-    WorkspaceFold,
+    FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource, WorkspaceFold,
 };
 use super::focus::{FocusRepairDispatch, spawn_pane_focus};
 #[cfg(test)]
@@ -141,7 +141,6 @@ struct FoldEffects {
     observations: Vec<observe::OwnFrameSig>,
     anomalies: Vec<observe::AnomalyDraft>,
     degraded: Option<String>,
-    acknowledgments: Vec<Arc<FetchUpdate>>,
     invalidate: bool,
     retry_focus_repair: bool,
 }
@@ -156,7 +155,7 @@ pub(super) struct LoopState {
     pub(super) view: ViewContext,
     fold_preparation: Option<FoldPreparation>,
     fold_effects: FoldEffects,
-    views: Arc<Mutex<super::views::Views>>,
+    pub(super) views: Arc<Mutex<super::views::Views>>,
     view_scope: Option<ViewScope>,
     transition_view: Option<super::views::ViewId>,
     view_focus: Option<Option<PaneId>>,
@@ -175,7 +174,8 @@ pub(super) struct LoopState {
     runtime: RuntimePaths,
     host_wake_path: PathBuf,
     diag: crate::diag::DiagSink,
-    result_rx: ResultReceiver,
+    pub(super) completion: Arc<AtomicBool>,
+    own: super::views::Cursor,
     pending_focus_push: Option<FocusPush>,
     painted_focus_anchor_ms: u64,
     painted_at: Instant,
@@ -318,7 +318,7 @@ impl LoopState {
         inputs: Option<Arc<super::fetch::FoldInputs>>,
         advance: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        self.view_transition(false, inputs, None, None, advance)
+        self.view_transition(false, inputs, None, advance)
     }
 
     fn view_transition<T>(
@@ -326,7 +326,6 @@ impl LoopState {
         input: bool,
         inputs: Option<Arc<super::fetch::FoldInputs>>,
         visible: Option<bool>,
-        delivered: Option<Arc<FetchUpdate>>,
         advance: impl FnOnce(&mut Self) -> T,
     ) -> T {
         if self.fold_preparation.is_some() {
@@ -350,14 +349,14 @@ impl LoopState {
                 |inputs| inputs.anchor.clone(),
             ),
         });
-        let result = self.with_projected_view(input, true, delivered, advance);
+        let result = self.with_projected_view(input, true, advance);
         self.fold_preparation = None;
         self.finish_view_effects();
         result
     }
 
     fn paint_transition<T>(&mut self, advance: impl FnOnce(&mut Self) -> T) -> T {
-        let result = self.with_shared_view(false, true, advance);
+        let result = self.with_projected_view(false, true, advance);
         self.finish_view_effects();
         result
     }
@@ -398,10 +397,7 @@ impl LoopState {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason, "sidebar refresh degraded");
         }
         if effects.invalidate {
-            self.result_rx.invalidate();
-        }
-        for delivered in effects.acknowledgments {
-            self.result_rx.acknowledge(delivered, false);
+            self.own.accepted = None;
         }
         if effects.retry_focus_repair {
             self.retry_pending_focus_repair();
@@ -471,7 +467,7 @@ impl LoopState {
         runtime: RuntimePaths,
         host_wake_path: PathBuf,
         diag: crate::diag::DiagSink,
-        result_rx: ResultReceiver,
+        completion: Arc<AtomicBool>,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
@@ -512,7 +508,8 @@ impl LoopState {
             runtime,
             host_wake_path,
             diag,
-            result_rx,
+            completion,
+            own: super::views::Cursor::default(),
             view: ViewContext::new(current, now),
             fold_preparation: None,
             fold_effects: FoldEffects::default(),
@@ -689,7 +686,7 @@ impl LoopState {
 
     fn freeze_remaining(&mut self, now_ms: i64) -> Option<Duration> {
         if self.view_scope.is_none() {
-            return self.with_shared_view(false, false, |state| state.freeze_remaining(now_ms));
+            return self.with_projected_view(false, false, |state| state.freeze_remaining(now_ms));
         }
         let hold = self.ui.freeze.as_ref()?;
         Some(Duration::from_millis(
@@ -699,7 +696,7 @@ impl LoopState {
 
     fn frame_timing(&mut self) -> (bool, Duration) {
         if self.view_scope.is_none() {
-            return self.with_shared_view(false, false, Self::frame_timing);
+            return self.with_projected_view(false, false, Self::frame_timing);
         }
         let clock = frame_clock(
             self.clock.now(),
@@ -816,43 +813,39 @@ impl LoopState {
     }
 
     fn drain_snapshot(&mut self, fetch: &mut FetchDispatcher, allow_defer: bool) {
-        #[cfg(test)]
-        let mut projections = 0;
-        let (pending, deferred) = self.result_rx.take_unless(
-            |own_view, viewed_panes| allow_defer && self.skips_hidden(own_view, viewed_panes),
-            |fold, own_pane, refresh_override| {
-                #[cfg(test)]
-                {
-                    projections += 1;
-                }
-                Self::project_fold(fold, own_pane, refresh_override)
-            },
-        );
-        #[cfg(test)]
-        {
-            self.projections += projections;
-        }
-        if deferred && pending.completed {
-            self.fetched_at = self.clock.now();
-            self.last_self_close_check = self.fetched_at;
-        }
-        let delivered = pending.snapshot.is_some() || pending.outcome.is_some();
-        let saw_final = pending.completed;
+        let (pending, revision, completed) = {
+            let views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+            (
+                views.latest.since(self.own.revision),
+                views.revision,
+                self.completion.swap(false, Ordering::Relaxed),
+            )
+        };
+        let deferred = allow_defer
+            && pending.iter().all(FetchUpdate::is_success)
+            && pending
+                .iter()
+                .find_map(|update| update.preview_for(self.config.own_pane.as_ref()))
+                .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
         let mut rejected = false;
-        for update in pending.snapshot.into_iter().chain(pending.outcome) {
-            rejected |= self.apply_latest_snapshot(update);
+        if deferred {
+            if completed {
+                self.fetched_at = self.clock.now();
+                self.last_self_close_check = self.fetched_at;
+            }
+        } else {
+            for update in pending {
+                rejected |= self.apply_latest_snapshot(update);
+            }
+            self.own.revision = revision;
         }
-        if delivered {
-            self.result_rx
-                .allow_unchanged(self.admits_clock_only(rejected));
-        }
-        if saw_final {
+        if completed {
             fetch.complete(!self.should_exit);
         }
         // A held transient regression schedules one reevaluation at the gate
         // deadline. Eager finals can otherwise feed themselves through the
         // fast fold and pin the renderer to its 1 ms gate wakeup.
-        if !self.should_exit && saw_final && rejected {
+        if !self.should_exit && completed && rejected {
             let defer_for = self
                 .inspect_view(|_, view| gate_remaining(&view.gate, self.clock.timestamp()))
                 .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
@@ -918,7 +911,8 @@ impl LoopState {
             runtime: _,
             host_wake_path: _,
             diag: _,
-            result_rx: _,
+            completion: _,
+            own: _,
             observe_tx: _,
             wake: _,
             room_caps: _,
@@ -1096,34 +1090,55 @@ impl LoopState {
     }
 
     fn apply_latest_snapshot_with_seed(&mut self, update: FetchUpdate, seed: bool) -> bool {
-        let unchanged = update.is_unchanged();
-        let delivered = update.into_full();
-        let (incoming, inputs) = match delivered.as_ref() {
-            FetchUpdate::Shared { update, context } => {
-                (update.as_ref(), Some(context.inputs.clone()))
-            }
-            update => (update, None),
-        };
-        let visible = match incoming {
-            FetchUpdate::Snapshot { snapshot, .. } => Some(self.watches_snapshot(snapshot)),
+        let inputs = match &update {
+            FetchUpdate::Shared { context, .. } => Some(context.inputs.clone()),
             _ => None,
         };
-        let acknowledgment = if unchanged {
-            Arc::new(FetchUpdate::unchanged(delivered.clone()))
-        } else {
-            delivered.clone()
-        };
-        self.view_transition(false, inputs, visible, Some(delivered.clone()), |state| {
-            let rejected = if state.shared_view_id().is_some() && state.view_latest {
-                state.view.gate != GateState::default()
-            } else if unchanged {
-                state.reduce_snapshot(FetchUpdate::unchanged(delivered), seed)
+        let visible = update
+            .preview_for(self.config.own_pane.as_ref())
+            .map(|(own_view, viewed)| self.watches_view(own_view.as_ref(), viewed));
+        let mut reduction = None;
+        let rejected = self.view_transition(false, inputs, visible, |state| {
+            if state.shared_view_id().is_some() && state.view_latest {
+                state.own.accepted = None;
+                return state.view.gate != GateState::default();
+            }
+            if seed {
+                return state.reduce_snapshot(update, true);
+            }
+            let clock_only = state.admits_clock_only(false);
+            let config = &state.config;
+            #[cfg(test)]
+            let mut projections = 0;
+            let update = state.own.replay(
+                update,
+                |fold| {
+                    #[cfg(test)]
+                    {
+                        projections += 1;
+                    }
+                    Self::project_fold(fold, config.own_pane.as_ref(), config.refresh_ms_override)
+                },
+                clock_only,
+            );
+            #[cfg(test)]
+            {
+                state.projections += projections;
+            }
+            if update.is_success() {
+                reduction = Some(update.is_unchanged());
+            }
+            state.reduce_snapshot(update, false)
+        });
+        if let Some(unchanged) = reduction {
+            let mut views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+            if unchanged {
+                views.reductions.unchanged += 1;
             } else {
-                state.reduce_snapshot((*delivered).clone(), seed)
-            };
-            state.fold_effects.acknowledgments.push(acknowledgment);
-            rejected
-        })
+                views.reductions.content += 1;
+            }
+        }
+        rejected
     }
 
     fn reduce_snapshot(&mut self, update: FetchUpdate, seed: bool) -> bool {
@@ -1183,7 +1198,7 @@ impl LoopState {
             failed @ FetchUpdate::Failed { .. } => failed,
             FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
-            FetchUpdate::Fold { .. } => unreachable!("projected at take"),
+            FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
         };
         self.fetched_at = self.clock.now();
         let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
@@ -1309,12 +1324,12 @@ impl LoopState {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .land(source, pane, self.clock.now());
-            self.with_shared_view(false, false, |state| {
+            self.with_projected_view(false, false, |state| {
                 state.view.live_focus_source = Some(push.anchor.nonce);
             });
         }
         // Read the view the landing paints: a scratch fold while hidden folded into no view.
-        if self.with_shared_view(false, false, |state| state.view.last_folded_focus_intent)
+        if self.with_projected_view(false, false, |state| state.view.last_folded_focus_intent)
             != Some(push.anchor.nonce)
         {
             self.prepare_action(fetch);
@@ -1359,12 +1374,10 @@ impl LoopState {
     fn known_non_owner(&self, target: &PaneId) -> bool {
         self.view.current.row_owning_pane(target).is_some()
             && !self.owns_focus_target(target)
-            && self
-                .view
-                .current
-                .own_view
-                .as_ref()
-                .is_some_and(|own_view| !self.result_rx.has_pending_own_view_change(own_view))
+            && self.view.current.own_view.as_ref().is_some_and(|own_view| {
+                self.pending_preview()
+                    .is_none_or(|(pending, _)| pending.as_ref() == Some(own_view))
+            })
     }
 
     fn retire_superseded_push(&mut self) -> bool {
@@ -1414,7 +1427,7 @@ impl LoopState {
                     self.prepare_action(fetch);
                 }
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
-                self.with_shared_view(false, false, |state| {
+                self.with_projected_view(false, false, |state| {
                     state.view.filter_observed_at = Some(state.clock.now());
                     if set_make_up_filter(&mut state.ui, &state.view.current, filter) {
                         state.dirty = true;
@@ -1507,8 +1520,19 @@ impl LoopState {
         }
     }
 
+    fn pending_preview(&self) -> Option<(Option<SidebarOwnView>, Vec<PaneId>)> {
+        self.views
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .latest
+            .since(self.own.revision)
+            .iter()
+            .find_map(|update| update.preview_for(self.config.own_pane.as_ref()))
+            .map(|(own_view, viewed)| (own_view, viewed.to_vec()))
+    }
+
     fn event_needs_fold(&mut self, event: &SidebarEvent) -> bool {
-        let preview = self.result_rx.preview();
+        let preview = self.pending_preview();
         let (view, viewed) = preview.as_ref().map_or(
             (
                 self.view.current.own_view.as_ref(),
@@ -1540,10 +1564,10 @@ impl LoopState {
 
     fn prepare_action(&mut self, fetch: &mut FetchDispatcher) {
         // Require content before flushing, then invalidate reuse again:
-        // the action can change renderer state after acknowledgement.
-        self.result_rx.invalidate();
+        // the action can change renderer state after the drain.
+        self.own.accepted = None;
         self.drain_snapshot(fetch, false);
-        self.result_rx.invalidate();
+        self.own.accepted = None;
     }
 
     fn handle_notification(&mut self, terminal: &mut Terminal<PaneBackend>, event: SidebarEvent) {
@@ -1586,7 +1610,7 @@ impl LoopState {
     fn handle_focus_stranded(&mut self, repair: &PendingFocusRepair) -> bool {
         let now_ms = self.clock.now_ms();
         let own_pane = self.config.own_pane.clone();
-        let verdict = self.with_shared_view(false, false, |state| {
+        let verdict = self.with_projected_view(false, false, |state| {
             focus_stranded_target(
                 &state.view.current,
                 &state.ui,
@@ -1623,7 +1647,7 @@ impl LoopState {
                     .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
             }),
         };
-        let (placement, order) = self.with_shared_view(false, false, |state| {
+        let (placement, order) = self.with_projected_view(false, false, |state| {
             (state.focus_placement(&target), state.ui.last_order.clone())
         });
         spawn_pane_focus(
@@ -1703,7 +1727,7 @@ impl LoopState {
             SidebarEvent::FocusIntent { pane_id, .. } => std::slice::from_ref(pane_id),
             _ => return false,
         };
-        let preview = self.result_rx.preview();
+        let preview = self.pending_preview();
         let own_view = preview
             .as_ref()
             .map_or(self.view.current.own_view.as_ref(), |(view, _)| {
@@ -1741,7 +1765,7 @@ impl LoopState {
             self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         } else if own_unfocused {
             self.optimistic_watch_until = None;
-            self.with_shared_view(false, false, |state| {
+            self.with_projected_view(false, false, |state| {
                 state.ui.help_visible = false;
                 if state.ui.search_draft.take().is_some() {
                     reconcile_selection(&mut state.ui, &state.view.current, None);
@@ -1910,7 +1934,7 @@ impl LoopState {
                         .as_ref()
                         .and_then(FocusPeers::clicked)
                         .unwrap_or_else(|| self.clock.now());
-                    let (placement, order) = self.with_shared_view(false, false, |state| {
+                    let (placement, order) = self.with_projected_view(false, false, |state| {
                         (state.focus_placement(&pane), state.ui.last_order.clone())
                     });
                     spawn_pane_focus(
@@ -1945,7 +1969,7 @@ impl LoopState {
     }
 
     fn persist_body_filter(&mut self, filter: BodyLens) {
-        self.with_shared_view(false, false, |state| {
+        self.with_projected_view(false, false, |state| {
             state.view.filter_observed_at = Some(state.clock.now());
         });
         let persisted = crate::sidebar::body_filter::write(&self.runtime, &filter);
@@ -1985,7 +2009,7 @@ impl LoopState {
         if user_input {
             self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         }
-        let (outcome, source_view) = self.view_transition(user_input, None, None, None, |state| {
+        let (outcome, source_view) = self.view_transition(user_input, None, None, |state| {
             (
                 state.reduce_input(wakeups, state.clock.now()),
                 state.shared_view_id(),
@@ -2017,7 +2041,7 @@ impl LoopState {
                 return Ok(outcome);
             }
             self.draw_frame(terminal, self.clock.now(), user_input)?;
-            self.with_shared_view(false, false, |state| {
+            self.with_projected_view(false, false, |state| {
                 let now = state.clock.now();
                 if outcome
                     .effects
@@ -2142,7 +2166,7 @@ impl LoopState {
     fn mark_row_read(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
         let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
-        let clear = self.with_shared_view(false, false, |state| {
+        let clear = self.with_projected_view(false, false, |state| {
             if state.ui.unread_guard.as_deref() == Some(row_id) {
                 state.ui.unread_guard = None;
             }
@@ -2170,7 +2194,7 @@ impl LoopState {
             warn!(error = %err, "mark-read receipt write failed");
             return;
         }
-        self.with_shared_view(false, false, |state| {
+        self.with_projected_view(false, false, |state| {
             set_rows_unread(&mut state.view.current, &clear.ids, false);
         });
         emit_unread_cleared_trace(&self.diag, &clear.trace);
@@ -2183,7 +2207,7 @@ impl LoopState {
     fn mark_all_read(&mut self, fetch: &mut FetchDispatcher) {
         let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
-        let clear = self.with_shared_view(false, false, |state| {
+        let clear = self.with_projected_view(false, false, |state| {
             state.ui.unread_guard = None;
             read_receipts_for_all(&state.view.current, UnreadClearCause::MarkRead, &marks, now)
         });
@@ -2213,7 +2237,7 @@ impl LoopState {
                     return;
                 }
             };
-        self.with_shared_view(false, false, |state| {
+        self.with_projected_view(false, false, |state| {
             set_rows_unread(&mut state.view.current, std::slice::from_ref(&row.id), true);
             state.ui.unread_guard = Some(row.id.clone());
         });
@@ -2436,7 +2460,7 @@ impl LoopState {
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
-        let (paint, interval, nonce) = self.with_shared_view(false, false, |state| {
+        let (paint, interval, nonce) = self.with_projected_view(false, false, |state| {
             frame_clock(
                 now,
                 state.view.anim_start,

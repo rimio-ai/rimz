@@ -54,11 +54,13 @@ pub enum ProduceErr {
 
 pub(crate) type Result<T> = std::result::Result<T, ProduceErr>;
 
-/// The host's session, own-pane exclusion, and lifecycle/resize freshness floor. `min_pane_cache_ms` rejects an older retained pane observation or root enumeration.
+/// The host's session and lifecycle/resize freshness floor.
+/// `min_pane_cache_ms` rejects an older retained pane observation or root enumeration.
 #[derive(Clone, Debug)]
 pub struct ProduceOptions {
     pub mux: MuxName,
     pub session_name: String,
+    /// The frame-validation witness pane, not a workspace row exclusion.
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
     pub diag: crate::diag::DiagSink,
@@ -386,14 +388,13 @@ pub fn refresh_producer_caches(
     state: &StatePaths,
     runtime: &RuntimePaths,
     inputs: Option<&HostInputs>,
-    exclude: Option<&PaneId>,
     refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
 ) -> Result<()> {
     let workspace = HostInputs::fold(inputs, cursor, state, runtime)?;
     let base = crate::sidebar::enrich::project_local(
         workspace,
         inputs.map(|inputs| inputs.frame.as_ref()),
-        exclude,
+        None,
     );
     let config = crate::config::MachineConfig::load_lenient();
     let _ = refresh_heavy_lanes(

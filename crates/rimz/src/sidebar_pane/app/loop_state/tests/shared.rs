@@ -40,7 +40,7 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     snapshot.viewed_panes = vec![own];
     rig.share_views(views);
     rig.fold(snapshot, SnapshotSource::Produced);
-    rig.state.with_shared_view(false, false, |state| {
+    rig.state.with_projected_view(false, false, |state| {
         let group = state.current.worktree_groups[0].key.clone();
         state.ui.expanded_groups.insert(group);
     });
@@ -64,17 +64,12 @@ fn views() -> Arc<Mutex<Views>> {
 }
 
 fn publish(rig: &mut Rig, update: FetchUpdate) {
-    let local = match &update {
-        FetchUpdate::Shared { update, .. } => update.as_ref(),
-        update => update,
-    };
-    let fold = match local {
-        FetchUpdate::Fold { fold, .. } => Some(fold.clone()),
-        FetchUpdate::Failed { .. } => None,
-        _ => panic!("publish a host fold or failure"),
-    };
-    rig.views.lock().unwrap().publish(fold, update.clone());
-    rig.result_tx.send(update).unwrap();
+    let mut views = rig.views.lock().unwrap();
+    let completed = update.is_final();
+    views.publish(update);
+    if completed {
+        rig.state.completion.store(true, Ordering::Relaxed);
+    }
 }
 
 #[test]
@@ -379,7 +374,7 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
     let views = views();
     let mut other = shared_rig(views.clone(), 0, 2);
     let target = shared_rig(views, 1, 2);
-    other.state.with_shared_view(false, false, |state| {
+    other.state.with_projected_view(false, false, |state| {
         state.ui.baseline_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"));
     });
     other.event(SidebarEvent::FocusChanged {

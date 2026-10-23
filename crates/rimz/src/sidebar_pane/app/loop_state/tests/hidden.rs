@@ -19,16 +19,12 @@ impl Rig {
                 .map(|id| pane(id.raw(), "tab_0", false)),
         );
         let frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
-        // The worker wraps every fold in the cycle's shared context, which is what lets a view
-        // catching up recognize its own take instead of projecting the fold again.
         FetchUpdate::Shared {
             update: Box::new(FetchUpdate::Fold {
                 fold: Arc::new(WorkspaceFold {
                     workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
                     frame: Some(Arc::new(frame)),
                 }),
-                own_pane: Some(own),
-                refresh_override: self.state.config.refresh_ms_override,
                 phase: FetchPhase::Final,
                 source,
             }),
@@ -670,8 +666,7 @@ fn notification_rings_against_the_deferred_unread_fold() {
         let output = capture_bells(&mut rig);
         let snapshot = unread_snapshot(&rig, true);
         let panes = snapshot.own_view.as_ref().unwrap().working_pane_ids.clone();
-        rig.send(rig.lazy_update(snapshot, SnapshotSource::Produced))
-            .unwrap();
+        rig.send(rig.lazy_update(snapshot, SnapshotSource::Produced));
         if drain {
             rig.state.on_snapshot(&mut rig.fetch);
         }

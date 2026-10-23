@@ -43,26 +43,24 @@ impl LoopState {
         }
     }
 
-    pub(in crate::sidebar_pane::app) fn share_views(&mut self, views: Arc<Mutex<Views>>) {
+    pub(in crate::sidebar_pane::app) fn share_views(
+        &mut self,
+        views: Arc<Mutex<Views>>,
+        revision: u64,
+    ) {
         self.baseline_seed = self.ui.baseline_pane.take();
         self.views = views;
+        self.own = super::super::views::Cursor {
+            revision,
+            accepted: None,
+        };
         self.view_advanced = false;
-    }
-
-    pub(in crate::sidebar_pane::app) fn with_shared_view<T>(
-        &mut self,
-        input: bool,
-        advancing: bool,
-        advance: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        self.with_projected_view(input, advancing, None, advance)
     }
 
     pub(super) fn with_projected_view<T>(
         &mut self,
         input: bool,
         advancing: bool,
-        delivered: Option<Arc<FetchUpdate>>,
         advance: impl FnOnce(&mut Self) -> T,
     ) -> T {
         if self.view_scope.is_some() {
@@ -115,10 +113,13 @@ impl LoopState {
         let revision = views.revision;
         let (id, entry, latest) = views.catch_up(&pane, now, input);
         let has_latest = !latest.is_empty();
-        if advancing && entry.revision != revision && has_latest && self.fold_preparation.is_none()
+        if advancing
+            && entry.cursor.revision != revision
+            && has_latest
+            && self.fold_preparation.is_none()
         {
             drop(views);
-            return self.view_transition(input, None, None, delivered, advance);
+            return self.view_transition(input, None, None, advance);
         }
         if !advancing
             && entry.state.freeze.is_some()
@@ -128,7 +129,7 @@ impl LoopState {
             // Parking needs focus overlays; take their cut unlocked, then re-check routing.
             drop(views);
             self.view_events = Some(self.event_snapshot());
-            return self.with_projected_view(input, advancing, delivered, advance);
+            return self.with_projected_view(input, advancing, advance);
         }
         if entry.context.is_none() {
             entry.context = Some(ViewContext::new(self.view.current.clone(), now));
@@ -174,93 +175,38 @@ impl LoopState {
         self.view_parked = parked;
         self.view_events = events;
         self.view_latest = has_latest;
-        if advancing && self.fold_preparation.is_some() && entry.revision != revision {
-            for latest in latest.since(entry.revision) {
-                let full = delivered
-                    .clone()
-                    .filter(|delivered| {
-                        let (
-                            FetchUpdate::Shared { update, context },
-                            FetchUpdate::Shared {
-                                update: latest,
-                                context: latest_context,
-                            },
-                        ) = (delivered.as_ref(), &latest)
-                        else {
-                            return false;
-                        };
-                        match (update.as_ref(), latest.as_ref()) {
-                            (
-                                FetchUpdate::Snapshot { phase, source, .. },
-                                FetchUpdate::Fold {
-                                    phase: latest_phase,
-                                    source: latest_source,
-                                    ..
-                                },
-                            ) => {
-                                Arc::ptr_eq(context, latest_context)
-                                    && phase == latest_phase
-                                    && source == latest_source
-                            }
-                            _ => false,
+        let mut reductions = super::super::views::Reductions::default();
+        if advancing && self.fold_preparation.is_some() && entry.cursor.revision != revision {
+            for latest in latest.since(entry.cursor.revision) {
+                let clock_only = self.admits_clock_only(false);
+                let update = entry.cursor.replay(
+                    latest,
+                    |fold| {
+                        #[cfg(test)]
+                        {
+                            self.projections += 1;
                         }
-                    })
-                    .unwrap_or_else(|| {
-                        let (update, shared) = latest.into_parts();
-                        let update = match update {
-                            FetchUpdate::Fold {
-                                fold,
-                                phase,
-                                source,
-                                ..
-                            } => {
-                                #[cfg(test)]
-                                {
-                                    self.projections += 1;
-                                }
-                                FetchUpdate::Snapshot {
-                                    snapshot: Box::new(Self::project_fold(
-                                        &fold,
-                                        Some(&pane),
-                                        self.config.refresh_ms_override,
-                                    )),
-                                    phase,
-                                    source,
-                                }
-                            }
-                            update => update,
-                        };
-                        Arc::new(match shared {
-                            Some(context) => FetchUpdate::Shared {
-                                update: Box::new(update),
-                                context,
-                            },
-                            None => update,
-                        })
-                    });
-                let update = if self.admits_clock_only(false)
-                    && entry
-                        .accepted
-                        .as_ref()
-                        .is_some_and(|accepted| full.same_content(accepted))
-                {
-                    FetchUpdate::unchanged(full.clone())
-                } else {
-                    (*full).clone()
-                };
-                self.reduce_snapshot(update, false);
-                if full.is_success() {
-                    entry.accepted = Some(full);
+                        Self::project_fold(fold, Some(&pane), self.config.refresh_ms_override)
+                    },
+                    clock_only,
+                );
+                if update.is_success() {
+                    if update.is_unchanged() {
+                        reductions.unchanged += 1;
+                    } else {
+                        reductions.content += 1;
+                    }
                 }
+                self.reduce_snapshot(update, false);
             }
-            entry.revision = revision;
+            entry.cursor.revision = revision;
         }
         // Catch-up can replay hidden content older than the evidence that routed this arrival.
         if let Some(until) = arrival_until {
             self.view.tab_read_dwell_until = Some(until);
             self.ui.viewing_own_tab = Some(true);
         }
-        self.view_token = Some((id, entry.revision, entry.activity));
+        self.view_token = Some((id, entry.cursor.revision, entry.activity));
         let result = advance(self);
         std::mem::swap(&mut self.ui.view, &mut entry.state);
         std::mem::swap(&mut self.view, context);
@@ -270,6 +216,8 @@ impl LoopState {
         } else {
             self.view.current.clone_from(&context.current);
         }
+        views.reductions.content += reductions.content;
+        views.reductions.unchanged += reductions.unchanged;
         self.view_scope = None;
         self.view_focus = None;
         self.view_focus_event = None;

@@ -392,7 +392,6 @@ impl ApplyHarness {
         config.own_pane = Some(own.clone());
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
-        let (_result_tx, result_rx) = super::super::fetch::result_channel();
         let mut state = LoopState::new(
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
@@ -400,7 +399,7 @@ impl ApplyHarness {
             runtime,
             socket_path,
             diag,
-            result_rx,
+            Default::default(),
             None,
             observe_tx,
             PixelRenderCaps::default(),
@@ -408,7 +407,7 @@ impl ApplyHarness {
         );
         state.current = snapshot(ws);
         let views = std::sync::Arc::default();
-        state.share_views(std::sync::Arc::clone(&views));
+        state.share_views(std::sync::Arc::clone(&views), 0);
         Self { state, views, own }
     }
 
@@ -422,6 +421,29 @@ impl ApplyHarness {
     }
 
     fn apply_outcome(&mut self, outcome: FetchUpdate) -> bool {
+        let outcome = match outcome {
+            FetchUpdate::Snapshot {
+                snapshot,
+                phase,
+                source,
+            } => FetchUpdate::Fold {
+                fold: std::sync::Arc::new(super::super::fixtures::fold(
+                    *snapshot,
+                    Some(&self.own),
+                    Vec::new(),
+                )),
+                phase,
+                source,
+            },
+            outcome => outcome,
+        };
+        {
+            let mut views = self.views.lock().unwrap();
+            views.publish(outcome.clone());
+            self.state
+                .completion
+                .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
+        }
         self.state.apply_latest_snapshot(outcome)
     }
 

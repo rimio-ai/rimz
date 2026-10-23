@@ -134,7 +134,6 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &state,
         &runtime,
         Some(&inputs),
-        None,
         &mut refresh_state,
     )
     .expect("refresh producer caches");
@@ -176,7 +175,6 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &state,
         &runtime,
         Some(&inputs),
-        None,
         &mut refresh_state,
     )
     .expect("second refresh");

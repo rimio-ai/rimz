@@ -14,11 +14,13 @@ use crate::sidebar_pane::render::ViewState;
 #[cfg(test)]
 use crate::store::snapshot::SidebarSnapshot;
 
+/// The host's only fetch-content store, including replay and reduction baselines.
 #[derive(Default)]
 pub(super) struct Views {
     pub(super) latest: Latest,
     pub(super) fold: Option<Arc<WorkspaceFold>>,
     pub(super) revision: u64,
+    pub(super) reductions: Reductions,
     sampled_frame: Option<Arc<PaneFrame>>,
     entries: BTreeMap<ViewId, Entry>,
     clients: BTreeMap<MuxClientId, Client>,
@@ -36,9 +38,8 @@ pub(super) struct ViewId(u64);
 
 /// The newest outcomes a lagging view replays, each tagged with its publication revision.
 ///
-/// A view replays what it has not seen as a pane mailbox would deliver it: the
-/// success before the failure, and an interim never in place of a completion the
-/// view has not reduced.
+/// Views retain content once: success precedes failure, and an interim never
+/// replaces a completion the consumer has not reduced.
 #[derive(Default)]
 pub(super) struct Latest {
     completed: Option<(u64, FetchUpdate)>,
@@ -75,11 +76,66 @@ impl Latest {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) struct Cursor {
+    pub(super) revision: u64,
+    pub(super) accepted: Option<Arc<FetchUpdate>>,
+}
+
+impl Cursor {
+    pub(super) fn replay(
+        &mut self,
+        update: FetchUpdate,
+        project: impl FnOnce(&WorkspaceFold) -> crate::store::snapshot::SidebarSnapshot,
+        clock_only: bool,
+    ) -> FetchUpdate {
+        let (update, context) = update.into_parts();
+        let update = match update {
+            FetchUpdate::Fold {
+                fold,
+                phase,
+                source,
+            } => FetchUpdate::Snapshot {
+                snapshot: Box::new(project(&fold)),
+                phase,
+                source,
+            },
+            update => update,
+        };
+        let full = Arc::new(match context {
+            Some(context) => FetchUpdate::Shared {
+                update: Box::new(update),
+                context,
+            },
+            None => update,
+        });
+        let update = if clock_only
+            && self
+                .accepted
+                .as_ref()
+                .is_some_and(|prior| full.same_content(prior))
+        {
+            FetchUpdate::unchanged(full.clone())
+        } else {
+            (*full).clone()
+        };
+        if full.is_success() {
+            self.accepted = Some(full);
+        }
+        update
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Reductions {
+    pub(super) content: u64,
+    pub(super) unchanged: u64,
+}
+
 pub(super) struct Entry {
     pub(super) state: ViewState,
     pub(super) context: Option<ViewContext>,
-    pub(super) revision: u64,
-    pub(super) accepted: Option<Arc<FetchUpdate>>,
+    pub(super) cursor: Cursor,
     pub(super) last_pane: Option<PaneId>,
     pub(super) unpainted: bool,
     pub(super) activity: u64,
@@ -103,9 +159,13 @@ struct ClientRoute {
 }
 
 impl Views {
-    pub(super) fn publish(&mut self, fold: Option<Arc<WorkspaceFold>>, update: FetchUpdate) {
-        if let Some(fold) = fold {
-            self.fold = Some(fold);
+    pub(super) fn publish(&mut self, update: FetchUpdate) {
+        let content = match &update {
+            FetchUpdate::Shared { update, .. } => update.as_ref(),
+            update => update,
+        };
+        if let FetchUpdate::Fold { fold, .. } = content {
+            self.fold = Some(fold.clone());
         }
         self.revision += 1;
         self.latest.push(self.revision, update);
@@ -635,16 +695,14 @@ impl Views {
             .unwrap_or_default();
         let activity = source.map_or(0, |id| self.entries[&id].activity);
         let context = source.and_then(|id| self.entries[&id].context.clone());
-        let (revision, accepted, last_pane, unpainted) =
-            source.map_or((0, None, None, true), |id| {
-                let source = &self.entries[&id];
-                (
-                    source.revision,
-                    source.accepted.clone(),
-                    source.last_pane.clone(),
-                    source.unpainted,
-                )
-            });
+        let (cursor, last_pane, unpainted) = source.map_or((Cursor::default(), None, true), |id| {
+            let source = &self.entries[&id];
+            (
+                source.cursor.clone(),
+                source.last_pane.clone(),
+                source.unpainted,
+            )
+        });
         self.next_id += 1;
         let id = ViewId(self.next_id);
         self.entries.insert(
@@ -652,8 +710,7 @@ impl Views {
             Entry {
                 state,
                 context,
-                revision,
-                accepted,
+                cursor,
                 last_pane,
                 unpainted,
                 activity,

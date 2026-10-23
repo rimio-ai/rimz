@@ -201,10 +201,13 @@ impl SharedPanes {
     pub(super) fn new(mux: MuxName) -> Self {
         let mut pair = Self::unpainted(mux);
         pair.sample(&[(1, 0)]);
-        pair.panes[0].state.with_shared_view(false, false, |state| {
-            let group = state.current.worktree_groups[0].key.clone();
-            state.ui.expanded_groups.insert(group);
-        });
+        pair.fold(1);
+        pair.panes[0]
+            .state
+            .with_projected_view(false, false, |state| {
+                let group = state.current.worktree_groups[0].key.clone();
+                state.ui.expanded_groups.insert(group);
+            });
         pair.paint(0);
         pair
     }
@@ -269,7 +272,15 @@ impl SharedPanes {
             workspace: crate::sidebar::enrich::WorkspaceSnapshot(self.snapshot.clone()),
             frame: Some(Arc::new(frame)),
         };
-        self.plane.remember(fold);
+        let mut views = self.plane.views.lock().unwrap();
+        views.publish(FetchUpdate::Fold {
+            fold: Arc::new(fold),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        });
+        for rig in &self.panes {
+            rig.state.completion.store(true, Ordering::Relaxed);
+        }
     }
 
     pub(super) fn paint(&mut self, index: usize) {
@@ -281,15 +292,8 @@ impl SharedPanes {
     }
 
     fn fold(&mut self, index: usize) {
-        let fold = self.plane.views.lock().unwrap().fold.clone().unwrap();
-        let own_pane = self.panes[index].state.config.own_pane.clone();
-        self.panes[index].deliver(FetchUpdate::Fold {
-            fold,
-            own_pane,
-            refresh_override: None,
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        });
+        let rig = &mut self.panes[index];
+        rig.state.on_snapshot(&mut rig.fetch);
     }
 
     fn input(&mut self, index: usize) {
@@ -389,12 +393,14 @@ fn reattach_after_expiry_reads_siblings_after_dwell_on_both_backends() {
             row.unread = true;
         }
         pair.sample(&[(1, 0)]);
-        pair.panes[0].state.with_shared_view(false, false, |state| {
-            assert_eq!(state.ui.scroll_offset, 0);
-            assert_eq!(state.ui.selected_index, None);
-            assert_eq!(state.ui.baseline_pane, None);
-            assert!(state.ui.freeze.is_none());
-        });
+        pair.panes[0]
+            .state
+            .with_projected_view(false, false, |state| {
+                assert_eq!(state.ui.scroll_offset, 0);
+                assert_eq!(state.ui.selected_index, None);
+                assert_eq!(state.ui.baseline_pane, None);
+                assert!(state.ui.freeze.is_none());
+            });
         pair.paint(0);
         assert!(
             pair.panes[0]
@@ -996,13 +1002,11 @@ fn source_click(mux: MuxName, cross_tab: bool) {
             row: row as u16,
         })
         .unwrap();
-    source
-        .send(FetchUpdate::Snapshot {
-            snapshot: Box::new(source.state.current.clone()),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        })
-        .unwrap();
+    source.send(FetchUpdate::Snapshot {
+        snapshot: Box::new(source.state.current.clone()),
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Produced,
+    });
     let applications = source.state.content_applications;
     let paints = source.state.paints;
     source
@@ -1186,14 +1190,11 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
                 SidebarEvent::BodyFilterChanged,
             );
             let mut inbox = queued([Wakeup::Event(event), Wakeup::Snapshot]);
-            hidden
-                .result_tx
-                .send(FetchUpdate::Snapshot {
-                    snapshot: Box::new(hidden.state.current.clone()),
-                    phase: FetchPhase::Final,
-                    source: SnapshotSource::Produced,
-                })
-                .unwrap();
+            hidden.send(FetchUpdate::Snapshot {
+                snapshot: Box::new(hidden.state.current.clone()),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            });
             let before = (hidden.state.projections, hidden.state.content_applications);
             ready_tx.send(()).unwrap();
             start.wait();

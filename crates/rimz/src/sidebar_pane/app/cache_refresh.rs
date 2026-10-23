@@ -1,6 +1,6 @@
 //! Host cache refresher: heavy enrichment lanes off the fetch worker.
 //!
-//! The fetch worker still publishes panes and projects caches each data tick.
+//! The fetch worker still publishes room folds each data tick.
 //! This thread owns the TTL-gated spending, account, usage, auto-continue, loop
 //! task firing, and diff-stats cache refreshes so a status flip never waits
 //! behind them.
@@ -17,21 +17,20 @@ use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::ServeConfig;
-use super::fetch::{HostData, Stand};
+use super::fetch::HostData;
 use super::timing::tick_for;
 
 const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
 
-/// `stand` names the renderer's pane and data tick at each refresh: a room
-/// host stands as its eldest pane, which changes as panes attach and detach.
+/// Read the room's live data tick, or skip work while no pane subscribes.
 pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,
-    stand: impl Fn() -> Option<Stand> + Send + 'static,
+    data_tick: impl Fn() -> Option<Duration> + Send + 'static,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag, data, stand))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, data, data_tick))
 }
 
 fn refresh_loop(
@@ -39,7 +38,7 @@ fn refresh_loop(
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,
-    stand: impl Fn() -> Option<Stand>,
+    data_tick: impl Fn() -> Option<Duration>,
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
@@ -52,10 +51,10 @@ fn refresh_loop(
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
     loop {
-        std::thread::sleep(stand().map_or(tick_for(config.tick_seconds), |pane| pane.tick));
-        let Some(stand) = stand() else {
+        std::thread::sleep(data_tick().unwrap_or_else(|| tick_for(config.tick_seconds)));
+        if data_tick().is_none() {
             continue;
-        };
+        }
         let state = match StatePaths::for_workspace(config.workspace_id.clone()) {
             Ok(state) => state,
             Err(err) => {
@@ -66,7 +65,6 @@ fn refresh_loop(
             }
         };
         let tick = meter.begin();
-        let own_pane = stand.own_pane;
         let inputs = data
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -78,7 +76,6 @@ fn refresh_loop(
                 &state,
                 &runtime,
                 inputs.as_ref(),
-                own_pane.as_ref(),
                 &mut refresh_state,
             )
         });
