@@ -2,6 +2,42 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn sidebar_view_repairs_round_trip_and_distinguish_each_effect() {
+    for added in [None, Some("tmux:%2")] {
+        let mut wire = serde_json::json!({
+            "kind": "sidebar_view_repaired", "view": "@0", "closed": ["tmux:%1"],
+        });
+        if let Some(added) = added {
+            wire["added"] = added.into();
+        }
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(
+            decoded.is_ok(),
+            "repair diagnostic must decode: {decoded:?}"
+        );
+        let event = decoded.unwrap();
+        assert_eq!(event.severity(), DiagSeverity::Info);
+        assert_eq!(event.kind_name(), "sidebar_view_repaired");
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+        assert!(event.summary().contains("@0"));
+        assert!(event.summary().contains("tmux:%1"));
+        if let Some(added) = added {
+            assert!(event.summary().contains(added));
+        }
+        for (field, value) in [
+            ("view", serde_json::json!("@1")),
+            ("closed", serde_json::json!(["tmux:%9"])),
+            ("added", serde_json::json!("tmux:%8")),
+        ] {
+            let mut other = wire.clone();
+            other[field] = value;
+            let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+            assert_ne!(event.identity_key(), other.identity_key(), "{field}");
+        }
+    }
+}
+
+#[test]
 fn stale_presence_rosters_round_trip_and_group_by_session_and_writer() {
     let wire = serde_json::json!({
         "kind": "presence_roster_stale", "session_name": "room",

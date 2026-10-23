@@ -7,6 +7,23 @@ use rimz::diag::record::{
 use rimz::ids::LinkTier;
 
 #[test]
+fn sidebar_view_repairs_are_recovered_information() {
+    let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+        "kind": "sidebar_view_repaired", "view": "@0",
+        "closed": ["tmux:%1"], "added": "tmux:%2",
+    }));
+    assert!(
+        event.is_ok(),
+        "doctor must recognize a view repair: {event:?}"
+    );
+    let event = event.unwrap();
+    assert_eq!(
+        classify_diagnostic(&event, event.severity()),
+        (model::DoctorState::Recovered, model::DoctorImpact::Info)
+    );
+}
+
+#[test]
 fn frozen_presence_roster_is_an_actionable_warning() {
     let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
         "kind": "presence_roster_stale", "session_name": "frozen-room",

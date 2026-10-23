@@ -613,6 +613,12 @@ pub enum DiagEvent {
         polls: u64,
         last_read: SubagentPaneBindRead,
     },
+    SidebarViewRepaired {
+        view: String,
+        closed: Vec<PaneId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        added: Option<PaneId>,
+    },
     PaneWinsizeRepaired {
         pane: PaneId,
         rows: u16,
@@ -780,6 +786,7 @@ impl DiagEvent {
             | Self::RecoverySeatRefilled { .. }
             | Self::RecoveryChildEnded { .. }
             | Self::PaneWinsizeRepaired { .. }
+            | Self::SidebarViewRepaired { .. }
             | Self::HiddenViewsFitted { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
@@ -854,6 +861,7 @@ impl DiagEvent {
             Self::SubagentPaneBindTimeout { .. } => "subagent_pane_bind_timeout",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
+            Self::SidebarViewRepaired { .. } => "sidebar_view_repaired",
             Self::HiddenViewsFitted { .. } => "hidden_views_fitted",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::RecoveryChildEnded { .. } => "recovery_child_ended",
@@ -1128,6 +1136,13 @@ impl DiagEvent {
                 ..
             } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
             Self::PaneWinsizeRepaired { pane, .. } => format!("{}:{pane}", self.kind_name()),
+            Self::SidebarViewRepaired {
+                view,
+                closed,
+                added,
+            } => {
+                format!("{}:{view}:{added:?}:{closed:?}", self.kind_name())
+            }
             Self::HiddenViewsFitted { trigger, .. } => format!("{}:{trigger:?}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
@@ -1632,6 +1647,22 @@ impl DiagEvent {
             ),
             Self::PaneWinsizeRepaired { pane, rows, cols } => {
                 format!("{pane} tty winsize repaired to {rows} rows, {cols} columns")
+            }
+            Self::SidebarViewRepaired {
+                view,
+                closed,
+                added,
+            } => {
+                let closed = closed
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let added = added
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "none".to_owned());
+                format!("view {view} repaired: closed [{closed}]; added {added}")
             }
             Self::HiddenViewsFitted {
                 trigger,
