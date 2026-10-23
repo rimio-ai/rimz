@@ -76,6 +76,14 @@ sleep 600
         assert_eq!(report.closed, 1);
         let replacement = wait_for_sidebar_pane(&server, &opts.session_name, None);
         assert_ne!(replacement, sidebar);
+        assert_eq!(
+            report.repairs,
+            [rimz::mux::SidebarViewRepair {
+                view: server.display(replacement.raw(), "#{window_id}"),
+                closed: vec![sidebar.clone()],
+                added: Some(replacement.clone()),
+            }]
+        );
         assert_eq!(server.display(replacement.raw(), "#{pane_width}"), "60");
         assert_eq!(
             server.show_option(&["-t", &opts.session_name], "@rimz_sidebar_cols"),

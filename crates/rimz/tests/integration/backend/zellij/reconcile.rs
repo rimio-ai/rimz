@@ -1436,6 +1436,20 @@ fn assert_replacement_preserves_work_rectangles(daemon: bool) {
         .collect();
     assert_eq!(sidebars.len(), 1, "{after:?}");
     assert_ne!(sidebars[0].id, old.id);
+    assert_eq!(
+        report.repairs,
+        [rimz::mux::SidebarViewRepair {
+            view: old.tab_id.to_string(),
+            closed: vec![PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{}", old.id)
+            )],
+            added: Some(PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{}", sidebars[0].id)
+            )),
+        }]
+    );
     assert!(
         !after
             .panes

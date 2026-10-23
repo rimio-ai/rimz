@@ -6,8 +6,8 @@
 use crate::ids::PaneId;
 use std::collections::{HashMap, HashSet};
 
-/// Tally of one in-place sidebar repair pass.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Tally and landed structural effects of one in-place sidebar repair pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SidebarRecovery {
     /// Views that gained a verified sidebar, including add-before-close replacements.
     pub recovered: usize,
@@ -21,6 +21,19 @@ pub struct SidebarRecovery {
     pub redocked: usize,
     /// Working sidebar panes that remain outside the verified dock.
     pub misdocked: usize,
+    /// Per-view effects that landed, including before a transaction failed.
+    pub repairs: Vec<SidebarViewRepair>,
+}
+
+/// Structural effects that landed in one native mux view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SidebarViewRepair {
+    /// Native view id: the tmux window id or the Zellij stable tab id.
+    pub view: String,
+    /// Successfully closed panes, in close order.
+    pub closed: Vec<PaneId>,
+    /// New sidebar after its mount and current-build heartbeat were verified.
+    pub added: Option<PaneId>,
 }
 
 /// Fresh renderer claims plus panes inside the first-heartbeat grace window.
@@ -113,10 +126,10 @@ enum ViewVerdict {
 }
 
 /// Result of a backend's native add and verification effect.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ReconcileAddOutcome {
-    Verified,
-    VerifiedMisdocked,
+    Verified(PaneId),
+    VerifiedMisdocked(PaneId),
     Deferred,
 }
 
@@ -206,9 +219,23 @@ where
     }
 
     for (index, verdict) in plan.verdicts.iter().enumerate() {
-        if let Err(error) =
-            execute_reconcile_verdict(verdict, report, defer_adds, &mut add, &mut close)
-        {
+        let mut repair = SidebarViewRepair {
+            view: verdict.view().to_owned(),
+            closed: Vec::new(),
+            added: None,
+        };
+        let result = execute_reconcile_verdict(
+            verdict,
+            report,
+            &mut repair,
+            defer_adds,
+            &mut add,
+            &mut close,
+        );
+        if !repair.closed.is_empty() || repair.added.is_some() {
+            report.repairs.push(repair);
+        }
+        if let Err(error) = result {
             return reconcile_failure(&plan, report, index, verdict.view(), error);
         }
     }
@@ -218,6 +245,7 @@ where
 fn execute_reconcile_verdict<Add, Close>(
     verdict: &ViewVerdict,
     report: &mut SidebarRecovery,
+    repair: &mut SidebarViewRepair,
     defer_adds: bool,
     add: &mut Add,
     close: &mut Close,
@@ -227,18 +255,16 @@ where
     Close: FnMut(&PaneId) -> crate::mux::Result<()>,
 {
     match verdict {
-        ViewVerdict::CloseDuplicates { close: panes, .. } => close_panes(panes, report, close),
-        ViewVerdict::Add { view } => {
-            let outcome = run_add(view, &[], defer_adds, add)?;
-            record_add(outcome, defer_adds, report);
-            Ok(())
+        ViewVerdict::CloseDuplicates { close: panes, .. } => {
+            close_panes(panes, report, repair, close)
         }
-        ViewVerdict::Replace {
-            view, close: panes, ..
-        } => {
-            let outcome = run_add(view, panes, defer_adds, add)?;
-            if outcome != ReconcileAddOutcome::Deferred {
-                close_panes(panes, report, close)?;
+        ViewVerdict::Add { view } | ViewVerdict::Replace { view, .. } => {
+            let outcome = run_add(view, verdict.closes(), defer_adds, add)?;
+            if let ReconcileAddOutcome::Verified(pane)
+            | ReconcileAddOutcome::VerifiedMisdocked(pane) = &outcome
+            {
+                repair.added = Some(pane.clone());
+                close_panes(verdict.closes(), report, repair, close)?;
             }
             record_add(outcome, defer_adds, report);
             Ok(())
@@ -265,6 +291,7 @@ where
 fn close_panes<Close>(
     panes: &[PaneId],
     report: &mut SidebarRecovery,
+    repair: &mut SidebarViewRepair,
     close: &mut Close,
 ) -> crate::mux::Result<()>
 where
@@ -273,6 +300,7 @@ where
     for pane in panes {
         close(pane)?;
         report.closed += 1;
+        repair.closed.push(pane.clone());
     }
     Ok(())
 }
@@ -283,8 +311,8 @@ fn record_add(
     report: &mut SidebarRecovery,
 ) {
     match outcome {
-        ReconcileAddOutcome::Verified => report.recovered += 1,
-        ReconcileAddOutcome::VerifiedMisdocked => {
+        ReconcileAddOutcome::Verified(_) => report.recovered += 1,
+        ReconcileAddOutcome::VerifiedMisdocked(_) => {
             report.recovered += 1;
             report.misdocked += 1;
         }
@@ -584,7 +612,7 @@ mod tests {
             |view, replacing| {
                 assert_eq!(replacing, [pane("terminal_1"), pane("terminal_2")]);
                 operations.borrow_mut().push(format!("add:{view}"));
-                Ok(ReconcileAddOutcome::Verified)
+                Ok(ReconcileAddOutcome::Verified(pane("terminal_9")))
             },
             |pane| {
                 operations.borrow_mut().push(format!("close:{pane}"));
@@ -595,6 +623,14 @@ mod tests {
         assert!(failed.is_none());
         assert_eq!(report.recovered, 1);
         assert_eq!(report.closed, 2);
+        assert_eq!(
+            report.repairs,
+            [SidebarViewRepair {
+                view: "view".to_owned(),
+                closed: vec![pane("terminal_1"), pane("terminal_2")],
+                added: Some(pane("terminal_9")),
+            }]
+        );
         assert_eq!(
             operations.into_inner(),
             [
@@ -626,6 +662,7 @@ mod tests {
         assert_eq!(failed_report.failed, 1);
         assert!(failed.is_some());
         assert!(closes.borrow().is_empty());
+        assert!(failed_report.repairs.is_empty());
 
         let (deferred_report, failed) = execute(
             vec![ViewVerdict::Replace {
@@ -640,6 +677,7 @@ mod tests {
         assert_eq!(deferred_report.deferred, 1);
         assert_eq!(deferred_report.recovered, 0);
         assert_eq!(deferred_report.closed, 0);
+        assert!(deferred_report.repairs.is_empty());
     }
 
     #[test]
@@ -667,6 +705,14 @@ mod tests {
             [pane("terminal_1"), pane("terminal_2")]
         );
         assert_eq!(report.closed, 1);
+        assert_eq!(
+            report.repairs,
+            [SidebarViewRepair {
+                view: "view".to_owned(),
+                closed: vec![pane("terminal_1")],
+                added: None,
+            }]
+        );
         assert_eq!(report.failed, 1);
         assert_eq!(failed.expect("failure context").view, "view");
     }
@@ -693,7 +739,7 @@ mod tests {
                 if view == "failed" {
                     Err(failure("add failed"))
                 } else {
-                    Ok(ReconcileAddOutcome::Verified)
+                    Ok(ReconcileAddOutcome::Verified(pane("terminal_9")))
                 }
             },
             |_| Ok(()),
@@ -702,6 +748,14 @@ mod tests {
         assert_eq!(add_operations.into_inner(), ["first", "failed"]);
         assert_eq!(report.recovered, 1);
         assert_eq!(report.failed, 2);
+        assert_eq!(
+            report.repairs,
+            [SidebarViewRepair {
+                view: "first".to_owned(),
+                closed: vec![],
+                added: Some(pane("terminal_9")),
+            }]
+        );
         assert_eq!(failed.expect("failure context").view, "failed");
     }
 
@@ -738,12 +792,51 @@ mod tests {
                 view: "view".to_owned(),
             }],
             false,
-            |_, _| Ok(ReconcileAddOutcome::VerifiedMisdocked),
+            |_, _| Ok(ReconcileAddOutcome::VerifiedMisdocked(pane("terminal_9"))),
             |_| Ok(()),
         );
 
         assert!(failed.is_none());
         assert_eq!(report.recovered, 1);
         assert_eq!(report.misdocked, 1);
+        assert_eq!(
+            report.repairs,
+            [SidebarViewRepair {
+                view: "view".to_owned(),
+                closed: vec![],
+                added: Some(pane("terminal_9")),
+            }]
+        );
+    }
+
+    #[test]
+    fn executor_retains_verified_add_and_partial_closes_on_failure() {
+        let (report, failed) = execute(
+            vec![ViewVerdict::Replace {
+                view: "view".to_owned(),
+                close: vec![pane("terminal_1"), pane("terminal_2")],
+            }],
+            false,
+            |_, _| Ok(ReconcileAddOutcome::Verified(pane("terminal_9"))),
+            |pane| {
+                if pane.raw() == "terminal_2" {
+                    Err(failure("close failed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(failed.is_some());
+        assert_eq!(report.recovered, 0);
+        assert_eq!(report.closed, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(
+            report.repairs,
+            [SidebarViewRepair {
+                view: "view".to_owned(),
+                closed: vec![pane("terminal_1")],
+                added: Some(pane("terminal_9")),
+            }]
+        );
     }
 }
