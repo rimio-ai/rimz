@@ -214,7 +214,7 @@ To keep host shells from compiling inside a server that a scoped pane started, a
 
 ### Zellij refuses a client right after it starts
 
-Zellij before 0.46 has a race that can report a running room as missing and refuse a new client. When the client exits with a nonzero code within two seconds and the room is still running, `rimz start` and `rimz attach` print a notice and attach again, at most twice. If both retries fail, run `rimz attach` again. Zellij 0.46 and newer remove this race; upgrade when available. See [multiplexer setup](./multiplexer.md).
+Zellij before 0.46 has a race that can report a running room as missing and refuse a new client. When the client exits with a nonzero code within two seconds and the room is still running, `rimz start` and `rimz attach` print a notice and attach again, at most twice. If both retries fail, run `rimz attach` again. Zellij 0.46 and newer remove this race; upgrade when available. A room started before the upgrade keeps its old Zellij server, and the race with it, until [`rimz reset`](#rebuild-a-wedged-room-with-rimz-reset) rebuilds it. RimZ decides whether to attach again from the installed `zellij --version`, so that room also loses the retry. See [multiplexer setup](./multiplexer.md).
 
 A "lost connection" drop exits with the same zero code as an explicit detach, so RimZ cannot tell them apart and does not attach again in either case. After a drop, run `rimz attach` again. Signal exits are not retried either.
 
