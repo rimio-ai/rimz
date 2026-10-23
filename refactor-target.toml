@@ -538,7 +538,8 @@ path = "crates/rimz/src/cli"
 # Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
 # Explicit child statuses reach main through the shared exit-code error.
 # anchor_caller_workspace shares agent-started placement across launch paths (+1).
-surface-budget = 34
+# open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -4462,6 +4463,11 @@ reason = "Shares scene discovery and presentation without duplicating resolver f
 kind = "item"
 key = "cli::profile_report::profile_summary"
 reason = "Shares scene discovery and presentation without duplicating resolver facts or profile-card summaries."
+
+[[verdict]]
+kind = "item"
+key = "cli::open_existing_store_at"
+reason = "Expanded wake-up cards enrich room handles from existing stores without creating state."
 
 [[verdict]]
 kind = "item"

@@ -1,6 +1,7 @@
 //! Room-scoped loop list model and presentation.
 
 use super::*;
+use crate::cli::wake_view::checkout_name;
 use rimz::config::WatchSpec;
 use rimz::harness::schedule::{TaskKind, Trigger, launch_ledger, signal::watcher_info};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use serde::Serialize;
 mod text;
 #[path = "list_watch.rs"]
 mod watch;
-pub(super) use text::action_text as action;
+pub(super) use crate::cli::wake_view::{action_text as action, worktree_name};
 #[cfg(test)]
 use text::wrap_trigger;
 
@@ -78,7 +79,16 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let width = std::io::stdout()
         .is_terminal()
         .then(|| ui::terminal_columns(100));
-    text::write(&mut ui::out(), &model, &rooms, args.all, width)
+    text::write(
+        &mut ui::out(),
+        &model,
+        &rooms,
+        args.all,
+        width,
+        workspace
+            .as_ref()
+            .map(|workspace| workspace.worktree_root.as_path()),
+    )
 }
 
 pub(super) fn render_watch_frame(
@@ -387,7 +397,7 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     worktree_here: bool,
     #[serde(skip)]
-    watcher_live: bool,
+    watcher_pid: Option<u32>,
     #[serde(skip)]
     launched_count: usize,
     #[serde(skip)]
@@ -400,7 +410,7 @@ struct RowContext<'a> {
     open: bool,
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
-    watcher_live: bool,
+    watcher_pid: Option<u32>,
     launch: Option<&'a launch_ledger::LaunchRecord>,
     now: Timestamp,
 }
@@ -506,9 +516,10 @@ fn load(
                     open,
                     stats: stats.get(name),
                     count,
-                    watcher_live: runtime.as_ref().is_some_and(|runtime| {
-                        watcher_info(runtime, name).ok().flatten().is_some()
-                    }),
+                    watcher_pid: runtime
+                        .as_ref()
+                        .and_then(|runtime| watcher_info(runtime, name).ok().flatten())
+                        .map(|info| info.pid),
                     launch: ledger
                         .get(name)
                         .and_then(|launches| launches.get(&task.entry().run_dir())),
@@ -579,6 +590,14 @@ fn load(
 }
 
 impl TaskRow {
+    fn owner_class(&self) -> schedule::DeliveryOwner<'_> {
+        self.task
+            .as_ref()
+            .map_or(schedule::DeliveryOwner::Loop(&self.name), |task| {
+                schedule::delivery_owner(&self.name, task.entry())
+            })
+    }
+
     fn new(
         name: &str,
         task: &LoadedTask,
@@ -590,7 +609,7 @@ impl TaskRow {
             open,
             stats,
             count,
-            watcher_live,
+            watcher_pid,
             launch,
             now,
         } = context;
@@ -660,7 +679,7 @@ impl TaskRow {
             running,
             held,
             worktree_here: false,
-            watcher_live,
+            watcher_pid,
             launched_count: 0,
             launch: launch.filter(|_| entry.stay).cloned(),
             exit: None,
@@ -771,7 +790,7 @@ impl TaskRow {
             running: Some(holder),
             held,
             worktree_here: false,
-            watcher_live: false,
+            watcher_pid: None,
             launched_count: 0,
             launch: None,
             exit: None,
@@ -842,7 +861,7 @@ impl TaskRow {
                 {
                     return "never fired".into();
                 }
-                if !self.watcher_live {
+                if self.watcher_pid.is_none() {
                     return "lost".into();
                 }
                 let elapsed = self
@@ -987,33 +1006,6 @@ impl WorkflowRunRow {
     }
 }
 
-pub(super) fn worktree_name(entry: &TaskEntry) -> Option<String> {
-    if let Some(name) = &entry.worktree {
-        return Some(name.clone());
-    }
-    (entry.wait.is_some() || entry.dir.is_some()).then(|| {
-        entry
-            .dir
-            .as_ref()
-            .map(|_| checkout_name(&entry.run_dir()))
-            .or_else(|| {
-                entry.wait.as_ref().and_then(|target| {
-                    target
-                        .handle
-                        .split_once('#')
-                        .map(|(_, channel)| channel.to_owned())
-                })
-            })
-            .unwrap_or_else(|| checkout_name(&entry.resolved_root()))
-    })
-}
-
-fn checkout_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
 fn elapsed(at: Timestamp, now: Timestamp) -> String {
     ui::age_label(now.duration_since(at).as_secs().max(0) as u64)
 }
@@ -1137,7 +1129,7 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             format!("✗ failing{strikes}{exit}"),
         );
     }
-    if schedule::watch_lost(task.entry(), row.watcher_live, now) {
+    if schedule::watch_lost(task.entry(), row.watcher_pid.is_some(), now) {
         let wake = task
             .entry()
             .wait

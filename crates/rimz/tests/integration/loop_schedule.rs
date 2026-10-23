@@ -6233,11 +6233,10 @@ fn loop_wait_workflow_pins_and_delivers_to_live_session() {
     let show = loop_ok(&env, &["loop", "show", "wait"]);
     assert!(
         list.lines()
-            .any(|line| line.contains("wait") && line.contains('✓'))
-            && show.contains("source:")
-            && show.contains("state"),
-        "list/show smoke failed:\n{list}\n{show}"
+            .any(|line| line == "  loop wait · every 15m → @claude in 1 worktree"),
+        "{list}"
     );
+    assert!(show.contains("✓ healthy · last run "), "{show}");
 }
 
 #[test]

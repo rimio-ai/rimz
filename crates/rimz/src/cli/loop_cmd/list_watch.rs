@@ -280,11 +280,10 @@ fn fold_lines(room: &Room, now: Timestamp) -> Vec<String> {
                 && row.section != Section::NeedsYou
                 && row.running.is_none()
         })
-        .count();
-    if wakes > 0 {
-        folds.push(format!(
-            "wake-ups  {wakes} wake agents · all healthy · rimz loop list --all"
-        ));
+        .collect::<Vec<_>>();
+    if !wakes.is_empty() {
+        let counts = crate::cli::wake_view::counts(wakes.iter().map(|row| row.owner_class()));
+        folds.push(format!("wake-ups  {counts} · rimz loop list --all"));
     }
     folds
 }
