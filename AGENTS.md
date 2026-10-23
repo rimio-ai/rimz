@@ -104,6 +104,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - A tree-wide `rg` also skips the paths the root `.ignore` lists (`docs/externals/`, `examples/`, `CHANGELOG.md`, `Cargo.lock`, `supply-chain/`) without saying so: a removal or rewording grep passes `--no-ignore-dot` or names `docs/externals` as a path.
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
+- zsh reserves `status` as a read-only alias of `$?`: name an exit-code variable `rc`.
 - A scope check against trunk diffs from the merge base, `git diff --stat origin/main...HEAD -- <path>` (three dots). Once trunk moves, a two-dot diff against `origin/main` lists trunk's own changes as the branch's.
 - Git over SSH (`fetch`, `push`, `ls-remote`) from an agent in scoped isolation runs as `GIT_SSH_COMMAND="ssh -F $HOME/.ssh/config" git ...`. The scoped view maps only your uid, so the root-owned `/etc/ssh/ssh_config.d/*.conf` reads as owned by nobody, and OpenSSH refuses the system config's `Include` with `Bad owner or permissions`. `-F /dev/null` also gets past the refusal but drops the identity your user config names, so a push fails.
 
