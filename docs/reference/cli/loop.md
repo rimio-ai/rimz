@@ -129,7 +129,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 ### `loop explain`
 
-`rimz loop explain <EXPR>... [--root <PATH>] [--provider <KIND>] [--account <NAME>]` evaluates the current readings without adding a task, starting probes, or writing state. Repeat positional clauses to AND them together, just like repeated `--when`. Scope resolves like `loop add`: the caller's checkout, overridden by `--root`. Use `--` before a positional value that is exactly a flag, including `-h` or `--help`.
+`rimz loop explain <EXPR>... [--json] [--root <PATH>] [--provider <KIND>] [--account <NAME>]` evaluates the current readings without adding a task, starting probes, or writing state. Repeat positional clauses to AND them together, just like repeated `--when`. Scope resolves like `loop add`: the caller's checkout, overridden by `--root`. Use `--` before a positional value that is exactly a flag, including `-h` or `--help`.
 
 Output shape:
 
@@ -143,6 +143,32 @@ now: true|false
 Each leaf term gets the same line as in `loop show`, in expression order. Exit 0 means true; exit 1 means false; exit 2 means a refused expression. Refused expressions use the same clause, position, and fix diagnostics as `loop add --when`; mistyped keys, forge values, and configured stages within two edits get a `did you mean` suggestion.
 
 Forge terms read the existing room cache only: explain does not keep a selected branch probed. Outside a room they read unknown and print the sidebar hint. Window terms use `--provider` and optionally `--account`, or the room's default account for that provider. Without `--provider`, window readings are unknown and a hint names the missing flag.
+
+`--json` prints one object instead of text and omits the human hints. For `ci=passed` outside a room:
+
+```json
+{
+  "when": "ci=passed",
+  "scope": "<checkout>",
+  "room_open": false,
+  "now": false,
+  "checked_at": null,
+  "terms": [
+    {
+      "term": "ci=passed",
+      "key": "ci",
+      "negated": false,
+      "reading": null,
+      "met": false,
+      "unread": "readings paused (room closed)"
+    }
+  ]
+}
+```
+
+`when` is the canonical expression; `scope` is its checkout path. `terms` has one entry per leaf in expression order, including repeated keys. `term` excludes surrounding negation; `negated` is true for an odd number of surrounding `!`. `reading` is a string or null when unread; `unread` is the text explanation for an unread term, otherwise null. `met` is the leaf's boolean satisfaction after negation. `now` keeps the loop's boolean rules, including matching unread values with `unknown`; it is not a workflow condition's three-valued truth.
+
+`checked_at` is the latest probe's RFC 3339 time only if it succeeded, the expression reads forge terms, and the room is open; otherwise it is null. Readings remain last-known, so scripts judge freshness from this stamp. Exit codes stay 0 for true, 1 for false (with JSON still printed), and 2 for a refused expression (no JSON).
 
 ### Flags
 

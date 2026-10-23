@@ -127,6 +127,9 @@ struct ExplainArgs {
     /// Condition clauses, ANDed together.
     #[arg(required = true, num_args = 1.., value_name = "EXPR")]
     expressions: Vec<String>,
+    /// Print structured readings and truth.
+    #[arg(long)]
+    json: bool,
     /// Checkout whose board and forge readings to inspect.
     #[arg(long, default_value = ".")]
     root: PathBuf,

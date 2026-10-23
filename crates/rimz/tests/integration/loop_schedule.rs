@@ -11961,6 +11961,137 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
 }
 
 #[test]
+fn explain_json_reports_live_terms_truth_and_leaves_inputs_unchanged() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "explain-json",
+    );
+    let cache = runtime.lane_path("pr-state.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let bytes = json!({
+        "branch_ci": {env.project_root.to_string_lossy().to_string(): "passing"},
+        "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"},
+        "repos": {"repo": {"refreshed_at_ms": 1_700_000_000_123_u64, "ok": true}},
+        "branches": {"repo": {"a": {"pr": {"state": "merged"}}}}
+    })
+    .to_string();
+    std::fs::write(&cache, &bytes).unwrap();
+    for (ci, truth, code) in [("passed", true, 0), ("pending", false, 1)] {
+        let condition = format!("!(pr[a]=open || ci=failed) && ci={ci} && pr[missing]=unknown");
+        let output = env
+            .rimz()
+            .args(["loop", "explain", "--json", &condition])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(code));
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        assert!(value.is_ok(), "{}", String::from_utf8_lossy(&output.stdout));
+        assert_eq!(
+            value.unwrap(),
+            json!({
+                "when": condition,
+                "scope": env.project_root,
+                "room_open": true,
+                "now": truth,
+                "checked_at": "2023-11-14T22:13:20.123Z",
+                "terms": [
+                    {"term": "pr[a]=open", "key": "pr[a]", "negated": true,
+                     "reading": "merged", "met": true, "unread": null},
+                    {"term": "ci=failed", "key": "ci", "negated": true,
+                     "reading": "passed", "met": true, "unread": null},
+                    {"term": format!("ci={ci}"), "key": "ci", "negated": false,
+                     "reading": "passed", "met": truth, "unread": null},
+                    {"term": "pr[missing]=unknown", "key": "pr[missing]", "negated": false,
+                     "reading": null, "met": true, "unread": "no PR for branch missing"}
+                ]
+            })
+        );
+    }
+    let output = loop_ok(&env, &["loop", "explain", "--json", "team.stage=unknown"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap(),
+        json!({
+            "when": "team.stage=unknown",
+            "scope": env.project_root,
+            "room_open": true,
+            "now": true,
+            "checked_at": null,
+            "terms": [{"term": "team.stage=unknown", "key": "team.stage", "negated": false,
+                       "reading": null, "met": true, "unread": "not read"}]
+        })
+    );
+    assert_eq!(std::fs::read_to_string(cache).unwrap(), bytes);
+    assert!(!runtime.lane_path("loop-when.json").exists());
+    assert!(loop_ok(&env, &["loop", "list", "--json"]).contains("[]"));
+}
+
+#[test]
+fn explain_json_outside_a_room_reports_unknown_and_usage_errors() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args([
+            "loop",
+            "explain",
+            "--json",
+            "ci=unknown",
+            "window.5h.left>=40",
+            "!pr=open",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+    assert!(value.is_ok(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert_eq!(
+        value.unwrap(),
+        json!({
+            "when": "ci=unknown && window.5h.left>=40 && !pr=open",
+            "scope": env.project_root,
+            "room_open": false,
+            "now": false,
+            "checked_at": null,
+            "terms": [
+                {"term": "ci=unknown", "key": "ci", "negated": false,
+                 "reading": null, "met": true, "unread": "readings paused (room closed)"},
+                {"term": "window.5h.left>=40", "key": "window.5h.left", "negated": false,
+                 "reading": null, "met": false, "unread": "not read"},
+                {"term": "pr=open", "key": "pr", "negated": true,
+                 "reading": null, "met": true, "unread": "readings paused (room closed)"}
+            ]
+        })
+    );
+    let output = env
+        .rimz()
+        .args(["loop", "explain", "--json", "ci=pased"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("clause 1, position") && error.contains("did you mean passed?"),
+        "{error}"
+    );
+}
+
+#[test]
 fn explain_root_and_account_select_the_same_readings_as_tasks() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
