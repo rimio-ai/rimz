@@ -212,6 +212,31 @@ target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-
 
 Expect `Recovered 1 sidebar in place.` and `Closed 1 duplicate or unresponsive sidebar.` with exit 0. In `after.json`, the new sidebar has a new terminal id at the old sidebar's `pane_x`, `pane_y`, `pane_columns` and `pane_rows`. Every work pane in every tab matches `before.json`. Run the repair once more: it prints `Sidebar structure is healthy across 1 session.` A daemon tab is worth its own run, since its companions sit beside the content pane. Leaving the host frozen through the repair is the failure case: exit 1, `sidebars could not be repaired`, and no new sidebar pane left behind.
 
+## Add a sidebar in place
+
+`rimz sidebar repair` also adds a sidebar to a tab that has none ([in-place repair](../internals/multiplexers.md#in-place-repair)). RimZ adds a missing sidebar only in its reconcile pass, which runs when a command enters the room (`rimz start`, or a supervised run such as `rimz agents -p` or a loop fire) and on `rimz sidebar repair` or `rimz reload --repair`; opening a tab runs none. A plain `new-tab` already carries a sidebar, since the room's `new_tab_template` holds one, so open the test tab from a one-pane layout instead. Where Zellij places the split depends on the view's size, so set the attached client's view first: `stty` on the client's terminal resizes it. The client is the `zellij attach` line in `ps` that has a `pts/` terminal:
+
+```sh
+ps -C zellij -o pid,tty,args | rg -F '<session>'
+stty -F /dev/pts/<n> cols 180 rows 50
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action new-tab --name lone --layout-string 'layout { pane; }'
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-panes -a -j > "$ROOT/tmp/before.json"
+target/debug/xtask sandbox in "$ROOT" -- "$BIN" --zellij sidebar repair; echo "exit=$?"
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-panes -a -j > "$ROOT/tmp/after.json"
+```
+
+Expect `Recovered 1 sidebar in place.` with exit 0. In `after.json`, the new sidebar in the `lone` tab sits at `pane_x` 0 and `pane_y` 0 with the tab's full 50 rows and 45 columns, and the work pane sits to its right with its `pane_y` and `pane_rows` from `before.json`. Run the repair once more: it prints `Sidebar structure is healthy across 1 session.`
+
+To check a tab with floating panes shown, set a wide view (`cols 240 rows 50`), open another one-pane tab the same way with `--name floats`, open a floating pane in it, and confirm that Zellij reports the floats visible before the repair:
+
+```sh
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action new-pane --floating -- sleep 600
+target/debug/xtask sandbox in "$ROOT" -- zellij --session <session> action list-tabs --json > "$ROOT/tmp/tabs.json"
+jq '.[] | select(.name == "floats") | .are_floating_panes_visible' "$ROOT/tmp/tabs.json"
+```
+
+The check reads `true`. After the repair, expect the same exit and dock, a sidebar 60 columns wide, the floating pane still listed in `list-panes`, and `are_floating_panes_visible` now `false`: the add hides the floating panes and never closes them.
+
 ## First frame of a new tab
 
 A new tab's sidebar seeds its first frame from the warm host's last delivered fold in memory ([state.md](../internals/sidebar/state.md)), so its first non-blank screen already holds the room's cards. A cold host has no seed and paints the placeholder until its first fold. The seed is projected for the new pane. Until a frame lists this new sidebar in its topology, focus derivation seats no selection, on the seed and the first cached fetch fold alike: every card rests at its configured density, with no card open by selection, no spines, no lane, and no header seal, even when the fold's focus names an agent in the previous tab. The loop-state regression test checks both paints before the correction. To check the live backend, poll the new pane from the moment the tab opens with one of the scripts below. Save it under the room's root and run it with `cargo xtask sandbox in <root> -- <script>`, since it needs the room's environment. Each script writes one file per non-blank capture, named by the milliseconds since the tab was opened.
