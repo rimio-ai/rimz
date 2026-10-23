@@ -1234,6 +1234,84 @@ fn discovery_keeps_a_launched_child_nested_before_its_session_start() {
     assert_eq!(nested[0].pane.as_ref(), Some(&child_pane.pane_id));
 }
 
+fn discovery_on_registered_codex_child(
+    session_id: &str,
+) -> (SidebarSnapshot, PaneRef, Vec<DiagEvent>) {
+    let (snapshot, child_pane) = provisional_codex_adopted_by_discovery(true);
+    let mut parent_pane = pane("%1", "claude", "/repo/main");
+    parent_pane.pane_process_start = Some(ago(30));
+    let panes = vec![parent_pane, child_pane.clone()];
+    let mut observation = identity_observation("codex", session_id, 1);
+    observation.transcript_path = PathBuf::from(format!("/codex/refreshed/{session_id}.jsonl"));
+    let (snapshot, diagnostics) =
+        snapshot.with_local_sessions_and_diagnostics(&panes, vec![observation]);
+    (
+        snapshot.with_live_panes(panes, None),
+        child_pane,
+        diagnostics,
+    )
+}
+
+#[test]
+fn registered_launched_child_reserves_its_pane_from_other_rollouts() {
+    let (snapshot, child_pane, diagnostics) = discovery_on_registered_codex_child("guardian");
+
+    assert_eq!(
+        diagnostics,
+        [DiagEvent::LocalSessionBindRejected {
+            agent_kind: AgentKind::new_unchecked("codex"),
+            agent_session_id: AgentSessionId::from("guardian"),
+            pane_id: child_pane.pane_id.clone(),
+            reason: LocalSessionBindRejectReason::PaneReserved,
+        }]
+    );
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "guardian")
+    );
+    assert_eq!(
+        rows(&snapshot).len(),
+        1,
+        "no standalone child or Guardian row"
+    );
+    let nested = row(&snapshot, "real-parent").sub_agents();
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].id, "real-child");
+    assert_eq!(nested[0].pane.as_ref(), Some(&child_pane.pane_id));
+    assert_eq!(
+        snapshot.agent_bound_to_pane(&child_pane).unwrap().agent_id,
+        "real-child"
+    );
+}
+
+#[test]
+fn registered_launched_child_accepts_its_own_session_observation() {
+    let (snapshot, child_pane, diagnostics) = discovery_on_registered_codex_child("real-child");
+
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let child = rollup_agent(&snapshot, "real-child");
+    assert!(child.is_launched_child());
+    assert_eq!(
+        child.parent_agent_id,
+        Some(AgentSessionId::from("launch_parent"))
+    );
+    assert_eq!(
+        child.transcript_path.as_deref(),
+        Some("/codex/refreshed/real-child.jsonl")
+    );
+    assert_eq!(rows(&snapshot).len(), 1, "no standalone child row");
+    let nested = row(&snapshot, "real-parent").sub_agents();
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].id, "real-child");
+    assert_eq!(nested[0].pane.as_ref(), Some(&child_pane.pane_id));
+    assert_eq!(
+        snapshot.agent_bound_to_pane(&child_pane).unwrap().agent_id,
+        "real-child"
+    );
+}
+
 #[test]
 fn discovery_keeps_an_adopted_provisional_root_a_root_row() {
     let (snapshot, child_pane) = provisional_codex_adopted_by_discovery(false);
