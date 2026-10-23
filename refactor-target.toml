@@ -1241,7 +1241,13 @@ path = "crates/rimz/src/mux"
 # FittedPane carries per-pane rows and proven sidebar columns across the fit/push seam (+1).
 # MuxBackend::close_pane_on_exit lets the sidebar pin only its own pane's lifetime (+1).
 # PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
-surface-budget = 295
+# MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
+surface-budget = 296
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::attach_may_drop_early"
+reason = "The CLI retries early client loss only when the backend reports an affected version."
 
 [[verdict]]
 kind = "item"
