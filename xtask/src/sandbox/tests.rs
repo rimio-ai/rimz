@@ -46,6 +46,14 @@ fn manual_sandbox_replaces_home_and_every_persistent_xdg_root() {
 }
 
 #[test]
+fn unkept_manual_sandbox_is_removed_on_drop() {
+    let sandbox = HostSandbox::for_manual_command().unwrap();
+    let root = sandbox.root().to_path_buf();
+    drop(sandbox);
+    assert!(!root.exists(), "an unmarked sandbox must be removed");
+}
+
+#[test]
 fn only_a_test_sandbox_names_a_skip_log_and_its_runs_keep_it() {
     let workspace = TempDir::new().unwrap();
     let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
@@ -402,7 +410,34 @@ mod reaper {
 
     const ROLE_ENV: &str = "XTASK_SANDBOX_TEST_ROLE";
     const ROOT_ENV: &str = "XTASK_SANDBOX_TEST_ROOT";
+    const KEEP_ENV: &str = "XTASK_SANDBOX_TEST_KEEP";
+    const REPORT: &str = "sandbox startup failed\n\nCaused by:\n    test step\n";
     const CLEANUP_WITHIN: Duration = Duration::from_secs(15);
+
+    #[test]
+    fn kept_manual_sandbox_survives_drop_but_its_home_child_does_not() {
+        let sandbox = HostSandbox::for_manual_command().unwrap();
+        let root = sandbox.root().to_path_buf();
+        let mut bystander = Command::new("sleep")
+            .arg("600")
+            .env("HOME", &sandbox.env["HOME"])
+            .spawn()
+            .unwrap();
+        sandbox.keep(REPORT).unwrap();
+        drop(sandbox);
+        let root_exists = root.exists();
+        let marker = std::fs::read_to_string(root.join("kept"));
+        let bystander_alive = alive(bystander.id());
+        let _ = bystander.kill();
+        bystander.wait().unwrap();
+        if root_exists {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+
+        assert!(root_exists, "a marked sandbox must survive drop");
+        assert_eq!(marker.unwrap(), REPORT);
+        assert!(!bystander_alive, "drop must stop the sandbox's HOME child");
+    }
 
     fn role_command(role: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());
@@ -436,6 +471,12 @@ mod reaper {
         sandbox.reaper = Some(
             SandboxReaper::start(role_command("reaper").env(ROOT_ENV, sandbox.root())).unwrap(),
         );
+        writeln!(
+            stdout,
+            "reaper: {}",
+            sandbox.reaper.as_ref().unwrap().child.id()
+        )
+        .unwrap();
         let bystander = Command::new("sleep")
             .arg("600")
             .env("HOME", &sandbox.env["HOME"])
@@ -445,6 +486,9 @@ mod reaper {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
+        if std::env::var_os(KEEP_ENV).is_some() {
+            sandbox.keep(REPORT).unwrap();
+        }
         writeln!(stdout, "bystander: {}", bystander.id()).unwrap();
         stdout.flush().unwrap();
         loop {
@@ -480,14 +524,28 @@ mod reaper {
                 && root.exists()
             {
                 cleanup_sandbox(root, &sandbox_env(root));
+                let _ = std::fs::remove_dir_all(root);
             }
         }
     }
 
     #[test]
     fn group_signal_to_the_owner_leaves_the_reaper_to_clean_the_sandbox() {
+        group_signal_to_owner(false);
+    }
+
+    #[test]
+    fn group_signal_to_the_owner_leaves_a_marked_root_but_stops_its_child() {
+        group_signal_to_owner(true);
+    }
+
+    fn group_signal_to_owner(keep: bool) {
+        let mut command = role_command("owner");
+        if keep {
+            command.env(KEEP_ENV, "1");
+        }
         let mut owner = Owner {
-            child: role_command("owner")
+            child: command
                 .process_group(0)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -506,12 +564,16 @@ mod reaper {
             }
         });
         let startup_deadline = Instant::now() + CLEANUP_WITHIN;
+        let mut reaper = None;
         let bystander = loop {
             let line = receive
                 .recv_timeout(startup_deadline.saturating_duration_since(Instant::now()))
                 .expect("owner did not report its sandbox and bystander");
             if let Some(root) = line.strip_prefix("root: ") {
                 owner.root = Some(PathBuf::from(root));
+            }
+            if let Some(pid) = line.strip_prefix("reaper: ") {
+                reaper = Some(pid.parse::<u32>().unwrap());
             }
             if let Some(pid) = line.strip_prefix("bystander: ") {
                 break pid.parse::<u32>().unwrap();
@@ -531,14 +593,22 @@ mod reaper {
         assert_eq!(owner.child.wait().unwrap().signal(), Some(15));
 
         let deadline = Instant::now() + CLEANUP_WITHIN;
-        while root.exists() || alive(bystander) {
+        while alive(reaper.unwrap()) || alive(bystander) {
             assert!(
                 Instant::now() < deadline,
-                "sandbox cleanup after owner's process-group SIGTERM timed out: root_exists={}, bystander_alive={}",
-                root.exists(),
+                "sandbox cleanup after owner's process-group SIGTERM timed out: reaper_alive={}, bystander_alive={}",
+                alive(reaper.unwrap()),
                 alive(bystander),
             );
             thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            root.exists(),
+            keep,
+            "only a marked root must survive the reaper"
+        );
+        if keep {
+            assert_eq!(std::fs::read_to_string(root.join("kept")).unwrap(), REPORT);
         }
     }
 }

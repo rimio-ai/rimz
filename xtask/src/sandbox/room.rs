@@ -63,15 +63,56 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
     let binary = binary
         .canonicalize()
         .with_context(|| format!("{DEV_BINARY_MISSING} (or set RIMZ_BIN)"))?;
+    let (_sandbox, card) = open(workspace, &binary, mux)?;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(card.as_bytes())?;
+    stdout.flush()?;
+    drop(stdout);
+    let started = Instant::now();
+    loop {
+        let delay = match budget {
+            Some(limit) => {
+                let remaining = limit.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                remaining.min(Duration::from_secs(1))
+            }
+            None => Duration::from_secs(1),
+        };
+        std::thread::sleep(delay);
+    }
+    Ok(())
+}
+
+fn open(workspace: &Path, binary: &Path, mux: &str) -> Result<(HostSandbox, String)> {
     let sandbox = HostSandbox::for_manual_command()?;
-    let root = sandbox._root.path();
+    let card = start(workspace, binary.to_path_buf(), mux, &sandbox).map_err(|error| {
+        let note = match sandbox.keep(&format!("{error:?}")) {
+            Ok(()) => format!(
+                "sandbox room failed to start; root kept at {}; remove with rm -rf {}",
+                sandbox.root.display(),
+                quote(sandbox.root.as_os_str())
+            ),
+            Err(keep_error) => format!(
+                "sandbox room failed to start; could not keep root {}: {keep_error:#}",
+                sandbox.root.display()
+            ),
+        };
+        error.context(note)
+    })?;
+    Ok((sandbox, card))
+}
+
+fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) -> Result<String> {
+    let root = &sandbox.root;
     let home = &sandbox.env["HOME"];
     let stub_dir = home.join("bin");
     let path = std::env::join_paths(std::iter::once(stub_dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))?;
     let mut room = Room {
-        sandbox: &sandbox,
+        sandbox,
         binary: &binary,
         mux,
         path,
@@ -191,26 +232,7 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         room.look(&record.session, index, tab)?;
     }
     RoomRecord::write(root, &record)?;
-    let card = room.card(&record)?;
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(card.as_bytes())?;
-    stdout.flush()?;
-    drop(stdout);
-    let started = Instant::now();
-    loop {
-        let delay = match budget {
-            Some(limit) => {
-                let remaining = limit.saturating_sub(started.elapsed());
-                if remaining.is_zero() {
-                    break;
-                }
-                remaining.min(Duration::from_secs(1))
-            }
-            None => Duration::from_secs(1),
-        };
-        std::thread::sleep(delay);
-    }
-    Ok(())
+    room.card(&record)
 }
 
 struct Room<'a> {
@@ -229,7 +251,7 @@ impl Room<'_> {
         // Read the roster last: a pane may have closed while the tabs were warming.
         let panes = self.json("card pane list", &["pane", "list", "--json"])?;
         render_card(
-            self.sandbox._root.path(),
+            &self.sandbox.root,
             self.binary,
             record,
             &panes,
@@ -786,5 +808,82 @@ esac
             .collect();
         // The first two follow their own position; the unidentified tab falls back to its index.
         assert_eq!(numbers, [2, 1, 3]);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn failed_start(action: &str) -> (anyhow::Error, PathBuf) {
+        let probe = tempfile::tempdir().unwrap();
+        let binary = probe.path().join("rimz");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > \"${{0%/*}}/sandbox-home\"\n{action}\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = open(probe.path(), &binary, "tmux")
+            .err()
+            .expect("the preflight binary fails");
+        let home = std::fs::read_to_string(probe.path().join("sandbox-home")).unwrap();
+        let root = Path::new(home.trim()).parent().unwrap().to_path_buf();
+        (error, root)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn failed_room_start_keeps_its_root_and_reports_the_step_error() {
+        let (error, root) = failed_start("");
+        let root_exists = root.exists();
+        let marker = std::fs::read_to_string(root.join("kept"));
+        if root_exists {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+
+        assert!(root_exists, "a failed room start must leave its root");
+        assert!(root.is_absolute());
+        let note = error.to_string();
+        let first_line = note.lines().next().unwrap();
+        assert!(first_line.contains(&root.display().to_string()), "{note}");
+        assert!(
+            first_line.contains(&format!("rm -rf {}", quote(root.as_os_str()))),
+            "{note}"
+        );
+        assert!(
+            error
+                .chain()
+                .skip(1)
+                .any(|cause| cause.to_string().contains("testkit preflight")),
+            "{error:?}"
+        );
+        let marker = marker.unwrap();
+        assert!(marker.contains("testkit preflight"), "{marker}");
+        assert!(!marker.contains("rm -rf"), "{marker}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn marker_write_failure_reports_the_reason_and_removes_the_root() {
+        let (error, root) = failed_start("mkdir \"${HOME%/*}/kept\"");
+        let root_exists = root.exists();
+        if root_exists {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+
+        assert!(
+            !root_exists,
+            "a failed marker write must not preserve the root"
+        );
+        let note = error.to_string();
+        assert!(note.contains("could not keep root"), "{note}");
+        assert!(note.contains(&root.display().to_string()), "{note}");
+        assert!(note.contains("Is a directory"), "{note}");
+        assert!(
+            error
+                .chain()
+                .skip(1)
+                .any(|cause| cause.to_string().contains("testkit preflight")),
+            "{error:?}"
+        );
     }
 }

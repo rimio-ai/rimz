@@ -72,6 +72,7 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const REAPER_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const SANDBOX_PREFIX: &str = "rimz-sandbox-";
 const REAPER_ARG: &str = "__sandbox-reaper";
+const KEEP_MARKER: &str = "kept";
 
 /// One short-lived filesystem namespace for host-facing test processes.
 ///
@@ -82,10 +83,11 @@ const REAPER_ARG: &str = "__sandbox-reaper";
 /// first, so a nested `cargo` whose launcher resolves rustup through `HOME`
 /// still finds the host toolchain rather than the empty sandbox home.
 ///
+/// Cleanup stops servers and processes, but leaves the tree when its `kept` marker file exists.
 /// An independent keepalive reaper applies the same cleanup when the owner dies before `Drop`.
 /// It runs in its own process group, so a group signal ending the owner leaves it to clean.
 pub(crate) struct HostSandbox {
-    _root: TempDir,
+    root: PathBuf,
     env: BTreeMap<&'static str, PathBuf>,
     toolchain: Vec<(&'static str, PathBuf)>,
     reaper: Option<SandboxReaper>,
@@ -95,9 +97,9 @@ impl HostSandbox {
     pub(crate) fn for_tests(workspace_root: &Path) -> Result<Self> {
         let mut sandbox = Self::new()?;
         sandbox.trust_workspace_for_git(workspace_root)?;
-        let skip_log = sandbox._root.path().join("skipped-tests");
+        let skip_log = sandbox.root.join("skipped-tests");
         sandbox.env.insert(SKIP_LOG_ENV, skip_log);
-        let missing_codex = sandbox._root.path().join("missing-codex");
+        let missing_codex = sandbox.root.join("missing-codex");
         sandbox.env.insert(CODEX_BIN_ENV, missing_codex);
         Ok(sandbox)
     }
@@ -122,8 +124,12 @@ impl HostSandbox {
         Self::new()
     }
 
+    fn keep(&self, report: &str) -> Result<()> {
+        crate::files::write_atomically(&self.root.join(KEEP_MARKER), report.as_bytes())
+    }
+
     fn new() -> Result<Self> {
-        let root = tempfile::Builder::new()
+        let root: TempDir = tempfile::Builder::new()
             .prefix(SANDBOX_PREFIX)
             .tempdir_in("/tmp")
             .context("creating short test sandbox")?;
@@ -141,7 +147,7 @@ impl HostSandbox {
         let reaper = SandboxReaper::spawn(root.path())?;
         let toolchain = toolchain_env(|key| std::env::var_os(key));
         Ok(Self {
-            _root: root,
+            root: root.keep(),
             env,
             toolchain,
             reaper,
@@ -194,7 +200,7 @@ impl HostSandbox {
 
     #[cfg(test)]
     fn root(&self) -> &Path {
-        self._root.path()
+        &self.root
     }
 }
 
@@ -351,7 +357,7 @@ impl Drop for HostSandbox {
         if self.reaper.take().is_some_and(SandboxReaper::finish) {
             return;
         }
-        cleanup_sandbox(self._root.path(), &self.env);
+        cleanup_sandbox(&self.root, &self.env);
     }
 }
 
@@ -498,7 +504,9 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
     }
 
     reap_sandbox_processes(root);
-    remove_tree_bounded(root);
+    if !root.join(KEEP_MARKER).is_file() {
+        remove_tree_bounded(root);
+    }
 }
 
 /// Provider home and state locations the adapters resolve ahead of `HOME`. An
