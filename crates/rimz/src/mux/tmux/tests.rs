@@ -1,6 +1,364 @@
 use super::*;
 
 #[cfg(unix)]
+fn script_shim(stdout: &str, stderr: &str) -> (tempfile::TempDir, TmuxBackend) {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\ndir=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$dir/argv\"\ncat > \"$dir/stdin\"\ncat \"$dir/stdout\"\ncat \"$dir/stderr\" >&2\nexit 1\n",
+    );
+    std::fs::write(temp.path().join("stdout"), stdout).unwrap();
+    std::fs::write(temp.path().join("stderr"), stderr).unwrap();
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    (temp, backend)
+}
+
+#[test]
+fn script_output_keeps_failed_lines_separate_and_preserves_stderr() {
+    let output = parse_script_output(
+        "__rimz_script_begin_0__\nfirst\n__rimz_script_end_0__\n\
+         __rimz_script_begin_1__\npartial\n\
+         __rimz_script_begin_2__\nlast\n__rimz_script_end_2__\n",
+        "no such window: @999\n",
+        3,
+    );
+    assert!(output.is_ok(), "a runtime failure costs only its line");
+    let output = output.unwrap();
+    assert_eq!(
+        output.lines,
+        [
+            ScriptLine {
+                completed: true,
+                stdout: "first\n".into()
+            },
+            ScriptLine {
+                completed: false,
+                stdout: "partial\n".into()
+            },
+            ScriptLine {
+                completed: true,
+                stdout: "last\n".into()
+            },
+        ],
+    );
+    assert_eq!(output.stderr, "no such window: @999\n");
+}
+
+#[test]
+fn script_parse_error_reports_stdout_without_markers() {
+    let error = parse_script_output("-:2: unknown command: not-a-command\n", "", 2)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("-:2: unknown command: not-a-command"),
+        "{error}"
+    );
+    let error = parse_script_output("", "connection refused", 2)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("connection refused"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn script_transport_quotes_words_and_accepts_partial_execution() {
+    let (temp, backend) = script_shim(
+        "__rimz_script_begin_0__\nhello\n__rimz_script_end_0__\n",
+        "a later line failed\n",
+    );
+    let output = backend.run_script(&[vec![
+        vec![
+            "display-message".into(),
+            "-p".into(),
+            "# lead ' ; #{pane_id}".into(),
+        ],
+        vec!["display-message".into(), "-p".into(), "done".into()],
+    ]]);
+    assert!(
+        output.is_ok(),
+        "markers, not the exit status, prove execution"
+    );
+    let output = output.unwrap();
+    assert_eq!(output.lines[0].stdout, "hello\n");
+    assert!(output.lines[0].completed);
+    assert_eq!(output.stderr, "a later line failed\n");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("argv")).unwrap(),
+        "-S /test/socket -u source-file -\n",
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("stdin")).unwrap(),
+        "'display-message' '-p' '__rimz_script_begin_0__' ; 'display-message' '-p' '# lead '\\'' ; #{pane_id}' ; 'display-message' '-p' 'done' ; 'display-message' '-p' '__rimz_script_end_0__'\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn script_transport_refuses_line_breaks_before_spawning() {
+    let (temp, backend) = script_shim("", "");
+    let errors = ["line\nbreak", "line\rbreak"].map(|word| {
+        backend
+            .run_script(&[vec![vec!["display-message".into(), word.into()]]])
+            .unwrap_err()
+            .to_string()
+    });
+    assert!(
+        errors.iter().all(|error| error.contains("line break")),
+        "{errors:?}"
+    );
+    assert!(!temp.path().join("argv").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn script_transport_empty_input_does_not_spawn() {
+    let (temp, backend) = script_shim("", "");
+    assert_eq!(backend.run_script(&[]).ok(), Some(ScriptOutput::default()));
+    assert!(!temp.path().join("argv").exists());
+}
+
+#[cfg(unix)]
+fn window_options_shim(
+    windows: &str,
+    read_stdout: &str,
+    script_stdout: &str,
+) -> (tempfile::TempDir, TmuxBackend) {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\ndir=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$dir/argv\"\n\
+         if [ \"$4\" = source-file ]; then\n\
+         if [ -f \"$dir/read-stdin\" ]; then\n\
+         cat > \"$dir/stdin\"\ncat \"$dir/script-stdout\"\n\
+         else\ncat > \"$dir/read-stdin\"\ncat \"$dir/read-stdout\"\nfi\n\
+         printf 'no such window: @999\\n' >&2\nexit 1\nfi\n\
+         case \"$*\" in\n*'#{allow-passthrough}'*) cat \"$dir/windows\" ;;\n\
+         *) awk -F '|' '/^@/ { print $1 \"|\" $2 \"|\" $4 \"|\" $7; next } { print }' \"$dir/windows\" ;;\nesac\n",
+    );
+    std::fs::write(temp.path().join("windows"), windows).unwrap();
+    std::fs::write(temp.path().join("read-stdout"), read_stdout).unwrap();
+    std::fs::write(temp.path().join("script-stdout"), script_stdout).unwrap();
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    (temp, backend)
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_matching_effective_values_need_no_writes() {
+    let (temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n@4||on|on|bottom|single||user|format\n",
+        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_ok()
+    );
+    let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(
+        argv.lines().count(),
+        2,
+        "the fixed-size batch and window-scoped read need no write script: {argv}"
+    );
+    assert!(!temp.path().join("stdin").exists());
+    let read = std::fs::read_to_string(temp.path().join("read-stdin")).unwrap();
+    for key in [
+        "allow-passthrough",
+        "pane-border-status",
+        "pane-border-lines",
+        "pane-border-format",
+    ] {
+        assert!(
+            read.contains(&format!("'show-options' '-wAv' '-t' '@4' '{key}'")),
+            "{read}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_script_writes_only_the_differing_key() {
+    let (temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n@4||on|off|bottom|single||user|format\n",
+        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "__rimz_script_begin_0__\n__rimz_script_end_0__\n",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_ok()
+    );
+    assert!(
+        temp.path().join("stdin").exists(),
+        "differing options travel on stdin"
+    );
+    let script = std::fs::read_to_string(temp.path().join("stdin")).unwrap();
+    assert_eq!(script.lines().count(), 1);
+    assert!(
+        script.contains("'set-window-option' '-t' '@4' 'aggressive-resize' 'on'"),
+        "{script}"
+    );
+    assert!(!script.contains("pane-border"), "{script}");
+    assert!(!script.contains("allow-passthrough"), "{script}");
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_partial_failure_still_applies_other_windows() {
+    let (temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n\
+         @999||on|off|bottom|single||user|format\n\
+         @998||on|off|bottom|single||user|format\n\
+         @4||on|off|bottom|single||user|format\n",
+        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n\
+         __rimz_script_begin_1__\non\n\
+         __rimz_script_begin_2__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_2__\n",
+        "__rimz_script_begin_0__\n__rimz_script_begin_1__\n__rimz_script_end_1__\n",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_ok()
+    );
+    assert!(
+        temp.path().join("stdin").exists(),
+        "windows share a script, not an argv batch"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("argv"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+    let script = std::fs::read_to_string(temp.path().join("stdin")).unwrap();
+    assert!(script.contains("'-t' '@999'"), "{script}");
+    assert!(!script.contains("'-t' '@998'"), "{script}");
+    assert!(script.contains("'-t' '@4'"), "{script}");
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_all_lines_failing_refuses_room_open() {
+    let (_temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n@999||on|off|bottom|single||user|format\n",
+        "__rimz_script_begin_0__\non\nbottom\nsingle\nuser|format\n__rimz_script_end_0__\n",
+        "__rimz_script_begin_0__\n",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_err(),
+        "a listed session with no applied window must fail"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_failed_read_does_not_count_a_matching_window() {
+    let (temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n@999||on|on|bottom|single||user|format\n",
+        "__rimz_script_begin_0__\non\n",
+        "",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_err(),
+        "a window that closed during the read was not applied"
+    );
+    assert!(!temp.path().join("stdin").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn window_options_read_transport_failure_refuses_room_open() {
+    let (temp, backend) = window_options_shim(
+        "bottom\nsingle\nuser|format\n@4||on|on|bottom|single||user|format\n",
+        "-:2: unknown command: broken\n",
+        "",
+    );
+    assert!(
+        backend
+            .apply_window_options("room", &TmuxConfig::default())
+            .is_err(),
+        "a read that never ran cannot prove the window matches"
+    );
+    assert!(!temp.path().join("stdin").exists());
+}
+
+#[cfg(unix)]
+fn detached_geometry_shim(read: &str) -> (tempfile::TempDir, TmuxBackend) {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/argv\"\nprintf '%s' '{read}'\n",
+    ));
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    (temp, backend)
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_geometry_matching_probe_needs_no_writes() {
+    let (temp, backend) = detached_geometry_shim("212x50|on|@4|212|49|latest\n\n");
+    backend.normalize_detached_geometry("room", 212, 50);
+    let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(
+        argv.lines().count(),
+        1,
+        "unchanged geometry needs only the read: {argv}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_geometry_changes_only_current_window_and_restores_local_option() {
+    let (temp, backend) = detached_geometry_shim("80x24|on|@4|80|24|smallest\nsmallest\n");
+    backend.normalize_detached_geometry("room", 212, 50);
+    let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(argv.lines().count(), 2);
+    assert_eq!(
+        argv.lines().nth(1).unwrap(),
+        "-S /test/socket -u set-option -t room default-size 212x50 ; resize-window -t @4 -x 212 -y 49 ; set-window-option -t @4 window-size smallest"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_geometry_manual_window_is_not_resized() {
+    let (temp, backend) = detached_geometry_shim("212x50|on|@4|80|24|manual\nmanual\n");
+    backend.normalize_detached_geometry("room", 212, 50);
+    let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+    assert_eq!(
+        argv.lines().count(),
+        1,
+        "manual geometry stays pinned: {argv}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_geometry_status_rows_and_inherited_option_are_preserved() {
+    let logs = [("off", 50), ("2", 48), ("5", 45)].map(|(status, expected_rows)| {
+        let (temp, backend) =
+            detached_geometry_shim(&format!("212x50|{status}|@4|80|24|latest\n\n"));
+        backend.normalize_detached_geometry("room", 212, 50);
+        let argv = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+        (argv, expected_rows)
+    });
+    for (argv, expected_rows) in logs {
+        assert!(
+            argv.contains(&format!("resize-window -t @4 -x 212 -y {expected_rows}")),
+            "{argv}"
+        );
+        assert!(
+            argv.contains("set-window-option -u -t @4 window-size"),
+            "{argv}"
+        );
+        assert!(!argv.contains("set-option -t room default-size"), "{argv}");
+    }
+}
+
+#[cfg(unix)]
 use crate::ids::MuxName;
 
 #[cfg(unix)]
