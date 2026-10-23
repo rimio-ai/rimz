@@ -418,7 +418,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 9);
+    assert_eq!(report["schema"], 10);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -575,7 +575,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
 
-    assert_eq!(report["schema"], 9);
+    assert_eq!(report["schema"], 10);
     assert_eq!(
         report["models"],
         serde_json::json!([
@@ -920,7 +920,13 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         assert_eq!(members[0]["cost_usd"], 4.0);
         assert_eq!(
             members[0]["subagents"],
-            serde_json::json!([{"task": "explorer", "count": 1, "cost_usd": 3.0, "active_secs": null}])
+            serde_json::json!([{
+                "task": "explorer",
+                "count": 1,
+                "fast": false,
+                "cost_usd": 3.0,
+                "active_secs": null,
+            }])
         );
         assert_eq!(report["totals"]["agents"], 1);
         assert_eq!(report["totals"]["cost_usd"], 4.0);

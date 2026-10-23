@@ -69,6 +69,7 @@ impl SlotEffort {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SlotEffortBreakdown {
     pub total: SlotEffort,
+    pub own_fast: bool,
     pub subagents: BTreeMap<String, SlotEffort>,
     pub models: BTreeMap<Option<String>, SlotEffort>,
 }
@@ -231,6 +232,8 @@ fn fold_tagged_entries<'a>(
                 breakdown.subagents.entry(child_id).or_default(),
                 selected.entry,
             );
+        } else {
+            breakdown.own_fast |= selected.entry.fast;
         }
     }
     breakdown
@@ -290,6 +293,7 @@ mod tests {
             assert_eq!(effort.cost_usd, Some(0.75));
             assert!(effort.fast);
         }
+        assert!(!breakdown.own_fast);
     }
 
     #[test]
@@ -416,6 +420,7 @@ mod tests {
             for entries in [[&kept, &replay], [&replay, &kept]] {
                 let breakdown = fold_tagged_entries(entries.map(|entry| (entry, None)));
                 assert_eq!(breakdown.total.fast, fast);
+                assert_eq!(breakdown.own_fast, fast);
                 assert_eq!(breakdown.models[&None].fast, fast);
                 assert_eq!(breakdown.total.tokens.input, 10);
             }
