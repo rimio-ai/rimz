@@ -3010,6 +3010,8 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     let stdout_path = env.project_root.join("stdout.log");
     let tunnel_plan = env.project_root.join("tunnel.plan");
     let master_exit_plan = env.project_root.join("master-exit.plan");
+    let tunnel_ready_gate = env.project_root.join("tunnel-ready");
+    let master_exit_gate = env.project_root.join("master-exit");
     let (browser_bin, browser_log) = write_browser_shim(&env);
     let ambient_path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
@@ -3025,9 +3027,9 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
             "RIMZ_TEST_SSH_WEB_PREP_STDERR",
             "remote preparation started\n",
         )
-        .env("RIMZ_TEST_SSH_TUNNEL_READY_MS", "300")
+        .env("RIMZ_TEST_SSH_TUNNEL_READY_GATE", &tunnel_ready_gate)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
-        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "900")
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_GATE", &master_exit_gate)
         .env("RIMZ_TEST_SSH_MASTER_EXIT_PLAN", &master_exit_plan)
         .env("RIMZ_TEST_BROWSER_LOG", &browser_log)
         .env("PATH", path)
@@ -3045,15 +3047,18 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
     );
     assert!(!browser_log.exists(), "browser waits for tunnel readiness");
 
+    std::fs::write(&tunnel_ready_gate, "").expect("release tunnel readiness");
     let stdout = wait_for_notify_log(&stdout_path, &["/?room=rimz-project-a1b2c3\n"]);
     let (port, url) = relay_url(&stdout);
     let browser = wait_for_notify_log(&browser_log, &[url]);
     assert_eq!(browser.trim(), url);
+    std::thread::sleep(Duration::from_millis(100));
     assert!(
         child.try_wait().expect("poll remote web connect").is_none(),
         "browser open must leave the ControlMaster-owned tunnel in the foreground"
     );
 
+    std::fs::write(&master_exit_gate, "").expect("release master exit");
     let out = child.wait_with_output().expect("wait remote web connect");
     assert!(
         out.status.success(),
