@@ -66,14 +66,19 @@ impl LoopState {
         if self.view_scope.is_some() {
             return advance(self);
         }
+        self.view_events = Some(
+            self.fold_preparation
+                .as_ref()
+                .map_or_else(|| self.events().clone(), |prepared| prepared.events.clone()),
+        );
         let Some(pane) = self.config.own_pane.as_ref() else {
             self.view_token = None;
             self.view_scope = Some(ViewScope::Scratch);
             let result = advance(self);
             self.view_scope = None;
+            self.view_events = None;
             return result;
         };
-        let events = self.view_events.take();
         let views = self.views.clone();
         let mut views = views.lock().unwrap_or_else(PoisonError::into_inner);
         let now = self.clock.now();
@@ -98,6 +103,7 @@ impl LoopState {
             self.view_advanced |= advancing;
             let result = advance(self);
             self.view_scope = None;
+            self.view_events = None;
             return result;
         }
         let pane = pane.clone();
@@ -120,16 +126,6 @@ impl LoopState {
         {
             drop(views);
             return self.view_transition(input, None, None, advance);
-        }
-        if !advancing
-            && entry.state.freeze.is_some()
-            && self.fold_preparation.is_none()
-            && events.is_none()
-        {
-            // Parking needs focus overlays; take their cut unlocked, then re-check routing.
-            drop(views);
-            self.view_events = Some(self.event_snapshot());
-            return self.with_projected_view(input, advancing, advance);
         }
         if entry.context.is_none() {
             entry.context = Some(ViewContext::new(self.view.current.clone(), now));
@@ -173,7 +169,6 @@ impl LoopState {
         self.view_focus = focused;
         self.view_focus_event = focus_event;
         self.view_parked = parked;
-        self.view_events = events;
         self.view_latest = has_latest;
         let mut reductions = super::super::views::Reductions::default();
         if advancing && self.fold_preparation.is_some() && entry.cursor.revision != revision {
