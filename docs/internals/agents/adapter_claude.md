@@ -148,6 +148,21 @@ On resume or fork, RimZ compares the configured system-prompt fingerprint with t
 
 Smart and idle compaction append the configured summary brief after `/compact `. RimZ types the brief as a second write so Claude's paste handling cannot swallow the slash command.
 
+### Headless form
+
+`ClaudeHeadless` ([`claude/headless.rs`](../../../crates/rimz/src/agents/adapters/claude/headless.rs)) is the [headless form](./adapter.md#the-spec) that loop and workflow judges run. Its argv is `claude <profile args> -p --output-format json --json-schema <schema> -- <prompt>`. It merges `disableAllHooks = true` into the profile settings through the same settings merge as an interactive launch, pending artifact included, so the check fires no RimZ hook and exactly one `--settings` survives.
+
+`read_result` parses the last non-blank stdout line as Claude's JSON result:
+
+| Field | Becomes |
+| --- | --- |
+| `structured_output` | the value. A result without it is an `Other` error |
+| `total_cost_usd` | the cost, kept only when finite and non-negative |
+| `usage` | input tokens (fresh plus cache-creation plus cache-read) and output tokens |
+| `is_error` with `result` or `subtype` | an error whose text passes through `claude/statusline.rs::classify_api_error`. `PausedRateLimit` and `PausedSpendLimit` become `ProviderLimit`, and every other class becomes `Other` |
+
+A line that is not valid JSON is an `Other` error with no tokens or cost.
+
 ## Subagents
 
 Claude reports Task-tool children through `SubagentStart` and `SubagentStop`. The child's `agent_id` keys its row, and the payload's `session_id` becomes `parent_agent_id`, so the child nests under its parent ([model.md](./model.md#subagents)). The row's `task` is the child's `agent_type`, falling back to `subagent_type` or `description`.
