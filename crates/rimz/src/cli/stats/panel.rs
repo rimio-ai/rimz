@@ -323,7 +323,8 @@ pub(super) fn render_panel(
         active,
     } = stats;
     let geometry = PanelGeometry::current();
-    let assist_categories = assists::category_rows(&assists.rollup);
+    let assist_categories =
+        assists::category_rows(&assists.rollup, assists::CategoryMode::Dashboard);
     let mut lines: Vec<String> = Vec::new();
     let agent_tallies = RoleView::Agents.rows(stats, active);
     let team_tallies = RoleView::Teams.rows(stats, active);

@@ -1261,7 +1261,7 @@ fn queued_stall_notices_count_and_failed_ones_are_held() {
     assert_eq!(stats.timeline(0, true).0.len(), 3);
     assert_eq!(stats.timeline(1, true).1, 2);
     assert!(
-        assists::category_rows(&stats.rollup)
+        assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline)
             .iter()
             .any(|row| strip_ansi(row) == "Stall notice: 2 (1 held)")
     );
@@ -1288,7 +1288,7 @@ fn judge_declines_include_legacy_assist_records() {
         2
     );
     assert!(
-        assists::category_rows(&stats.rollup)
+        assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline)
             .join("\n")
             .contains("Judge declines:")
     );
@@ -3568,7 +3568,7 @@ fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
         serde_json::to_value(&stats.rollup).unwrap()["tier_fallbacks"],
         1
     );
-    let rows = assists::category_rows(&stats.rollup).join("\n");
+    let rows = assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline).join("\n");
     assert!(rows.contains("Tier fallback:"), "{rows}");
     let line = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
     assert!(
@@ -3605,7 +3605,7 @@ fn stall_notice_names_child_parent_and_silence_in_stats() {
         serde_json::to_value(&stats.rollup).unwrap()["stall_notices"],
         0
     );
-    let rows = assists::category_rows(&stats.rollup).join("\n");
+    let rows = assists::category_rows(&stats.rollup, assists::CategoryMode::Timeline).join("\n");
     assert!(
         strip_ansi(&rows).contains("Stall notice: 0 (1 held)"),
         "{rows}"
@@ -3816,7 +3816,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(stats.events.len(), 8, "every assist outcome stays forensic");
     assert_eq!(stats.timeline(0, false).0.len(), 6);
     assert_eq!(stats.timeline(0, true).0.len(), 8);
-    let categories = category_rows(&stats.rollup)
+    let categories = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
@@ -3988,14 +3988,14 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         },
         events: Vec::new(),
     };
-    let rows = category_rows(&stats.rollup)
+    let rows = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
     assert_eq!(
         rows,
         [
-            "Auto-continue: 5 (+6.2h)",
+            "Auto-continue: 5 (after 6.2h parked)",
             "Auto-compact: 4",
             "Auto-redeem: 2 (1 reset)",
             "Auto-resume: 2 (7 agents)",
@@ -4015,7 +4015,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         restored_sessions: 1,
         ..Default::default()
     };
-    let bare = category_rows(&bare_counts)
+    let bare = category_rows(&bare_counts, assists::CategoryMode::Timeline)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>()
@@ -4085,7 +4085,7 @@ fn manual_redeems_stay_in_the_ledger_but_not_the_automation_row() {
             stats.rollup.manual_resets,
             usize::from(manual_outcome == "reset")
         );
-        let rows = category_rows(&stats.rollup)
+        let rows = category_rows(&stats.rollup, assists::CategoryMode::Timeline)
             .into_iter()
             .map(|row| strip_ansi(&row))
             .collect::<Vec<_>>();
@@ -4099,7 +4099,7 @@ fn manual_redeems_stay_in_the_ledger_but_not_the_automation_row() {
         let mut manual = stats.rollup;
         manual.manual_redeems = manual.redeems;
         manual.manual_resets = manual.resets;
-        assert!(category_rows(&manual).is_empty());
+        assert!(category_rows(&manual, assists::CategoryMode::Timeline).is_empty());
     }
 }
 
