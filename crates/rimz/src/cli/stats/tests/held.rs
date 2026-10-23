@@ -513,7 +513,7 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
             .any(|line| line.contains("Pi") && line.contains("<1%") && line.contains("1 session"))
     );
     assert!(output.contains("5,995 sessions"));
-    assert!(!output.contains("active time and messages recorded since"));
+    assert!(!output.contains("agent-time and messages"));
     let short = strip_ansi(&frame(&stats, &assists, Window::Month, 119, Some(40)).text);
     let other = short
         .lines()

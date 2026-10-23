@@ -71,7 +71,7 @@ fn stats_panel_shows_teams_with_effort_and_keeps_roles_in_json_only() {
     let text = String::from_utf8_lossy(&output.get_output().stdout);
     for expected in [
         "Teams (today)",
-        "ACTIVE",
+        "AGENT-TIME",
         "MESSAGES",
         "2 other teams",
         "3 (1 you)",
@@ -115,8 +115,18 @@ fn stats_teams_envelope_is_uncapped_and_empty_view_names_the_window() {
     let output = env.rimz().args(["stats", "--teams"]).assert().success();
     let text = String::from_utf8_lossy(&output.get_output().stdout);
     for name in [
-        "team-0", "team-1", "team-2", "team-3", "team-4", "INPUT", "OUTPUT", "CACHED", "HIT",
-        "SESSIONS", "ACTIVE", "MESSAGES",
+        "team-0",
+        "team-1",
+        "team-2",
+        "team-3",
+        "team-4",
+        "INPUT",
+        "OUTPUT",
+        "CACHED",
+        "HIT",
+        "SESSIONS",
+        "AGENT-TIME",
+        "MESSAGES",
     ] {
         assert!(text.contains(name), "missing {name}: {text}");
     }
@@ -140,7 +150,7 @@ fn stats_teams_envelope_is_uncapped_and_empty_view_names_the_window() {
     let text = String::from_utf8_lossy(&output.get_output().stdout);
     assert!(text.contains("No team spend recorded (week)."), "{text}");
     assert!(
-        text.contains("active time and messages recorded since"),
+        text.contains("earlier spend counts as No role · agent-time and messages since"),
         "{text}"
     );
 }

@@ -96,6 +96,321 @@ fn full_panel_text(stats: &Stats, held: bool) -> String {
     strip_ansi(std::str::from_utf8(&out).unwrap())
 }
 
+fn spend_text(stats: &Stats, role: Option<RoleView>, window: Window) -> String {
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, stats, 20_000, false, role, window, "\n").unwrap();
+    strip_ansi(std::str::from_utf8(&out).unwrap())
+}
+
+#[test]
+fn one_shot_averages_spend_over_active_days() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = [0, 1, 7, 29, 30, 364, 365]
+        .map(|ago| (20_000 - ago, day(1, 10.0)))
+        .into();
+    stats.by_day.insert(19_994, day(0, 1.0));
+    stats.total.week.usd = 28.0;
+    stats.total.month.usd = 100.0;
+    stats.total.year.usd = 180.0;
+    let text = spend_text(&stats, None, Window::Today);
+    let row = text
+        .lines()
+        .find(|line| line.contains("per active day"))
+        .expect(&text);
+    assert_eq!(
+        row.split_whitespace().collect::<Vec<_>>(),
+        ["per", "active", "day", "–", "$11", "$10", "$10"]
+    );
+}
+
+#[test]
+fn one_shot_average_excludes_the_oldest_partial_day_from_both_inputs() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = BTreeMap::from([(19_993, day(1, 10.0)), (20_000, day(1, 4.0))]);
+    stats.total.week.usd = 14.0;
+    let text = spend_text(&stats, None, Window::Week);
+    let row = text
+        .lines()
+        .find(|line| line.contains("per active day"))
+        .unwrap();
+    assert_eq!(row.split_whitespace().nth(4), Some("$4.00"), "{row}");
+}
+
+#[test]
+fn one_shot_extreme_trends_do_not_move_the_month_figure() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = BTreeMap::from([(20_000, day(1, 1_000.0)), (19_993, day(1, 0.0005))]);
+    stats.total.week.usd = 1_000.0;
+    stats.total.month.usd = 24_571.0;
+    let text = spend_text(&stats, None, Window::Week);
+    let row = text.lines().find(|line| line.contains("dollars")).unwrap();
+    assert_eq!(
+        display_width(&row[..row.find("$24,571").unwrap() + "$24,571".len()]),
+        69,
+        "{row}"
+    );
+    assert!(row.contains("↑999%+"), "{row}");
+}
+
+#[test]
+fn one_shot_single_day_streak_is_singular() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = BTreeMap::from([(20_000, day(1, 1.0))]);
+    let text = spend_text(&stats, None, Window::Today);
+    assert!(text.contains("streak 1 day ·"), "{text}");
+}
+
+#[test]
+fn one_shot_trends_preserve_right_aligned_dollar_columns() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = (0..60)
+        .map(|ago| {
+            (
+                20_000 - ago,
+                day(
+                    1,
+                    if ago < 7 {
+                        5.0
+                    } else if ago < 30 {
+                        10.0
+                    } else {
+                        4.0
+                    },
+                ),
+            )
+        })
+        .collect();
+    stats.total.week.usd = 35.0;
+    stats.total.month.usd = 265.0;
+    let with_trends = spend_text(&stats, None, Window::Month);
+    let dollars = with_trends
+        .lines()
+        .find(|line| line.contains("dollars"))
+        .unwrap();
+    assert!(dollars.contains("$35 ↓50%"), "{dollars}");
+    assert!(dollars.contains("$265 ↑121%"), "{dollars}");
+    stats.by_day.retain(|day, _| *day > 19_993);
+    let without_trends = spend_text(&stats, None, Window::Month);
+    let plain = without_trends
+        .lines()
+        .find(|line| line.contains("dollars"))
+        .unwrap();
+    assert!(!plain.contains(['↑', '↓']), "{plain}");
+    let header = with_trends.lines().next().unwrap();
+    let end_column = |line: &str, needle: &str| {
+        display_width(&line[..line.find(needle).unwrap() + needle.len()])
+    };
+    for (label, amount, edge) in [("Week", "$35", 52), ("Month", "$265", 69)] {
+        let end = end_column(dollars, amount);
+        assert_eq!(
+            end,
+            end_column(plain, amount),
+            "{with_trends}\n{without_trends}"
+        );
+        assert_eq!(end, end_column(header, label));
+        assert_eq!(end, edge, "the mock's column edge: {with_trends}");
+    }
+    assert_eq!(end_column(header, "Today"), 35);
+    assert_eq!(end_column(header, "Year"), 86);
+}
+
+#[test]
+fn one_shot_combines_independent_coverage_dates_above_the_first_role() {
+    let since = 20_000 * 86_400 + 12 * 3_600;
+    let midnight = 20_000 * 86_400;
+    for (roles, effort, expected) in [
+        (
+            Some(since),
+            Some(midnight),
+            "roles recorded since Oct 04, earlier spend counts as No role",
+        ),
+        (
+            Some(midnight),
+            Some(since),
+            "agent-time and messages recorded since Oct 04",
+        ),
+        (
+            Some(since),
+            Some(since),
+            "roles recorded since Oct 04, earlier spend counts as No role · agent-time and messages since Oct 04",
+        ),
+        (None, None, ""),
+    ] {
+        let mut stats = Stats::from_provider(team_cache());
+        stats.recorded_since_secs = roles;
+        stats.effort_since_secs = effort;
+        for role in [
+            None,
+            Some(RoleView::Agents),
+            Some(RoleView::Teams),
+            Some(RoleView::Subagents),
+        ] {
+            let text = spend_text(&stats, role, Window::Today);
+            let notes: Vec<_> = text
+                .lines()
+                .filter(|line| line.contains("recorded since"))
+                .collect();
+            if expected.is_empty() {
+                assert!(notes.is_empty(), "{text}");
+                continue;
+            }
+            assert_eq!(notes.len(), 1, "{text}");
+            assert_eq!(notes[0].trim(), expected);
+            let section = format!("{} (today)", role.unwrap_or(RoleView::Agents).label());
+            assert!(
+                text.find(expected).unwrap() < text.find(&section).unwrap(),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn one_shot_reports_only_a_positive_cent_of_unassigned_spend() {
+    let mut stats = Stats::from_provider(team_cache());
+    for (total, expected) in [
+        (150.0, true),
+        (100.0, false),
+        (50.0, false),
+        (100.009, false),
+    ] {
+        stats.total.day.usd = total;
+        let text = spend_text(&stats, None, Window::Today);
+        assert_eq!(text.contains("No role recorded"), expected, "{text}");
+        if expected {
+            let row = text
+                .lines()
+                .find(|line| line.contains("No role recorded"))
+                .unwrap();
+            assert_eq!(
+                row.split_whitespace().collect::<Vec<_>>(),
+                ["No", "role", "recorded", "$50", "33.3%"]
+            );
+            assert!(text.find("Subagents (today)").unwrap() < text.find(row).unwrap());
+            assert!(text.find(row).unwrap() < text.find("Token activity").unwrap());
+        }
+        for role in [RoleView::Agents, RoleView::Teams, RoleView::Subagents] {
+            assert!(!spend_text(&stats, Some(role), Window::Today).contains("No role recorded"));
+        }
+    }
+}
+
+#[test]
+fn one_shot_footer_scopes_sessions_and_omits_the_clause_without_them() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.total = SpendTally {
+        day: spend_window(100, 3_333.0, 0, 0, 0, 1_111),
+        week: spend_window(100, 8_888.0, 0, 0, 0, 2_222),
+        month: spend_window(100, 16_665.0, 0, 0, 0, 3_333),
+        year: spend_window(100, 26_664.0, 0, 0, 0, 4_444),
+        ..Default::default()
+    };
+    for (window, label, sessions, cost) in [
+        (Window::Today, "today", "1,111", "$3.00"),
+        (Window::Week, "this week", "2,222", "$4.00"),
+        (Window::Month, "this month", "3,333", "$5.00"),
+        (Window::Year, "this year", "4,444", "$6.00"),
+    ] {
+        let text = spend_text(&stats, None, window);
+        assert_eq!(
+            text.lines().last().unwrap(),
+            format!("  as of 15:00 · {sessions} sessions {label} at {cost} each")
+        );
+        for role in [RoleView::Agents, RoleView::Teams, RoleView::Subagents] {
+            let text = spend_text(&stats, Some(role), window);
+            assert_eq!(text.lines().last().unwrap(), "  as of 15:00");
+        }
+    }
+    stats.total = SpendTally::default();
+    let text = spend_text(&stats, None, Window::Today);
+    assert_eq!(text.lines().last().unwrap(), "  as of 15:00");
+}
+
+#[test]
+fn one_shot_fresh_machine_replaces_zero_tables_and_heatmap() {
+    let stats = Stats::from_provider(ProviderSpendingCache {
+        timezone: "UTC".into(),
+        refreshed_at_ms: (20_000 * 86_400 + 15 * 3_600) * 1_000,
+        ..Default::default()
+    });
+    assert_eq!(
+        spend_text(&stats, None, Window::Today),
+        "  No agent sessions recorded on this machine yet.\n  Spend appears here after your first agent session; rimz stats reads it from each agent's own session files.\n\n  as of 15:00\n"
+    );
+}
+
+#[test]
+fn one_shot_groups_session_and_run_counts_in_compact_and_explicit_views() {
+    let mut cache = team_cache();
+    let tally = every_window(tally(100, 10.0, 1_111));
+    cache
+        .spending
+        .by_provider
+        .insert("codex".into(), tally.clone());
+    cache.roles.agents.get_mut("solo").unwrap().tally = tally.clone();
+    cache.roles.subagents.get_mut("child").unwrap().tally = tally.clone();
+    cache
+        .roles
+        .teams
+        .get_mut("recon")
+        .unwrap()
+        .retain(|role, _| role == "coder");
+    cache
+        .roles
+        .teams
+        .get_mut("recon")
+        .unwrap()
+        .get_mut("coder")
+        .unwrap()
+        .tally = tally;
+    let stats = Stats::from_provider(cache);
+    let text = spend_text(&stats, None, Window::Today);
+    assert_eq!(text.matches("1,111").count(), 4, "{text}");
+    let headers: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            line.find("AGENT-TIME")
+                .map(|at| &line[..at + "AGENT-TIME".len()])
+        })
+        .collect();
+    assert_eq!(headers.len(), 3, "{text}");
+    for header in headers {
+        assert_eq!(display_width(header), 63, "the mock's column edge: {text}");
+    }
+    for role in [RoleView::Agents, RoleView::Teams, RoleView::Subagents] {
+        let text = spend_text(&stats, Some(role), Window::Today);
+        assert!(text.contains("1,111"), "{text}");
+        assert!(text.contains("AGENT-TIME"), "{text}");
+    }
+}
+
+#[test]
+fn one_shot_heatmap_key_combines_window_activity_with_the_full_streak() {
+    let mut stats = Stats::from_provider(team_cache());
+    stats.by_day = (0..40).map(|ago| (20_000 - ago, day(1, 1.0))).collect();
+    stats.by_day.insert(19_999, day(10, 1.0));
+    stats.by_day.insert(19_940, day(100, 1.0));
+    for (window, days, busiest) in [
+        (Window::Today, 28, 19_940),
+        (Window::Week, 7, 19_999),
+        (Window::Month, 30, 19_999),
+        (Window::Year, 28, 19_940),
+    ] {
+        let text = spend_text(&stats, None, window);
+        let key = text.lines().find(|line| line.contains("Less")).unwrap();
+        let summary = format!(
+            "{days} of last {days} days active · streak 40 days · busiest {}",
+            fmt_day(busiest)
+        );
+        let at = key.find(&summary).expect(&text);
+        assert_eq!(
+            display_width(&key[..at]),
+            40,
+            "the mock's summary column: {key}"
+        );
+    }
+}
+
 fn held_frame(stats: &Stats, assists: &AssistStats, active: Window, today: i64) -> String {
     dashboard::Dashboard {
         stats,
@@ -241,7 +556,7 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
             }
             {
                 assert!(
-                    text.contains("ACTIVE") && text.contains("MESSAGES"),
+                    text.contains("AGENT-TIME") && text.contains("MESSAGES"),
                     "{text}"
                 );
                 let cells: Vec<_> = row.split_whitespace().collect();
@@ -399,7 +714,7 @@ fn effort_only_rows_survive_panels_and_json() {
 }
 
 #[test]
-fn teams_cap_compact_rows_and_keep_effort_notes_after_the_last_section() {
+fn teams_cap_compact_rows_and_keep_coverage_above_the_first_section() {
     let mut cache = team_cache();
     let roles = cache.roles.teams["recon"].clone();
     cache.roles.teams = (0..5)
@@ -413,14 +728,14 @@ fn teams_cap_compact_rows_and_keep_effort_notes_after_the_last_section() {
     for held in [false, true] {
         let text = full_panel_text(&stats, held);
         if held {
-            assert!(!text.contains("active time and messages recorded since"));
+            assert!(!text.contains("agent-time and messages"));
             assert!(text.contains("Where it went · roles recorded since Oct 04"));
             continue;
         }
         let note = text
-            .find("active time and messages recorded since Oct 04")
+            .find("agent-time and messages since Oct 04")
             .expect(&text);
-        assert!(text.rfind("team-").unwrap() < note, "{text}");
+        assert!(note < text.find("Teams (today)").unwrap(), "{text}");
         assert!(text.find("roles recorded since").unwrap() < note, "{text}");
     }
     cache.roles.recorded_since_secs = None;
@@ -478,7 +793,7 @@ fn agent_sections_show_only_real_profiles_in_the_selected_window() {
 }
 
 #[test]
-fn role_note_follows_last_visible_profile_section() {
+fn role_note_precedes_first_visible_profile_section() {
     for (agents, subagents, last) in [
         (true, true, Some("Subagents")),
         (true, false, Some("Agents")),
@@ -502,16 +817,13 @@ fn role_note_follows_last_visible_profile_section() {
                 if let Some(last) = last {
                     assert!(note < text.rfind(last).unwrap(), "{text}");
                 }
-                assert!(!text.contains("earlier spend shows under Providers only"));
+                assert!(!text.contains("earlier spend counts as No role"));
                 continue;
             }
             if let Some(last) = last {
                 let note = text.find("roles recorded since Oct 04").expect(&text);
-                assert!(text.rfind(last).unwrap() < note, "{text}");
-                assert!(
-                    text.contains("earlier spend shows under Providers only"),
-                    "{text}"
-                );
+                assert!(note < text.find(last).unwrap(), "{text}");
+                assert!(text.contains("earlier spend counts as No role"), "{text}");
                 assert!(!text.contains("subagent roles recorded"), "{text}");
             } else {
                 assert!(!text.contains("recorded since"), "{text}");
@@ -642,7 +954,7 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
             "CACHED",
             "HIT",
             &count.to_ascii_uppercase(),
-            "ACTIVE",
+            "AGENT-TIME",
         ] {
             assert!(text.contains(column), "{text}");
         }
@@ -651,9 +963,9 @@ fn explicit_role_views_are_unfolded_and_keep_provider_named_rows() {
             line.trim_end().chars().count()
         };
         assert_eq!(
-            end_column("ACTIVE"),
+            end_column("AGENT-TIME"),
             end_column("alpha"),
-            "the active header ends where its values end: {text}"
+            "the agent-time header ends where its values end: {text}"
         );
         assert!(!text.contains("other "), "{text}");
         assert!(!text.contains("Spend activity"), "{text}");
@@ -879,6 +1191,7 @@ fn provider_breakdowns_default_to_today() {
     provider.day.timed_output = 40;
     cache.spending.total = provider.clone();
     cache.spending.by_provider.insert("codex".into(), provider);
+    cache.days.insert(20_000, day(100, 10.0));
     let stats = Stats::from_provider(cache);
     assert_eq!(stats.by_provider["codex"].day.usd, 10.0);
     let value = json::stats_json_value(
