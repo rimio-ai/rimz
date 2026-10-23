@@ -1104,7 +1104,8 @@ path = "crates/rimz/src/harness"
 # WhenExpr::forge_branches shares parsed selectors with workflow demand (+1).
 # WorkflowSpec::forge_branches exposes read-only sealed-spec demand to the sidebar (+1).
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
-surface-budget = 973
+# resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
+surface-budget = 975
 
 [[verdict]]
 kind = "item"
@@ -2877,6 +2878,16 @@ reason = "Loop show and logs share the history split and wait arming cutoff."
 kind = "item"
 key = "harness::schedule::signal::SignalSelector::matches"
 reason = "Events list, filtered follow, and subscription resolution share selector matching."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::resolve_subscription"
+reason = "Loop triggers and workflow wakes share signal delivery and sibling-skip matching."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::SignalResolution"
+reason = "Loop triggers and workflow wakes distinguish delivery from sibling skips."
 
 [[verdict]]
 kind = "item"

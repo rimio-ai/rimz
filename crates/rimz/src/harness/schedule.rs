@@ -597,25 +597,11 @@ impl Trigger {
     }
 
     fn resolve(&self, task_name: &str, signal: &signal::Signal) -> signal::SignalResolution {
-        use signal::SignalResolution::{Deliver, Ignore, Skip};
+        use signal::SignalResolution::{Deliver, Ignore};
         match self {
             Self::Schedule(_) | Self::Condition { .. } => Ignore,
             Self::Signal { selector, matches } => {
-                if selector.family() != signal.name.family()
-                    || !matches.iter().all(|(key, expected)| {
-                        signal.payload.get(key).is_some_and(|value| {
-                            signal::is_match_wildcard(expected)
-                                || signal::match_value(value) == *expected
-                        })
-                    })
-                {
-                    return Ignore;
-                }
-                if selector.matches(&signal.name) {
-                    Deliver
-                } else {
-                    Skip
-                }
+                signal::resolve_subscription(selector, matches, signal)
             }
             Self::Watch { .. } if signal.name.as_str() == format!("wait.{task_name}") => Deliver,
             Self::Watch { .. } => Ignore,
