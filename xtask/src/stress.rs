@@ -625,12 +625,18 @@ mod tests {
     }
 
     /// Stands in for the test binary: of all its copies, exactly one exits 3
-    /// and exactly one kills itself, whichever claim each directory first.
+    /// and exactly one kills itself, whichever copy claims each outcome first.
+    ///
+    /// Every stub claims an outcome by creating a file under noclobber, which
+    /// the shell opens with `O_EXCL`, so one concurrent caller wins. `mkdir`
+    /// is no claim: uutils `mkdir` checks for the path before creating it and
+    /// reports success to several. The subshell keeps a lost claim's
+    /// redirection error from exiting the script.
     const STUB: &str = r#"#!/bin/sh
 echo "args: $*"
 echo "home: $RIMZ_HOME backtrace: $RUST_BACKTRACE cwd: $(pwd -P)" >&2
-mkdir "$STUB_STATE/exit" 2>/dev/null && exit 3
-mkdir "$STUB_STATE/signal" 2>/dev/null && kill -KILL $$
+(set -C; : > "$STUB_STATE/exit") 2>/dev/null && exit 3
+(set -C; : > "$STUB_STATE/signal") 2>/dev/null && kill -KILL $$
 exit 0
 "#;
 
@@ -768,8 +774,8 @@ exit 0
     /// Run serially: copy 1 exits 3, copy 2 passes, and copy 3 marks itself
     /// started, which proves the first two completed, then hangs until killed.
     const HANGING_STUB: &str = r#"#!/bin/sh
-mkdir "$STUB_STATE/exit" 2>/dev/null && exit 3
-mkdir "$STUB_STATE/pass" 2>/dev/null && exit 0
+(set -C; : > "$STUB_STATE/exit") 2>/dev/null && exit 3
+(set -C; : > "$STUB_STATE/pass") 2>/dev/null && exit 0
 echo "hanging copy started"
 mkdir "$STUB_STATE/hanging"
 exec sleep 120
@@ -859,7 +865,7 @@ exec sleep 120
     /// Run serially: copy 1 exits 3, copy 2 passes and deletes the binary, so
     /// copy 3 cannot start.
     const VANISHING_STUB: &str = r#"#!/bin/sh
-mkdir "$STUB_STATE/exit" 2>/dev/null && exit 3
+(set -C; : > "$STUB_STATE/exit") 2>/dev/null && exit 3
 rm "$0"
 exit 0
 "#;
