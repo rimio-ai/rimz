@@ -430,13 +430,11 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     let screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                landed_open: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            landed_open: true,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         30,
     );
@@ -462,14 +460,12 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     let expanded = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         30,
     );
@@ -481,14 +477,12 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     let filtered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         30,
     );

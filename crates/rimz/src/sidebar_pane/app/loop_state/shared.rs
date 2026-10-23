@@ -16,7 +16,7 @@ impl LoopState {
                 return inspect(state, context);
             }
         }
-        inspect(&self.ui.view, &self.view)
+        inspect(&self.presentation, &self.view)
     }
 
     pub(super) fn observed_watched(&self) -> bool {
@@ -48,7 +48,7 @@ impl LoopState {
         views: Arc<Mutex<Views>>,
         revision: u64,
     ) {
-        self.baseline_seed = self.ui.baseline_pane.take();
+        self.baseline_seed = self.presentation.baseline_pane.take();
         self.views = views;
         self.own = super::super::views::Cursor {
             revision,
@@ -129,7 +129,7 @@ impl LoopState {
         }
         if entry.context.is_none() {
             entry.context = Some(ViewContext::new(self.view.current.clone(), now));
-            entry.state.make_up_filter = self.ui.make_up_filter.clone();
+            entry.state.make_up_filter = self.presentation.make_up_filter.clone();
         }
         // Presentation initialization above guarantees the portable context exists.
         let context = entry.context.as_mut().expect("initialized view context");
@@ -162,7 +162,7 @@ impl LoopState {
             entry.unpainted = false;
         }
         self.view_advanced |= advancing;
-        std::mem::swap(&mut self.ui.view, &mut entry.state);
+        std::mem::swap(&mut self.presentation, &mut entry.state);
         std::mem::swap(&mut self.view, context);
         self.view_scope = Some(ViewScope::Shared(id));
         self.transition_view = Some(id);
@@ -199,13 +199,13 @@ impl LoopState {
         // Catch-up can replay hidden content older than the evidence that routed this arrival.
         if let Some(until) = arrival_until {
             self.view.tab_read_dwell_until = Some(until);
-            self.ui.viewing_own_tab = Some(true);
+            self.presentation.viewing_own_tab = Some(true);
         }
         self.view_token = Some((id, entry.cursor.revision, entry.activity));
         let result = advance(self);
-        std::mem::swap(&mut self.ui.view, &mut entry.state);
+        std::mem::swap(&mut self.presentation, &mut entry.state);
         std::mem::swap(&mut self.view, context);
-        self.ui.view = render::ViewState::default();
+        self.presentation = render::ViewState::default();
         if super::super::fetch::same_snapshot_content(&self.view.current, &context.current) {
             super::super::fetch::SnapshotClock::of(&context.current).apply(&mut self.view.current);
         } else {

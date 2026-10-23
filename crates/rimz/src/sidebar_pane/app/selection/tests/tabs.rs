@@ -8,8 +8,9 @@ fn tabs_distinguish_two_logins_of_one_kind() {
     let mut work = snapshot.providers[0].clone();
     work.account = "work".parse().unwrap();
     snapshot.providers = vec![snapshot.providers[0].clone(), work];
-    let mut ui = UiState::default();
-    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .unwrap()
@@ -31,7 +32,8 @@ fn tabs_distinguish_two_logins_of_one_kind() {
 fn tab_keys_cycle_the_dashboard_and_wrap() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     select_row(&mut ui, &snapshot, 0);
     // Selected row 0 is the claude agent, so the derived tab starts there.
     assert_eq!(
@@ -41,7 +43,7 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
         Some("claude")
     );
 
-    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
@@ -61,14 +63,14 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     );
 
     // A later pick only moves the tab — the anchor holds.
-    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .as_ref()
             .map(|key| key.kind.as_str()),
         Some("pi")
     );
-    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .as_ref()
@@ -76,7 +78,7 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
         Some("claude"),
         "→ wraps past the last tab"
     );
-    handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
+    handle_key(KeyAction::TabPrev, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .as_ref()
@@ -108,9 +110,10 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
     for (label, kinds) in cases {
         let mut snapshot = clickable_block_snapshot(&ws);
         snapshot.providers = kinds.iter().map(|k| provider(k)).collect();
-        let mut ui = UiState::default();
+        let mut ui = ViewState::default();
+        let mut pane_ui = UiState::default();
 
-        let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+        let outcome = handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
 
         assert_eq!(outcome, InputOutcome::default(), "{label}");
         assert!(ui.dashboard_tab.is_none(), "{label}");
@@ -130,21 +133,22 @@ fn pets_enabled_keeps_provider_default_and_cycles_providers_only() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);
     snapshot.theme.pets.enabled = true;
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
 
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
         Some("claude@default".parse().unwrap())
     );
 
-    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
         Some("codex@default".parse().unwrap())
     );
 
-    handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
+    handle_key(KeyAction::TabPrev, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
         Some("claude@default".parse().unwrap()),
@@ -158,9 +162,10 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     let snapshot = tabbed_snapshot(&ws);
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
-    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui)
             .as_ref()
@@ -220,7 +225,7 @@ fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
     .name = "codex".to_owned();
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
 
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane));
     assert_eq!(
@@ -249,7 +254,7 @@ fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
     )[0]
     .name = "codex".to_owned();
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
 
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
     assert_eq!(
@@ -280,9 +285,10 @@ fn tab_pick_drops_when_its_panel_leaves_the_dashboard() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
-    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    handle_key(KeyAction::TabNext, &mut ui, &mut pane_ui, &snapshot);
 
     let mut shrunk = tabbed_snapshot(&ws);
     shrunk.providers = vec![provider("claude"), provider("pi")];
@@ -300,7 +306,8 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     // The rail's geometry after the gutter translation: the active
     // `─ Claude ─` chip footprint edge to edge, then the inactive
     // `─ Codex ─` footprint past the 2-cell `──` gap.
-    let mut ui = UiState {
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState {
         interactions: render::FrameInteractions::from_parts(
             vec![None; 31],
             vec![
@@ -319,7 +326,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
         ..Default::default()
     };
 
-    let outcome = handle_mouse_click(17, 30, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(17, 30, &mut ui, &mut pane_ui, &snapshot);
 
     // A tab click repaints in place — never a jump.
     assert_eq!(outcome, InputOutcome::redraw());
@@ -333,7 +340,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
 
     // The hit range is half-open: the cell past the tab falls through to the
     // row hit-test (and lands nowhere on this chrome line).
-    let outcome = handle_mouse_click(24, 30, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(24, 30, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 }
 
@@ -347,9 +354,9 @@ fn a_card_on_an_account_without_a_block_follows_its_provider_block() {
     snapshot.providers = vec![provider("codex"), provider("pi"), work];
     let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
     let active =
-        |ui: &UiState| render::active_dashboard_tab(&snapshot, ui).map(|key| key.to_string());
+        |ui: &ViewState| render::active_dashboard_tab(&snapshot, ui).map(|key| key.to_string());
 
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane));
     assert_eq!(active(&ui).as_deref(), Some("claude@work"));

@@ -17,7 +17,7 @@ fn scroll_rig() -> (Rig, FrameOutput) {
         })
         .collect();
     rig.view()
-        .ui
+        .presentation
         .expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     rig.view().current = snapshot;
@@ -182,10 +182,10 @@ fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
 }
 
 fn paint_scrolled(source: &mut Rig, offset: usize) {
-    source.view().ui.scroll_offset = offset;
-    source.view().ui.offset_authoritative = true;
-    source.view().ui.scroll_ease.cancel();
-    source.view().ui.landed_open = true;
+    source.view().presentation.scroll_offset = offset;
+    source.view().presentation.offset_authoritative = true;
+    source.view().presentation.scroll_ease.cancel();
+    source.view().presentation.landed_open = true;
     source.state.dirty = true;
     paint_at(source, 0);
 }
@@ -206,7 +206,7 @@ impl SharedPanes {
             .state
             .with_projected_view(false, false, |state| {
                 let group = state.current.worktree_groups[0].key.clone();
-                state.ui.expanded_groups.insert(group);
+                state.presentation.expanded_groups.insert(group);
             });
         pair.paint(0);
         pair
@@ -381,9 +381,9 @@ fn reattach_after_expiry_reads_siblings_after_dwell_on_both_backends() {
             .next()
             .unwrap()
             .clone();
-        pair.panes[0].view().ui.baseline_pane = Some(selected.clone());
-        pair.panes[0].view().ui.selected_pane = Some(selected);
-        pair.panes[0].view().ui.selected_index = Some(0);
+        pair.panes[0].view().presentation.baseline_pane = Some(selected.clone());
+        pair.panes[0].view().presentation.selected_pane = Some(selected);
+        pair.panes[0].view().presentation.selected_index = Some(0);
         pair.sample(&[]);
         pair.plane.views.lock().unwrap().refresh(pair.clock.now());
         pair.clock.advance(
@@ -396,10 +396,10 @@ fn reattach_after_expiry_reads_siblings_after_dwell_on_both_backends() {
         pair.panes[0]
             .state
             .with_projected_view(false, false, |state| {
-                assert_eq!(state.ui.scroll_offset, 0);
-                assert_eq!(state.ui.selected_index, None);
-                assert_eq!(state.ui.baseline_pane, None);
-                assert!(state.ui.freeze.is_none());
+                assert_eq!(state.presentation.scroll_offset, 0);
+                assert_eq!(state.presentation.selected_index, None);
+                assert_eq!(state.presentation.baseline_pane, None);
+                assert!(state.presentation.freeze.is_none());
             });
         pair.paint(0);
         assert!(
@@ -473,7 +473,7 @@ fn frozen_view_survives_round_trip_on_both_backends() {
             assert_eq!(arrived.scroll_offset, original.scroll_offset);
             assert!(!pair.panes[1 - destination].state.observed_watched());
             assert_eq!(
-                pair.panes[1 - destination].state.ui.view.scroll_offset,
+                pair.panes[1 - destination].state.presentation.scroll_offset,
                 0,
                 "no departing pane copy"
             );
@@ -527,6 +527,7 @@ fn newborn_paints_the_clients_view_and_latest_content_in_its_first_frame() {
     let before = pair.panes[1].state.paints;
     let reductions = pair.panes[1].state.content_applications;
     pair.panes[1].state.ui = UiState::default();
+    pair.panes[1].state.presentation = ViewState::default();
     for name in ["hidden one", "hidden two", "latest at arrival"] {
         pair.snapshot.display_name = name.into();
         pair.sample(&[(1, 0)]);
@@ -764,8 +765,8 @@ fn assert_focus_marker_boundary(mux: MuxName) {
             .is_none()
     );
     let rows = rig.state.ui.painted_rows.clone();
-    let anchors = rig.view().ui.anchored_rows.clone();
-    let offset = rig.view().ui.scroll_offset;
+    let anchors = rig.view().presentation.anchored_rows.clone();
+    let offset = rig.view().presentation.scroll_offset;
     rig.state
         .draw_frame(&mut rig.terminal, deadline, false)
         .unwrap();
@@ -777,8 +778,8 @@ fn assert_focus_marker_boundary(mux: MuxName) {
             .is_some()
     );
     assert_eq!(rig.state.ui.painted_rows, rows);
-    assert_eq!(rig.view().ui.anchored_rows, anchors);
-    assert_eq!(rig.view().ui.scroll_offset, offset);
+    assert_eq!(rig.view().presentation.anchored_rows, anchors);
+    assert_eq!(rig.view().presentation.scroll_offset, offset);
 }
 
 #[test]
@@ -819,16 +820,16 @@ fn a_second_focus_move_rearms_the_marker_dwell() {
 #[test]
 fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
     let (mut rig, _) = scroll_rig();
-    rig.view().ui.selected_index = Some(19);
+    rig.view().presentation.selected_index = Some(19);
     {
         let mut guard = rig.view();
         let state = &mut *guard;
-        state.ui.selected_pane = state.current.worktree_groups[0].rows[19]
+        state.presentation.selected_pane = state.current.worktree_groups[0].rows[19]
             .pane
             .as_ref()
             .map(|pane| pane.pane_id.clone());
     }
-    rig.view().ui.freeze = None;
+    rig.view().presentation.freeze = None;
     rig.state.dirty = false;
     rig.view().focus_marker = Some(FocusMarker::Dwelling(
         Instant::now() + Duration::from_millis(50),
@@ -865,14 +866,14 @@ fn marker_click_reveals_without_changing_selection_and_then_disappears() {
         .interactions
         .line_for_target(&render::HitTarget::FocusMarker)
         .unwrap();
-    let selected = rig.view().ui.selected_pane.clone();
+    let selected = rig.view().presentation.selected_pane.clone();
     let applied = rig
         .state
         .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
         .unwrap();
     assert!(applied.effects.is_empty());
-    assert_eq!(rig.view().ui.selected_pane, selected);
-    assert!(rig.view().ui.scroll_offset > 0);
+    assert_eq!(rig.view().presentation.selected_pane, selected);
+    assert!(rig.view().presentation.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -1090,8 +1091,9 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         assert!(first.is_current());
         let (_, row) = source.state.ui.painted_rows[0].clone();
         let input = if keyboard {
-            source.view().ui.selected_index = Some(0);
-            source.view().ui.selected_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+            source.view().presentation.selected_index = Some(0);
+            source.view().presentation.selected_pane =
+                Some(pane("terminal_0", "tab_0", false).pane_id);
             Wakeup::Key(KeyAction::Enter)
         } else {
             Wakeup::MouseClick {
@@ -1402,8 +1404,11 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
         ),
         None
     );
-    assert_eq!(destination.view().ui.selected_pane, Some(previous));
-    assert_eq!(destination.view().ui.selected_index, Some(19));
+    assert_eq!(
+        destination.view().presentation.selected_pane,
+        Some(previous)
+    );
+    assert_eq!(destination.view().presentation.selected_index, Some(19));
     let new_pane = PaneId::from_parts(MuxName::Tmux, "%20");
     let mut admitted = destination.state.current.clone();
     let rows = Arc::make_mut(&mut Arc::make_mut(&mut admitted.worktree_groups)[0].rows);
@@ -1414,11 +1419,14 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
     admitted.own_view.as_mut().unwrap().working_pane_ids = vec![new_pane.clone()];
     destination.fold(admitted, SnapshotSource::Produced);
     paint_at(&mut destination, 0);
-    assert_eq!(destination.view().ui.selected_pane, Some(new_pane));
+    assert_eq!(
+        destination.view().presentation.selected_pane,
+        Some(new_pane)
+    );
 }
 
 fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Instant) {
-    rig.view().ui.freeze = None;
+    rig.view().presentation.freeze = None;
     Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows)
         .swap(first, second);
     rig.state.dirty = true;
@@ -1431,14 +1439,14 @@ fn arrival_freezes_the_painted_order_not_a_hidden_fold() {
     let painted = {
         let mut guard = rig.view();
         let state = &mut *guard;
-        layout_freeze::capture_order(&state.current, &state.ui)
+        layout_freeze::capture_order(&state.current, &state.presentation)
     };
     let mut hidden = rig.state.current.clone();
     hidden.own_view = Some(own_view());
     hidden.viewed_panes.clear();
     hidden.focused_pane = None;
     rig.fold(hidden.clone(), SnapshotSource::Produced);
-    rig.view().ui.freeze = None;
+    rig.view().presentation.freeze = None;
     // Still hidden: the pane-local copy lags a fold its pane did not paint.
     let mut reranked = hidden;
     Arc::make_mut(&mut Arc::make_mut(&mut reranked.worktree_groups)[0].rows)[1].attention_score =
@@ -1455,8 +1463,8 @@ fn arrival_freezes_the_painted_order_not_a_hidden_fold() {
     rig.fold(arrival, SnapshotSource::Produced);
     rig.state.next_frame = Instant::now();
     rig.paint(true);
-    assert_eq!(rig.view().ui.last_order.rows, painted.rows);
-    assert!(rig.view().ui.freeze.is_some());
+    assert_eq!(rig.view().presentation.last_order.rows, painted.rows);
+    assert!(rig.view().presentation.freeze.is_some());
 }
 
 #[test]
@@ -1505,8 +1513,8 @@ fn a_guarded_card_that_left_is_swallowed_without_selection_paint_or_rearm() {
     Arc::make_mut(&mut Arc::make_mut(&mut rig.view().current.worktree_groups)[0].rows).remove(1);
     rig.state.dirty = true;
     rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
-    layout_freeze::arm_freeze(&mut rig.view().ui, 1);
-    let selection = rig.view().ui.selected_pane.clone();
+    layout_freeze::arm_freeze(&mut rig.view().presentation, 1);
+    let selection = rig.view().presentation.selected_pane.clone();
     let before = paints(&output);
     clock.advance(Duration::from_millis(399));
     let outcome = rig
@@ -1518,9 +1526,9 @@ fn a_guarded_card_that_left_is_swallowed_without_selection_paint_or_rearm() {
         InputOutcome::default(),
         "do not click the replacement card"
     );
-    assert_eq!(rig.view().ui.selected_pane, selection);
+    assert_eq!(rig.view().presentation.selected_pane, selection);
     assert_eq!(paints(&output), before);
-    assert_eq!(rig.view().ui.freeze.as_ref().unwrap().armed_ms, 1);
+    assert_eq!(rig.view().presentation.freeze.as_ref().unwrap().armed_ms, 1);
 }
 
 #[test]
@@ -1606,7 +1614,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
     pulled.viewed_panes.clear();
     pulled.pane_session_name = Some("rimz-test".to_owned());
     rig.state.optimistic_watch_until = None;
-    rig.view().ui.scroll_offset = 30;
+    rig.view().presentation.scroll_offset = 30;
     rig.fold(pulled, SnapshotSource::Produced);
     assert!(!rig.state.watched());
     let anchor = FocusAnchor {
@@ -1624,7 +1632,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
             viewport_row: 2,
             held: std::collections::BTreeSet::new(),
         }),
-        order: Some(rig.view().ui.last_order.clone()),
+        order: Some(rig.view().presentation.last_order.clone()),
     };
     (rig, output, anchor)
 }
@@ -1648,8 +1656,8 @@ fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
     focused.focused_pane = Some(target.clone());
     rig.fold(focused, SnapshotSource::Produced);
     paint_at(&mut rig, 0);
-    assert_eq!(rig.view().ui.selected_pane, Some(target));
-    assert_eq!(rig.view().ui.scroll_offset, 0);
+    assert_eq!(rig.view().presentation.selected_pane, Some(target));
+    assert_eq!(rig.view().presentation.scroll_offset, 0);
     assert!(
         !rig.state
             .ui
@@ -1673,7 +1681,7 @@ fn rowless_focus_anchor_never_reveals_an_offscreen_selection() {
 fn own_key_browse_reveals_an_offscreen_selection() {
     let (mut rig, _) = scroll_rig();
     rig.input(KeyAction::Bottom);
-    assert!(rig.view().ui.scroll_offset > 0);
+    assert!(rig.view().presentation.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -1701,13 +1709,13 @@ fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
         .apply_input([Wakeup::Key(KeyAction::InboxNext)], &mut rig.terminal)
         .unwrap();
     assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
-    assert_eq!(rig.view().ui.selected_pane, None);
+    assert_eq!(rig.view().presentation.selected_pane, None);
     let mut focused = rig.state.current.clone();
     focused.focused_pane = Some(target.clone());
     rig.fold(focused, SnapshotSource::Produced);
     paint_at(&mut rig, 0);
-    assert_eq!(rig.view().ui.selected_pane, Some(target));
-    assert!(rig.view().ui.scroll_offset > 0);
+    assert_eq!(rig.view().presentation.selected_pane, Some(target));
+    assert!(rig.view().presentation.scroll_offset > 0);
     assert!(
         rig.state
             .ui
@@ -1726,11 +1734,11 @@ fn shared_placement_captures_the_painted_opening_set() {
         .unwrap()
         .pane_id
         .clone();
-    rig.view().ui.selected_index = Some(0);
+    rig.view().presentation.selected_index = Some(0);
     {
         let mut guard = rig.view();
         let state = &mut *guard;
-        state.ui.selected_pane = state.current.worktree_groups[0].rows[0]
+        state.presentation.selected_pane = state.current.worktree_groups[0].rows[0]
             .pane
             .as_ref()
             .map(|pane| pane.pane_id.clone());
@@ -1741,13 +1749,16 @@ fn shared_placement_captures_the_painted_opening_set() {
     rig.state
         .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.view().ui.drawn_selection.as_deref(), Some("agent-1"));
+    assert_eq!(
+        rig.view().presentation.drawn_selection.as_deref(),
+        Some("agent-1")
+    );
     assert!(
-        rig.view().ui.held_expansions.contains("agent-0"),
+        rig.view().presentation.held_expansions.contains("agent-0"),
         "the click paint already retains A under its freeze"
     );
     let placement = rig.state.focus_placement(&target).expect("visible target");
-    let mut expected = rig.view().ui.held_expansions.clone();
+    let mut expected = rig.view().presentation.held_expansions.clone();
     expected.insert("agent-1".into());
     assert_eq!(placement.held, expected);
 }
@@ -1760,8 +1771,8 @@ fn assert_shared_placement_from_history(previous: usize) {
         .unwrap()
         .pane_id
         .clone();
-    source.view().ui.selected_index = Some(0);
-    source.view().ui.selected_pane = Some(first.clone());
+    source.view().presentation.selected_index = Some(0);
+    source.view().presentation.selected_pane = Some(first.clone());
     source.state.dirty = true;
     paint_at(&mut source, 0);
     let target = source.view().current.worktree_groups[0].rows[1].clone();
@@ -1774,7 +1785,10 @@ fn assert_shared_placement_from_history(previous: usize) {
             &mut source.terminal,
         )
         .unwrap();
-    assert_eq!(source.view().ui.drawn_selection.as_deref(), Some("agent-1"));
+    assert_eq!(
+        source.view().presentation.drawn_selection.as_deref(),
+        Some("agent-1")
+    );
     let placement = source
         .state
         .focus_placement(&target_pane)
@@ -1790,11 +1804,11 @@ fn assert_shared_placement_from_history(previous: usize) {
 
     let (mut destination, _, mut anchor) = hidden_destination();
     destination.view().current = source.state.current.clone();
-    destination.view().ui.selected_index = Some(previous);
+    destination.view().presentation.selected_index = Some(previous);
     {
         let mut guard = destination.view();
         let state = &mut *guard;
-        state.ui.selected_pane = Some(
+        state.presentation.selected_pane = Some(
             state.current.worktree_groups[0].rows[previous]
                 .pane
                 .as_ref()
@@ -1822,15 +1836,18 @@ fn assert_shared_placement_from_history(previous: usize) {
     destination.state.optimistic_watch_until = None;
     anchor.pane_id = target_pane.clone();
     anchor.placement = Some(placement);
-    anchor.order = Some(source.view().ui.last_order.clone());
+    anchor.order = Some(source.view().presentation.last_order.clone());
     let (push, ack) = focus_push(&mut destination, anchor);
     destination
         .state
         .on_focus_push(push, &mut destination.fetch, &mut destination.terminal)
         .unwrap();
 
-    assert_eq!(destination.view().ui.selected_pane, Some(target_pane));
-    assert!(destination.view().ui.focus_placement.is_none());
+    assert_eq!(
+        destination.view().presentation.selected_pane,
+        Some(target_pane)
+    );
+    assert!(destination.view().presentation.focus_placement.is_none());
     assert_eq!(
         destination
             .state
@@ -1884,7 +1901,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
-    assert_eq!(rig.view().ui.selected_pane, Some(target.clone()));
+    assert_eq!(rig.view().presentation.selected_pane, Some(target.clone()));
     assert!(
         rig.state.watched(),
         "the overlay must open the existing paint gate"
@@ -1914,13 +1931,16 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
         y(&rig),
         rig.state.ui.scroll_zone_top as isize + placement.viewport_row
     );
-    assert_eq!(rig.view().ui.last_focus_anchor_ms, anchor.issued_at_ms);
+    assert_eq!(
+        rig.view().presentation.last_focus_anchor_ms,
+        anchor.issued_at_ms
+    );
     let old_y = y(&rig);
     let mut switched = rig.state.current.clone();
     switched.focused_pane = Some(target.clone());
     switched.viewed_panes = vec![target];
     rig.fold(switched, SnapshotSource::Produced);
-    assert!(rig.view().ui.focus_placement.is_none());
+    assert!(rig.view().presentation.focus_placement.is_none());
     paint_at(&mut rig, 100);
     assert_eq!(
         y(&rig),
@@ -1997,10 +2017,10 @@ fn cleared_anchor_without_push_keeps_the_viewport_on_the_first_target_fold() {
     switched.focused_pane = Some(anchor.pane_id.clone());
     switched.viewed_panes = vec![anchor.pane_id.clone()];
     rig.fold(switched, SnapshotSource::Produced);
-    assert_eq!(rig.view().ui.selected_pane, Some(anchor.pane_id));
-    assert!(!rig.view().ui.own_input_reveal);
-    assert!(rig.view().ui.focus_placement.is_none());
-    assert_eq!(rig.view().ui.last_focus_anchor_ms, 0);
+    assert_eq!(rig.view().presentation.selected_pane, Some(anchor.pane_id));
+    assert!(!rig.view().presentation.own_input_reveal);
+    assert!(rig.view().presentation.focus_placement.is_none());
+    assert_eq!(rig.view().presentation.last_focus_anchor_ms, 0);
 }
 
 fn fitted_grow_hold(resize_first: bool) {
@@ -2104,8 +2124,8 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
             .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
 
-        assert_eq!(rig.view().ui.selected_pane, Some(anchor.pane_id));
-        assert!(rig.view().ui.focus_placement.is_none());
+        assert_eq!(rig.view().presentation.selected_pane, Some(anchor.pane_id));
+        assert!(rig.view().presentation.focus_placement.is_none());
         assert!(rig.state.ui.anchor_clamped);
         let report = assert_push_report(&ack, &rig, PushVerdict::Displaced, !cached);
         assert_eq!(
@@ -2267,11 +2287,11 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
     rig.state
         .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
-    rig.view().ui.drawn_selection = None;
+    rig.view().presentation.drawn_selection = None;
     rig.observe_paint(Instant::now());
-    rig.view().ui.drawn_selection = Some(row_id);
+    rig.view().presentation.drawn_selection = Some(row_id);
     assert!(
-        rig.view().ui.focus_placement.is_some(),
+        rig.view().presentation.focus_placement.is_some(),
         "placement has not been consumed by a paint"
     );
     rig.observe_paint(Instant::now());
@@ -2312,8 +2332,8 @@ fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
         .unwrap();
     assert!(effect.effects.contains(&InputEffect::Focus(target)));
     // Deliberately bypass anchoring to exercise the detector at an actual paint.
-    rig.view().ui.offset_authoritative = true;
-    rig.view().ui.scroll_offset += 1;
+    rig.view().presentation.offset_authoritative = true;
+    rig.view().presentation.scroll_offset += 1;
     rig.state.dirty = true;
     paint_at(&mut rig, 0);
     let message = rx.try_recv();
@@ -2352,11 +2372,11 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
             own_view_is_daemon: false,
         });
         rig.view().current.viewed_panes = vec![target_pane];
-        rig.view().ui.selected_index = Some(4);
-        rig.view().ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
-        rig.view().ui.scroll_offset = 30;
+        rig.view().presentation.selected_index = Some(4);
+        rig.view().presentation.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.view().presentation.scroll_offset = 30;
         let stamp = crate::utils::time::unix_now_ms();
-        let selected = rig.view().ui.selected_pane.clone().unwrap();
+        let selected = rig.view().presentation.selected_pane.clone().unwrap();
         crate::mux::focus_anchor::store(
             &rig.runtime,
             &FocusAnchor {
@@ -2379,7 +2399,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         )
         .unwrap();
         rig.state.apply_focus_anchor();
-        assert!(rig.view().ui.focus_placement.is_some());
+        assert!(rig.view().presentation.focus_placement.is_some());
         rig.state.dirty = true;
         paint_at(&mut rig, 0);
         let theme = {
@@ -2390,7 +2410,15 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         let frame = {
             let mut guard = rig.view();
             let state = &mut *guard;
-            render::compose_lines(&state.current, None, &state.ui, &theme, 80, 24)
+            render::compose_lines(
+                &state.current,
+                None,
+                &state.presentation,
+                &state.ui,
+                &theme,
+                80,
+                24,
+            )
         };
         let (_, first_line) = rig
             .state
@@ -2439,11 +2467,11 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
         let rows = rig.view().current.worktree_groups[0].rows.clone();
         let placed_id = rows[placed].id.clone();
         let target = rows[selected].clone();
-        rig.view().ui.selected_index = Some(selected);
-        rig.view().ui.own_input_reveal = true;
-        rig.view().ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
-        rig.view().ui.scroll_offset = 0;
-        rig.view().ui.focus_placement = Some(FocusPlacement {
+        rig.view().presentation.selected_index = Some(selected);
+        rig.view().presentation.own_input_reveal = true;
+        rig.view().presentation.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.view().presentation.scroll_offset = 0;
+        rig.view().presentation.focus_placement = Some(FocusPlacement {
             row_id: placed_id,
             viewport_row,
             held: std::collections::BTreeSet::new(),
@@ -2466,9 +2494,9 @@ fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     let (mut rig, _) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.view().ui.frame_ms;
+    let started = rig.view().presentation.frame_ms;
     paint_at(&mut rig, started + 40);
-    assert!(rig.view().ui.scroll_ease.in_flight());
+    assert!(rig.view().presentation.scroll_ease.in_flight());
     let (tx, rx) = std::sync::mpsc::sync_channel(8);
     rig.state.observe_tx = tx;
     let (_, y) = rig.state.ui.painted_rows.last().unwrap().clone();
@@ -2485,7 +2513,7 @@ fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     for elapsed in [60, 80, 100, 140] {
         paint_at(&mut rig, started + elapsed);
     }
-    assert!(!rig.view().ui.scroll_ease.in_flight());
+    assert!(!rig.view().presentation.scroll_ease.in_flight());
     assert!(rx.try_recv().is_err(), "wheel glide is not a displacement");
     assert!(
         rig.state.clicked_row.is_some(),
@@ -2498,19 +2526,25 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     let (mut rig, output) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.view().ui.scroll_offset, 9);
+    assert_eq!(rig.view().presentation.scroll_offset, 9);
     assert_eq!(visible(&rig), 0);
     assert_eq!(paints(&output), 1);
     assert!(rig.frame_active());
-    let started = rig.view().ui.frame_ms;
+    let started = rig.view().presentation.frame_ms;
     paint_at(&mut rig, started + 100);
     assert_eq!(visible(&rig), 9);
-    assert!(!rig.view().ui.scroll_ease.in_flight());
+    assert!(!rig.view().presentation.scroll_ease.in_flight());
     {
         let mut guard = rig.view();
         let state = &mut *guard;
         assert_eq!(
-            render::animation_interval(&state.current, &state.ui, state.ui.animation_phase, false),
+            render::animation_interval(
+                &state.current,
+                &state.presentation,
+                &state.ui,
+                state.presentation.animation_phase,
+                false
+            ),
             Some(animation_frame(&state.current))
         );
     }
@@ -2523,11 +2557,11 @@ fn click_after_wheel_ease_hits_the_landed_frame() {
     let (mut rig, _) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    let started = rig.view().ui.frame_ms;
+    let started = rig.view().presentation.frame_ms;
     for elapsed in [16, 48, 100] {
         paint_at(&mut rig, started + elapsed);
     }
-    assert!(!rig.view().ui.scroll_ease.in_flight());
+    assert!(!rig.view().presentation.scroll_ease.in_flight());
     let index = rig.state.ui.interactions.visible_row_span().unwrap().0 + 1;
     let row = rig.state.ui.interactions.line_for_row(index).unwrap() as u16;
     let id = rig.state.ui.painted_roster[index].clone();
@@ -2561,7 +2595,7 @@ fn late_wheel_frame_matches_regular_playback() {
     for rig in [&mut regular, &mut late] {
         let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
         dispatch(rig, &mut inbox);
-        starts.push(rig.view().ui.frame_ms);
+        starts.push(rig.view().presentation.frame_ms);
     }
     for elapsed in [16, 32, 48, 64] {
         paint_at(&mut regular, starts[0] + elapsed);
@@ -2578,12 +2612,12 @@ fn selection_key_snaps_an_in_flight_wheel_run() {
         rig.input(KeyAction::Down);
         let mut inbox = queued((0..count).map(|_| Wakeup::Scroll { down: true }));
         dispatch(&mut rig, &mut inbox);
-        assert!(rig.view().ui.scroll_ease.in_flight());
+        assert!(rig.view().presentation.scroll_ease.in_flight());
         rig.input(KeyAction::Down);
-        assert!(!rig.view().ui.scroll_ease.in_flight());
-        assert_eq!(visible(&rig), rig.view().ui.scroll_offset);
+        assert!(!rig.view().presentation.scroll_ease.in_flight());
+        assert_eq!(visible(&rig), rig.view().presentation.scroll_offset);
         let (first, last) = rig.state.ui.interactions.visible_row_span().unwrap();
-        assert!((first..=last).contains(&rig.view().ui.selected_index.unwrap()));
+        assert!((first..=last).contains(&rig.view().presentation.selected_index.unwrap()));
     }
 }
 
@@ -2606,18 +2640,18 @@ fn wheel_input_pulls_the_next_grid_frame_in() {
 fn queued_wheel_ticks_paint_once_at_the_final_offset() {
     for count in [1, 4, 30] {
         let (mut rig, output) = scroll_rig();
-        let selected = rig.view().ui.selected_pane.clone();
+        let selected = rig.view().presentation.selected_pane.clone();
         let max = rig.state.ui.drawn_scroll_max.unwrap();
         let mut inbox = queued((0..count).map(|_| Wakeup::Scroll { down: true }));
         dispatch(&mut rig, &mut inbox);
-        assert_eq!(rig.view().ui.scroll_offset, (count * 3).min(max));
+        assert_eq!(rig.view().presentation.scroll_offset, (count * 3).min(max));
         assert_eq!(paints(&output), 1);
-        assert_eq!(rig.view().ui.selected_pane, selected);
+        assert_eq!(rig.view().presentation.selected_pane, selected);
         assert!(
-            !rig.view().ui.offset_authoritative,
+            !rig.view().presentation.offset_authoritative,
             "paint consumed the wheel intent"
         );
-        assert!(rig.view().ui.freeze.is_some());
+        assert!(rig.view().presentation.freeze.is_some());
         assert!(!rig.state.dirty);
     }
 }
@@ -2635,7 +2669,7 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
                 {
                     let mut guard = rig.view();
                     let state = &mut *guard;
-                    state.ui.scroll_offset = state.ui.drawn_scroll_max.unwrap();
+                    state.presentation.scroll_offset = state.ui.drawn_scroll_max.unwrap();
                 }
             }
         }
@@ -2652,8 +2686,8 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
                 .unwrap();
         }
         assert_eq!(
-            batched.view().ui.scroll_offset,
-            single.view().ui.scroll_offset
+            batched.view().presentation.scroll_offset,
+            single.view().presentation.scroll_offset
         );
     }
 }
@@ -2668,16 +2702,16 @@ fn key_between_runs_acts_on_the_first_painted_frame() {
         Wakeup::Scroll { down: true },
     ]);
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.view().ui.scroll_offset, 6);
+    assert_eq!(rig.view().presentation.scroll_offset, 6);
     assert_eq!(paints(&output), 1);
     // ScreenTop resolves the row from the frame the preceding run painted.
     let expected = rig.state.ui.interactions.visible_row_span().unwrap().0;
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.view().ui.selected_index, Some(expected));
+    assert_eq!(rig.view().presentation.selected_index, Some(expected));
     assert_eq!(paints(&output), 2);
-    let offset = rig.view().ui.scroll_offset;
+    let offset = rig.view().presentation.scroll_offset;
     dispatch(&mut rig, &mut inbox);
-    assert_eq!(rig.view().ui.scroll_offset, offset + 3);
+    assert_eq!(rig.view().presentation.scroll_offset, offset + 3);
     assert_eq!(paints(&output), 3);
 }
 
@@ -2689,8 +2723,8 @@ fn help_dismissal_consumes_only_the_first_tick_of_a_run() {
     output.1.store(0, std::sync::atomic::Ordering::SeqCst);
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
-    assert!(!rig.view().ui.help_visible);
-    assert_eq!(rig.view().ui.scroll_offset, 6);
+    assert!(!rig.view().presentation.help_visible);
+    assert_eq!(rig.view().presentation.scroll_offset, 6);
     assert_eq!(paints(&output), 1);
 }
 

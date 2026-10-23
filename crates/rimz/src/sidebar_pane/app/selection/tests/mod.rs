@@ -10,14 +10,14 @@ mod input;
 mod reconcile;
 mod tabs;
 
-fn paint(ui: &mut UiState, snapshot: &SidebarSnapshot, height: u16) {
+fn paint(ui: &mut ViewState, pane_ui: &mut UiState, snapshot: &SidebarSnapshot, height: u16) {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, height)).unwrap();
-    render::draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
+    render::draw_to_terminal(&mut terminal, snapshot, None, ui, pane_ui).unwrap();
 }
 
-fn remember_roster(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    ui.painted_roster = ui
+fn remember_roster(ui: &mut ViewState, pane_ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    pane_ui.painted_roster = ui
         .visible_roster(snapshot)
         .rows()
         .iter()
@@ -76,7 +76,12 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
         };
         for action in [KeyAction::InboxNext, KeyAction::InboxPrev] {
             assert_eq!(
-                handle_key(action, &mut UiState::default(), &snapshot),
+                handle_key(
+                    action,
+                    &mut ViewState::default(),
+                    &mut UiState::default(),
+                    &snapshot
+                ),
                 InputOutcome::focus(expected.clone()),
                 "native={native}, pane={child_pane:?}, own={own_status:?}"
             );
@@ -117,9 +122,10 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     rows[0].last_activity = now;
     rows.push(next);
     let child: PaneId = "zellij:terminal_first".parse().unwrap();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(child.clone())
     );
     snapshot.focused_pane = Some(child);
@@ -127,7 +133,7 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     reconcile_selection(&mut ui, &snapshot, baseline);
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_11"))
     );
 }
@@ -250,17 +256,15 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 /// returning the freshly-composed typed interactions — the same projection
 /// the live draw stores on `UiState`.
 fn interactions_for(snapshot: &SidebarSnapshot, selected: usize) -> render::FrameInteractions {
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(selected),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = render::ViewState {
+        selected_index: Some(selected),
+        help_visible: false,
+        animation_phase: 0,
+        ..Default::default()
     };
-    let theme = ui.theme(&snapshot.theme);
-    render::compose_lines(snapshot, None, &ui, theme.as_ref(), 54, 64).interactions
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
+    render::compose_lines(snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64).interactions
 }
 
 /// The screen row a content-line index maps to: borderless, the body fills

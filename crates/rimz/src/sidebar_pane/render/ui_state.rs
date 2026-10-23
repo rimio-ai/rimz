@@ -17,7 +17,6 @@ pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRo
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct UiState {
-    pub(in crate::sidebar_pane) view: ViewState,
     pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// Typed hit geometry from the most recently painted frame.
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
@@ -66,7 +65,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
     /// renderer at `animation_phase`; the serve loop keeps the fast tick alive
     /// while a roll is in flight. Crate-internal: an implementation detail of the
-    /// renderer, not part of the public `UiState` surface.
+    /// renderer, not part of the public `ViewState` surface.
     pub(in crate::sidebar_pane) tally: TallyAnim,
     /// The highest cockpit spend displayed within the current headline-window
     /// epoch. Producer frames before the epoch field leave this inert.
@@ -198,20 +197,6 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// next user-authored prompt.
     /// Travels with the view, including a fork's initial state.
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
-}
-
-impl std::ops::Deref for UiState {
-    type Target = ViewState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.view
-    }
-}
-
-impl std::ops::DerefMut for UiState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view
-    }
 }
 
 impl UiState {

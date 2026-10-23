@@ -15,14 +15,11 @@ fn browse_roams_other_tabs_rows() {
             pane("terminal_9", "tab_7", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            selected_pane: Some(here.clone()),
-            baseline_pane: Some(here.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(here.clone()),
+        baseline_pane: Some(here.clone()),
+        ..Default::default()
     };
 
     select_row(&mut ui, &snapshot, 1);
@@ -49,17 +46,15 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            baseline_pane: Some(anchor.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        baseline_pane: Some(anchor.clone()),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
     select_row(&mut ui, &snapshot, 1);
     begin_or_continue_browse(&mut ui);
-    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::Focus(picked.clone())]);
     assert!(ui.browse.is_some(), "the jump leaves the browse in place");
 
@@ -84,20 +79,20 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            selected_pane: Some(from.clone()),
-            baseline_pane: Some(from.clone()),
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(from.clone()),
+        baseline_pane: Some(from.clone()),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
 
-    remember_roster(&mut ui, &snapshot);
-    let row1 = ui.interactions.line_for_row(1).unwrap();
-    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    let row1 = pane_ui.interactions.line_for_row(1).unwrap();
+    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::Focus(jumped.clone())]);
     assert!(outcome.redraw);
     assert_eq!(ui.selected_pane, Some(jumped.clone()));
@@ -127,12 +122,9 @@ fn continued_browse_keeps_the_first_anchor() {
             pane("terminal_3", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            baseline_pane: Some(anchor.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        baseline_pane: Some(anchor.clone()),
+        ..Default::default()
     };
 
     select_row(&mut ui, &snapshot, 1);
@@ -163,15 +155,12 @@ fn browse_drops_when_its_pane_leaves_the_room() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(gone.clone()),
-            baseline_pane: Some(real.clone()),
-            browse: Some(browse(&gone, Some(&real))),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(gone.clone()),
+        baseline_pane: Some(real.clone()),
+        browse: Some(browse(&gone, Some(&real))),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, None);

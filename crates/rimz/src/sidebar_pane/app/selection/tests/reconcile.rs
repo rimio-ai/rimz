@@ -4,7 +4,7 @@ use super::*;
 fn unseated_fold_does_not_poison_the_dashboard_before_correction() {
     let mut snapshot = clickable_block_snapshot(&workspace());
     snapshot.providers = tabbed_snapshot(&workspace()).providers;
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.selected_pane, None);
     assert_eq!(ui.selected_index, None);
@@ -32,7 +32,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
             pane("terminal_2", "tab_0", true),
         ],
     );
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
 
     reconcile_selection(&mut ui, &active_snapshot, Some(active.clone()));
 
@@ -47,7 +47,7 @@ fn cold_start_derives_from_focused_pane_or_holds_unseated() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
 
     reconcile_selection(&mut ui, &snapshot, None);
 
@@ -67,14 +67,11 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
             pane("terminal_3", "tab_0", true),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            selected_pane: Some(was.clone()),
-            baseline_pane: Some(was),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(was.clone()),
+        baseline_pane: Some(was),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, Some(now_active.clone()));
@@ -91,14 +88,11 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            selected_pane: Some(held.clone()),
-            baseline_pane: Some(held.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(held.clone()),
+        baseline_pane: Some(held.clone()),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, None);
@@ -119,14 +113,11 @@ fn selection_reanchors_to_its_pane_after_a_reorder() {
             pane("terminal_1", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(active.clone()),
-            baseline_pane: Some(active.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(active.clone()),
+        baseline_pane: Some(active.clone()),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, Some(active.clone()));
@@ -154,15 +145,12 @@ fn frameless_fold_holds_browse_until_its_pane_returns() {
     frameless.panes_produced_at_ms = None;
     std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
     let pick = browse(&selected, None);
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(selected.clone()),
-            browse: Some(pick.clone()),
-            scroll_offset: 3,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        browse: Some(pick.clone()),
+        scroll_offset: 3,
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &frameless, None);
@@ -194,14 +182,11 @@ fn frameless_fold_holds_baseline_until_its_pane_returns() {
     let mut frameless = framed.clone();
     frameless.panes_produced_at_ms = None;
     std::sync::Arc::make_mut(&mut frameless.worktree_groups).clear();
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(selected.clone()),
-            baseline_pane: Some(selected.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        baseline_pane: Some(selected.clone()),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &frameless, None);
@@ -221,14 +206,12 @@ fn frameless_fold_holds_baseline_until_its_pane_returns() {
 fn frameless_anchor_withholds_index_without_dropping_the_pane() {
     let ws = workspace();
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(selected.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(selected.clone()),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
     let frameless = snapshot(&ws);
     anchor_selection(&mut ui, &frameless);
@@ -236,7 +219,7 @@ fn frameless_anchor_withholds_index_without_dropping_the_pane() {
     assert_eq!(ui.selected_pane, Some(selected.clone()));
     assert_eq!(ui.selected_index, None);
     assert_eq!(
-        handle_key(KeyAction::Enter, &mut ui, &frameless),
+        handle_key(KeyAction::Enter, &mut ui, &mut pane_ui, &frameless),
         InputOutcome::default(),
         "Enter focuses nothing while no card shows the held pick"
     );
@@ -267,15 +250,12 @@ fn selection_drops_when_its_pane_leaves_the_room() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(gone.clone()),
-            baseline_pane: Some(gone.clone()),
-            browse: Some(browse(&gone, Some(&gone))),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(gone.clone()),
+        baseline_pane: Some(gone.clone()),
+        browse: Some(browse(&gone, Some(&gone))),
+        ..Default::default()
     };
 
     reconcile_selection(&mut ui, &snapshot, None);

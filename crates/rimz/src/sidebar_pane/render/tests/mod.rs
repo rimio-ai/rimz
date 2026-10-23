@@ -43,13 +43,10 @@ mod worktree;
 use super::*;
 use crate::sidebar_pane::view::BodyLens;
 
-fn selected_ui() -> UiState {
-    UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+fn selected_ui() -> ViewState {
+    ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     }
 }
 
@@ -175,17 +172,25 @@ fn snapshot_to_screen_with_alert(
     width: u16,
     height: u16,
 ) -> String {
-    snapshot_to_screen_with_alert_and_ui(snapshot, alert, &selected_ui(), width, height)
+    snapshot_to_screen_with_alert_and_ui(
+        snapshot,
+        alert,
+        &selected_ui(),
+        &UiState::default(),
+        width,
+        height,
+    )
 }
 
 fn snapshot_to_screen_with_alert_and_ui(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-    ui: &UiState,
+    ui: &ViewState,
+    pane_ui: &UiState,
     width: u16,
     height: u16,
 ) -> String {
-    let bytes = snapshot_to_bytes_with_alert_and_ui(snapshot, alert, ui, width, height);
+    let bytes = snapshot_to_bytes_with_alert_and_ui(snapshot, alert, ui, pane_ui, width, height);
     let mut parser = vt100::Parser::new(height, width, 0);
     parser.process(&bytes);
     parser.screen().contents()
@@ -194,7 +199,8 @@ fn snapshot_to_screen_with_alert_and_ui(
 fn snapshot_to_bytes_with_alert_and_ui(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-    ui: &UiState,
+    ui: &ViewState,
+    pane_ui: &UiState,
     width: u16,
     height: u16,
 ) -> Vec<u8> {
@@ -203,8 +209,9 @@ fn snapshot_to_bytes_with_alert_and_ui(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
     Backend::clear_region(terminal.backend_mut(), ClearType::All).unwrap();
-    let mut ui = fixed_theme_ui(snapshot, ui);
-    draw_to_terminal(&mut terminal, snapshot, alert, &mut ui).unwrap();
+    let mut ui = ui.clone();
+    let mut pane_ui = fixed_theme_ui(snapshot, pane_ui);
+    draw_to_terminal(&mut terminal, snapshot, alert, &mut ui, &mut pane_ui).unwrap();
     drop(terminal);
     bytes
 }
@@ -323,28 +330,24 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
 
     let mut measured_snapshot = snapshot.clone();
     measured_snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    let ui = fixed_theme_ui(
-        &measured_snapshot,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                expanded_groups: measured_snapshot
-                    .worktree_groups
-                    .iter()
-                    .map(|group| group.key.clone())
-                    .collect(),
-                ..Default::default()
-            },
-            ..UiState::default()
-        },
-    );
-    let theme = ui
+    let pane_ui = fixed_theme_ui(&measured_snapshot, &UiState::default());
+    let ui = ViewState {
+        selected_index: Some(0),
+        expanded_groups: measured_snapshot
+            .worktree_groups
+            .iter()
+            .map(|group| group.key.clone())
+            .collect(),
+        ..Default::default()
+    };
+    let theme = pane_ui
         .cached_theme(&measured_snapshot.theme)
         .expect("fixed theme is cached");
     let composed = compose_lines_with_meter(
         &measured_snapshot,
         None,
         &ui,
+        &pane_ui,
         theme.as_ref(),
         54,
         u16::MAX,
@@ -509,15 +512,12 @@ fn codex_context(now: Timestamp) -> AgentContext {
     }
 }
 
-fn ui_at_phase(phase: u64) -> UiState {
-    UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: phase,
-            ..Default::default()
-        },
-        ..UiState::default()
+fn ui_at_phase(phase: u64) -> ViewState {
+    ViewState {
+        selected_index: Some(0),
+        help_visible: false,
+        animation_phase: phase,
+        ..Default::default()
     }
 }
 
@@ -624,13 +624,14 @@ fn bottom_chrome_texts(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
 ) -> (Vec<String>, Vec<HitRegion>) {
-    bottom_chrome_texts_with_ui(snapshot, alert, &selected_ui())
+    bottom_chrome_texts_with_ui(snapshot, alert, &selected_ui(), &UiState::default())
 }
 
 fn bottom_chrome_texts_with_ui(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-    ui: &UiState,
+    ui: &ViewState,
+    pane_ui: &UiState,
 ) -> (Vec<String>, Vec<HitRegion>) {
     let theme = Theme::fixed(true);
     let block = build_bottom_chrome(
@@ -639,6 +640,7 @@ fn bottom_chrome_texts_with_ui(
         &theme,
         42,
         ui,
+        pane_ui,
         &ui.visible_roster(snapshot),
     );
     (
@@ -1116,17 +1118,15 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
 #[test]
 fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let snapshot = overflowing_fleet_with_unread_lead();
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 99,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 99,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     let theme = Theme::for_sidebar(&snapshot.theme);
-    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 20);
+    let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 20);
     let (_, banner_row) = composed
         .interactions
         .line_for_target(&HitTarget::UnreadBanner)
@@ -1143,7 +1143,16 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     );
 
     let default_ui = selected_ui();
-    let composed = compose_lines(&snapshot, None, &default_ui, &theme, 54, 20);
+    let pane_default_ui = UiState::default();
+    let composed = compose_lines(
+        &snapshot,
+        None,
+        &default_ui,
+        &pane_default_ui,
+        &theme,
+        54,
+        20,
+    );
     assert!(
         composed
             .interactions
@@ -1162,7 +1171,16 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let overflow = overflowing_fleet();
     let overflow_theme = Theme::for_sidebar(&overflow.theme);
     let default_ui = selected_ui();
-    let composed = compose_lines(&overflow, None, &default_ui, &overflow_theme, 54, 20);
+    let pane_default_ui = UiState::default();
+    let composed = compose_lines(
+        &overflow,
+        None,
+        &default_ui,
+        &pane_default_ui,
+        &overflow_theme,
+        54,
+        20,
+    );
     assert!(
         composed
             .interactions

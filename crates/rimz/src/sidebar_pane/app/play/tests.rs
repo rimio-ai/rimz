@@ -143,7 +143,7 @@ fn pilot_holds_then_reorders_at_the_loop_freeze_deadline() {
     assert!(before(&before_ask, "@planner#main", "@coder#main"));
     let freeze = column
         .state
-        .ui
+        .presentation
         .freeze
         .as_ref()
         .expect("selection arms the product freeze");
@@ -177,9 +177,9 @@ fn pilot_renders_nested_results_countdown_expansion_and_root_unread() {
     text_at(&mut column, &scenario, 17_600);
     let selected = column
         .state
-        .ui
+        .presentation
         .visible_roster(&column.state.current)
-        .row(column.state.ui.selected_index.unwrap())
+        .row(column.state.presentation.selected_index.unwrap())
         .unwrap()
         .as_agent()
         .unwrap();

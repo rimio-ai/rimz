@@ -42,7 +42,7 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     rig.fold(snapshot, SnapshotSource::Produced);
     rig.state.with_projected_view(false, false, |state| {
         let group = state.current.worktree_groups[0].key.clone();
-        state.ui.expanded_groups.insert(group);
+        state.presentation.expanded_groups.insert(group);
     });
     rig
 }
@@ -81,8 +81,8 @@ fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
     rig.state.optimistic_watch_until = None;
     let dwell = rig.state.clock.now() + Duration::from_secs(60);
     rig.state.with_projected_view(false, false, |state| {
-        state.ui.scroll_offset = 17;
-        state.ui.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
+        state.presentation.scroll_offset = 17;
+        state.presentation.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
         state.view.tab_read_dwell_until = Some(dwell);
     });
     rig.views.lock().unwrap().reconcile(
@@ -132,7 +132,7 @@ fn outside_decisions_read_the_routed_view_not_scratch() {
         let state = &mut *view;
         state.current.own_view = Some(own_view());
         state.ui.theme(&state.view.current.theme);
-        layout_freeze::arm_freeze(&mut state.ui, clock.now_ms() as i64);
+        layout_freeze::arm_freeze(&mut state.presentation, clock.now_ms() as i64);
         state.health.failure_streak = 1;
         state.tab_read_dwell_until = Some(dwell);
     }
@@ -480,7 +480,8 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
     let mut other = shared_rig(views.clone(), 0, 2);
     let target = shared_rig(views, 1, 2);
     other.state.with_projected_view(false, false, |state| {
-        state.ui.baseline_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"));
+        state.presentation.baseline_pane =
+            Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"));
     });
     other.event(SidebarEvent::FocusChanged {
         focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1_0")],

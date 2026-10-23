@@ -6,9 +6,10 @@ fn painted(
     width: u16,
     height: u16,
 ) -> (UiState, Buffer) {
-    let mut ui = fixed_theme_ui(snapshot, &selected_ui());
+    let mut view = selected_ui();
+    let mut ui = fixed_theme_ui(snapshot, &UiState::default());
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    draw_to_terminal(&mut terminal, snapshot, alert, &mut ui).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, alert, &mut view, &mut ui).unwrap();
     (ui, terminal.backend().buffer().clone())
 }
 

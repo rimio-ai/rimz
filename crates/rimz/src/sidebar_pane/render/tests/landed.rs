@@ -41,11 +41,17 @@ fn landed_snapshot() -> SidebarSnapshot {
     snapshot
 }
 
-fn body(snapshot: &SidebarSnapshot, ui: &UiState, width: usize) -> RenderedBlock {
+fn body(
+    snapshot: &SidebarSnapshot,
+    ui: &ViewState,
+    pane_ui: &UiState,
+    width: usize,
+) -> RenderedBlock {
     let roster = ui.visible_roster(snapshot);
     scroll_lines(
         snapshot,
         ui,
+        pane_ui,
         &roster,
         &BTreeSet::new(),
         width,
@@ -58,7 +64,7 @@ fn body(snapshot: &SidebarSnapshot, ui: &UiState, width: usize) -> RenderedBlock
 #[test]
 fn closed_landed_line_replaces_receipts_before_external() {
     let snapshot = landed_snapshot();
-    let block = body(&snapshot, &UiState::default(), 54);
+    let block = body(&snapshot, &ViewState::default(), &UiState::default(), 54);
     let texts = line_texts(&block.lines);
     let fold = texts
         .iter()
@@ -96,13 +102,11 @@ fn open_landed_line_lists_collapsed_receipts_with_group_gaps() {
     let snapshot = landed_snapshot();
     let block = body(
         &snapshot,
-        &UiState {
-            view: ViewState {
-                landed_open: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            landed_open: true,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
     );
     let texts = line_texts(&block.lines);
@@ -122,13 +126,11 @@ fn open_landed_line_lists_collapsed_receipts_with_group_gaps() {
         snapshot_to_screen_with_alert_and_ui(
             &snapshot,
             None,
-            &UiState {
-                view: ViewState {
-                    landed_open: true,
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                landed_open: true,
+                ..Default::default()
             },
+            &UiState::default(),
             54,
             42,
         ),
@@ -146,7 +148,9 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
     let pane = group.rows[0].pane.as_ref().unwrap().pane_id.clone();
     let key = group.key.clone();
     snapshot.focused_pane = Some(pane);
-    let focused = line_texts(&body(&snapshot, &UiState::default(), 54).lines).join("\n");
+    let focused =
+        line_texts(&body(&snapshot, &ViewState::default(), &UiState::default(), 54).lines)
+            .join("\n");
     assert!(
         focused.contains("[ ▸ 3 landed ]") && focused.contains("landed-a"),
         "{focused}"
@@ -156,13 +160,11 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
     let expanded = line_texts(
         &body(
             &snapshot,
-            &UiState {
-                view: ViewState {
-                    expanded_groups: BTreeSet::from([key.clone()]),
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                expanded_groups: BTreeSet::from([key.clone()]),
+                ..Default::default()
             },
+            &UiState::default(),
             54,
         )
         .lines,
@@ -185,6 +187,7 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
     );
     let block = scroll_lines(
         &snapshot,
+        &ViewState::default(),
         &UiState::default(),
         &roster,
         &BTreeSet::new(),
@@ -210,13 +213,11 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
         let text = line_texts(
             &body(
                 &snapshot,
-                &UiState {
-                    view: ViewState {
-                        make_up_filter: lens,
-                        ..Default::default()
-                    },
-                    ..UiState::default()
+                &ViewState {
+                    make_up_filter: lens,
+                    ..Default::default()
                 },
+                &UiState::default(),
                 54,
             )
             .lines,
@@ -228,14 +229,12 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
     let text = line_texts(
         &body(
             &snapshot,
-            &UiState {
-                view: ViewState {
-                    make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
-                    landed_open: true,
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                make_up_filter: BodyFilter::Status(AgentStatus::Success).into(),
+                landed_open: true,
+                ..Default::default()
             },
+            &UiState::default(),
             54,
         )
         .lines,
@@ -245,13 +244,11 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
     let text = line_texts(
         &body(
             &snapshot,
-            &UiState {
-                view: ViewState {
-                    search_draft: Some("landed-a".to_owned()),
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                search_draft: Some("landed-a".to_owned()),
+                ..Default::default()
             },
+            &UiState::default(),
             54,
         )
         .lines,
@@ -271,7 +268,15 @@ fn landed_label_keeps_its_width_before_rules_and_trims_only_when_needed() {
         label_width + 1,
         label_width + 2,
     ] {
-        let texts = line_texts(&body(&snapshot, &UiState::default(), inner + 2).lines);
+        let texts = line_texts(
+            &body(
+                &snapshot,
+                &ViewState::default(),
+                &UiState::default(),
+                inner + 2,
+            )
+            .lines,
+        );
         let line = texts
             .iter()
             .find(|line| line.contains('▸'))

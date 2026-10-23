@@ -13,7 +13,7 @@ fn tab_read_dwell_ignores_wall_steps() {
         own_view_is_daemon: false,
     });
     rig.view().current.viewed_panes = vec![own];
-    rig.view().ui.viewing_own_tab = Some(false);
+    rig.view().presentation.viewing_own_tab = Some(false);
     let marks = ReadMarks::load(&rig.runtime);
     let mut clear = ReadClear::default();
     let wall = clock.timestamp();
@@ -60,14 +60,14 @@ fn body_filter_observation_is_not_backdated_to_the_fold() {
         }),
     );
     assert_eq!(
-        rig.view().ui.make_up_filter,
+        rig.view().presentation.make_up_filter,
         filter,
         "an older worker cut cannot undo the filter just loaded"
     );
     {
         let mut guard = rig.view();
         let state = &mut *guard;
-        assert_eq!(state.ui.visible_roster(&state.current).len(), 0);
+        assert_eq!(state.presentation.visible_roster(&state.current).len(), 0);
     }
 }
 
@@ -121,7 +121,7 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
 
     rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
     assert_eq!(
-        rig.view().ui.frame_ms,
+        rig.view().presentation.frame_ms,
         1_000,
         "paint uses scenario elapsed time"
     );
@@ -139,13 +139,13 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         rig.state.last_heartbeat.is_none(),
         "play publishes no heartbeat"
     );
-    assert_eq!(rig.view().ui.selected_pane, Some(target));
+    assert_eq!(rig.view().presentation.selected_pane, Some(target));
     assert!(
         rig.state.clicked_row.is_some(),
         "click reached the focus effect"
     );
     assert_eq!(
-        rig.view().ui.freeze.as_ref().unwrap().armed_ms,
+        rig.view().presentation.freeze.as_ref().unwrap().armed_ms,
         clock.now_ms() as i64
     );
     assert_eq!(clock.focus_calls.load(Ordering::Relaxed), 0);

@@ -6,24 +6,20 @@ fn moving_a_view_keeps_banner_geometry_on_the_pane() {
     fn assert_send(_: &impl Send) {}
 
     let snapshot = overflowing_fleet_with_unread_lead();
-    let mut source = UiState {
-        view: ViewState {
-            selected_index: Some(4),
-            scroll_offset: 8,
-            offset_authoritative: true,
-            ..Default::default()
-        },
+    let mut source = ViewState {
+        selected_index: Some(4),
+        scroll_offset: 8,
+        offset_authoritative: true,
         ..Default::default()
     };
-    let _ = paint_card_row(&snapshot, &mut source, "task-3", 35);
-    assert!(source.banner_shown);
-    assert_send(&source.view);
-    let destination = UiState {
-        view: source.view,
-        ..Default::default()
-    };
+    let mut pane_source = UiState::default();
+    let _ = paint_card_row(&snapshot, &mut source, &mut pane_source, "task-3", 35);
+    assert!(pane_source.banner_shown);
+    assert_send(&source);
+    let _destination = source;
+    let pane_destination = UiState::default();
     assert!(
-        !destination.banner_shown,
+        !pane_destination.banner_shown,
         "the destination has not painted a banner; its geometry cannot come from the source"
     );
 }
@@ -31,19 +27,24 @@ fn moving_a_view_keeps_banner_geometry_on_the_pane() {
 #[test]
 fn a_portable_view_keeps_scroll_zone_relative_anchors_across_geometries() {
     let snapshot = overflowing_fleet();
-    let mut source = UiState {
-        view: ViewState {
-            scroll_offset: 12,
-            offset_authoritative: true,
-            ..Default::default()
-        },
+    let mut source = ViewState {
+        scroll_offset: 12,
+        offset_authoritative: true,
         ..Default::default()
     };
+    let mut pane_source = UiState::default();
     let mut terminal = Terminal::new(TestBackend::new(38, 22)).unwrap();
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut source).unwrap();
+    draw_to_terminal(
+        &mut terminal,
+        &snapshot,
+        None,
+        &mut source,
+        &mut pane_source,
+    )
+    .unwrap();
     assert!(!source.anchored_rows.is_empty());
     for (id, relative) in &source.anchored_rows {
-        let painted = source
+        let painted = pane_source
             .painted_rows
             .iter()
             .find(|(row, _)| row == id)
@@ -51,17 +52,22 @@ fn a_portable_view_keeps_scroll_zone_relative_anchors_across_geometries() {
             .1;
         assert_eq!(
             *relative,
-            painted - source.scroll_zone_top as isize,
+            painted - pane_source.scroll_zone_top as isize,
             "shared anchors are relative to the scroll zone, not the pane"
         );
     }
     let anchor = source.anchored_rows[0].clone();
-    let mut destination = UiState {
-        view: source.view,
-        ..Default::default()
-    };
+    let mut destination = source;
+    let mut pane_destination = UiState::default();
     let mut terminal = Terminal::new(TestBackend::new(54, 22)).unwrap();
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut destination).unwrap();
+    draw_to_terminal(
+        &mut terminal,
+        &snapshot,
+        None,
+        &mut destination,
+        &mut pane_destination,
+    )
+    .unwrap();
     assert_eq!(
         destination
             .anchored_rows
@@ -76,16 +82,14 @@ fn a_portable_view_keeps_scroll_zone_relative_anchors_across_geometries() {
 fn focus_marker_overlays_the_edge_without_moving_cards_or_anchors() {
     let snapshot = overflowing_fleet();
     let theme = Theme::fixed(false);
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(5),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(5),
+        ..Default::default()
     };
-    let plain = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let pane_ui = UiState::default();
+    let plain = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     ui.focus_marker_ready = true;
-    let marked = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let marked = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert!(
         marked
             .interactions
@@ -107,7 +111,7 @@ fn focus_marker_overlays_the_edge_without_moving_cards_or_anchors() {
     assert_eq!(marked.anchored_rows, plain.anchored_rows);
     assert_eq!(marked.top_height, plain.top_height);
     assert_eq!(marked.lines.len(), plain.lines.len());
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     let name = ui.visible_roster(&snapshot).row(5).unwrap().display_name();
     assert!(screen.contains(&format!("↓ {name}")));
     assert_snapshot("offscreen_focus_marker", screen);
@@ -121,16 +125,14 @@ fn unread_banner_suppresses_only_the_up_marker() {
     lead.unread = true;
     let theme = Theme::fixed(false);
     for (selected_index, scroll_offset, marker) in [(0, 99, false), (5, 8, true)] {
-        let ui = UiState {
-            view: ViewState {
-                selected_index: Some(selected_index),
-                scroll_offset,
-                focus_marker_ready: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        let ui = ViewState {
+            selected_index: Some(selected_index),
+            scroll_offset,
+            focus_marker_ready: true,
+            ..Default::default()
         };
-        let frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+        let pane_ui = UiState::default();
+        let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
         assert!(
             frame
                 .interactions
@@ -146,16 +148,14 @@ fn unread_banner_suppresses_only_the_up_marker() {
         );
     }
     snapshot.rows_mut().next().unwrap().unread = false;
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 99,
-            focus_marker_ready: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 99,
+        focus_marker_ready: true,
+        ..Default::default()
     };
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let pane_ui = UiState::default();
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 38, 20);
     let name = ui.visible_roster(&snapshot).row(0).unwrap().display_name();
     assert!(
         screen.contains(&format!("↑ {name}")),
@@ -174,15 +174,13 @@ fn focus_marker_trims_wide_names_without_wrapping_the_frame() {
         .unwrap()
         .handle = Some("多".repeat(100));
     let theme = Theme::fixed(false);
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(5),
-            focus_marker_ready: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(5),
+        focus_marker_ready: true,
+        ..Default::default()
     };
-    let frame = compose_lines(&snapshot, None, &ui, &theme, 16, 20);
+    let pane_ui = UiState::default();
+    let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 16, 20);
     assert!(
         frame
             .interactions
@@ -195,18 +193,16 @@ fn focus_marker_trims_wide_names_without_wrapping_the_frame() {
         .line_for_target(&HitTarget::FocusMarker)
         .unwrap();
     assert!(frame.lines[usize::from(row)].width() <= 16);
-    let unmarked = UiState {
-        view: ViewState {
-            focus_marker_ready: false,
-            ..ui.view.clone()
-        },
+    let unmarked = ViewState {
+        focus_marker_ready: false,
         ..ui.clone()
     };
+    let pane_unmarked = pane_ui.clone();
     assert_eq!(
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 16, 20)
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 16, 20)
             .lines()
             .count(),
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &unmarked, 16, 20)
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &unmarked, &pane_unmarked, 16, 20)
             .lines()
             .count(),
         "the marker never wraps into an extra line"
@@ -249,7 +245,7 @@ fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
     snapshot_with(agents)
 }
 
-fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
+fn select_card(snapshot: &SidebarSnapshot, ui: &mut ViewState, id: &str) {
     ui.freeze = Some(LayoutFreeze {
         frozen: FrozenOrder::default(),
         armed_ms: fixed_now().as_millisecond(),
@@ -263,19 +259,24 @@ fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
 fn shared_placement_preserves_the_sources_expanded_selection() {
     let snapshot = delegation_fleet(&[0]);
     let mut source = selected_ui();
-    let before = paint_card_row(&snapshot, &mut source, "task-1", 45);
-    let mut target = UiState::default();
+    let mut pane_source = UiState::default();
+    let before = paint_card_row(&snapshot, &mut source, &mut pane_source, "task-1", 45);
+    let mut target = ViewState::default();
+    let mut pane_target = UiState::default();
     select_card(&snapshot, &mut target, "codex-1");
     target.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-1",
-            "viewport_row": before as isize - source.scroll_zone_top as isize,
+            "viewport_row": before as isize - pane_source.scroll_zone_top as isize,
             "held": ["codex-0", "codex-1", "departed"],
         }))
         .unwrap(),
     );
 
-    assert_eq!(paint_card_row(&snapshot, &mut target, "task-1", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut target, &mut pane_target, "task-1", 45),
+        before
+    );
     assert_eq!(target.held_expansions, ["codex-0".into()].into());
 }
 
@@ -284,21 +285,26 @@ fn shared_placement_replaces_the_destinations_previous_selection() {
     let mut snapshot = delegation_fleet(&[2]);
     Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows).truncate(4);
     let mut source = selected_ui();
-    let before = paint_card_row(&snapshot, &mut source, "task-3", 45);
-    let mut target = UiState::default();
+    let mut pane_source = UiState::default();
+    let before = paint_card_row(&snapshot, &mut source, &mut pane_source, "task-3", 45);
+    let mut target = ViewState::default();
+    let mut pane_target = UiState::default();
     select_card(&snapshot, &mut target, "codex-2");
-    paint_card_row(&snapshot, &mut target, "task-3", 45);
+    paint_card_row(&snapshot, &mut target, &mut pane_target, "task-3", 45);
     select_card(&snapshot, &mut target, "codex-3");
     target.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-3",
-            "viewport_row": before as isize - source.scroll_zone_top as isize,
+            "viewport_row": before as isize - pane_source.scroll_zone_top as isize,
             "held": ["codex-0"],
         }))
         .unwrap(),
     );
 
-    assert_eq!(paint_card_row(&snapshot, &mut target, "task-3", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut target, &mut pane_target, "task-3", 45),
+        before
+    );
     assert!(!target.held_expansions.contains("codex-2"));
 }
 
@@ -306,20 +312,21 @@ fn shared_placement_replaces_the_destinations_previous_selection() {
 fn shared_placement_with_no_opening_set_overrides_local_holds() {
     let snapshot = delegation_fleet(&[0]);
     let mut target = selected_ui();
-    paint_card_row(&snapshot, &mut target, "task-1", 45);
+    let mut pane_target = UiState::default();
+    paint_card_row(&snapshot, &mut target, &mut pane_target, "task-1", 45);
     select_card(&snapshot, &mut target, "codex-1");
-    let held_row = paint_card_row(&snapshot, &mut target, "task-1", 45);
+    let held_row = paint_card_row(&snapshot, &mut target, &mut pane_target, "task-1", 45);
     assert!(!target.held_expansions.is_empty());
     target.focus_placement = Some(
         serde_json::from_value(serde_json::json!({
             "row_id": "codex-1",
-            "viewport_row": held_row as isize - target.scroll_zone_top as isize,
+            "viewport_row": held_row as isize - pane_target.scroll_zone_top as isize,
             "held": [],
         }))
         .unwrap(),
     );
 
-    paint_card_row(&snapshot, &mut target, "task-1", 45);
+    paint_card_row(&snapshot, &mut target, &mut pane_target, "task-1", 45);
     assert!(target.held_expansions.is_empty());
 }
 
@@ -343,23 +350,21 @@ fn assert_cache_notice_anchor(
             held_since: None,
             rewarm_cost_usd: None,
         });
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: offset,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: offset,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     select_card(&snapshot, &mut ui, "codex-0");
     let task = format!("task-{target}");
-    let before = paint_card_row(&snapshot, &mut ui, &task, 45);
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, &task, 45);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45);
     assert_eq!(screen.contains("cache expired"), expired_cache, "{screen}");
 
     select_card(&snapshot, &mut ui, &format!("codex-{target}"));
-    let after = paint_card_row(&snapshot, &mut ui, &task, 45);
+    let after = paint_card_row(&snapshot, &mut ui, &mut pane_ui, &task, 45);
     assert_eq!(after, before, "cache notice above must not move the click");
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45);
     let keeps_stats = true;
     assert_eq!(
         screen.contains("cache expired"),
@@ -414,24 +419,22 @@ fn cache_notice_anchor_two_cards_without_cache() {
 
 fn assert_collapse_hold(offset: usize, parent: usize, target: usize) {
     let snapshot = delegation_fleet(&[parent]);
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: offset,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: offset,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     select_card(&snapshot, &mut ui, &format!("codex-{parent}"));
     let task = format!("task-{target}");
-    let before = paint_card_row(&snapshot, &mut ui, &task, 45);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, &task, 45);
     select_card(&snapshot, &mut ui, &format!("codex-{target}"));
-    let after = paint_card_row(&snapshot, &mut ui, &task, 45);
+    let after = paint_card_row(&snapshot, &mut ui, &mut pane_ui, &task, 45);
     assert_eq!(
         after, before,
         "previous selection's collapse must not move the click"
     );
-    assert!(!ui.anchor_clamped);
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    assert!(!pane_ui.anchor_clamped);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45);
     assert!(
         screen.contains("survey area"),
         "held entries remain painted: {screen}"
@@ -444,10 +447,14 @@ fn assert_collapse_hold(offset: usize, parent: usize, target: usize) {
 fn collapse_above_at_zero_holds_the_previous_cards_stats() {
     let snapshot = delegation_fleet(&[]);
     let mut ui = selected_ui();
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45);
     assert_eq!(
         screen.matches('▤').count(),
         2,
@@ -478,26 +485,29 @@ fn collapse_below_at_bottom_keeps_clicked_card() {
 #[test]
 fn collapse_with_room_keeps_entries_until_freeze_expires() {
     let snapshot = delegation_fleet(&[0]);
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 10,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 10,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     select_card(&snapshot, &mut ui, "codex-0");
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
     assert!(!ui.held_expansions.is_empty());
     assert!(
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45)
+            .contains("survey area")
     );
     ui.freeze = None;
-    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     assert!(ui.held_expansions.is_empty());
     assert!(
-        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45)
+            .contains("survey area")
     );
 }
 
@@ -505,22 +515,28 @@ fn collapse_with_room_keeps_entries_until_freeze_expires() {
 fn authoritative_wheel_paint_keeps_a_frozen_expansion() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
     ui.scroll_offset += 3;
     ui.offset_authoritative = true;
     ui.scroll_ease.arm();
-    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     assert!(!ui.held_expansions.is_empty());
     assert!(
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45)
+            .contains("survey area")
     );
     ui.freeze = None;
-    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     assert!(ui.held_expansions.is_empty());
     assert!(
-        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45)
+            .contains("survey area")
     );
 }
 
@@ -528,30 +544,38 @@ fn authoritative_wheel_paint_keeps_a_frozen_expansion() {
 fn growth_above_keeps_expansions_until_freeze_expires() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
+    let mut pane_ui = UiState::default();
     ui.delegation_overrides.insert("codex-1".into(), true);
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
     assert_eq!(ui.held_expansions, ["codex-0".into()].into());
     assert!(
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45)
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 45)
             .contains("survey area 0-")
     );
 
     // The already-open card above gains children, making room to collapse.
     let grown = delegation_fleet(&[0, 1]);
     assert!(!ui.offset_authoritative);
-    assert_eq!(paint_card_row(&grown, &mut ui, "task-2", 45), before);
-    assert!(!ui.anchor_clamped);
+    assert_eq!(
+        paint_card_row(&grown, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
+    assert!(!pane_ui.anchor_clamped);
     assert!(!ui.held_expansions.is_empty());
-    let screen = snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, 54, 45);
+    let screen = snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, &pane_ui, 54, 45);
     assert!(screen.contains("survey area 0-"));
     assert!(screen.contains("survey area 1-"));
     ui.freeze = None;
-    paint_card_row(&grown, &mut ui, "task-2", 45);
+    paint_card_row(&grown, &mut ui, &mut pane_ui, "task-2", 45);
     assert!(ui.held_expansions.is_empty());
     assert!(
-        !snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, 54, 45).contains("survey area 0-")
+        !snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, &pane_ui, 54, 45)
+            .contains("survey area 0-")
     );
 }
 
@@ -559,11 +583,15 @@ fn growth_above_keeps_expansions_until_freeze_expires() {
 fn collapse_holds_accumulate_across_clicks_at_the_top() {
     let snapshot = delegation_fleet(&[0, 1]);
     let mut ui = selected_ui();
-    paint_card_row(&snapshot, &mut ui, "task-1", 45);
+    let mut pane_ui = UiState::default();
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-1", 45);
     select_card(&snapshot, &mut ui, "codex-1");
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
     assert_eq!(ui.held_expansions.len(), 2);
 }
 
@@ -572,22 +600,27 @@ fn compact_collapse_at_zero_keeps_the_clicked_card_shape() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
     let mut ui = selected_ui();
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30);
     select_card(&snapshot, &mut ui, &snapshot.rows().nth(2).unwrap().id);
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 30), before);
-    assert!(!ui.anchor_clamped);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30),
+        before
+    );
+    assert!(!pane_ui.anchor_clamped);
 }
 
 #[test]
 fn offscreen_selection_keeps_the_previous_card_and_reveals() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
-    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let mut pane_ui = UiState::default();
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-11");
-    paint_card_row(&snapshot, &mut ui, "task-11", 45);
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-11", 45);
     assert!(!ui.held_expansions.is_empty());
     let theme = Theme::fixed(false);
-    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 200);
+    let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 200);
     assert!(
         composed
             .lines
@@ -595,9 +628,9 @@ fn offscreen_selection_keeps_the_previous_card_and_reveals() {
             .any(|line| line.to_string().contains("survey area"))
     );
     ui.freeze = None;
-    paint_card_row(&snapshot, &mut ui, "task-11", 45);
+    paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-11", 45);
     assert!(ui.held_expansions.is_empty());
-    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 200);
+    let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 200);
     assert!(
         !composed
             .lines
@@ -610,17 +643,27 @@ fn offscreen_selection_keeps_the_previous_card_and_reveals() {
 fn collapse_hold_drops_departed_and_live_selection_ids() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
     ui.held_expansions = ["codex-2".into(), "departed".into()].into();
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
-    assert!(!ui.anchor_clamped);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 45),
+        before
+    );
+    assert!(!pane_ui.anchor_clamped);
     assert_eq!(ui.held_expansions, ["codex-0".into()].into());
 }
 
-fn paint_card_row(snapshot: &SidebarSnapshot, ui: &mut UiState, task: &str, height: u16) -> usize {
+fn paint_card_row(
+    snapshot: &SidebarSnapshot,
+    ui: &mut ViewState,
+    pane_ui: &mut UiState,
+    task: &str,
+    height: u16,
+) -> usize {
     let mut terminal = Terminal::new(TestBackend::new(54, height)).unwrap();
-    draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, None, ui, pane_ui).unwrap();
     (0..height)
         .find(|&y| {
             let text: String = (0..54)
@@ -636,17 +679,15 @@ fn paint_card_row(snapshot: &SidebarSnapshot, ui: &mut UiState, task: &str, heig
 fn accordion_selection_keeps_the_clicked_card_row_with_room_above() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 2,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 2,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30);
     ui.selected_index = Some(2);
-    let after = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    let after = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30);
     assert_eq!(after, before, "collapse above is absorbed by the offset");
 }
 
@@ -659,15 +700,13 @@ fn stale_card_selection_and_threshold_crossing_keep_the_selected_row() {
         row.last_activity = fixed_now() - Duration::from_secs(86401);
         row.unread = false;
     }
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 2,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 2,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "card-2", 30);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "card-2", 30);
     let old = snapshot.rows().nth(2).unwrap();
     let stale_line = group_lines(&snapshot, &Theme::fixed(false), 0)
         .into_iter()
@@ -678,13 +717,16 @@ fn stale_card_selection_and_threshold_crossing_keep_the_selected_row() {
         "the unselected card has shrunk"
     );
     select_card(&snapshot, &mut ui, &old.id);
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "card-2", 30), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "card-2", 30),
+        before
+    );
 
     snapshot.rows_mut().next().unwrap().last_activity = fixed_now() - Duration::from_secs(86400);
-    let before = paint_card_row(&snapshot, &mut ui, "card-2", 30);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "card-2", 30);
     snapshot.now += Duration::from_secs(1);
     assert_eq!(
-        paint_card_row(&snapshot, &mut ui, "card-2", 30),
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "card-2", 30),
         before,
         "shrinking above preserves the selection"
     );
@@ -694,17 +736,15 @@ fn stale_card_selection_and_threshold_crossing_keep_the_selected_row() {
 fn growth_above_an_unchanged_selection_keeps_its_row() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(2),
-            scroll_offset: 2,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(2),
+        scroll_offset: 2,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30);
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    let after = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    let after = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 30);
     assert_eq!(
         after, before,
         "live height changes above do not move the selection"
@@ -716,41 +756,37 @@ fn growth_above_an_unchanged_selection_keeps_its_row() {
 fn shrinking_above_at_the_top_records_the_unavoidable_clamp() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(2),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(2),
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 35);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 35);
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let frame = compose_lines(&snapshot, None, &ui, &Theme::fixed(false), 54, 35);
+    let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &Theme::fixed(false), 54, 35);
     assert!(
         frame.anchor_clamped,
         "shrinking above needs a negative offset"
     );
-    assert!(paint_card_row(&snapshot, &mut ui, "task-2", 35) < before);
+    assert!(paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 35) < before);
 }
 
 #[test]
 fn banner_appearance_and_disappearance_keep_the_card_row() {
     let mut snapshot = overflowing_fleet_with_unread_lead();
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(4),
-            scroll_offset: 8,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(4),
+        scroll_offset: 8,
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-3", 35);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-3", 35);
     let lead = &mut std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0];
     lead.unread = false;
-    let after = paint_card_row(&snapshot, &mut ui, "task-3", 35);
+    let after = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-3", 35);
     assert_eq!(
         after, before,
         "removing the banner preserves absolute pane placement"
@@ -759,18 +795,25 @@ fn banner_appearance_and_disappearance_keep_the_card_row() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .unread = true;
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-3", 35), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-3", 35),
+        before
+    );
 }
 
 #[test]
 fn selecting_a_partially_visible_card_does_not_reveal_it() {
     let snapshot = overflowing_fleet();
-    let mut ui = UiState::default();
-    let _ = paint_card_row(&snapshot, &mut ui, "task-0", 20);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let _ = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-0", 20);
     let offset = ui.scroll_offset;
-    ui.selected_index = ui.interactions.visible_row_span().map(|(_, last)| last);
+    ui.selected_index = pane_ui
+        .interactions
+        .visible_row_span()
+        .map(|(_, last)| last);
     let mut terminal = Terminal::new(TestBackend::new(54, 20)).unwrap();
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert_eq!(
         ui.scroll_offset, offset,
         "even one visible card line prevents reveal"
@@ -781,18 +824,19 @@ fn selecting_a_partially_visible_card_does_not_reveal_it() {
 fn wheel_peek_anchors_the_top_visible_card_not_the_offscreen_selection() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 12,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 12,
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-3", 20);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-3", 20);
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-3", 20), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-3", 20),
+        before
+    );
 }
 
 #[test]
@@ -807,21 +851,20 @@ fn a_departed_anchor_falls_through_to_the_next_placed_card() {
         row.id = format!("tail-{index}");
         rows.push(row);
     }
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 12,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 12,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-4", 26);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-4", 26);
     let survivor = snapshot.worktree_groups[1].rows[1].id.clone();
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows)
         .remove(0);
     let mut terminal = Terminal::new(TestBackend::new(54, 26)).unwrap();
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert_eq!(
-        ui.painted_rows
+        pane_ui
+            .painted_rows
             .iter()
             .find(|(id, _)| id == &survivor)
             .unwrap()
@@ -833,45 +876,47 @@ fn a_departed_anchor_falls_through_to_the_next_placed_card() {
 #[test]
 fn resort_anchors_the_cards_own_line_not_its_new_group_header() {
     let mut snapshot = overflowing_fleet();
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(2),
-            scroll_offset: 7,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(2),
+        scroll_offset: 7,
+        ..Default::default()
     };
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 24);
+    let mut pane_ui = UiState::default();
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 24);
     let rows = std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     );
     let selected = rows.remove(2);
     rows.insert(0, selected);
     ui.selected_index = Some(0);
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 24), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 24),
+        before
+    );
 }
 
 #[test]
 fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(2),
-            scroll_offset: 6,
-            frame_ms: 40,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(2),
+        scroll_offset: 6,
+        frame_ms: 40,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     ui.scroll_ease.observe(2, 0);
     ui.scroll_ease.arm();
     ui.scroll_ease.observe(6, 0);
-    let before = paint_card_row(&snapshot, &mut ui, "task-2", 28);
+    let before = paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 28);
     let remaining = ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms);
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
-    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 28), before);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, &mut pane_ui, "task-2", 28),
+        before
+    );
     assert!(ui.scroll_ease.in_flight());
     assert_eq!(
         ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms),
@@ -883,15 +928,13 @@ fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
 fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let snapshot = overflowing_fleet();
     let theme = Theme::fixed(false);
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 9,
-            frame_ms: 40,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 9,
+        frame_ms: 40,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     ui.scrollbar.observe(0, 0);
     ui.scroll_ease.arm();
     ui.scroll_ease.observe(9, 0);
@@ -900,19 +943,17 @@ fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let expected = compose_lines(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                scroll_offset: visible,
-                scroll_ease: Default::default(),
-                ..ui.view.clone()
-            },
+        &ViewState {
+            scroll_offset: visible,
+            scroll_ease: Default::default(),
             ..ui.clone()
         },
+        &pane_ui.clone(),
         &theme,
         38,
         20,
     );
-    let actual = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let actual = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert_eq!(actual.scroll_offset, 9);
     assert_eq!(actual.lines, expected.lines);
     assert_eq!(actual.interactions, expected.interactions);
@@ -922,23 +963,21 @@ fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
 fn wheel_banner_height_uses_the_target_throughout_the_glide() {
     let snapshot = overflowing_fleet_with_unread_lead();
     let theme = Theme::fixed(false);
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 99,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 99,
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let target_frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let pane_ui = UiState::default();
+    let target_frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     ui.scroll_offset = target_frame.scroll_offset;
     ui.scroll_ease.arm();
-    ui.view.scroll_ease.observe(ui.scroll_offset, 0);
-    let first = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    ui.scroll_ease.observe(ui.scroll_offset, 0);
+    let first = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert_eq!(first.interactions.visible_row_span().unwrap().0, 0);
     for elapsed in [0, 16, 48, 100] {
         ui.frame_ms = elapsed;
-        let frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+        let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
         assert_eq!(frame.top_height, target_frame.top_height);
         assert!(
             frame
@@ -952,17 +991,15 @@ fn wheel_banner_height_uses_the_target_throughout_the_glide() {
 #[test]
 fn selection_follow_cancels_a_flight_even_with_the_same_target() {
     let snapshot = overflowing_fleet();
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 3,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 3,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     ui.scroll_ease.arm();
     ui.scroll_ease.observe(3, 0);
     let mut terminal = Terminal::new(TestBackend::new(38, 20)).unwrap();
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert_eq!(ui.scroll_offset, 3);
     assert!(!ui.scroll_ease.in_flight());
 }
@@ -970,19 +1007,17 @@ fn selection_follow_cancels_a_flight_even_with_the_same_target() {
 #[test]
 fn no_selection_holds_the_clamped_scroll_after_own_input() {
     let snapshot = overflowing_fleet();
-    let mut ui = UiState {
-        view: ViewState {
-            scroll_offset: 4,
-            own_input_reveal: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        scroll_offset: 4,
+        own_input_reveal: true,
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     let theme = Theme::fixed(false);
-    let composed = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let composed = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert_eq!(composed.scroll_offset, 4);
     ui.scroll_offset = usize::MAX;
-    let clamped = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    let clamped = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 38, 20);
     assert!(clamped.scroll_offset < usize::MAX);
 }
 
@@ -1037,14 +1072,12 @@ fn render_scroll_overflow_shows_bar() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                scrollbar: scrolled_fade(0, 0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            scrollbar: scrolled_fade(0, 0),
+            ..Default::default()
         },
+        &UiState::default(),
         38,
         27,
     );
@@ -1072,14 +1105,12 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: true,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         28,
     );
@@ -1114,14 +1145,12 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         snapshot_to_screen_with_alert_and_ui(
             &snapshot,
             None,
-            &UiState {
-                view: ViewState {
-                    selected_index: Some(0),
-                    help_visible: true,
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                selected_index: Some(0),
+                help_visible: true,
+                ..Default::default()
             },
+            &UiState::default(),
             80,
             44,
         ),
@@ -1132,15 +1161,14 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     // Selecting the last row auto-scrolls its card fully into view. The first
     // draw establishes the fade's baseline rather than reading as a move, so
     // this frame doubles as the settled witness: no scroll activity, no bar.
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(5),
-            own_input_reveal: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(5),
+        own_input_reveal: true,
+        ..Default::default()
     };
-    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 29);
+    let pane_ui = UiState::default();
+    let rendered =
+        snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, &pane_ui, 38, 29);
     assert!(
         rendered.contains("task-5"),
         "the selected last card is in view:\n{rendered}"
@@ -1151,7 +1179,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     );
     let mut no_bar = overflowing_fleet();
     no_bar.theme.display.scrollbar = ScrollbarMode::Never;
-    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 29);
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, &pane_ui, 38, 29);
     assert_eq!(
         rendered, expected,
         "a settled viewport carries no scrollbar overlay"
@@ -1192,7 +1220,14 @@ fn render_scroll_pins_tall_expanded_card_top() {
     }
     let snapshot = snapshot_with(agents);
 
-    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 54, 24);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        54,
+        24,
+    );
     // The viewport opens below the pinned cockpit separator, so the card
     // block's first line holds one row lower while the subagent list fills down.
     let lines: Vec<&str> = rendered.lines().collect();
@@ -1213,15 +1248,13 @@ fn render_scroll_manual_offset_holds() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                scroll_offset: 6,
-                offset_authoritative: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            scroll_offset: 6,
+            offset_authoritative: true,
+            ..Default::default()
         },
+        &UiState::default(),
         38,
         28,
     );
@@ -1233,20 +1266,25 @@ fn render_scroll_manual_offset_holds() {
 }
 #[test]
 fn scrollbar_modes_control_visibility_without_moving_the_window() {
-    let settled_ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scrollbar: scrolled_fade(0, 0),
-            animation_phase: 11,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let settled_ui = ViewState {
+        selected_index: Some(0),
+        scrollbar: scrolled_fade(0, 0),
+        animation_phase: 11,
+        ..Default::default()
     };
-    let settled =
-        snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &settled_ui, 38, 21);
+    let pane_settled_ui = UiState::default();
+    let settled = snapshot_to_screen_with_alert_and_ui(
+        &overflowing_fleet(),
+        None,
+        &settled_ui,
+        &pane_settled_ui,
+        38,
+        21,
+    );
     let mut no_bar = overflowing_fleet();
     no_bar.theme.display.scrollbar = ScrollbarMode::Never;
-    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, 38, 21);
+    let expected =
+        snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, &pane_settled_ui, 38, 21);
     assert_eq!(
         settled, expected,
         "the settle window has passed — no scrollbar overlay"
@@ -1254,7 +1292,14 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
 
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.scrollbar = ScrollbarMode::Always;
-    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 38, 21);
+    let always = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        38,
+        21,
+    );
     assert!(
         line_containing(&always, "⑂ alpha").ends_with('▐'),
         "always mode pins the bar with no activity:\n{always}"
@@ -1265,16 +1310,14 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
     let never = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                scroll_offset: 9,
-                offset_authoritative: true,
-                scrollbar: scrolled_fade(9, 0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            scroll_offset: 9,
+            offset_authoritative: true,
+            scrollbar: scrolled_fade(9, 0),
+            ..Default::default()
         },
+        &UiState::default(),
         38,
         18,
     );

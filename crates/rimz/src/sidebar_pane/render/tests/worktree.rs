@@ -45,16 +45,14 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
         .unwrap()
         .id
         .clone();
-    let mut ui = UiState {
-        view: ViewState {
-            make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+        ..Default::default()
     };
+    let pane_ui = UiState::default();
     ui.selected_index = ui.visible_roster(&snapshot).ordinal_of_id(&match_id);
     let theme = Theme::fixed(false);
-    let block = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 40);
+    let block = super::super::compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 40);
     let context = block
         .lines
         .iter()
@@ -69,13 +67,13 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
         .find(|span| span.content == "worker")
         .unwrap();
     assert_eq!(matched.style.fg, Some(theme.provider_brand_tone("claude")));
-    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 40);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 40);
     assert!(
         !screen.contains("context task"),
         "the unselected teammate stays compact: {screen}"
     );
     ui.make_up_filter = BodyLens::default();
-    let unfiltered = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 40);
+    let unfiltered = super::super::compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 40);
     let card_lines = |frame: super::super::compose::ComposedFrame| {
         frame
             .lines
@@ -137,8 +135,14 @@ fn no_selection_opens_no_card_and_draws_no_lane() {
     });
     let mut snapshot = snapshot_with(members.into());
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 18);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &ViewState::default(),
+        &UiState::default(),
+        54,
+        18,
+    );
     assert!(
         !rendered.contains("folded task"),
         "both teammates rest:\n{rendered}"
@@ -407,13 +411,11 @@ fn render_pipeline_folded_stage() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                landed_open: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            landed_open: true,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         20,
     );
@@ -1016,13 +1018,11 @@ fn selecting_named_team_member_keeps_teammates_resting() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(selected_index),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(selected_index),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         32,
     );
@@ -1102,11 +1102,13 @@ fn assert_named_teammates_keep_resting_shape(held: bool) {
             )]);
             std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
                 .push(outside.worktree_groups[0].clone());
-            let mut baseline = UiState::default();
+            let mut baseline = ViewState::default();
+            let pane_baseline = UiState::default();
             baseline.selected_index = baseline.visible_roster(&snapshot).ordinal_of_id("outside");
             let roster = baseline.visible_roster(&snapshot);
             let planner = roster.ordinal_of_id("planner").unwrap();
             let mut ui = baseline.clone();
+            let pane_ui = pane_baseline.clone();
             if held {
                 ui.drawn_selection = Some("planner".into());
                 ui.freeze = Some(LayoutFreeze {
@@ -1116,8 +1118,17 @@ fn assert_named_teammates_keep_resting_shape(held: bool) {
             } else {
                 ui.selected_index = Some(planner);
             }
-            let resting = super::super::compose_lines(&snapshot, None, &baseline, &theme, 54, 80);
-            let selected = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 80);
+            let resting = super::super::compose_lines(
+                &snapshot,
+                None,
+                &baseline,
+                &pane_baseline,
+                &theme,
+                54,
+                80,
+            );
+            let selected =
+                super::super::compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 80);
             let card = |frame: &super::super::compose::ComposedFrame, id: &str| {
                 let ordinal = roster.ordinal_of_id(id).unwrap();
                 frame
@@ -1200,13 +1211,11 @@ fn selecting_inline_cohort_member_expands_only_that_card() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(selected_index),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(selected_index),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         24,
     );
@@ -1656,7 +1665,14 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
         "OSC 8 metadata leaves the badge layout unchanged"
     );
 
-    let bytes = snapshot_to_bytes_with_alert_and_ui(&linked, None, &selected_ui(), 44, 14);
+    let bytes = snapshot_to_bytes_with_alert_and_ui(
+        &linked,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        44,
+        14,
+    );
     let raw = String::from_utf8_lossy(&bytes);
     let url = crate::osc::osc_text(unsafe_url);
     let open_hash = format!("\x1b]8;;{url}\x1b\\#");
@@ -1791,8 +1807,14 @@ fn render_pr_badge_link_and_header_fill_follow_admission() {
         // so the bytes are asserted at a realistic width in
         // `render_pr_badge_is_a_diff_safe_sanitized_hyperlink`.
         let links = group_hyperlinks_at_width(&snapshot, &theme, 0, width);
-        let bytes =
-            snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &selected_ui(), width as u16, 14);
+        let bytes = snapshot_to_bytes_with_alert_and_ui(
+            &snapshot,
+            None,
+            &selected_ui(),
+            &UiState::default(),
+            width as u16,
+            14,
+        );
         let raw = String::from_utf8_lossy(&bytes);
         if width < 16 {
             assert!(links.is_empty(), "no link at width {width}: {links:?}");

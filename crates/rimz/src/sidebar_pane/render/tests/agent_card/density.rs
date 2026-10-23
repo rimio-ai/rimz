@@ -19,7 +19,9 @@ fn fresh_team_keeps_only_the_live_selection_open() {
     );
     for width in [32, 46] {
         let mut ui = selected_ui();
-        let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, width, 24);
+        let pane_ui = UiState::default();
+        let screen =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 24);
         assert_eq!(screen.matches("0%").count(), 1, "{screen}");
         assert_snapshot(&format!("fresh_team_{width}"), screen);
         ui.freeze = Some(LayoutFreeze {
@@ -29,7 +31,8 @@ fn fresh_team_keeps_only_the_live_selection_open() {
         ui.held_expansions
             .insert(snapshot.rows().next().unwrap().id.clone());
         ui.selected_index = Some(1);
-        let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, width, 24);
+        let screen =
+            snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, width, 24);
         assert_eq!(screen.matches("0%").count(), 1, "{screen}");
         assert_snapshot(&format!("fresh_team_held_{width}"), screen);
     }
@@ -269,8 +272,9 @@ fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
     }
     let mut snapshot = snapshot_with(agents);
     snapshot.theme.display.card_density = CardDensityMode::Expanded;
-    let mut ui = UiState::default();
-    let expanded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    let mut ui = ViewState::default();
+    let pane_ui = UiState::default();
+    let expanded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     for handle in ["first", "second"] {
         assert!(
             expanded.contains(&format!("{handle} delegation")),
@@ -286,13 +290,13 @@ fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
         .id
         .clone();
     ui.delegation_overrides.insert(first.clone(), false);
-    let closed = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    let closed = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(!closed.contains("first delegation"), "{closed}");
     assert!(closed.contains("second delegation"), "{closed}");
 
     snapshot.theme.display.card_density = CardDensityMode::Auto;
     ui.delegation_overrides.insert(first, true);
-    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 32);
+    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 32);
     assert!(opened.contains("first delegation"), "{opened}");
     assert!(!opened.contains("second delegation"), "{opened}");
 }
@@ -353,13 +357,11 @@ fn compact_density_trims_resting_cards_by_status() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(6),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(6),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         31,
     );
@@ -425,13 +427,11 @@ fn compact_density_running_waiting_render_placeholder_meter() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(2),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(2),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         25,
     );
@@ -484,13 +484,11 @@ fn compact_density_selected_card_opens_to_full_form() {
     let resting = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(usize::MAX),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(usize::MAX),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         21,
     );
@@ -502,13 +500,11 @@ fn compact_density_selected_card_opens_to_full_form() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         21,
     );
@@ -564,7 +560,14 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     child.last_activity = fixed_now() - Duration::from_secs(60);
 
     let mut snapshot = snapshot_with(vec![parent, selected, child]);
-    let resting = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 54, 25);
+    let resting = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &selected_ui(),
+        &UiState::default(),
+        54,
+        25,
+    );
     let stats_count = |screen: &str| {
         screen
             .lines()
@@ -581,13 +584,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         25,
     );
@@ -635,19 +636,17 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     parent.sub_agents.push(older);
     parent.sub_agent_count += 1;
     let turn = parent.user_turn_started_at;
-    let mut ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
-    let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
+    let pane_ui = UiState::default();
+    let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 31);
     assert!(folded.contains("map the render path"));
     assert!(folded.contains("+1 older"));
     assert!(!folded.contains("previous render audit"));
     ui.delegation_history.insert(row_id, turn);
-    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
+    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 31);
     assert!(opened.contains("previous render audit"));
     assert!(!opened.contains("+1 older"));
 }
