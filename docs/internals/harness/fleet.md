@@ -91,8 +91,8 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) | The one `<system_reminder>` tag: paragraph order and the model fragment. |
 | [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | A team member's identity sentence, launch-time run state, and channel rule. |
 | [`runtime_env.rs`](../../../crates/rimz/src/harness/runtime_env.rs) | The Environment block sampled at prompt submit. |
-| [`headless.rs`](../../../crates/rimz/src/harness/headless.rs) | Profile resolution, launch preparation, and execution for headless loop checks and workflow judges. See [loops.md](./loops.md). |
-| [`hook_drain.rs`](../../../crates/rimz/src/harness/hook_drain.rs) | The elected hook drainer and the socket leases sandboxed wrappers hold. See [loops.md](./loops.md). |
+| [`headless.rs`](../../../crates/rimz/src/harness/headless.rs) | Profile resolution, launch preparation, and execution for headless loop checks and workflow judges. See [loops.md § Guard chains](./loops.md#guard-chains). |
+| [`hook_drain.rs`](../../../crates/rimz/src/harness/hook_drain.rs) | The elected hook drainer and the socket leases sandboxed wrappers hold. See [adapter.md § The feed](../agents/adapter.md#the-feed). |
 | [`scratch.rs`](../../../crates/rimz/src/harness/scratch.rs), [`board.rs`](../../../crates/rimz/src/harness/board.rs) | Team memory-file scan, the advisory `.rimz/team/blackboard.md` stage parser, and locked board writes. See [teams.md](./teams.md). |
 | [`team_notes.rs`](../../../crates/rimz/src/harness/team_notes.rs) | Locked archive-run and checkout-link registration before fresh launch, cohort resume, or place-first restore. See [teams.md](./teams.md#scratch-files). |
 | [`team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) | `rimz teams flip`: locked board edits, the durable `team.stage` signal, owner delivery, and hand-off compaction. See [teams.md](./teams.md). |
