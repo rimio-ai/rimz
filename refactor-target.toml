@@ -254,7 +254,8 @@ upward-dependencies = ["address"]
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
 # AgentState::fast_mode shares live-over-launch truth with the CLI and sidebar projection (+1).
 # expects_usage_reading and its re-export share per-login quota expectations with the CLI (+2).
-surface-budget = 1126
+# BirthLoginErr::repair shares structured account repair text with the overview (+1).
+surface-budget = 1127
 
 [[verdict]]
 kind = "item"

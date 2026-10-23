@@ -150,6 +150,7 @@ fn plan_prefers_setup_problems_to_lapsed_entitlement_and_problems_are_last() {
     rows[1].status = AccountStatus::HooksUntrusted;
     rows[1].entitlement = Entitlement::Lapsed { since_ms: 100 };
     rows[1].problem = Some("trust the hooks first".to_owned());
+    rows[1].setup_error = None;
     let text = text(
         &rows,
         &[("claude", Deciding::Room), ("codex", Deciding::Machine)],
@@ -165,7 +166,7 @@ fn plan_prefers_setup_problems_to_lapsed_entitlement_and_problems_are_last() {
         text.lines()
             .rev()
             .take_while(|line| !line.is_empty())
-            .any(|line| line == "trust the hooks first"),
+            .any(|line| line.ends_with("trust the hooks first")),
         "{text}"
     );
 }
@@ -406,7 +407,6 @@ fn rows_at(
     .filter(|row| matches!(row.kind.as_str(), "claude" | "codex"))
     .map(|mut row| {
         row.installed = true;
-        row.expanded = true;
         row
     })
     .collect()
@@ -428,6 +428,7 @@ fn text(rows: &[AccountRow], deciding: &[(&str, Deciding)], _width: Option<usize
         jiff::Timestamp::from_second(1_700_000_000).unwrap(),
         &jiff::tz::TimeZone::UTC,
         &deciding,
+        true,
     )
     .unwrap();
     String::from_utf8(stream.into_inner()).unwrap()
@@ -489,6 +490,7 @@ fn lapsed_entitlement_preserves_setup_repairs() {
         let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
         row.status = status;
         row.problem = Some("fix the account setup first".to_owned());
+        row.setup_error = None;
         row.read(Some(&reading), || unreachable!("not a logout"));
         assert_eq!(row.status, status);
         assert_eq!(row.problem.as_deref(), Some("fix the account setup first"));
@@ -648,7 +650,9 @@ fn list_marks_unknown_agent_counts_and_undeclared_selections() {
 }
 #[test]
 fn markers_and_legend_name_the_layer_that_decides() {
-    let machine = machine("[claude.alpha]\nhome = '/srv/alpha'\n[use]\nclaude = 'alpha'\n");
+    let machine = machine(
+        "[claude.alpha]\nhome = '/srv/alpha'\n[codex.work]\nhome = '/srv/work'\n[use]\nclaude = 'alpha'\n",
+    );
     let standing = AccountStanding::machine_only(&machine);
     let mut rows = rows_at(&machine, &standing, None, &BTreeMap::new());
     for row in &mut rows {

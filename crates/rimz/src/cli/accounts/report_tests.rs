@@ -51,9 +51,6 @@ fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
         &BTreeMap::new(),
     );
     rows.retain(|row| matches!(row.kind.as_str(), "claude" | "codex"));
-    for row in &mut rows {
-        row.expanded = true;
-    }
     let mut out = anstream::StripStream::new(Vec::new());
     write_overview(
         &mut out,
@@ -61,6 +58,7 @@ fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
         Timestamp::UNIX_EPOCH,
         &TimeZone::UTC,
         &BTreeMap::new(),
+        true,
     )
     .unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
@@ -80,6 +78,7 @@ fn account_labels_have_a_conditional_column_detail_row_and_nullable_json() {
         Timestamp::UNIX_EPOCH,
         &TimeZone::UTC,
         &BTreeMap::new(),
+        &multiple_account_kinds(&rows),
     )
     .unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
@@ -116,6 +115,8 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             label: None,
             machine_default: report.default_for.contains(Scope::NewRooms),
             problem: None,
+            setup_error: None,
+            login_command: None,
             status: AccountStatus::Ready,
             entitlement: report.entitlement,
             active: report.active,
@@ -140,7 +141,6 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             spending: report.spending.clone(),
             day_budget: report.day_budget,
             installed: report.installed,
-            expanded: report.expanded,
             legacy_spend_step: report.spend_step,
         })
         .collect()
@@ -160,7 +160,15 @@ fn write_pretty(
     now: Timestamp,
     time_zone: &TimeZone,
 ) -> std::io::Result<()> {
-    super::write_pretty(out, &merged(reports), now, time_zone, &BTreeMap::new())
+    let rows = merged(reports);
+    super::write_pretty(
+        out,
+        &rows,
+        now,
+        time_zone,
+        &BTreeMap::new(),
+        &multiple_account_kinds(&rows),
+    )
 }
 
 fn assemble_reports(
@@ -169,7 +177,6 @@ fn assemble_reports(
     panels: BTreeMap<LoginKey, SidebarProviderPanel>,
     spending: &ProviderSpendingCache,
     filter: Option<&str>,
-    all: bool,
 ) -> Vec<ProviderReport> {
     super::assemble_reports(
         logins,
@@ -177,7 +184,6 @@ fn assemble_reports(
         panels,
         spending,
         filter,
-        all,
         &ReportContext {
             day_cutoff_secs: None,
             config: &MachineConfig::default(),
@@ -289,6 +295,7 @@ fn detail_includes_the_account_home_without_a_pace_legend() {
         Timestamp::UNIX_EPOCH,
         &TimeZone::UTC,
         &BTreeMap::new(),
+        &multiple_account_kinds(&reports),
     )
     .unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
@@ -316,7 +323,7 @@ fn lapsed_provider_report_does_not_restore_the_cached_plan() {
         &reports,
         Timestamp::from_second(1_700_000_000).unwrap(),
         &BTreeMap::new(),
-        false,
+        true,
     );
     assert!(text.contains("lapsed"));
     assert!(!text.contains("Claude Pro"));
@@ -331,6 +338,7 @@ fn lapsed_provider_report_does_not_restore_the_cached_plan() {
         Timestamp::UNIX_EPOCH,
         &TimeZone::UTC,
         &BTreeMap::new(),
+        &multiple_account_kinds(&rows),
     )
     .unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
@@ -389,7 +397,7 @@ fn default_panels(panels: Vec<SidebarProviderPanel>) -> BTreeMap<LoginKey, Sideb
 }
 
 #[test]
-fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
+fn report_assembly_covers_auth_states_raw_accounts_and_filters() {
     let accounts = account_fixture();
     let mut spending = ProviderSpendingCache::default();
     spending.spending.by_provider.insert(
@@ -409,7 +417,6 @@ fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
         default_panels(vec![panel("claude")]),
         &spending,
         None,
-        false,
     );
 
     assert_eq!(
@@ -439,42 +446,18 @@ fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
         BTreeMap::new(),
         &spending,
         Some("pi"),
-        false,
     );
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].kind, "pi");
-    assert_eq!(
-        assemble_reports(
-            &default_logins(),
-            &accounts,
-            BTreeMap::new(),
-            &spending,
-            Some("codex"),
-            false
-        )
-        .len(),
-        1
-    );
     let logged_out = assemble_reports(
         &default_logins(),
         &accounts,
         BTreeMap::new(),
         &spending,
         Some("codex"),
-        true,
     );
     assert_eq!(logged_out.len(), 1);
     assert_eq!(logged_out[0].status, ProviderStatus::LoggedOut);
-
-    let all = assemble_reports(
-        &default_logins(),
-        &accounts,
-        BTreeMap::new(),
-        &spending,
-        None,
-        true,
-    );
-    assert_eq!(all.len(), rimz::agents::known_kinds().count());
 }
 
 fn week(usd: f64) -> SpendTally {
@@ -518,7 +501,6 @@ fn undeclared_or_unread_selections_mark_no_report_active() {
             BTreeMap::new(),
             &ProviderSpendingCache::default(),
             None,
-            true,
         );
         mark_standing(&mut reports, &standing);
         assert!(reports.iter().all(|report| !report.active), "{standing:?}");
@@ -558,8 +540,7 @@ fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
         .spending
         .by_login
         .insert(logins[1].key(), week(12.0));
-    let mut reports =
-        assemble_reports(&logins, &accounts, panels, &spending, Some("claude"), false);
+    let mut reports = assemble_reports(&logins, &accounts, panels, &spending, Some("claude"));
     assert_eq!(
         reports
             .iter()
@@ -591,6 +572,7 @@ fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
         Timestamp::from_second(1).unwrap(),
         &TimeZone::UTC,
         &BTreeMap::from([(AgentKind::new_unchecked("claude"), Deciding::Machine)]),
+        &multiple_account_kinds(&merged(&reports)),
     )
     .unwrap();
     let pretty = String::from_utf8(out.into_inner()).unwrap();
@@ -605,7 +587,6 @@ fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
-        false,
     );
     assert_eq!(
         unprobed
@@ -631,7 +612,7 @@ fn overview(
     reports: &[ProviderReport],
     now: Timestamp,
     deciding: &BTreeMap<String, Deciding>,
-    _in_room: bool,
+    all: bool,
 ) -> String {
     let mut out = anstream::StripStream::new(Vec::new());
     write_overview(
@@ -643,6 +624,7 @@ fn overview(
             .iter()
             .map(|(kind, source)| (AgentKind::new_unchecked(kind), *source))
             .collect(),
+        all,
     )
     .unwrap();
     String::from_utf8(out.into_inner()).unwrap()
@@ -677,7 +659,6 @@ fn group(kind: &str, rows: Vec<(&str, SidebarProviderPanel)>) -> Vec<ProviderRep
         panels,
         &ProviderSpendingCache::default(),
         None,
-        false,
     )
 }
 
@@ -690,7 +671,7 @@ fn cells(line: &str) -> Vec<&str> {
 }
 
 #[test]
-fn overview_renders_every_kind_as_one_table() {
+fn overview_keeps_account_choices_and_collects_single_logins() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let claude = AgentKind::new_unchecked("claude");
     let named = |name: &str| {
@@ -763,7 +744,7 @@ fn overview_renders_every_kind_as_one_table() {
         .spending
         .by_login
         .insert(logins[2].key(), week(12.0));
-    let mut reports = assemble_reports(&logins, &accounts, panels, &spending, None, false);
+    let mut reports = assemble_reports(&logins, &accounts, panels, &spending, None);
     mark_standing(
         &mut reports,
         &AccountStanding::machine_only(&machine_using("claude", "work")),
@@ -805,7 +786,13 @@ fn overview_renders_every_kind_as_one_table() {
         lines.iter().all(|line| line.trim_end() == *line),
         "{text:?}"
     );
-    assert!(text.contains("Pi · v1.2.3"), "{text}");
+    assert!(text.contains("Other providers\n"), "{text}");
+    assert!(
+        text.lines().any(|line| line.trim_start().starts_with("Pi ")
+            && line.contains("Openai Oauth")
+            && line.ends_with("v1.2.3")),
+        "{text}"
+    );
     assert!(text.contains("default"), "{text}");
     assert_eq!(
         text.matches("● next launch from here (this room)").count(),
@@ -814,6 +801,368 @@ fn overview_renders_every_kind_as_one_table() {
     );
     assert!(!text.contains('○'), "{text}");
     insta::assert_snapshot!("provider_overview", text);
+}
+
+#[test]
+fn overview_separates_readings_healthy_logins_and_unchecked_providers() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let mut reading = panel("copilot");
+    reading.windows = vec![window(60, 30, Some(1_800), now)];
+    let mut reports = group("copilot", vec![("default", reading)]);
+    reports[0].active = true;
+    let mut other_panel = panel("opencode");
+    other_panel.spending = Some(std::sync::Arc::new(week(1.25)));
+    let mut other = group("opencode", vec![("default", other_panel)]);
+    other[0].sub_provider = Some("openai".to_owned());
+    other[0].agents = Some(2);
+    reports.extend(other);
+    for kind in [
+        "grok",
+        "qwen",
+        "antigravity",
+        "pi",
+        "claude",
+        "muse",
+        "kiro",
+        "droid",
+    ] {
+        let mut rows = group(kind, vec![("default", panel(kind))]);
+        match kind {
+            "grok" => {
+                rows[0].plan_label = None;
+                rows[0].version = None;
+            }
+            "qwen" | "antigravity" => {
+                rows[0].status = ProviderStatus::Unavailable;
+                rows[0].probe_error = Some("account source unavailable".to_owned());
+            }
+            "pi" => rows[0].status = ProviderStatus::Unavailable,
+            "claude" => {
+                rows[0].status = ProviderStatus::Unavailable;
+                rows[0].probed_at = None;
+            }
+            "droid" => rows[0].installed = false,
+            _ => {}
+        }
+        reports.extend(rows);
+    }
+    let text = overview(&reports, now, &BTreeMap::new(), false);
+    assert!(text.contains("Other providers"), "{text}");
+    assert!(
+        text.lines().any(|line| line.starts_with("   NAME")),
+        "{text}"
+    );
+    let header = text.lines().find(|line| line.contains("PROVIDER")).unwrap();
+    assert_eq!(
+        cells(header),
+        [
+            "PROVIDER", "LOGIN", "READING", "AGENTS", "SPEND 7d", "VERSION"
+        ]
+    );
+    assert!(text.contains("never read"), "{text}");
+    assert!(text.contains("$1.25"), "{text}");
+    assert!(
+        text.contains("antigravity, qwen (login read failed: account source unavailable)"),
+        "{text}"
+    );
+    let unchecked = text
+        .lines()
+        .find(|line| line.starts_with("Not checked,"))
+        .unwrap();
+    assert!(
+        unchecked.ends_with(
+            "pi (login read failed) · claude (not probed yet) · kiro, muse (no login check)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("droid"), "{text}");
+    assert!(!text.contains('●') && !text.contains('○'), "{text}");
+    assert!(
+        !text.contains("\n\n\n") && !text.ends_with("\n\n"),
+        "{text:?}"
+    );
+    let other_section = text.split("Other providers\n").nth(1).unwrap();
+    assert!(!other_section.contains("\n\nNot checked"), "{text}");
+    let grok = other_section
+        .lines()
+        .find(|line| line.trim_start().starts_with("Grok "))
+        .unwrap();
+    assert!(grok.contains("logged in") && grok.ends_with('–'), "{text}");
+    let all = overview(&reports, now, &BTreeMap::new(), true);
+    let other = all.split("Other providers\n").nth(1).expect(&all);
+    for state in [
+        "probe failed",
+        "not probed",
+        "no login check",
+        "not installed",
+    ] {
+        assert!(other.contains(state), "{all}");
+    }
+    assert!(other.contains("Droid"), "{all}");
+    assert!(!all.contains("Not checked"), "{all}");
+}
+
+#[test]
+fn only_multiple_accounts_contribute_markers_and_the_legend() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let mut reports = group(
+        "codex",
+        vec![("default", panel("codex")), ("work", panel("codex"))],
+    );
+    reports[0].active = true;
+    let mut single = group("copilot", vec![("default", panel("copilot"))]);
+    single[0].active = true;
+    single[0].windows = vec![window(60, 30, Some(1_800), now)];
+    reports.extend(single.clone());
+    let deciding = BTreeMap::from([
+        ("codex".to_owned(), Deciding::Room),
+        ("copilot".to_owned(), Deciding::Machine),
+    ]);
+    let text = overview(&reports, now, &deciding, true);
+    assert!(
+        text.contains("● next launch from here (this room)"),
+        "{text}"
+    );
+    assert_eq!(text.matches('●').count(), 2, "{text}");
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(&mut out, &single, now, &TimeZone::UTC).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(!text.contains('●') && !text.contains('○'), "{text}");
+    assert!(!text.contains("next launch"), "{text}");
+}
+
+#[test]
+fn a_single_login_earns_a_table_for_credits_but_not_for_logged_out_cache() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    for reset in [false, true] {
+        let mut reports = group("cursor", vec![("default", panel("cursor"))]);
+        if reset {
+            reports[0].reset_credits = Some(ResetCredits {
+                count: 1,
+                soonest_expiry: None,
+                expiries: Vec::new(),
+                effect: rimz::agents::RedeemEffect::KeepsSchedule,
+            });
+        } else {
+            reports[0].extra_credits = Some(ExtraCredits::Disabled);
+        }
+        let text = overview(&reports, now, &BTreeMap::new(), false);
+        assert!(
+            text.lines().any(|line| line.starts_with("   NAME")),
+            "{text}"
+        );
+        assert!(!text.contains("Other providers"), "{text}");
+        reports[0].status = ProviderStatus::LoggedOut;
+        let text = overview(&reports, now, &BTreeMap::new(), false);
+        assert!(
+            !text.contains("NAME") && !text.contains("Other providers"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn rounded_zero_heading_spend_has_no_tally_or_pool_members() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    for usd in [0.0, 0.001] {
+        let mut default = panel("claude");
+        default.spending = Some(std::sync::Arc::new(week(usd)));
+        let mut reports = group(
+            "claude",
+            vec![("default", default), ("work", panel("claude"))],
+        );
+        reports[1].pool = reports[0].pool.clone();
+        for standalone in [false, true] {
+            if standalone {
+                reports[1].pool = reports[1].account.clone();
+            }
+            let text = overview(&reports, now, &BTreeMap::new(), false);
+            assert!(
+                !text.contains("spent in 7d") && !text.contains("shared by"),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn needs_you_orders_structured_repairs_and_keeps_detail_problems() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let row = |kind: &str, name: &str| merged(&group(kind, vec![(name, panel(kind))])).remove(0);
+    let mut kimi = row("kimi", "default");
+    kimi.read(
+        Some(&LoginReading {
+            status: ProviderStatus::LoggedOut,
+            ..super::logged_in(Vec::new())
+        }),
+        || "kimi".to_owned(),
+    );
+    let mut pi = row("pi", "default");
+    pi.read(
+        Some(&LoginReading {
+            entitlement: Entitlement::Lapsed { since_ms: 100 },
+            ..super::logged_in(Vec::new())
+        }),
+        String::new,
+    );
+    let mut rows = vec![kimi, pi];
+    for (kind, name, error) in [
+        (
+            "hermes",
+            "default",
+            BirthLoginErr::HooksUntrusted {
+                kind: AgentKind::new_unchecked("hermes"),
+                name: LoginName::default_login(),
+                home: Box::new("/home/u/.hermes".into()),
+                env_key: None,
+                hooks: "rimz-start, rimz-stop".into(),
+                fix: "launch hermes in a terminal and answer y to each RimZ hook prompt".into(),
+                choice: None,
+            },
+        ),
+        (
+            "codex",
+            "gone",
+            BirthLoginErr::MachineUnknown {
+                kind: AgentKind::new_unchecked("codex"),
+                name: "gone".parse().unwrap(),
+                configured: Vec::new(),
+                path: "/home/u/.rimz/config.toml".into(),
+            },
+        ),
+        (
+            "codex",
+            "work",
+            BirthLoginErr::MissingHome {
+                kind: AgentKind::new_unchecked("codex"),
+                name: "work".parse().unwrap(),
+                home: "/accounts/work".into(),
+            },
+        ),
+        (
+            "claude",
+            "default",
+            BirthLoginErr::HooksMissing {
+                kind: AgentKind::new_unchecked("claude"),
+                name: LoginName::default_login(),
+                home: "/home/u/.claude".into(),
+            },
+        ),
+        (
+            "claude",
+            "off",
+            BirthLoginErr::HooksDisabled {
+                kind: AgentKind::new_unchecked("claude"),
+                name: "off".parse().unwrap(),
+                reason: "all hooks disabled".into(),
+                fix: "enable hooks".into(),
+            },
+        ),
+        (
+            "claude",
+            "trust",
+            BirthLoginErr::HooksUntrusted {
+                kind: AgentKind::new_unchecked("claude"),
+                name: "trust".parse().unwrap(),
+                home: Box::new("/accounts/trust".into()),
+                env_key: Some("CLAUDE_CONFIG_DIR"),
+                hooks: "start-hook".into(),
+                fix: "trust hooks".into(),
+                choice: None,
+            },
+        ),
+    ] {
+        let mut row = row(kind, name);
+        row.status = AccountStatus::of(Some(&error));
+        row.problem = Some(error.to_string());
+        row.setup_error = Some(error);
+        rows.push(row);
+    }
+    let mut absent = row("omp", "default");
+    absent.read(
+        Some(&LoginReading {
+            status: ProviderStatus::LoggedOut,
+            ..super::logged_in(Vec::new())
+        }),
+        || "omp".to_owned(),
+    );
+    absent.installed = false;
+    rows.push(absent);
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_overview(
+        &mut out,
+        &rows,
+        now,
+        &TimeZone::UTC,
+        &BTreeMap::new(),
+        false,
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.contains("Needs you\n"), "{text}");
+    let needs = text.split("Needs you\n").nth(1).expect(&text);
+    let lines = needs.lines().collect::<Vec<_>>();
+    let position = |kind| {
+        lines
+            .iter()
+            .position(|line| line.trim_start().starts_with(kind))
+            .unwrap()
+    };
+    assert!(
+        position("hermes") < position("pi") && position("pi") < position("kimi"),
+        "{text}"
+    );
+    let hermes = lines[position("hermes")];
+    assert_eq!(
+        cells(hermes),
+        [
+            "hermes",
+            "hooks untrusted",
+            "launch hermes in a terminal and answer y to each RimZ hook prompt"
+        ]
+    );
+    assert!(!hermes.contains("rimz-start"), "{text}");
+    assert!(needs.contains("run rimz accounts add codex work"), "{text}");
+    assert!(needs.contains("codex@work"), "{text}");
+    assert!(needs.contains("run rimz hooks install claude"), "{text}");
+    assert!(needs.contains("enable hooks"), "{text}");
+    assert!(
+        needs.contains("trust hooks, started as `CLAUDE_CONFIG_DIR=/accounts/trust claude`"),
+        "{text}"
+    );
+    assert!(needs.contains("no Pi access"), "{text}");
+    assert!(needs.contains("log in once: kimi"), "{text}");
+    let unavailable = rows
+        .iter()
+        .find(|row| row.account.to_string() == "codex@gone")
+        .unwrap();
+    assert!(
+        needs.contains(unavailable.problem.as_deref().unwrap()),
+        "{text}"
+    );
+    assert!(
+        !needs
+            .lines()
+            .any(|line| line.trim_start().starts_with("omp ")),
+        "{text}"
+    );
+    assert!(!text.ends_with("\n\n"), "{text:?}");
+    let hermes = rows
+        .iter()
+        .find(|row| row.kind.as_str() == "hermes")
+        .unwrap();
+    let mut out = anstream::StripStream::new(Vec::new());
+    super::write_pretty(
+        &mut out,
+        std::slice::from_ref(hermes),
+        now,
+        &TimeZone::UTC,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.contains("rimz-start, rimz-stop"), "{text}");
 }
 
 #[test]
@@ -870,6 +1219,7 @@ fn table_window_cells_show_what_is_left() {
         now,
         &TimeZone::UTC,
         &BTreeMap::new(),
+        false,
     )
     .unwrap();
     let raw = String::from_utf8(raw).unwrap();
@@ -1025,7 +1375,6 @@ fn provider_contract_names_pool_and_separates_today_from_headline() {
         default_panels(vec![panel]),
         &spending,
         Some("claude"),
-        false,
     );
     let json = serde_json::to_value(&reports).unwrap();
     assert_eq!(json[0]["account"], "claude@default");
@@ -1038,7 +1387,7 @@ fn provider_contract_names_pool_and_separates_today_from_headline() {
 }
 
 #[test]
-fn empty_named_kind_is_reported_and_overview_folds_unlogged_kinds() {
+fn unprobed_kinds_are_grouped_without_earning_own_tables() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let reports = assemble_reports(
         &default_logins(),
@@ -1046,7 +1395,6 @@ fn empty_named_kind_is_reported_and_overview_folds_unlogged_kinds() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         Some("kiro"),
-        false,
     );
     assert_eq!(reports.len(), 1);
     let reports = assemble_reports(
@@ -1055,30 +1403,35 @@ fn empty_named_kind_is_reported_and_overview_folds_unlogged_kinds() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
-        false,
     );
     let text = overview(&reports, now, &BTreeMap::new(), false);
-    assert!(text.contains("Also:"), "{text}");
+    assert!(text.starts_with("Not checked, launches proceed:"), "{text}");
     assert!(text.contains("kiro"), "{text}");
+    assert!(!text.contains("NAME"), "{text}");
 }
 
 #[test]
-fn logged_out_kind_with_spend_history_folds_into_also() {
+fn logged_out_kind_with_spend_history_still_shows_its_login_fix() {
     let login = ProviderLogin::default_for(AgentKind::new_unchecked("claude"));
     let accounts = AccountsCache {
         logins: BTreeMap::from([(login.key(), record(1_000, true, None))]),
     };
     let mut spending = ProviderSpendingCache::default();
     spending.spending.by_login.insert(login.key(), week(123.0));
-    let reports = assemble_reports(&[login], &accounts, BTreeMap::new(), &spending, None, false);
+    let reports = assemble_reports(&[login], &accounts, BTreeMap::new(), &spending, None);
     assert_eq!(reports[0].spending.as_ref().unwrap().week.usd, 123.0);
-    let text = overview(
-        &reports,
-        Timestamp::from_second(1).unwrap(),
-        &BTreeMap::new(),
-        false,
+    let mut rows = merged(&reports);
+    rows[0].read(
+        Some(&LoginReading {
+            status: ProviderStatus::LoggedOut,
+            ..super::logged_in(Vec::new())
+        }),
+        || "claude".to_owned(),
     );
-    assert!(text.contains("Also: claude logged out"), "{text}");
+    let text = super::text(&rows, &[], None);
+    assert!(text.contains("Needs you\n"), "{text}");
+    assert!(text.contains("log in once: claude"), "{text}");
+    assert!(!text.contains("NAME"), "{text}");
     assert!(!text.contains("spent in 7d"), "{text}");
 }
 
@@ -1136,7 +1489,7 @@ fn shared_pool_spend_appears_once_with_standalone_spend_in_its_row() {
         .spending
         .by_login
         .insert("claude@solo".parse().unwrap(), week(17.0));
-    let reports = assemble_reports(&logins, &accounts, BTreeMap::new(), &spending, None, false);
+    let reports = assemble_reports(&logins, &accounts, BTreeMap::new(), &spending, None);
     let text = overview(
         &reports,
         Timestamp::from_second(1_700_000_000).unwrap(),
@@ -1208,9 +1561,8 @@ fn failed_probe_and_missing_readings_have_reasons() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         Some("claude"),
-        true,
     );
-    let text = overview(&reports, now, &BTreeMap::new(), false);
+    let text = overview(&reports, now, &BTreeMap::new(), true);
     assert!(text.contains("probe failed"), "{text}");
     assert!(text.contains("never read"), "{text}");
     assert_eq!(
@@ -1270,7 +1622,6 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
             BTreeMap::new(),
             spending,
             None,
-            true,
             &context,
         ))
         .unwrap()
@@ -1296,7 +1647,7 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
 }
 
 #[test]
-fn absent_binary_folds_and_all_expands_with_the_plan_precedence() {
+fn absent_binary_is_hidden_unless_all_lists_its_login_state() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let logins = [ProviderLogin::default_for(AgentKind::new_unchecked("kiro"))];
     let accounts = AccountsCache {
@@ -1317,22 +1668,17 @@ fn absent_binary_folds_and_all_expands_with_the_plan_precedence() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
-        false,
-        &context,
-    );
-    assert!(overview(&reports, now, &BTreeMap::new(), false).contains("Also: kiro not installed"));
-    let reports = super::assemble_reports(
-        &logins,
-        &accounts,
-        BTreeMap::new(),
-        &ProviderSpendingCache::default(),
-        None,
-        true,
         &context,
     );
     let text = overview(&reports, now, &BTreeMap::new(), false);
+    assert!(text.contains("No provider is set up here"), "{text}");
+    assert!(!text.contains("kiro"), "{text}");
+    let text = overview(&reports, now, &BTreeMap::new(), true);
     assert!(
-        text.contains("NAME") && text.contains("not installed") && !text.contains("Also:"),
+        text.contains("Other providers")
+            && text.contains("not installed")
+            && !text.contains("NAME")
+            && !text.contains("Not checked"),
         "{text}"
     );
     let reports = assemble_reports(
@@ -1341,7 +1687,6 @@ fn absent_binary_folds_and_all_expands_with_the_plan_precedence() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
-        true,
     );
     let text = overview(&reports, now, &BTreeMap::new(), false);
     assert!(
@@ -1354,7 +1699,6 @@ fn absent_binary_folds_and_all_expands_with_the_plan_precedence() {
         BTreeMap::new(),
         &ProviderSpendingCache::default(),
         None,
-        true,
     );
     let text = overview(&reports, now, &BTreeMap::new(), false);
     assert!(text.contains("no login check"), "{text}");
@@ -1479,7 +1823,6 @@ fn pretty_and_json_reports_are_stable() {
         default_panels(vec![panel]),
         &spending,
         Some("claude"),
-        false,
     );
     let mut out = anstream::StripStream::new(Vec::new());
     let time_zone = TimeZone::get("America/New_York").unwrap();
@@ -1510,7 +1853,6 @@ fn paid_credit_step_marks_the_extra_cell_and_line_as_paying() {
         default_panels(vec![panel]),
         &spending,
         Some("claude"),
-        false,
     );
     let render = |reports: &[ProviderReport]| {
         let mut out = anstream::StripStream::new(Vec::new());
@@ -1555,7 +1897,6 @@ fn pretty_report_hides_zero_reset_credits() {
         default_panels(vec![panel]),
         &spending,
         Some("claude"),
-        false,
     );
     let mut out = anstream::StripStream::new(Vec::new());
     write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
@@ -1643,7 +1984,6 @@ fn provider_block_colours_dollar_percent_and_pace_tokens() {
         default_panels(vec![panel]),
         &spending,
         Some("claude"),
-        false,
     );
     let mut raw = Vec::new();
     write_pretty(&mut raw, &reports, now, &TimeZone::UTC).unwrap();

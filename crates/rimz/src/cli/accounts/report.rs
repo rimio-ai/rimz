@@ -213,7 +213,6 @@ pub(super) fn list(
         panels,
         &provider_spending,
         filter,
-        args.all || target.is_some(),
         &ReportContext {
             day_cutoff_secs: now
                 .to_zoned(config.time_zone())
@@ -258,9 +257,9 @@ pub(super) fn list(
             row.apply(report);
         } else {
             row.installed = installed.contains(row.kind.as_str());
-            row.expanded = args.all || target.is_some();
         }
     }
+    let multiple = multiple_account_kinds(&rows);
     rows.retain(|row| {
         filter.is_none_or(|kind| row.kind.as_str() == kind)
             && name.as_ref().is_none_or(|name| row.account.name == *name)
@@ -294,6 +293,7 @@ pub(super) fn list(
             now,
             &config.time_zone(),
             &deciding,
+            &multiple,
         ));
     }
     render::finish(write_overview(
@@ -302,6 +302,7 @@ pub(super) fn list(
         now,
         &config.time_zone(),
         &deciding,
+        args.all,
     ))
 }
 
@@ -332,8 +333,6 @@ struct ProviderReport {
     probe_error: Option<String>,
     #[serde(skip)]
     installed: bool,
-    #[serde(skip)]
-    expanded: bool,
     plan: Option<String>,
     plan_label: Option<String>,
     account_id: Option<String>,
@@ -376,7 +375,6 @@ fn assemble_reports(
     panels: BTreeMap<LoginKey, SidebarProviderPanel>,
     provider_spending: &ProviderSpendingCache,
     filter: Option<&str>,
-    all: bool,
     context: &ReportContext<'_>,
 ) -> Vec<ProviderReport> {
     let mut reports = Vec::new();
@@ -385,14 +383,13 @@ fn assemble_reports(
         if filter.is_some_and(|filter| filter != kind) {
             continue;
         }
-        let mut report = build_report(
+        let report = build_report(
             login,
             accounts.logins.get(&login.key()),
             panels.get(&login.key()),
             provider_spending,
             context,
         );
-        report.expanded = all || filter.is_some();
         reports.push(report);
     }
     reports
@@ -434,7 +431,6 @@ fn build_report(
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         probe_error: record.and_then(|record| record.probe_error.as_ref().map(ToString::to_string)),
         installed: context.installed.contains(kind),
-        expanded: false,
         plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
             raw_plan
                 .as_deref()
@@ -496,6 +492,10 @@ struct AccountRow {
     /// A setup or subscription-access problem, with its fix when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     problem: Option<String>,
+    #[serde(skip)]
+    setup_error: Option<BirthLoginErr>,
+    #[serde(skip)]
+    login_command: Option<String>,
     status: AccountStatus,
     entitlement: Entitlement,
     /// A launch from here uses this account for its kind.
@@ -533,8 +533,6 @@ struct AccountRow {
     #[serde(skip)]
     installed: bool,
     #[serde(skip)]
-    expanded: bool,
-    #[serde(skip)]
     legacy_spend_step: SpendStep,
 }
 
@@ -558,7 +556,6 @@ impl AccountRow {
         self.spending = report.spending.clone();
         self.day_budget = report.day_budget;
         self.installed = report.installed;
-        self.expanded = report.expanded;
         self.legacy_spend_step = report.spend_step;
     }
 
@@ -589,7 +586,6 @@ impl AccountRow {
             spending: self.spending.clone(),
             day_budget: self.day_budget,
             installed: self.installed,
-            expanded: self.expanded,
         }
     }
 
@@ -627,12 +623,12 @@ impl AccountRow {
                 .is_some_and(|spec| !spec.user_coverage.account.is_unsupported())
         {
             self.status = AccountStatus::LoggedOut;
+            let command = login_command();
             self.problem = Some(format!(
                 "{} account `{}` is logged out; log in once: {}",
-                self.kind,
-                self.account.name,
-                login_command()
+                self.kind, self.account.name, command
             ));
+            self.login_command = Some(command);
         }
     }
 
@@ -682,7 +678,9 @@ fn account_rows(
             machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
             status: AccountStatus::of(problem.as_ref()),
             entitlement: Entitlement::Ok,
-            problem: problem.map(|err| err.to_string()),
+            problem: problem.as_ref().map(ToString::to_string),
+            setup_error: problem,
+            login_command: None,
             active: standing.active(kind).as_ref() == Some(name),
             default_for: standing.scopes(kind, name),
             agents: agents.map(|agents| agents.get(&key).copied().unwrap_or_default()),
@@ -706,7 +704,6 @@ fn account_rows(
             spending: None,
             day_budget: None,
             installed: false,
-            expanded: false,
             legacy_spend_step: SpendStep::Subscription,
         }
     };
@@ -768,49 +765,232 @@ fn account_rows(
     rows
 }
 
-/// Account tables followed by the kinds with no login or named accounts.
+fn multiple_account_kinds(rows: &[AccountRow]) -> BTreeSet<AgentKind> {
+    rows.chunk_by(|a, b| a.kind == b.kind)
+        .filter(|group| group.len() > 1)
+        .map(|group| group[0].kind.clone())
+        .collect()
+}
+
+/// Account choices and readings, followed by other logins and their repairs.
 fn write_overview(
     out: &mut impl Write,
     reports: &[AccountRow],
     now: Timestamp,
     time_zone: &TimeZone,
     deciding: &BTreeMap<AgentKind, Deciding>,
+    all: bool,
 ) -> std::io::Result<()> {
-    let mut folded = Vec::new();
-    let mut displayed = Vec::new();
+    let mut single_logins = Vec::new();
+    let mut marker_rows = Vec::new();
     let mut printed = false;
     for group in reports.chunk_by(|a, b| a.kind == b.kind) {
-        if !group.iter().any(|report| {
-            report.expanded
-                || !report.account.name.is_default()
-                || report.login == Some(ProviderStatus::LoggedIn)
-        }) {
-            let report = &group[0];
-            let version = report.version.as_ref().map_or_else(String::new, |version| {
-                format!(" v{}", render::one_line(version))
-            });
-            folded.push(format!(
-                "{}{version} {}",
-                report.kind,
-                status_label(report, false)
-            ));
+        let reading = group.iter().any(|row| {
+            !row.without_login()
+                && (!row.windows.is_empty()
+                    || row.extra_credits.is_some()
+                    || row.reset_credits.is_some())
+        });
+        if group.len() == 1 && !reading {
+            single_logins.push(&group[0]);
             continue;
         }
         if printed {
             writeln!(out)?;
         }
         write_comparison(out, group, now, time_zone)?;
-        displayed.extend(group);
+        if group.len() > 1 {
+            marker_rows.extend(group);
+        }
         printed = true;
     }
-    if printed {
-        writeln!(out)?;
+    if let Some(legend) = marker_legend(marker_rows.iter().copied(), deciding) {
+        if printed {
+            writeln!(out)?;
+        }
+        writeln!(out, "{legend}")?;
+        printed = true;
     }
-    write_marker_legend(out, displayed.iter().copied(), deciding)?;
-    if !folded.is_empty() {
-        writeln!(out, "Also: {}", folded.join(" · "))?;
+    let other: Vec<_> = single_logins
+        .iter()
+        .copied()
+        .filter(|row| all || status_label(row, false) == "logged in")
+        .collect();
+    if !other.is_empty() {
+        if printed {
+            writeln!(out)?;
+        }
+        write_other_providers(out, &other, now, time_zone)?;
+        printed = true;
     }
-    write_problems(out, displayed.iter().copied())
+    if !all && let Some(unchecked) = unchecked_logins(&single_logins) {
+        if printed && other.is_empty() {
+            writeln!(out)?;
+        }
+        writeln!(
+            out,
+            "{}",
+            render::paint(render::palette::faint(), &unchecked)
+        )?;
+        printed = true;
+    }
+    let mut needs: Vec<_> = reports
+        .iter()
+        .filter(|row| row.installed)
+        .filter_map(|row| row.problem.as_deref().map(|problem| (row, problem)))
+        .collect();
+    needs.sort_by_key(|(row, _)| {
+        if setup_problem(row) {
+            0
+        } else if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
+            1
+        } else {
+            2
+        }
+    });
+    if !needs.is_empty() {
+        if printed {
+            writeln!(out)?;
+        }
+        writeln!(out, "Needs you")?;
+        let mut table = render::Table::new(["ACCOUNT", "STATE", "FIX"])
+            .without_headers()
+            .indent(3);
+        for (row, problem) in needs {
+            let account = if row.account.name.is_default() {
+                row.kind.to_string()
+            } else {
+                row.account.to_string()
+            };
+            let fix = if setup_problem(row) {
+                row.setup_error
+                    .as_ref()
+                    .map_or_else(|| problem.to_owned(), BirthLoginErr::repair)
+            } else if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
+                format!(
+                    "no {} access",
+                    render::palette::identity_name(row.kind.as_str())
+                )
+            } else {
+                row.login_command.as_ref().map_or_else(
+                    || problem.to_owned(),
+                    |command| format!("log in once: {command}"),
+                )
+            };
+            table.row([
+                cell(account),
+                cell(status_label(row, false)).fg(plan_tone(row)),
+                cell(fix),
+            ]);
+        }
+        table.render(out)?;
+        printed = true;
+    }
+    if !printed {
+        writeln!(
+            out,
+            "No provider is set up here; `rimz accounts --all` lists every supported one."
+        )?;
+    }
+    Ok(())
+}
+
+fn write_other_providers(
+    out: &mut impl Write,
+    reports: &[&AccountRow],
+    now: Timestamp,
+    time_zone: &TimeZone,
+) -> std::io::Result<()> {
+    writeln!(out, "Other providers")?;
+    let missing = reports
+        .iter()
+        .any(|row| missing_reading(row, now, time_zone).is_some());
+    let spend = reports.iter().any(|row| {
+        row.spending
+            .as_ref()
+            .is_some_and(|spending| rimz::theme::fmt::dollars2(spending.week.usd) != "$0.00")
+    });
+    let mut headers = vec!["PROVIDER", "LOGIN"];
+    headers.extend(missing.then_some("READING"));
+    headers.push("AGENTS");
+    headers.extend(spend.then_some("SPEND 7d"));
+    headers.push("VERSION");
+    let mut table = render::Table::new(headers).indent(3);
+    for row in reports {
+        let state = status_label(row, false);
+        let login = if state == "logged in" && row.plan_label.is_some() {
+            plan_cell(row)
+        } else {
+            cell(state).fg(plan_tone(row))
+        };
+        let mut cells = vec![
+            cell(render::palette::identity_name(row.kind.as_str()))
+                .fg(render::palette::identity(row.kind.as_str())),
+            login,
+        ];
+        if missing {
+            cells.push(cell(
+                missing_reading(row, now, time_zone).unwrap_or_default(),
+            ));
+        }
+        cells.push(match row.agents {
+            None => unknown_cell(),
+            Some(0) => cell("-").dash(),
+            Some(count) => cell(count.to_string()),
+        });
+        if spend {
+            cells.push(row.spending.as_ref().map_or_else(
+                || cell("-").dash(),
+                |spending| money_cell(spending.week.usd),
+            ));
+        }
+        cells.push(row.version.as_deref().map_or_else(unknown_cell, |version| {
+            cell(format!("v{}", render::one_line(version)))
+        }));
+        table.row(cells);
+    }
+    table.render(out)
+}
+
+fn unchecked_logins(reports: &[&AccountRow]) -> Option<String> {
+    let mut failures: Vec<(Option<&str>, Vec<&str>)> = Vec::new();
+    let mut unprobed = Vec::new();
+    let mut unsupported = Vec::new();
+    for row in reports.iter().filter(|row| row.installed) {
+        let kind = row.kind.as_str();
+        match status_label(row, false).as_str() {
+            "probe failed" => {
+                let cause = row.probe_error.as_deref();
+                if let Some((_, kinds)) = failures.iter_mut().find(|(seen, _)| *seen == cause) {
+                    kinds.push(kind);
+                } else {
+                    failures.push((cause, vec![kind]));
+                }
+            }
+            "not probed" => unprobed.push(kind),
+            "no login check" => unsupported.push(kind),
+            _ => {}
+        }
+    }
+    let mut groups = Vec::new();
+    for (cause, mut kinds) in failures {
+        kinds.sort_unstable();
+        let reason = cause.map_or_else(
+            || "login read failed".to_owned(),
+            |cause| format!("login read failed: {}", render::one_line(cause)),
+        );
+        groups.push(format!("{} ({reason})", kinds.join(", ")));
+    }
+    for (mut kinds, reason) in [
+        (unprobed, "not probed yet"),
+        (unsupported, "no login check"),
+    ] {
+        if !kinds.is_empty() {
+            kinds.sort_unstable();
+            groups.push(format!("{} ({reason})", kinds.join(", ")));
+        }
+    }
+    (!groups.is_empty()).then(|| format!("Not checked, launches proceed: {}", groups.join(" · ")))
 }
 
 fn write_problems<'a>(
@@ -831,11 +1011,10 @@ fn write_problems<'a>(
     Ok(())
 }
 
-fn write_marker_legend<'a>(
-    out: &mut impl Write,
+fn marker_legend<'a>(
     reports: impl Iterator<Item = &'a AccountRow> + Clone,
     deciding: &BTreeMap<AgentKind, Deciding>,
-) -> std::io::Result<()> {
+) -> Option<String> {
     let mut deciding = deciding.clone();
     for report in reports.clone().filter(|report| report.active) {
         deciding
@@ -850,10 +1029,7 @@ fn write_marker_legend<'a>(
     let machine_marker = reports
         .clone()
         .any(|report| !report.active && report.default_for.contains(Scope::NewRooms));
-    if let Some(legend) = render::account_marker_legend(&displayed, &deciding, machine_marker) {
-        writeln!(out, "{legend}")?;
-    }
-    Ok(())
+    render::account_marker_legend(&displayed, &deciding, machine_marker)
 }
 
 /// A rate-limit lane's identity across accounts: its scope id, else its
@@ -901,6 +1077,7 @@ fn write_comparison(
         .iter()
         .find(|report| report.account.name.is_default())
         .and_then(|report| report.spending.as_ref())
+        .filter(|spending| rimz::theme::fmt::dollars2(spending.week.usd) != "$0.00")
     {
         write!(
             out,
@@ -911,14 +1088,14 @@ fn write_comparison(
                 &rimz::theme::fmt::dollars2(spending.week.usd)
             )
         )?;
-    }
-    let members: Vec<_> = reports
-        .iter()
-        .filter(|report| report.pool.name.is_default())
-        .map(|report| report.account.name.as_str())
-        .collect();
-    if !standalone && reports.iter().any(|report| report.spending.is_some()) && members.len() > 1 {
-        write!(out, " (shared by {})", members.join(", "))?;
+        let members: Vec<_> = reports
+            .iter()
+            .filter(|report| report.pool.name.is_default())
+            .map(|report| report.account.name.as_str())
+            .collect();
+        if !standalone && members.len() > 1 {
+            write!(out, " (shared by {})", members.join(", "))?;
+        }
     }
     writeln!(out)?;
     let mut windows: Vec<(WindowKey<'_>, String)> = Vec::new();
@@ -943,7 +1120,9 @@ fn write_comparison(
         .iter()
         .any(|report| missing_reading(report, now, time_zone).is_some());
     headers.extend(missing.then(|| "READING".to_owned()));
-    let mut table = render::Table::new(headers);
+    let multiple = reports.len() > 1;
+    // A marker column without markers has no width; one space keeps the 3-column indent.
+    let mut table = render::Table::new(headers).indent(usize::from(!multiple));
     let mut columns: Vec<_> = windows
         .iter()
         .map(|(key, _)| {
@@ -966,9 +1145,9 @@ fn write_comparison(
         .collect();
     for report in reports {
         let mut cells = vec![
-            if report.active {
+            if multiple && report.active {
                 cell("●").fg(render::palette::accent())
-            } else if report.default_for.contains(Scope::NewRooms) {
+            } else if multiple && report.default_for.contains(Scope::NewRooms) {
                 cell("○").fg(render::palette::muted())
             } else {
                 cell("")
@@ -1071,6 +1250,7 @@ fn write_pretty(
     now: Timestamp,
     time_zone: &TimeZone,
     deciding: &BTreeMap<AgentKind, Deciding>,
+    multiple: &BTreeSet<AgentKind>,
 ) -> std::io::Result<()> {
     let named_kinds: BTreeSet<&str> = reports
         .iter()
@@ -1082,10 +1262,11 @@ fn write_pretty(
             writeln!(out)?;
         }
         let named = named_kinds.contains(report.kind.as_str());
+        let markers = multiple.contains(&report.kind);
         let mut name = render::palette::identity_name(report.kind.as_str());
-        if report.active {
+        if markers && report.active {
             write!(out, "{} ", render::paint(render::palette::accent(), "●"))?;
-        } else if report.default_for.contains(Scope::NewRooms) {
+        } else if markers && report.default_for.contains(Scope::NewRooms) {
             write!(out, "{} ", render::paint(render::palette::muted(), "○"))?;
         } else if named {
             write!(out, "  ")?;
@@ -1231,7 +1412,12 @@ fn write_pretty(
     if !reports.is_empty() {
         writeln!(out)?;
     }
-    write_marker_legend(out, reports.iter(), deciding)?;
+    if let Some(legend) = marker_legend(
+        reports.iter().filter(|row| multiple.contains(&row.kind)),
+        deciding,
+    ) {
+        writeln!(out, "{legend}")?;
+    }
     write_problems(out, reports.iter())
 }
 

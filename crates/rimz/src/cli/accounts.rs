@@ -35,7 +35,7 @@ struct ListArgs {
     /// Bypass account and usage refresh TTLs.
     #[arg(long)]
     refresh: bool,
-    /// Expand logged-out and empty provider kinds into tables.
+    /// Include unhealthy and uninstalled providers in Other providers.
     #[arg(long)]
     all: bool,
 }
@@ -51,7 +51,7 @@ pub(super) struct ProvidersArgs {
     /// Bypass account and usage refresh TTLs.
     #[arg(long)]
     refresh: bool,
-    /// Expand logged-out and empty provider kinds into tables.
+    /// Include unhealthy and uninstalled providers in Other providers.
     #[arg(long)]
     all: bool,
 }
