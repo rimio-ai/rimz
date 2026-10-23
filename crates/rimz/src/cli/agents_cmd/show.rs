@@ -377,7 +377,7 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
             model.push_str(&format!(
                 " {}",
                 render::paint(
-                    render::palette::electric(),
+                    render::palette::fast_mode(),
                     &glyph(rimz::config::GlyphRole::CardFast)
                 )
             ));

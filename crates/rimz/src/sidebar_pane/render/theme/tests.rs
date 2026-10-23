@@ -517,42 +517,57 @@ fn luminance(color: Color) -> f32 {
 }
 
 #[test]
-fn electric_is_an_icy_accent_distinct_from_status_tones() {
+fn fast_mode_is_amber_between_warn_and_caution() {
     use crate::theme::oklab::hue_angle;
     use std::f32::consts::{PI, TAU};
 
     let palette = truecolor_default().palette;
-    let electric = tone_color(palette.electric());
-    for tone in [palette.cool, palette.warn, palette.alarm, palette.good] {
-        assert_ne!(electric, tone_color(tone));
+    let fast_mode = tone_color(palette.fast_mode());
+    for tone in [
+        palette.good,
+        palette.warn,
+        palette.caution,
+        palette.alarm,
+        palette.cool,
+        palette.accent,
+    ] {
+        assert_ne!(fast_mode, tone_color(tone));
     }
-    assert!(luminance(electric) > luminance(tone_color(palette.accent)));
-    let arc = (hue_angle(color_to_rgb(electric).unwrap())
-        - hue_angle(color_to_rgb(tone_color(palette.accent)).unwrap())
-        + PI)
-        .rem_euclid(TAU)
-        - PI;
-    assert!(arc.abs() < 0.20, "electric holds accent's hue: {arc:.3}rad");
+    assert!(luminance(fast_mode) > luminance(tone_color(palette.warn)));
+    let hue = |color| hue_angle(color_to_rgb(color).unwrap());
+    let arc = |from, to| (hue(to) - hue(from) + PI).rem_euclid(TAU) - PI;
+    let bolt_arc = arc(tone_color(palette.warn), fast_mode);
+    let caution_arc = arc(tone_color(palette.warn), tone_color(palette.caution));
+    assert!(
+        bolt_arc * caution_arc > 0.0 && bolt_arc.abs() < caution_arc.abs(),
+        "the bolt lies strictly between warn and caution: {bolt_arc:.3}, {caution_arc:.3}"
+    );
 
     let indexed = Theme::fixed(false).palette;
-    assert_ne!(indexed.electric(), indexed.cool);
-    assert_ne!(indexed.electric(), indexed.warn);
+    assert_ne!(indexed.fast_mode(), indexed.cool);
+    assert_ne!(indexed.fast_mode(), indexed.warn);
+    // Indexed amber may share caution's cell; the bold glyph and placement distinguish it.
 }
 
 #[test]
-fn electric_follows_accent_overrides_at_both_depths() {
-    for accent in [ThemeColor::Rgb(32, 160, 176), ThemeColor::Indexed(30)] {
+fn fast_mode_follows_warn_but_not_accent_overrides_at_both_depths() {
+    for color in [ThemeColor::Rgb(32, 160, 176), ThemeColor::Indexed(30)] {
         let config = ThemeConfig {
-            accent: Some(accent),
+            warn: Some(color),
             ..Default::default()
         };
         for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
             let palette = Palette::resolve(&config, depth);
             let baseline = Palette::resolve(&ThemeConfig::default(), depth);
-            assert_ne!(palette.electric(), baseline.electric());
-            assert!(
-                luminance(tone_color(palette.electric())) > luminance(tone_color(palette.accent)),
-                "electric lifts the overridden accent at {depth:?}"
+            assert_ne!(palette.fast_mode(), baseline.fast_mode());
+            let accent_only = ThemeConfig {
+                accent: Some(color),
+                ..Default::default()
+            };
+            assert_eq!(
+                Palette::resolve(&accent_only, depth).fast_mode(),
+                baseline.fast_mode(),
+                "accent does not recolor the bolt at {depth:?}"
             );
         }
     }

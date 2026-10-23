@@ -1,6 +1,6 @@
 //! Layer 2 — palette resolution: the scheme's raw tones (Layer 1) derived
 //! into the depth-resolved semantic slots the renderer paints, plus the
-//! heat/calm ramps and the derived expense, electric, and expired-cache
+//! heat/calm ramps and the derived expense, fast-mode, and expired-cache
 //! tones. Component tokens (Layer 3) and the Theme facade read these slots;
 //! this is the one place depth quantization and slot overrides are applied.
 
@@ -46,9 +46,13 @@ const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 /// cache, not the full bar's live red.
 const CACHE_EXPIRED_GREY: f32 = 0.5;
 
-/// Raise `accent`'s OKLab lightness for the fast-mode bolt: the data glyphs'
-/// hue, a step brighter so the bolt reads as charged.
-const ELECTRIC_LIFT: f32 = 0.10;
+/// Step the fast-mode amber away from the background to separate it from `warn`.
+/// Levers: `LIGHTNESS_STEP` is that first step; `CONTRAST_STEP` repeats in the
+/// same direction until the emitted color, truecolor or indexed cell, clears
+/// `MIN_CONTRAST` against the background.
+const FAST_MODE_LIGHTNESS_STEP: f32 = 0.04;
+const FAST_MODE_CONTRAST_STEP: f32 = 0.01;
+const FAST_MODE_MIN_CONTRAST: f32 = 3.0;
 
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,9 +74,9 @@ pub struct Palette {
     /// and the stale line's age; derived, not a tunable slot.
     pub(crate) cache_expired: Tone,
     pub(crate) accent: Tone,
-    /// The fast-mode bolt's tone, `accent` a step brighter; derived, not a
-    /// tunable slot.
-    electric: Tone,
+    /// The fast-mode bolt's amber, derived from `warn` and kept readable against
+    /// the scheme background at the emitted depth; not a tunable slot.
+    fast_mode: Tone,
     pub(crate) cool: Tone,
     pub(crate) meta: Tone,
     pub(crate) body: Tone,
@@ -153,6 +157,25 @@ impl Palette {
             ),
             depth,
         );
+        let direction = if oklab::contrast_ratio((255, 255, 255), raw.background)
+            >= oklab::contrast_ratio((0, 0, 0), raw.background)
+        {
+            1.0
+        } else {
+            -1.0
+        };
+        let mut fast_mode = oklab::lift_lightness(
+            oklab::warm_toward(heat_ramp[1], raw.red, 0.10, 1.15),
+            direction * FAST_MODE_LIGHTNESS_STEP,
+        );
+        // At most one unit of lightness: lift_lightness clamps at either endpoint.
+        for _ in 0..100 {
+            let emitted = emitted_rgb(rgb_color(fast_mode, depth));
+            if oklab::contrast_ratio(emitted, raw.background) >= FAST_MODE_MIN_CONTRAST {
+                break;
+            }
+            fast_mode = oklab::lift_lightness(fast_mode, direction * FAST_MODE_CONTRAST_STEP);
+        }
         Palette {
             depth,
             raw,
@@ -165,13 +188,7 @@ impl Palette {
             expense,
             cache_expired,
             accent: slot(theme.accent, tones.accent),
-            electric: rgb_color(
-                oklab::lift_lightness(
-                    derived_rgb_slot(theme.accent, tones.accent, &raw),
-                    ELECTRIC_LIFT,
-                ),
-                depth,
-            ),
+            fast_mode: rgb_color(fast_mode, depth),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),
             body: slot(theme.body, tones.body),
@@ -257,8 +274,8 @@ impl Palette {
     pub fn accent(&self) -> Tone {
         self.accent
     }
-    pub fn electric(&self) -> Tone {
-        self.electric
+    pub fn fast_mode(&self) -> Tone {
+        self.fast_mode
     }
     pub fn cool(&self) -> Tone {
         self.cool
@@ -363,6 +380,14 @@ fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Tone {
     Tone::from_rgb(rgb, depth)
 }
 
+/// The RGB a terminal shows for `tone`: an indexed cell's xterm value.
+fn emitted_rgb(tone: Tone) -> oklab::Rgb {
+    match tone {
+        Tone::Rgb(red, green, blue) => (red, green, blue),
+        Tone::Indexed(index) => xterm_rgb(index),
+    }
+}
+
 /// Where `value` sits between `start` and `end`, mapped onto `[low, high]`
 /// and clamped; an empty span reads `high`.
 pub(crate) fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f32 {
@@ -393,6 +418,56 @@ pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_fast_mode_contrast(name: &str) {
+        let config = ThemeConfig {
+            scheme: Some(name.to_owned()),
+            ..ThemeConfig::default()
+        };
+        let background = raw_palette_for_theme(&config).background;
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            let bolt = emitted_rgb(Palette::resolve(&config, depth).fast_mode());
+            let contrast = oklab::contrast_ratio(bolt, background);
+            assert!(
+                contrast >= 3.0,
+                "{name} at {depth:?}: {bolt:?}, {contrast:.3}:1"
+            );
+        }
+    }
+
+    #[test]
+    fn fast_mode_is_readable_on_named_dark_and_light_schemes() {
+        for name in [
+            "TokyoNight Night",
+            "TokyoNight Day",
+            "Catppuccin Latte",
+            "Builtin Light",
+        ] {
+            assert_fast_mode_contrast(name);
+            if name == "TokyoNight Night" {
+                continue;
+            }
+            let config = ThemeConfig {
+                scheme: Some(name.to_owned()),
+                ..ThemeConfig::default()
+            };
+            let raw = raw_palette_for_theme(&config);
+            let bolt = emitted_rgb(Palette::resolve(&config, ColorDepth::Truecolor).fast_mode());
+            let white = (255, 255, 255);
+            assert!(
+                oklab::contrast_ratio(bolt, white) > oklab::contrast_ratio(raw.yellow, white),
+                "{name}: the bolt {bolt:?} must be darker than yellow {:?}",
+                raw.yellow
+            );
+        }
+    }
+
+    #[test]
+    fn fast_mode_clears_contrast_floor_across_bundled_schemes_at_both_depths() {
+        for scheme in crate::config::scheme_swatches() {
+            assert_fast_mode_contrast(&scheme.name);
+        }
+    }
 
     #[test]
     fn pace_tone_walks_both_ramps_and_follows_configured_bands() {

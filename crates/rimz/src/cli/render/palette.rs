@@ -81,8 +81,8 @@ pub(crate) fn accent() -> anstyle::Style {
     THEME.style(THEME.palette.accent())
 }
 
-pub(crate) fn electric() -> anstyle::Style {
-    THEME.style(THEME.palette.electric()).bold()
+pub(crate) fn fast_mode() -> anstyle::Style {
+    THEME.style(THEME.palette.fast_mode()).bold()
 }
 
 pub(crate) fn cool() -> anstyle::Style {

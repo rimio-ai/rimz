@@ -434,7 +434,7 @@ fn agent_row(
     } else if agent.model.fast {
         render::cell(model)
             .fg(render::palette::muted())
-            .suffix(glyph(GlyphRole::CardFast), render::palette::electric())
+            .suffix(glyph(GlyphRole::CardFast), render::palette::fast_mode())
     } else {
         render::cell(model).fg(render::palette::muted())
     };

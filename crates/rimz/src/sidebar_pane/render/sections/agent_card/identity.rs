@@ -85,7 +85,7 @@ pub(super) fn agent_lead_cell(
 /// name, then the dim capability tokens (`· model · reasoning · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
-/// The fast-mode bolt follows the model in bold electric, still at rest and
+/// The fast-mode bolt follows the model in bold amber, still at rest and
 /// crackling only while running.
 /// The window token is the model's context window (`258k`, `1M`) — the
 /// context-sidecar reading first, the row's carried/default fallback second.

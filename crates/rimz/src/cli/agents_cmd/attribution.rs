@@ -226,7 +226,7 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
                     format!(
                         " {}",
                         render::paint(
-                            render::palette::electric(),
+                            render::palette::fast_mode(),
                             &format!("{} fast", glyph(rimz::config::GlyphRole::CardFast))
                         )
                     )
@@ -256,7 +256,7 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
                     if stat.fast {
                         row = row.suffix(
                             format!("{} fast", glyph(rimz::config::GlyphRole::CardFast)),
-                            render::palette::electric(),
+                            render::palette::fast_mode(),
                         );
                     }
                     lines.push(vec![row]);

@@ -160,10 +160,10 @@ fn fast_bolt_stays_bold_and_still_for_every_resting_status() {
         assert_eq!(snapshot.rows().next().unwrap().status(), Some(status));
         let rest = bolt_style(&snapshot, &theme, 0);
         assert!(rest.add_modifier.contains(Modifier::BOLD), "{status:?}");
-        let electric =
+        let fast_mode =
             crate::theme::Palette::resolve(&snapshot.theme, crate::config::ColorDepth::Indexed)
-                .electric();
-        let crate::theme::Tone::Indexed(index) = electric else {
+                .fast_mode();
+        let crate::theme::Tone::Indexed(index) = fast_mode else {
             panic!("indexed palette has indexed tones");
         };
         assert_eq!(rest.fg, Some(Color::Indexed(index)));
