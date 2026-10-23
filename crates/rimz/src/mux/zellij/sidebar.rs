@@ -263,7 +263,8 @@ impl ZellijBackend {
 
     /// Mount a sidebar in a stable tab. A replacement can split a docked old
     /// sidebar, leaving its geometry alone until the executor closes the old
-    /// panes. Plain adds retain their native placement and bounded dock repair.
+    /// panes. On 0.45+, a plain add anchors on a lone live work pane, then runs
+    /// the same bounded dock and width convergence as other plain adds.
     pub(super) fn add_sidebar_to_tab(
         &self,
         opts: &SidebarPaneOptions,
@@ -273,6 +274,7 @@ impl ZellijBackend {
     ) -> Result<AddedSidebar> {
         let mut last_error = None;
         let mut fallback_misdocked: Option<u64> = None;
+        let mut lone_anchor_missed = false;
         for attempt in 0..ADD_DOCK_ATTEMPTS {
             let before_panes = match self.structural_geometry_listing(
                 &opts.session_name,
@@ -306,7 +308,16 @@ impl ZellijBackend {
                 .iter()
                 .filter_map(|pane| ZellijPaneId::try_from(pane).ok()?.terminal_id())
                 .collect();
-            let anchor = if !replaced.is_empty() && self.supports_no_focus() {
+            let anchor = if lone_anchor_missed || !self.supports_no_focus() {
+                None
+            } else if replacing.is_empty() {
+                let mut work = before_panes.iter().filter(|pane| {
+                    pane.tab_position == tab_position
+                        && pane.is_live_terminal()
+                        && !is_sidebar_pane(pane)
+                });
+                work.next().filter(|_| work.next().is_none())
+            } else {
                 replacing.iter().find_map(|pane| {
                     let id = ZellijPaneId::try_from(pane).ok()?.terminal_id()?;
                     let candidate = sidebar_pane(&before_panes, tab_id, id)?;
@@ -321,8 +332,6 @@ impl ZellijBackend {
                             == Some(SidebarDock::Docked))
                     .then_some(candidate)
                 })
-            } else {
-                None
             };
             // Action clients can cross-talk responses: discover the mount even
             // when the command misreports failure, and never close a hint alone.
@@ -348,17 +357,22 @@ impl ZellijBackend {
                         }
                         return Err(err);
                     }
-                    if anchor.is_some() {
-                        return Err(super::output_error(format!(
-                            "anchored sidebar split never mounted in tab {tab_id}; \
-                             floating panes being shown can prevent a tiled split"
-                        )));
-                    }
                     if let Some(raw_id) = fallback_misdocked {
                         return Ok(AddedSidebar {
                             pane: PaneId::from(ZellijPaneId::Terminal(raw_id)),
                             dock: DockOutcome::Misdocked,
                         });
+                    }
+                    if anchor.is_some() && !replacing.is_empty() {
+                        return Err(spawn_err.unwrap_or_else(|| {
+                            super::output_error(format!(
+                                "anchored sidebar split never mounted in tab {tab_id}; \
+                                 floating panes being shown can prevent a tiled split"
+                            ))
+                        }));
+                    }
+                    if anchor.is_some() {
+                        lone_anchor_missed = true;
                     }
                     last_error = Some(spawn_err.unwrap_or_else(|| {
                         super::output_error(format!(
@@ -384,7 +398,7 @@ impl ZellijBackend {
             if let Some(previous) = fallback_misdocked.take() {
                 self.cleanup_failed_add(opts, previous);
             }
-            if anchor.is_some() {
+            if !replacing.is_empty() && anchor.is_some() {
                 // Its old neighbour still owns the left edge. Verify geometry
                 // only after the executor closes that neighbour.
                 return Ok(AddedSidebar {
@@ -435,7 +449,7 @@ impl ZellijBackend {
     }
 
     /// Poll native geometry for a newly mounted sidebar in the stable target
-    /// tab, and inside the old sidebar's column band for an anchored split.
+    /// tab, and inside the anchor's column band for an anchored split.
     fn wait_for_mounted_sidebar(
         &self,
         opts: &SidebarPaneOptions,
@@ -914,9 +928,11 @@ impl ZellijBackend {
         .unwrap_or_default()
     }
 
-    /// Spawn the layout's sidebar command. A replacement splits its old docked
-    /// anchor unfocused; a plain add leaves placement unspecified because 0.44.3
-    /// directional placement with `--tab-id` can leave its PTY unmounted.
+    /// Spawn the layout's sidebar command. An anchor splits a docked sidebar
+    /// or lone work pane unfocused on 0.45+. Other adds leave placement
+    /// unspecified: 0.44.3 directional placement with `--tab-id` can leave its
+    /// PTY unmounted; 0.45+ multi-pane adds rely on stacking repair, and a lone
+    /// anchored miss retries as a plain tab-targeted add.
     /// Returns the created pane id Zellij prints (for example, `terminal_58`) as
     /// a hint only: concurrent action clients can cross-talk.
     pub(super) fn new_sidebar_pane(

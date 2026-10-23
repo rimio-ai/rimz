@@ -271,9 +271,8 @@ pub(super) fn nested_work_pane_ids(
 
 /// Pane ids in the narrow nested-sidebar shape that RimZ can safely repair:
 /// one right-side work column plus one or more live work panes intruding from
-/// `x=0`. Newer Zellij can stack these panes in place; older supported Zellij
-/// can close and verified-readd the sidebar. A real multi-column work layout is
-/// left untouched and reported as mis-docked.
+/// `x=0`. Newer Zellij can stack these panes in place. A real multi-column work
+/// layout is left untouched and reported as mis-docked.
 pub(super) fn repairable_nested_work_pane_ids(
     sidebar: &PaneTopologyPane,
     panes: &[PaneTopologyPane],

@@ -10,7 +10,7 @@ use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ZellijNamespace};
 
 use super::support::*;
 
@@ -182,6 +182,177 @@ fn repair_cli_with_a_silent_plugin_adds_from_live_panes_and_exits_zero() {
         1
     );
     assert_sidebar_is_left_docked(fixture.room.path(), fixture.room.name());
+}
+
+#[test]
+fn repair_cli_docks_a_sidebar_beside_a_lone_work_pane() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairlone");
+    let version = fixture.room.backend().version().expect("version");
+    if version
+        .split('.')
+        .nth(1)
+        .and_then(|part| part.parse::<u32>().ok())
+        .is_none_or(|minor| minor < 45)
+    {
+        crate::common::skip("zellij below 0.45");
+        return;
+    }
+    fixture.birth(r#"tab name="work" { pane cwd=CWD { command "sleep"; args "600"; }; }"#);
+    let _client = AttachedClient::attach(&fixture.room, 180, 50);
+    let before = expect_list_panes(fixture.room.path(), fixture.room.name());
+    let work = before
+        .panes
+        .iter()
+        .find(|pane| pane.is_live_terminal())
+        .unwrap();
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let after = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}\n{after:#?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Recovered 1 sidebar in place."), "{stdout}");
+    assert!(!stdout.contains("not docked"), "{stdout}");
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar())
+        .collect();
+    assert_eq!(sidebars.len(), 1, "{after:#?}");
+    let sidebar = sidebars[0];
+    assert_eq!(sidebar.pane_x, 0, "{sidebar:?}");
+    assert_eq!(sidebar.pane_y, 0, "{sidebar:?}");
+    assert_eq!(sidebar.pane_rows, 50, "{sidebar:?}");
+    assert!((sidebar.pane_columns as i64 - 45).abs() <= 5, "{sidebar:?}");
+    let work_after = after
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.id == work.id)
+        .unwrap();
+    assert_eq!(work_after.pane_x, sidebar.pane_columns, "{work_after:?}");
+    assert_eq!(work_after.pane_y, work.pane_y, "{work_after:?}");
+    assert_eq!(work_after.pane_rows, work.pane_rows, "{work_after:?}");
+    assert_eq!(
+        work_after.pane_x + work_after.pane_columns,
+        180,
+        "{work_after:?}"
+    );
+
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let kept = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert_eq!(terminal_state(&kept), terminal_state(&after));
+}
+
+#[test]
+fn repair_cli_docks_a_sidebar_when_a_lone_work_pane_has_floats_shown() {
+    require_zellij!();
+    let fixture = RepairRoom::new("repairfloats");
+    let version = fixture.room.backend().version().expect("version");
+    if version
+        .split('.')
+        .nth(1)
+        .and_then(|part| part.parse::<u32>().ok())
+        .is_none_or(|minor| minor < 45)
+    {
+        crate::common::skip("zellij below 0.45");
+        return;
+    }
+    fixture.birth(r#"tab name="work" { pane cwd=CWD { command "sleep"; args "600"; }; }"#);
+    let _client = AttachedClient::attach(&fixture.room, 240, 50);
+    let output = ZellijNamespace::command_at(fixture.room.path())
+        .args(["--session", fixture.room.name(), "action", "new-pane"])
+        .args(["--floating", "--", "sleep", "601"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let before = poll_until(
+        SPAWN_TIMEOUT,
+        || list_panes(fixture.room.path(), fixture.room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .any(|pane| !pane.is_plugin && pane.is_floating)
+        },
+        "the floating work pane",
+    );
+    let work = before
+        .panes
+        .iter()
+        .find(|pane| pane.is_live_terminal() && !pane.is_floating)
+        .unwrap();
+    let floating = before
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.is_floating)
+        .unwrap();
+    let floating_visible = || {
+        let output = ZellijNamespace::command_at(fixture.room.path())
+            .args(["--session", fixture.room.name(), "action", "list-tabs"])
+            .arg("--json")
+            .bounded_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let tabs: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        let tab = tabs
+            .iter()
+            .find(|tab| tab["tab_id"].as_u64() == Some(work.tab_id))
+            .unwrap();
+        tab["are_floating_panes_visible"].as_bool().unwrap()
+    };
+    assert!(
+        floating_visible(),
+        "repair must start with floating panes shown"
+    );
+
+    let (output, _) = with_repair_claims(&fixture, || fixture.repair());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let after = expect_list_panes(fixture.room.path(), fixture.room.name());
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}\n{after:#?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Recovered 1 sidebar in place."), "{stdout}");
+    assert!(!stdout.contains("not docked"), "{stdout}");
+    let sidebars: Vec<_> = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar())
+        .collect();
+    assert_eq!(sidebars.len(), 1, "{after:#?}");
+    let sidebar = sidebars[0];
+    assert_eq!(sidebar.pane_x, 0, "{sidebar:?}");
+    assert_eq!(sidebar.pane_y, 0, "{sidebar:?}");
+    assert_eq!(sidebar.pane_rows, 50, "{sidebar:?}");
+    assert!((sidebar.pane_columns as i64 - 60).abs() <= 5, "{sidebar:?}");
+    let work_after = after
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.id == work.id)
+        .unwrap();
+    assert_eq!(work_after.pane_y, work.pane_y, "{work_after:?}");
+    assert_eq!(work_after.pane_rows, work.pane_rows, "{work_after:?}");
+    assert!(
+        after
+            .panes
+            .iter()
+            .any(|pane| !pane.is_plugin && pane.is_floating && pane.id == floating.id),
+        "the floating pane must survive: {after:#?}"
+    );
+    assert!(
+        !floating_visible(),
+        "the fallback must hide, not close, floating panes"
+    );
 }
 
 #[test]
