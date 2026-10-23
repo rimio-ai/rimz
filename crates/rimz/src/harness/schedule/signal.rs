@@ -742,7 +742,7 @@ fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Option<Vec<std::f
     Some(crate::harness::workflow::advance_args(
         project_root,
         None,
-        Some(signal.name.as_str()),
+        Some(signal),
     ))
 }
 
@@ -880,7 +880,10 @@ mod tests {
             let signal = Signal {
                 name: "review.ready".parse().unwrap(),
                 source,
-                payload: Map::new(),
+                payload: serde_json::from_value(serde_json::json!({
+                    "path": "/a checkout/with spaces", "note": "quote \" and\nnewline"
+                }))
+                .unwrap(),
                 watch: None,
             };
             let args = workflow_wake_args(Path::new("/project"), &signal);
@@ -891,16 +894,13 @@ mod tests {
             );
             if let Some(args) = args {
                 assert_eq!(
-                    args,
-                    [
-                        "--root",
-                        "/project",
-                        "workflow",
-                        "advance",
-                        "--wake-signal",
-                        "review.ready"
-                    ]
-                    .map(std::ffi::OsString::from)
+                    args[..5],
+                    ["--root", "/project", "workflow", "advance", "--wake-signal"]
+                        .map(std::ffi::OsString::from)
+                );
+                assert_eq!(
+                    serde_json::from_str::<Signal>(args[5].to_str().unwrap()).ok(),
+                    Some(signal)
                 );
             }
         }

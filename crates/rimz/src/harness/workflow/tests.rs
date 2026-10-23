@@ -120,18 +120,32 @@ fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
     .map(Into::into)
     .collect();
     assert_eq!(advance_args(root, Some(&id), None), expected);
+    let signal = crate::harness::schedule::signal::Signal {
+        name: "pr.ready".parse().unwrap(),
+        payload: serde_json::from_value(serde_json::json!({
+            "path": "/another checkout", "note": "a quote \" and\nnewline"
+        }))
+        .unwrap(),
+        source: crate::store::event::SignalSource::Forge,
+        watch: None,
+    };
     let expected: Vec<std::ffi::OsString> = [
         "--root",
         "/project with spaces",
         "workflow",
         "advance",
         "--wake-signal",
-        "pr.ready",
     ]
     .into_iter()
     .map(Into::into)
     .collect();
-    assert_eq!(advance_args(root, None, Some("pr.ready")), expected);
+    let args = advance_args(root, None, Some(&signal));
+    assert_eq!(args[..5], expected);
+    assert_eq!(
+        serde_json::from_str::<crate::harness::schedule::signal::Signal>(args[5].to_str().unwrap())
+            .ok(),
+        Some(signal)
+    );
 }
 
 const VALID: &str = r#"

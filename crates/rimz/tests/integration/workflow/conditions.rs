@@ -46,7 +46,13 @@ fn condition_holds_merge_survive_wakes_and_restart_after_another_answer() {
         text.contains("holding ready ") && text.contains("/2m"),
         "{text}"
     );
-    success(command(&env, &["events", "emit", "condition.sample"]));
+    let stage_board = env
+        .project_root
+        .join(".rimz/team")
+        .canonicalize()
+        .unwrap()
+        .join("blackboard.md");
+    wakes::wake(&env, "team.stage", json!({"board": stage_board}));
     let woke = until(&env, &id, |v| {
         v["record"]["wait"]["count"].as_u64().unwrap_or(0) >= 2
     });
@@ -134,7 +140,18 @@ fn condition_unknown_waits_for_a_successful_post_entry_forge_probe() {
         "{reason}"
     );
     forge(&env, jiff::Timestamp::now(), true);
-    success(command(&env, &["events", "emit", "condition.fresh"]));
+    success(command(
+        &env,
+        &[
+            "events",
+            "emit",
+            "pr.opened",
+            "--source",
+            "forge",
+            "--json",
+            &json!({"path":env.project_root}).to_string(),
+        ],
+    ));
     let done = settled(&env, &id, "done");
     assert_eq!(
         done["record"]["input"],

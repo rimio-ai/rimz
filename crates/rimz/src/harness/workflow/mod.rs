@@ -38,7 +38,7 @@ impl ScopeRoots {
 pub fn advance_args(
     project_root: &Path,
     id: Option<&crate::ids::WorkflowRunId>,
-    wake_signal: Option<&str>,
+    wake_signal: Option<&crate::harness::schedule::signal::Signal>,
 ) -> Vec<std::ffi::OsString> {
     let mut args = vec![
         "--root".into(),
@@ -50,7 +50,8 @@ pub fn advance_args(
         args.push(id.as_str().into());
     }
     if let Some(signal) = wake_signal {
-        args.extend(["--wake-signal".into(), signal.into()]);
+        let signal = serde_json::json!(crate::store::event::SignalEventPayload::from(signal));
+        args.extend(["--wake-signal".into(), signal.to_string().into()]);
     }
     args
 }

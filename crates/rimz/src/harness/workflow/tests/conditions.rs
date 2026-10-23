@@ -108,6 +108,7 @@ fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
         ("bad key", format!("{CONDITION}key=true\n"), "checks.pr"),
         ("prompt", CONDITION.replace("else='pending'", "prompt-file='prompts/build.md'\nelse='pending'"), "checks.pr.prompt-file"),
         ("window", CONDITION.replace("else='pending'", "window='5h.left>=40'\nelse='pending'"), "checks.pr.window"),
+        ("wake", CONDITION.replace("else='pending'", "wake=[]\nelse='pending'"), "checks.pr.wake"),
         ("missing provider", CONDITION.replace("pr=merged", "window.5h.left>=40"), "checks.pr.provider"),
         ("unneeded provider", CONDITION.replace("else='pending'", "provider='claude'\nelse='pending'"), "checks.pr.provider"),
         ("unknown provider", CONDITION.replace("else='pending'", "provider='missing-kind'\nelse='pending'").replace("pr=merged", "window.5h.left>=40"), "checks.pr.provider"),
@@ -137,4 +138,85 @@ fn condition_validation_refuses_malformed_cases_and_inapplicable_fields() {
     .unwrap();
     let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn wake_validation_accepts_selectors_and_strict_match_tables() {
+    let (home, dir) = fixture();
+    for runner in [
+        "run='true'\non.ok='@done'",
+        "shell='true'\non={pass='@done',fail='@user'}",
+        "agent='claude'\nprompt-file='prompts/build.md'\non.ok='@done'",
+    ] {
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\n{runner}\nwake=['ci.*', 'team.stage', 'review.ready', {{signal='pr.opened', match={{path='*', branch='main'}}}}]\n"
+        );
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        assert!(report.errors.is_empty(), "{text}: {:?}", report.errors);
+    }
+}
+
+#[test]
+fn wake_validation_refuses_invalid_and_unreachable_subscriptions() {
+    let (home, dir) = fixture();
+    for entry in [
+        "'bad selector'",
+        "{signal='review.ready', match={env=' '}}",
+        "'ci.finished'",
+        "{signal='ci.*', match={conclusion='success'}}",
+        "'agent.*'",
+        "'agent.idle'",
+        "'team.idle'",
+        "'team.*'",
+        "{signal='review.ready', extra=true}",
+        "{match={env='prod'}}",
+        "{signal='review.ready', match={env=42}}",
+    ] {
+        let text = format!(
+            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\nwake=[{entry}]\n"
+        );
+        fs::write(dir.join("workflow.toml"), &text).unwrap();
+        let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.path == "checks.pr.wake"),
+            "{entry}: {:?}",
+            report.errors
+        );
+    }
+}
+
+#[test]
+fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
+    for (terms, expected) in [
+        ("ci=failed", vec!["ci.*"]),
+        ("!pr=open || pr.queue=queued", vec!["pr.*"]),
+        ("team.stage=Done && ci=passed", vec!["team.stage", "ci.*"]),
+        (
+            "ci[main]=passed || pr[main]=merged || pr.queue[main]=queued",
+            vec![],
+        ),
+        ("window.5h.left>=40", vec![]),
+    ] {
+        let check: Check = toml::from_str(&format!(
+            "else='pending'\n[[cases]]\nwhen=['{terms}']\noutcome='ready'\n"
+        ))
+        .unwrap();
+        let subscriptions = check.subscriptions().unwrap();
+        assert_eq!(
+            subscriptions
+                .iter()
+                .map(|(selector, _)| selector.to_string())
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "{terms}"
+        );
+        assert!(subscriptions.iter().all(|(_, matches)| matches.is_empty()));
+    }
 }

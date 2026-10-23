@@ -8,7 +8,11 @@ use super::{AttemptHost, Occupancy, ScopeRoots};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::harness::schedule::when::WindowReadings;
+use crate::harness::schedule::{
+    arm,
+    signal::{Signal, SignalResolution, resolve_subscription},
+    when::WindowReadings,
+};
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, Host, JournalEvent, KeyVisits, LiveAttempt, ParkReason,
@@ -726,7 +730,7 @@ pub(crate) fn rename_task(state: &StatePaths, old: &str, new: &str) -> Result<Ve
     Ok(renamed)
 }
 
-pub fn wake(state: &StatePaths, signal: &str) -> Result<()> {
+pub fn wake(state: &StatePaths, signal: &Signal) -> Result<()> {
     for record in workflow::list(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
@@ -736,6 +740,35 @@ pub fn wake(state: &StatePaths, signal: &str) -> Result<()> {
                 return Ok(());
             }
             let spec = spec::load(&paths.home)?;
+            let Some(check) = spec.checks.get(&current.node) else {
+                return Ok(());
+            };
+            let subscribed = check
+                .subscriptions()?
+                .into_iter()
+                .any(|(selector, mut matches)| {
+                    match arm::default_signal_match_key(&selector, &matches) {
+                        Some("path") => {
+                            matches.insert(
+                                "path".into(),
+                                current.scope.path.to_string_lossy().into_owned(),
+                            );
+                        }
+                        Some("instance") if !matches.contains_key("board") => {
+                            matches.insert(
+                                "board".into(),
+                                crate::harness::scratch::durable_board_path(&current.scope.path)
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            );
+                        }
+                        _ => {}
+                    }
+                    resolve_subscription(&selector, &matches, signal) == SignalResolution::Deliver
+                });
+            if !subscribed {
+                return Ok(());
+            }
             let mut t = Transition {
                 record: current,
                 spec: &spec,
@@ -753,7 +786,7 @@ pub fn wake(state: &StatePaths, signal: &str) -> Result<()> {
             t.push(
                 None,
                 JournalEvent::Wake {
-                    signal: signal.into(),
+                    signal: signal.name.as_str().into(),
                 },
             );
             persist(&t, &guard)?;

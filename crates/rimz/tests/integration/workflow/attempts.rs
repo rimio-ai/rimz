@@ -20,6 +20,37 @@ fn dummy_agent_process() -> std::process::Child {
 }
 
 #[test]
+fn signals_leave_step_waits_and_live_attempts_untouched() {
+    let room = Room::new("window='5h.left>=100'\n");
+    let id = room.start();
+    until(&room.env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "window"
+    });
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    for outcome in ["window", "takeover", "occupied"] {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let mut record = records::load(&paths).unwrap();
+        record.wait.as_mut().unwrap().outcome = outcome.into();
+        records::write(&paths, &record, &guard).unwrap();
+        drop(guard);
+        let before = show(&room.env, &id);
+        wakes::wake(&room.env, "review.ready", json!({}));
+        let after = show(&room.env, &id);
+        assert_eq!(after["journal"], before["journal"], "{outcome}");
+        assert_eq!(after["record"], before["record"], "{outcome}");
+    }
+    let room = Room::new("");
+    let id = room.start();
+    let _ = room.attempt(&id);
+    let before = show(&room.env, &id);
+    wakes::wake(&room.env, "review.ready", json!({}));
+    let after = show(&room.env, &id);
+    assert_eq!(after["journal"], before["journal"]);
+    assert_eq!(after["record"], before["record"]);
+}
+
+#[test]
 fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
     let room = Room::new("");
     fs::write(room.env.project_root.join("items.txt"), "one\ntwo\n").unwrap();

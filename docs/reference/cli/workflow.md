@@ -57,7 +57,7 @@ waiting: sweep, takeover, since 09:10, ×3
 | `occupied` | The checkout holds an idle agent and the step has no `takeover = true`. |
 | `since` | First time the run waited here. |
 | `×N` | How many advances found it still waiting. |
-| `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal clears it. For a `for` hold it is when the hold completes, and signals and the minute tick re-sample the case before then. |
+| `recheck` | The check's `recheck_at`, before which nothing evaluates; a signal matching that check's subscription clears it. For a `for` hold it is when the hold completes, and subscribed signals and the minute tick re-sample the case before then. |
 
 ## Cancel and resume
 

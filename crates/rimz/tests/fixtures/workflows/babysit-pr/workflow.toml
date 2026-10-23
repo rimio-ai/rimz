@@ -6,6 +6,7 @@ start = "pr"
 run = "uv run checks/pr.py"
 on = { merged = "notes", ci-pending = "@wait", needs-sweep = "sweep" }
 timeout = "2d"
+wake = ["ci.*", "pr.*"]
 
 [checks.notes]
 run = "uv run checks/notes.py"
