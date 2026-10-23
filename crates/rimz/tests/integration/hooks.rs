@@ -956,6 +956,7 @@ fn runtime_env_context_reaches_the_root_prompt_and_never_a_side_conversation() {
             &[
                 ("TMUX_PANE", "%0"),
                 (rimz::harness::launch::ENV_RUNTIME_ENV, "1"),
+                ("RIMZ_TEST_HOOK_REPLY_WAIT_MS", "30000"),
             ],
         );
         assert!(
