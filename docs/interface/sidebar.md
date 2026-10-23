@@ -364,7 +364,7 @@ A card's slots are set by its stage, age, density, and selection reach. Data fil
 | card | lines |
 |------|-------|
 | stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, or a subagents and waits section clicked open restores the card |
-| fresh: idle, never prompted, including teammates and held cards | identity, plus the description when it was launched with one |
+| fresh: idle, never prompted, including held cards | identity, plus the description when it was launched with one |
 | fresh, live-selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
 | engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |
 | engaged, with subagents or waits | adds the subagents and waits line, except on unreached idle and done cards with their entries closed |
