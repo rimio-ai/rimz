@@ -158,21 +158,21 @@ rimz accounts [--json] [--refresh] [--all]
 rimz accounts list [--json] [--refresh] [--all]
 ```
 
-Both spellings print the same overview: one table per provider, with `default` first and named accounts by name. Providers with a logged-in account or named accounts get tables; other kinds fold into an `Also:` line with their version and login status. Spend history alone does not earn a table. `--all` expands folded kinds. Providers follow the dashboard's usage ranking; kinds without default-account facts follow in registry order.
+Both spellings print the same overview. Providers with multiple accounts or a quota reading get their own tables, with `default` first and named accounts by name. A reading is a window, paid usage, or reset credits on an account with a login; stale cached facts on a logged-out account do not qualify. Healthy single-account providers without readings share `Other providers`. Unchecked logins and account repairs follow below. Spend history alone does not earn a table. Within each section, providers follow the dashboard's usage ranking; kinds without default-account facts follow in registry order. Multiple-account providers keep their tables even when not installed.
 
 | Flag | Effect |
 | --- | --- |
-| `--all` | Expand every registered kind into a table. Does not change JSON rows. |
+| `--all` | Include unhealthy and uninstalled single-account providers without readings in `Other providers`. Does not change JSON rows. |
 | `--refresh` | Bypass account and usage TTLs ([freshness](#how-fresh-the-figures-are)). |
-| `--json` | Print the [merged account array](#json-output), including folded kinds. |
+| `--json` | Print the [merged account array](#json-output), including kinds hidden from the text overview. |
 
-The heading names the provider and CLI version: the active account's version, else the default account's, else the first known. With spending recorded and every account in the default history pool, it adds `$X spent in 7d` and, for multiple members, `(shared by default, a, b)`. With any standalone account, it instead adds `shared pool $X spent in 7d`, without the member list.
+The heading names the provider and CLI version: the active account's version, else the default account's, else the first known. With spending recorded and every account in the default history pool, it adds `$X spent in 7d` and, for multiple members, `(shared by default, a, b)`. With any standalone account, it instead adds `shared pool $X spent in 7d`, without the member list. A tally that rounds to `$0.00` and its member list are omitted; spend-column cells are unchanged.
 
 ### Provider tables
 
 | Column | Shows |
 | --- | --- |
-| (marker) | `●` on the account a launch from here uses; `○` on the machine default when it is not the `●` row. |
+| (marker) | Only for providers with multiple accounts: `●` on the account a launch from here uses; `○` on the machine default when it is not the `●` row. |
 | `NAME` | Bare account name; `default` is muted. |
 | `LABEL` | Only when some account in this provider's table has a valid label; rows without one have an empty cell. `NAME` remains the identity. |
 | `PLAN` | Plan label or a faint `–` when unknown, overridden by the first applicable state below. |
@@ -197,17 +197,23 @@ Pace is the used share divided by the elapsed share of the window: `1.0x` lasts 
 
 ### Position and footer
 
-The position is the room the command runs in, else the project at the current directory, or the one `--root` names. `●` marks the account a launch from that position uses, inside or outside a room: its room pin, else the trusted project's selection, else the machine's `[accounts.use]`, else `default`, resolved live. Pins decide per provider. A blocked or unreadable selection leaves affected kinds without `●` and warns with the fix; healthy kinds keep theirs. A pin to `default` needs neither project nor machine configuration. An unreadable room record leaves all kinds without `●`.
+The position is the room the command runs in, else the project at the current directory, or the one `--root` names. For providers with multiple accounts, `●` marks the account a launch from that position uses, inside or outside a room: its room pin, else the trusted project's selection, else the machine's `[accounts.use]`, else `default`, resolved live. Pins decide per provider. A blocked or unreadable selection leaves affected kinds without `●` and warns with the fix; healthy kinds keep theirs. A pin to `default` needs neither project nor machine configuration. An unreadable room record leaves all kinds without `●`.
 
 `○` marks the machine's selection, or `default` when it selects nothing, only when that account is not active. It is the default for new rooms without a project selection or explicit pin, and existing rooms following the machine default.
 
-After the tables comes one blank line, the marker legend, the folded `Also:` line, then displayed accounts' problems with fixes. Rows reading `not installed` have no problem line. The legend uses displayed rows only:
+After the own tables comes the marker legend, using only providers with multiple accounts:
 
 - One deciding layer: `● next launch from here (this room)`, `(this project)`, or `(machine default)`.
-- Mixed layers: `● next launch from here: codex pinned by this room, claude pinned by this project, pi by machine default`. Only present groups appear, in room, project, machine order, with kinds joined by `, `.
+- Mixed layers: `● next launch from here: codex pinned by this room, claude by machine default`. Only present groups appear, in room, project, machine order, with kinds joined by `, `.
 - `   ○ new rooms` follows only when a displayed row carries `○`. With no `●`, it stands alone as `○ new rooms`. With neither marker, no legend prints.
 
-Setup problems name their repair: create or re-add the home, install hooks for `default`, enable disabled hooks, or trust Codex hooks with `/hooks` under that account. Without a setup problem, a lapse names `plan lapsed: no <product> access`; restore access, then run `rimz accounts show <kind> --refresh`. Logged-out accounts name their login command. An undeclared selected account names the declaration or selection fix.
+`Other providers` follows the legend. Its columns are `PROVIDER` (product name), `LOGIN` (plan label, or `logged in`), optional `READING` under the rule above, `AGENTS`, optional `SPEND 7d` when some tally does not round to `$0.00`, then `VERSION` (`v…`, or `–` when unknown). With `--all`, unhealthy and uninstalled single-account providers without readings join this table; their `LOGIN` cells use the same state precedence as `PLAN`.
+
+Without `--all`, installed single-account providers without readings whose login is unchecked appear in a faint `Not checked, launches proceed:` line. It sits directly below `Other providers`, or on its own when that table is empty. Groups appear in this order: each distinct `login read failed: <cause>` (or `login read failed` without a cause), then `not probed yet`, then `no login check`. Kind ids are alphabetical within each group. `--all` omits this line because its table includes those states.
+
+`Needs you` ends the overview, listing every installed account with a problem, whether or not it has its own table. Its aligned columns are the kind id (`kind@name` for a named account), state, and short repair. Setup problems come first, then lapses, then logouts, keeping provider and account order within each class. Missing homes and hooks name `rimz accounts add <kind> <name>` or `rimz hooks install <kind>` for `default`; untrusted or disabled hooks name the action, including the named account's launch environment when needed. Configuration errors retain their full sentence. A lapse reads `no <Product> access`; restore access, then run `rimz accounts show <kind> --refresh`. A logout reads `log in once: <command>`. Uninstalled accounts have no repair line. Use `show` for the long problem, paths, and hook names.
+
+Sections have one blank line between them and no trailing blank line, except the unchecked line directly below `Other providers`. Empty sections are omitted. If nothing qualifies, the overview points to `rimz accounts --all` to list every supported provider.
 
 `rimz start` warns about configured account problems and opens the room; an explicit `--account` still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts, except that watched Codex and Hermes launches proceed to their hook-trust prompts with a notice ([launch checks](./agents.md#the-account-check-at-launch)). The account row still says `hooks untrusted` until you consent. Listing exits 0 despite account problems. `rimz doctor` additionally reports exported-home conflicts; a named account missing hooks is `hooks missing`, with `rimz accounts add <kind> <name>` as the repair.
 
@@ -219,7 +225,7 @@ rimz accounts show <KIND>[@<NAME>] [--json] [--refresh]
 
 `show codex` prints every Codex account as a block; `show claude@work` selects just that account. Any known provider kind is accepted, even without named accounts or cached facts. An unknown kind exits 1 with ``unknown provider kind `<kind>`; known kinds: …``; an undeclared name exits 1 with ``no <kind> account `<name>`; configured: default, …``.
 
-Blocks use the table's state precedence in their titles, alongside the plan and account's default layers. Markers, the footer legend, and problem lines follow the overview rules. A single selected named account retains its canonical `kind@name` in the title.
+Blocks use the table's state precedence in their titles, alongside the plan and account's default layers. Markers and the footer legend appear only for providers with multiple accounts, counted before the optional name filter. A single selected named account retains its canonical `kind@name` in the title and its marker when that provider has other accounts. Long problem lines retain paths, hook names, and reasons, unlike the overview's short repairs.
 
 | Row | Shows |
 | --- | --- |
@@ -253,7 +259,7 @@ Rooms and concurrent account queries share one probe and one usage read per acco
 
 ## JSON output
 
-`accounts --json`, `accounts list --json`, and `accounts show … --json` print the same top-level array contract. Listing includes every known kind, folded or not, plus undeclared selected accounts and failed configuration rows. `show` filters by kind and optional name. Rows follow the overview order. Credentials and account fingerprints never appear.
+`accounts --json`, `accounts list --json`, and `accounts show … --json` print the same top-level array contract. Listing includes every known kind, including those hidden from the text overview, plus undeclared selected accounts and failed configuration rows. `show` filters by kind and optional name. Rows keep provider usage-ranking order, then registry order for kinds without default-account facts, with `default` first and named accounts by name; they are not split into the text overview's sections. Credentials and account fingerprints never appear.
 
 Every key below is present, with `null` when unknown, except `problem`, `probe_error`, `extra_credits`, and `reset_credits`, which are omitted when absent.
 

@@ -56,17 +56,23 @@ fn unavailable_login_probe_keeps_accounts_stderr_quiet() {
             .unwrap(),
     );
     let plain = accounts(&env, &["--refresh"]);
-    succeeded(&plain);
+    let text = succeeded(&plain);
     assert!(
         plain.stderr.is_empty(),
         "{}",
         String::from_utf8_lossy(&plain.stderr)
     );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("Not checked, launches proceed:")
+                && line.contains("claude (login read failed: exited 42)")),
+        "{text}"
+    );
     let alias = hermetic(&env, &mut env.rimz())
         .args(["providers", "--refresh"])
         .output()
         .unwrap();
-    succeeded(&alias);
+    assert_eq!(succeeded(&alias), text);
     assert_eq!(
         String::from_utf8_lossy(&alias.stderr),
         "rimz: warning: `rimz providers` is deprecated and goes in the next release; use `rimz accounts` (`rimz accounts show <kind>` for one provider)\n"
@@ -74,10 +80,46 @@ fn unavailable_login_probe_keeps_accounts_stderr_quiet() {
 }
 
 #[test]
+fn single_markers_disappear_but_filtered_multi_account_markers_remain() {
+    let env = Env::new();
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        r#"case "$1" in --version) echo 2.1.304;; auth) printf '{"loggedIn":true,"subscriptionType":"pro"}\n';; esac"#,
+    );
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["hooks", "install", "claude"])
+            .output()
+            .unwrap(),
+    );
+    let single = succeeded(&accounts(&env, &["show", "claude"]));
+    assert!(!single.contains('●') && !single.contains('○'), "{single}");
+    assert!(!single.contains("next launch"), "{single}");
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    let default = succeeded(&accounts(&env, &["show", "claude@default"]));
+    assert!(default.starts_with("● Claude"), "{default}");
+    assert!(
+        default.contains("● next launch from here (machine default)"),
+        "{default}"
+    );
+    succeeded(&accounts(&env, &["use", "--global", "claude", "work"]));
+    let named = succeeded(&accounts(&env, &["show", "claude@work"]));
+    assert!(named.starts_with("● Claude · claude@work"), "{named}");
+    assert!(
+        named.contains("● next launch from here (machine default)"),
+        "{named}"
+    );
+}
+
+#[test]
 fn bare_accounts_runs_list() {
     let env = Env::new();
     let bare = succeeded(&accounts(&env, &[]));
-    assert!(bare.contains("Also:"), "{bare}");
+    assert_eq!(
+        bare,
+        "No provider is set up here; `rimz accounts --all` lists every supported one.\n"
+    );
     assert!(!bare.contains("KIND") && !bare.contains("STATUS"), "{bare}");
     assert_eq!(bare, succeeded(&accounts(&env, &["list"])));
     let alias = hermetic(&env, &mut env.rimz())
@@ -442,15 +484,15 @@ fn invalid_kind_report(doctor: bool) {
     if !doctor {
         assert_eq!(default["active"], false);
         let human = succeeded(&accounts(&env, &["list", "--all"]));
-        assert!(human.contains("Codex"), "{human}");
+        assert!(human.contains("Other providers"), "{human}");
         assert!(
             human.contains("give each account its own directory"),
             "{human}"
         );
         let default_row = human
             .lines()
-            .find(|row| row.contains("default") && row.contains("unavailable"))
-            .expect("failed kind retains its unavailable default row in the table");
+            .find(|row| row.trim_start().starts_with("Codex ") && row.contains("unavailable"))
+            .expect("failed kind retains its unavailable default row in Other providers");
         assert_eq!(default["default_for"], json!([]), "{human}");
         assert_eq!(default["machine_default"], false, "{human}");
         assert!(

@@ -723,6 +723,26 @@ pub enum BirthLoginErr {
     },
 }
 
+impl BirthLoginErr {
+    /// A concise repair for listings; configuration errors retain their full context.
+    pub fn repair(&self) -> String {
+        match self {
+            Self::MissingHome { kind, name, .. } | Self::HooksMissing { kind, name, .. } => {
+                format!("run {}", home_fix(kind, name))
+            }
+            Self::HooksUntrusted {
+                kind,
+                home,
+                env_key,
+                fix,
+                ..
+            } => format!("{fix}{}", started_as(*env_key, home, kind)),
+            Self::HooksDisabled { fix, .. } => fix.to_string(),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl ProviderLogin {
     /// Check a named account before a requested room pin or account switch:
     /// its home must exist and carry trusted RimZ hooks. The default account

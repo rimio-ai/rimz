@@ -2,6 +2,6 @@
 source: crates/rimz/src/cli/accounts/report_tests.rs
 expression: text
 ---
-Claude · v1.2.3
-  NAME     PLAN    AGENTS  READING
-  default  lapsed  –       never read
+Other providers
+   PROVIDER  LOGIN   READING     AGENTS  VERSION
+   Claude    lapsed  never read  –       v1.2.3

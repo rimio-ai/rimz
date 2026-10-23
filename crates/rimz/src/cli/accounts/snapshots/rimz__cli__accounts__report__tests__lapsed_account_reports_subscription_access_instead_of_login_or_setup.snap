@@ -13,7 +13,9 @@ Codex
 ●  team     home missing  –       -         never read
 
 ● next launch from here (machine default)
-claude account `default` home `/nonexistent/u/.claude` is not a directory; run `rimz hooks install claude`
-plan lapsed: no Claude access
-codex account `default` home `/nonexistent/u/.codex` is not a directory; run `rimz hooks install codex`
-codex account `team` home `/srv/team` is not a directory; run `rimz accounts add codex team`
+
+Needs you
+   claude        home missing  run rimz hooks install claude
+   codex         home missing  run rimz hooks install codex
+   codex@team    home missing  run rimz accounts add codex team
+   claude@alpha  lapsed        no Claude access
