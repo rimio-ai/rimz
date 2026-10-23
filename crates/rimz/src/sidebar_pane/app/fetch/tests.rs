@@ -2107,6 +2107,36 @@ fn one_cycle_projects_only_the_eldest_on_the_worker() {
         let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
         renderer.on_snapshot(&mut dispatcher);
         assert_eq!(renderer.projections, u64::from(index != 0));
+    }
+}
+
+#[test]
+fn one_cycle_projects_each_pane_excluding_only_itself() {
+    let fixture = FetchFixture::new();
+    let panes = ["terminal_7", "terminal_8", "terminal_9"];
+    let frame = crate::sidebar::frame::assemble_frame(
+        panes.iter().map(|raw| pane(raw, "tab_1", false)).collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
+
+    let subscribers = Subscribers::default();
+    let mut updates = Vec::new();
+    for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
+        let (subscriber, rx) = subscriber(id, own, 2, wake_channel().0);
+        subscribe(&subscribers, subscriber);
+        updates.push((own, rx));
+    }
+    let mut worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+
+    for (own, rx) in updates {
+        let mut config = worker.config.clone();
+        config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
+        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
+        renderer.on_snapshot(&mut dispatcher);
         assert_eq!(renderer.current.own_view.as_ref().unwrap().sibling_count, 2);
         let shown: Vec<String> = renderer
             .current
@@ -3110,6 +3140,69 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
         Duration::from_secs(1),
         "the next eldest's tick takes over"
     );
+}
+
+#[test]
+fn the_worker_tick_follows_age_not_magnitude() {
+    fn tick(worker: &FetchWorker, sink: &ResultSink) -> Duration {
+        worker.stand(sink).tick
+    }
+
+    let fixture = FetchFixture::new();
+    let subscribers = Subscribers::default();
+    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 1, wake_channel().0);
+    let (younger, _younger_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
+    subscribe(&subscribers, eldest);
+    subscribe(&subscribers, younger);
+    let worker = fixture.worker();
+    let mut sink = ResultSink::shared(
+        subscribers.clone(),
+        Covered::default(),
+        fixture.host_data.clone(),
+    );
+
+    assert_eq!(tick(&worker, &sink), Duration::from_secs(1));
+    unsubscribe(&subscribers, "01");
+    sink.begin_cycle();
+    assert_eq!(tick(&worker, &sink), Duration::from_secs(60));
+    unsubscribe(&subscribers, "02");
+    sink.begin_cycle();
+    assert_eq!(tick(&worker, &sink), tick_for(worker.config.tick_seconds));
+}
+
+#[test]
+fn the_worker_witness_is_its_eldest_renderers_pane() {
+    fn witness(worker: &FetchWorker, sink: &ResultSink) -> Option<PaneId> {
+        worker.stand(sink).own_pane
+    }
+
+    let fixture = FetchFixture::new();
+    let subscribers = Subscribers::default();
+    let (mut eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
+    let (younger, _younger_rx) = subscriber("02", "terminal_8", 2, wake_channel().0);
+    subscribe(&subscribers, eldest.clone());
+    subscribe(&subscribers, younger);
+    let mut worker = fixture.worker();
+    let fallback = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+    worker.config.own_pane = fallback.clone();
+    let mut sink = ResultSink::shared(
+        subscribers.clone(),
+        Covered::default(),
+        fixture.host_data.clone(),
+    );
+
+    assert_eq!(
+        witness(&worker, &sink),
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"))
+    );
+    eldest.own_pane = None;
+    subscribe(&subscribers, eldest);
+    sink.begin_cycle();
+    assert_eq!(witness(&worker, &sink), fallback);
+    unsubscribe(&subscribers, "01");
+    unsubscribe(&subscribers, "02");
+    sink.begin_cycle();
+    assert_eq!(witness(&worker, &sink), fallback);
 }
 
 #[test]
