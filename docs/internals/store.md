@@ -127,6 +127,7 @@ cache/auto-gc.json                            daily sweep stamp
 cache/{publish,log-sync,dead-reap}.stamp       off-lock tail debounce
 cache/auto-rotate.stamp                        rotation debounce
 cache/skills/<sha256>/                        handleless rewritten skills
+cache/ssh-config/<sha256>/                    shared system SSH Include-graph snapshots
 owned/agents/<handle>/scratch/                per-handle scratch
 owned/agents/<handle>/skills/<sha256>/         immutable rewritten skills
 owned/runs/<run_id>.json                      supervised-run records

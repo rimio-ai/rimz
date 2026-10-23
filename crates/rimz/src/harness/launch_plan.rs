@@ -864,6 +864,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 skills_dir: &inputs
                     .state
                     .agent_skills_dir(request.identity.name.as_deref()),
+                ssh_config_file: Path::new("/etc/ssh/ssh_config"),
+                ssh_config_copies_dir: &inputs.state.ssh_config_copies_dir,
                 provider_home,
                 provider_home_env_keys: adapter.config_home_env_keys(),
                 default_home: (!login.is_default())

@@ -1,7 +1,9 @@
-//! Immutable, content-addressed copies carrying provider user-only invocation markers.
+//! Immutable, content-addressed copies for skill policy and system SSH configuration.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
+use std::ops::Range;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -33,7 +35,7 @@ pub struct PlannedCopy {
     pub source: PathBuf,
     pub target: PathBuf,
     entries: Vec<Entry>,
-    skills_dir: PathBuf,
+    parent_dir: PathBuf,
 }
 
 pub(super) fn plan(
@@ -59,22 +61,188 @@ fn plan_entries(
         source: source.to_path_buf(),
         target,
         entries,
-        skills_dir: skills_dir.to_path_buf(),
+        parent_dir: skills_dir.to_path_buf(),
     })
+}
+
+pub(super) fn plan_ssh_config(
+    parent_dir: &Path,
+    source: &Path,
+) -> Option<(PlannedCopy, PathBuf, PathBuf)> {
+    let canonical = source.canonicalize().ok()?;
+    let base = std::path::absolute(source.parent()?).ok()?;
+    let mut pending = vec![canonical.clone()];
+    let mut visited = BTreeSet::new();
+    let mut files = BTreeMap::new();
+    while let Some(path) = pending.pop() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let includes = ssh_includes(&bytes, &base);
+        pending.extend(
+            includes
+                .iter()
+                .flat_map(|include| &include.paths)
+                .filter_map(|(_, canonical)| canonical.clone()),
+        );
+        files.insert(path, (metadata.permissions(), bytes, includes));
+    }
+    // Only the root's includes reach other files, so fewer than two means no readable
+    // root or nothing it includes to mirror.
+    if files.len() < 2 {
+        return None;
+    }
+    let names: BTreeMap<_, _> = files
+        .keys()
+        .map(|path| {
+            (
+                path.clone(),
+                PathBuf::from(hex::encode(Sha256::digest(
+                    path.as_os_str().as_encoded_bytes(),
+                ))),
+            )
+        })
+        .collect();
+    let capture = |target: &Path| {
+        files
+            .iter()
+            .map(|(path, (permissions, bytes, includes))| Entry {
+                path: names[path].clone(),
+                permissions: fs::Permissions::from_mode(permissions.mode() & !0o022),
+                bytes: Some(rewrite_ssh_config(bytes, includes, &names, target)),
+            })
+            .collect::<Vec<_>>()
+    };
+    // A NUL cannot occur in a host path, so kept host paths cannot alias the placeholder.
+    let target = parent_dir.join(tagged_digest(
+        &capture(Path::new("/\0ssh-config")),
+        b"ssh-config-v1",
+    ));
+    let copy = PlannedCopy {
+        source: source.to_path_buf(),
+        entries: capture(&target),
+        target,
+        parent_dir: parent_dir.to_path_buf(),
+    };
+    Some((copy, names[&canonical].clone(), canonical))
+}
+
+struct SshInclude {
+    line: Range<usize>,
+    paths: Vec<(PathBuf, Option<PathBuf>)>,
+}
+
+fn ssh_includes(bytes: &[u8], base: &Path) -> Vec<SshInclude> {
+    const MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: true,
+    };
+    let mut includes = Vec::new();
+    let mut offset = 0;
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let range = offset..offset + line.len();
+        offset = range.end;
+        let text = String::from_utf8_lossy(line);
+        let Some((keyword, arguments)) = text
+            .trim_ascii()
+            .split_once(|ch: char| ch.is_ascii_whitespace() || ch == '=')
+        else {
+            continue;
+        };
+        if !keyword.eq_ignore_ascii_case("include") {
+            continue;
+        }
+        let Some(arguments) = shlex::split(
+            arguments.trim_start_matches(|ch: char| ch.is_ascii_whitespace() || ch == '='),
+        ) else {
+            continue;
+        };
+        let mut paths = Vec::new();
+        for argument in arguments {
+            if argument.starts_with('~') {
+                paths.push((PathBuf::from(argument), None));
+                continue;
+            }
+            let pattern = if Path::new(&argument).is_absolute() {
+                argument
+            } else {
+                format!(
+                    "{}/{}",
+                    glob::Pattern::escape(&base.to_string_lossy()),
+                    argument
+                )
+            };
+            if let Ok(matches) = glob::glob_with(&pattern, MATCH_OPTIONS) {
+                paths.extend(matches.filter_map(Result::ok).map(|path| {
+                    let canonical = path.canonicalize().ok();
+                    (path, canonical)
+                }));
+            }
+        }
+        includes.push(SshInclude { line: range, paths });
+    }
+    includes
+}
+
+fn rewrite_ssh_config(
+    bytes: &[u8],
+    includes: &[SshInclude],
+    names: &BTreeMap<PathBuf, PathBuf>,
+    target: &Path,
+) -> Vec<u8> {
+    let mut rewritten = Vec::new();
+    let mut offset = 0;
+    for include in includes {
+        rewritten.extend_from_slice(&bytes[offset..include.line.start]);
+        let line = &bytes[include.line.clone()];
+        if include.paths.is_empty() {
+            rewritten.extend_from_slice(b"# ");
+            rewritten.extend_from_slice(line);
+        } else {
+            rewritten.extend_from_slice(b"Include");
+            for (path, canonical) in &include.paths {
+                let copy = canonical
+                    .as_ref()
+                    .and_then(|path| names.get(path))
+                    .map(|name| target.join(name));
+                let path = copy.as_deref().unwrap_or(path);
+                let quoted = glob::Pattern::escape(&path.to_string_lossy())
+                    .replace('\\', r"\\\\")
+                    .replace('"', r#"\""#);
+                rewritten.extend_from_slice(format!(" \"{quoted}\"").as_bytes());
+            }
+            if line.ends_with(b"\n") {
+                rewritten.push(b'\n');
+            }
+        }
+        offset = include.line.end;
+    }
+    rewritten.extend_from_slice(&bytes[offset..]);
+    rewritten
 }
 
 pub(super) fn apply(copy: &PlannedCopy) -> Result<(), SandboxErr> {
     let PlannedCopy {
         target,
         entries,
-        skills_dir,
+        parent_dir,
         ..
     } = copy;
-    crate::disk::paths::ensure_private_runtime_dir(skills_dir)?;
+    crate::disk::paths::ensure_private_runtime_dir(parent_dir)?;
     if target.is_dir() {
         return Ok(());
     }
-    let temp = skills_dir.join(format!(".{}", uuid::Uuid::now_v7()));
+    let temp = parent_dir.join(format!(".{}", uuid::Uuid::now_v7()));
     crate::disk::paths::ensure_private_runtime_dir(&temp)?;
     let result = (|| {
         for entry in entries {
@@ -187,12 +355,17 @@ fn collect(
 }
 
 fn digest(entries: &[Entry], kind: ManualSkill) -> String {
-    let mut hash = Sha256::new();
-    hash.update(match kind {
+    let domain = match kind {
         ManualSkill::Unsupported => b"unsupported-v1".as_slice(),
         ManualSkill::Frontmatter => b"frontmatter-v2".as_slice(),
         ManualSkill::OpenAiPolicy => b"openai-policy-v2".as_slice(),
-    });
+    };
+    tagged_digest(entries, domain)
+}
+
+fn tagged_digest(entries: &[Entry], domain: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(domain);
     for entry in entries {
         let path = entry.path.as_os_str().as_encoded_bytes();
         hash.update((path.len() as u64).to_le_bytes());
@@ -577,7 +750,7 @@ mod tests {
 
         assert_eq!(copy.target, target);
         assert_eq!(copy.source, source);
-        assert_eq!(copy.skills_dir, skills_dir);
+        assert_eq!(copy.parent_dir, skills_dir);
         assert_eq!(copy.entries[0].permissions.mode(), 0o640);
         assert_eq!(
             copy.entries[0].bytes.as_deref(),

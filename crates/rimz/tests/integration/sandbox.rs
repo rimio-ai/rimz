@@ -624,6 +624,475 @@ fn environment(env: &Env) -> BTreeMap<String, String> {
     .collect()
 }
 
+fn ssh_config_plan(env: &Env, source: &Path) -> SandboxPlan {
+    let state = env.store();
+    rimz::sandbox::plan(&SandboxInputs {
+        env: &environment(env),
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        checkout: None,
+        read_only: vec![env.home_root.clone()],
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: source,
+        ssh_config_copies_dir: &state.paths().ssh_config_copies_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: None,
+        skills: SkillInputs {
+            kind: "claude",
+            home: None,
+            manual: ManualSkill::Frontmatter,
+            callable: None,
+        },
+    })
+    .unwrap()
+}
+
+#[test]
+fn sandbox_ssh_config_captures_regular_targets_without_writes() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let env = Env::new();
+    let state = env.store();
+    let real = env.home_root.join("system-ssh");
+    std::fs::create_dir(&real).unwrap();
+    let source = env.home_root.join("ssh_config");
+    let root = env.home_root.join("system-ssh.conf");
+    symlink(&root, &source).unwrap();
+    std::fs::write(
+        &root,
+        "# root\r\ninclude=\"system-ssh/*.conf\" missing.conf\nInclude ~/.ssh/config\nInclude absent-*.conf",
+    )
+    .unwrap();
+    let regular = real.join("10-regular.conf");
+    let nested_dir = env.home_root.join("nested config");
+    std::fs::create_dir(&nested_dir).unwrap();
+    let nested = nested_dir.join("10-regular.conf");
+    let regular_text = format!(
+        "Host nomatch.invalid\n  INCLUDE \"{}\"\nInclude ssh_config\n",
+        nested.display()
+    );
+    std::fs::write(&regular, &regular_text).unwrap();
+    std::fs::set_permissions(&regular, std::fs::Permissions::from_mode(0o664)).unwrap();
+    let outside = env.home_root.join("outside.conf");
+    let outside_text = "include='relative file.conf'\n";
+    std::fs::write(&outside, outside_text).unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&nested, "Include outside.conf\n").unwrap();
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let relative = env.home_root.join("relative file.conf");
+    std::fs::write(&relative, "Include system-ssh/10-regular.conf\r\n").unwrap();
+    std::fs::set_permissions(&relative, std::fs::Permissions::from_mode(0o644)).unwrap();
+    symlink(&outside, real.join("20-linked.conf")).unwrap();
+    symlink(real.join("absent"), real.join("30-dangling.conf")).unwrap();
+    std::fs::create_dir(real.join("40-directory.conf")).unwrap();
+    nix::unistd::mkfifo(
+        &real.join("50-fifo.conf"),
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+
+    let plan = ssh_config_plan(&env, &source);
+    assert_eq!(plan.copies.len(), 1, "the Include graph needs one mirror");
+    let copy = &plan.copies[0];
+    assert_eq!(copy.source, source);
+    assert_eq!(
+        copy.target.parent().unwrap(),
+        state.paths().ssh_config_copies_dir
+    );
+    let mirrors: BTreeMap<_, _> = plan
+        .plan
+        .mounts
+        .iter()
+        .filter_map(|mount| match mount {
+            rimz::sandbox::Mount::RoBind { source, target }
+                if source.parent() == Some(copy.target.as_path()) =>
+            {
+                Some((target.clone(), source.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(mirrors.len(), 1, "only the rewritten root must be bound");
+    let root_copy = &mirrors[&root.canonicalize().unwrap()];
+    assert_eq!(
+        plan.plan.mounts.last(),
+        Some(&rimz::sandbox::Mount::RoBind {
+            source: root_copy.clone(),
+            target: root.canonicalize().unwrap(),
+        })
+    );
+    assert!(!state.paths().ssh_config_copies_dir.exists());
+    assert!(!plan.plan.host_bound_paths().contains(&copy.target));
+    let repeated = ssh_config_plan(&env, &source);
+    assert_eq!(repeated.copies[0].target, copy.target);
+    assert_eq!(repeated.plan.mounts, plan.plan.mounts);
+    let extra_dangling = real.join("60-new-dangling.conf");
+    symlink(real.join("absent"), &extra_dangling).unwrap();
+    assert_ne!(ssh_config_plan(&env, &source).copies[0].target, copy.target);
+    std::fs::remove_file(extra_dangling).unwrap();
+    std::fs::set_permissions(&regular, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(ssh_config_plan(&env, &source).copies[0].target, copy.target);
+    std::fs::write(&regular, "Host edited-after-plan\n").unwrap();
+    assert_ne!(ssh_config_plan(&env, &source).copies[0].target, copy.target);
+
+    rimz::sandbox::apply(&plan).unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    assert_eq!(std::fs::read_dir(&copy.target).unwrap().count(), 5);
+    let root_bytes = std::fs::read_to_string(root_copy).unwrap();
+    let root_paths = shlex::split(root_bytes.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(root_paths.len(), 6);
+    let regular_copy = Path::new(&root_paths[1]);
+    let outside_copy = Path::new(&root_paths[2]);
+    let nested_copy = shlex::split(
+        std::fs::read_to_string(regular_copy)
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap(),
+    )
+    .unwrap()[1]
+        .clone();
+    let relative_copy =
+        shlex::split(std::fs::read_to_string(outside_copy).unwrap().trim_end()).unwrap()[1].clone();
+    assert_eq!(
+        root_bytes,
+        format!(
+            "# root\r\nInclude \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"\nInclude \"~/.ssh/config\"\n# Include absent-*.conf",
+            regular_copy.display(),
+            outside_copy.display(),
+            real.join("30-dangling.conf").display(),
+            real.join("40-directory.conf").display(),
+            real.join("50-fifo.conf").display(),
+        )
+    );
+    for (path, bytes, mode) in [
+        (root_copy.as_path(), root_bytes, 0o644),
+        (
+            regular_copy,
+            format!(
+                "Host nomatch.invalid\nInclude \"{nested_copy}\"\nInclude \"{}\"\n",
+                root_copy.display()
+            ),
+            0o644,
+        ),
+        (
+            outside_copy,
+            format!("Include \"{relative_copy}\"\n"),
+            0o600,
+        ),
+        (
+            Path::new(&nested_copy),
+            format!("Include \"{}\"\n", outside_copy.display()),
+            0o644,
+        ),
+        (
+            Path::new(&relative_copy),
+            format!("Include \"{}\"\n", regular_copy.display()),
+            0o644,
+        ),
+    ] {
+        assert_eq!(path.parent(), Some(copy.target.as_path()));
+        assert!(std::fs::symlink_metadata(path).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+
+    let empty = env.home_root.join("empty-ssh");
+    std::fs::write(&empty, "Host *\n  Port 22\n").unwrap();
+    let skipped = env.home_root.join("skipped-ssh");
+    std::fs::create_dir(&skipped).unwrap();
+    symlink(real.join("absent"), skipped.join("dangling.conf")).unwrap();
+    std::fs::create_dir(skipped.join("directory.conf")).unwrap();
+    let skipped_root = env.home_root.join("skipped-ssh.conf");
+    std::fs::write(
+        &skipped_root,
+        "Include skipped-ssh/* system-ssh/50-fifo.conf ~/.ssh/config\n",
+    )
+    .unwrap();
+    for source in [env.home_root.join("missing-ssh"), empty, real, skipped_root] {
+        let plan = ssh_config_plan(&env, &source);
+        assert!(plan.copies.is_empty(), "{}", source.display());
+        assert!(!plan.plan.mounts.iter().any(|mount| matches!(mount,
+            rimz::sandbox::Mount::RoBind { target, .. } if target == &source
+        )));
+    }
+}
+
+#[test]
+fn sandbox_ssh_config_skips_unreadable_sources() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if nix::unistd::getuid().is_root() {
+        crate::common::skip("mode 000 files remain readable as root");
+        return;
+    }
+    let env = Env::new();
+    let source = env.home_root.join("ssh_config");
+    std::fs::write(&source, "Include *.conf\n").unwrap();
+    let entry = env.home_root.join("unreadable.conf");
+    std::fs::write(&entry, "Host unreadable\n").unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = env.home_root.join("readable.conf");
+    std::fs::write(&readable, "Host readable\n").unwrap();
+    let plan = ssh_config_plan(&env, &source);
+    assert_eq!(
+        plan.copies.len(),
+        1,
+        "readable includes must survive a bad sibling"
+    );
+    rimz::sandbox::apply(&plan).unwrap();
+    assert_eq!(
+        std::fs::read_dir(&plan.copies[0].target).unwrap().count(),
+        2
+    );
+    let Some(rimz::sandbox::Mount::RoBind {
+        source: root_copy,
+        target,
+    }) = plan.plan.mounts.last()
+    else {
+        panic!("missing root mirror");
+    };
+    assert_eq!(target, &source.canonicalize().unwrap());
+    let root_bytes = std::fs::read_to_string(root_copy).unwrap();
+    let paths = shlex::split(root_bytes.trim_end()).unwrap();
+    assert_eq!(paths.len(), 3);
+    let readable_copy = Path::new(&paths[1]);
+    assert_eq!(
+        readable_copy.parent(),
+        Some(plan.copies[0].target.as_path())
+    );
+    assert_eq!(
+        std::fs::read_to_string(readable_copy).unwrap(),
+        "Host readable\n"
+    );
+    assert_eq!(
+        root_bytes,
+        format!(
+            "Include \"{}\" \"{}\"\n",
+            readable_copy.display(),
+            entry.display()
+        )
+    );
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let plan = ssh_config_plan(&env, &source);
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(plan.copies.is_empty());
+}
+
+#[cfg(target_os = "linux")]
+fn ssh_config_available() -> bool {
+    if !available() {
+        return false;
+    }
+    match std::process::Command::new("ssh").arg("-V").output() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::common::skip("ssh not on PATH");
+            return false;
+        }
+        result => assert!(result.unwrap().status.success()),
+    }
+    true
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_ssh_config_accepts_root_owned_host_includes() {
+    use std::os::unix::fs::MetadataExt;
+
+    if !ssh_config_available() {
+        return;
+    }
+    let source = Path::new("/etc/ssh/ssh_config");
+    let env = Env::new();
+    let plan = ssh_config_plan(&env, source);
+    let uid = nix::unistd::getuid().as_raw();
+    if plan.copies.is_empty() || std::fs::metadata(source).unwrap().uid() == uid {
+        crate::common::skip("no system SSH include owned by another uid");
+        return;
+    }
+    rimz::sandbox::apply(&plan).unwrap();
+    let entries: Vec<_> = std::fs::read_dir(&plan.copies[0].target)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let mut command = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "ssh -G rimz-scoped-ssh.invalid >/dev/null && cat /etc/ssh/ssh_config && printf '\\0' && stat -Lc '%u %a' -- \"$@\"".into(),
+        "ssh-config-view".into(),
+    ];
+    command.extend(entries.iter().map(|path| path.display().to_string()));
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped)
+            .unwrap()
+            .unwrap(),
+        &plan.plan,
+        &env.project_root,
+        &command,
+    );
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let (root_bytes, stats) = stdout.split_once('\0').unwrap();
+    let included_copies: Vec<_> = root_bytes
+        .lines()
+        .filter_map(shlex::split)
+        .filter(|args| args.first().is_some_and(|keyword| keyword == "Include"))
+        .flat_map(|args| args.into_iter().skip(1))
+        .collect();
+    assert!(!included_copies.is_empty());
+    assert!(
+        included_copies
+            .iter()
+            .all(|path| entries.contains(&PathBuf::from(path)))
+    );
+    assert_eq!(stats.lines().count(), entries.len());
+    for line in stats.lines() {
+        let (owner, mode) = line.split_once(' ').unwrap();
+        assert_eq!(owner.parse::<u32>().unwrap(), uid);
+        assert_eq!(u32::from_str_radix(mode, 8).unwrap() & 0o022, 0);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_ssh_config_accepts_nested_root_owned_include_in_inactive_host() {
+    use std::os::unix::fs::MetadataExt;
+
+    if !ssh_config_available() {
+        return;
+    }
+    let host_config = Path::new("/etc/ssh/ssh_config");
+    if !host_config.is_file()
+        || std::fs::metadata(host_config).unwrap().uid() == nix::unistd::getuid().as_raw()
+    {
+        crate::common::skip("no system SSH include owned by another uid");
+        return;
+    }
+    let env = Env::new();
+    let root = env.home_root.join("ssh_config");
+    let nested = env.home_root.join("nested.conf");
+    std::fs::write(&root, format!("Include {}\n", nested.display())).unwrap();
+    std::fs::write(
+        &nested,
+        "Host nomatch.invalid\n  Include /etc/ssh/ssh_config\n",
+    )
+    .unwrap();
+    let plan = ssh_config_plan(&env, &root);
+    rimz::sandbox::apply(&plan).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped)
+            .unwrap()
+            .unwrap(),
+        &plan.plan,
+        &env.project_root,
+        &[
+            "ssh".into(),
+            "-G".into(),
+            "-F".into(),
+            root.display().to_string(),
+            "rimz-scoped-ssh.invalid".into(),
+        ],
+    );
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_ssh_config_survives_include_replacement_in_a_running_view() {
+    use std::os::unix::fs::{MetadataExt, symlink};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    if !ssh_config_available() {
+        return;
+    }
+    let host_config = Path::new("/etc/ssh/ssh_config");
+    if !host_config.is_file()
+        || std::fs::metadata(host_config).unwrap().uid() == nix::unistd::getuid().as_raw()
+    {
+        crate::common::skip("no system SSH include owned by another uid");
+        return;
+    }
+    let env = Env::new();
+    let root = env.home_root.join("ssh_config");
+    let nested = env.home_root.join("nested.conf");
+    let alias = env.home_root.join("included.conf");
+    symlink(&nested, &alias).unwrap();
+    std::fs::write(&root, format!("Include {}\n", alias.display())).unwrap();
+    std::fs::write(&nested, "Host nomatch.invalid\n  User snapshot-user\n").unwrap();
+    let plan = ssh_config_plan(&env, &root);
+    rimz::sandbox::apply(&plan).unwrap();
+    let unit = env.store().paths().temp_unit_dir(None);
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped)
+            .unwrap()
+            .unwrap(),
+        &plan.plan,
+        &env.project_root,
+        &[
+            "/bin/sh".into(),
+            "-c".into(),
+            ": > /tmp/ssh-ready; while [ ! -e /tmp/ssh-go ]; do sleep 0.01; done; exec ssh -G -F \"$1\" rimz-scoped-ssh.invalid".into(),
+            "ssh-config-rename".into(),
+            root.display().to_string(),
+        ],
+    );
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("HOME", &env.home_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !unit.join("ssh-ready").exists() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "view exited before ready"
+        );
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("view did not signal readiness");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let replacement = nested.with_extension("new");
+    symlink(host_config, &replacement).unwrap();
+    std::fs::rename(replacement, &nested).unwrap();
+    std::fs::write(unit.join("ssh-go"), "").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "ssh exit {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn skill_prepare(
     env: &Env,
     vars: &BTreeMap<String, String>,
@@ -639,6 +1108,8 @@ fn skill_prepare(
         checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
@@ -770,6 +1241,8 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
         checkout: Some(&checkout),
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
@@ -850,6 +1323,8 @@ fn scoped_protection_keeps_provider_homes_writable() {
         read_only: Vec::new(),
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: Some(rimz::sandbox::ProviderHome {
             source: account.clone(),
             target: account.clone(),
@@ -975,6 +1450,8 @@ fn scoped_protects_separate_git_directory() {
         checkout: Some(&env.project_root),
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
@@ -1134,6 +1611,8 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
@@ -1641,6 +2120,8 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &["CODEX_HOME"],
         default_home: None,
@@ -1912,6 +2393,8 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
@@ -3130,6 +3613,8 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         checkout: None,
         tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
         provider_home: None,
         provider_home_env_keys: &[],
         default_home: None,
