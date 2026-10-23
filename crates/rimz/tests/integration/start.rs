@@ -1,7 +1,7 @@
 //! `rimz start` run from inside a session of the selected mux: a same-mux room
 //! can't be nested, so the default launch reports the directory's room and
 //! exits before any side effect instead of emitting a doomed nested
-//! `attach --create`.
+//! `attach`.
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;

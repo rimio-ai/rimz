@@ -29,7 +29,7 @@ pub struct ReapOutcome {
     pub errors: Vec<String>,
 }
 
-/// Retire every same-lineage `zellij attach --create <session>` process and
+/// Retire every same-lineage `zellij attach <session> options ...` process and
 /// wait until the server's human-client count proves their removals drained.
 /// Failures stay in the returned evidence so the attach seam can proceed while
 /// recording the degraded cleanup.
@@ -232,8 +232,8 @@ where
 
 fn attach_argv_matches(argv: &[OsString], session_name: &str) -> bool {
     argv.get(1).and_then(|arg| arg.to_str()) == Some("attach")
-        && argv.get(2).and_then(|arg| arg.to_str()) == Some("--create")
-        && argv.get(3).and_then(|arg| arg.to_str()) == Some(session_name)
+        && argv.get(2).and_then(|arg| arg.to_str()) == Some(session_name)
+        && argv.get(3).and_then(|arg| arg.to_str()) == Some("options")
 }
 
 fn pid_matches(pid: u32, session_name: &str, lineage: &str) -> bool {
@@ -289,7 +289,7 @@ mod tests {
     }
 
     fn zellij_argv(session: &str) -> Vec<OsString> {
-        ["/usr/bin/zellij", "attach", "--create", session]
+        ["/usr/bin/zellij", "attach", session, "options"]
             .into_iter()
             .map(OsString::from)
             .collect()
@@ -298,14 +298,14 @@ mod tests {
     #[test]
     fn matcher_selects_only_same_lineage_clients_outside_own_ancestry() {
         let processes = vec![
-            process(1, 0, 1000, "zellij attach --create room"),
-            process(10, 1, 1000, "zellij attach --create room"),
-            process(20, 10, 1000, "zellij attach --create room"),
+            process(1, 0, 1000, "zellij attach room options"),
+            process(10, 1, 1000, "zellij attach room options"),
+            process(20, 10, 1000, "zellij attach room options"),
             process(30, 20, 1000, "rimz attach --attach room"),
-            process(40, 30, 1000, "zellij attach --create room"),
-            process(41, 30, 1000, "zellij attach --create room"),
-            process(42, 30, 1000, "zellij attach --create other"),
-            process(43, 30, 2000, "zellij attach --create room"),
+            process(40, 30, 1000, "zellij attach room options"),
+            process(41, 30, 1000, "zellij attach room options"),
+            process(42, 30, 1000, "zellij attach other options"),
+            process(43, 30, 2000, "zellij attach room options"),
         ];
         let protected = crate::mux::recovery::protected_pids(&processes, 30);
         let lineage = |pid| match pid {
@@ -337,33 +337,38 @@ mod tests {
 
     #[test]
     fn matcher_requires_the_rimz_attach_argv_shape() {
-        let processes = vec![
-            process(1, 0, 1000, "zellij attach room"),
-            process(2, 0, 1000, "zellij --session room action list-clients"),
-        ];
-
-        assert!(
-            select_lineage_clients(
-                &processes,
-                MatchContext {
-                    own_uid: Some(1000),
-                    protected: &HashSet::new(),
-                    session_name: "room",
-                    lineage: "same",
-                },
-                |_| Some("zellij".to_owned()),
-                |pid| match pid {
-                    1 => Some(["zellij", "attach", "room"].map(OsString::from).to_vec()),
-                    _ => Some(
-                        ["zellij", "--session", "room", "action", "list-clients"]
-                            .map(OsString::from)
-                            .to_vec(),
-                    ),
-                },
-                |_, _| Some("same".to_owned()),
-            )
-            .is_empty()
-        );
+        for (args, expected) in [
+            (&["zellij", "attach", "room", "options"][..], true),
+            (
+                &[
+                    "zellij",
+                    "attach",
+                    "room",
+                    "options",
+                    "--default-mode",
+                    "locked",
+                ][..],
+                true,
+            ),
+            (&["zellij", "attach", "room"][..], false),
+            (
+                &["zellij", "attach", "room", "--default-mode", "locked"][..],
+                false,
+            ),
+            (&["zellij", "attach", "other", "options"][..], false),
+            (
+                &["zellij", "attach", "--create", "room", "options"][..],
+                false,
+            ),
+            (
+                &["zellij", "--session", "room", "action", "list-clients"][..],
+                false,
+            ),
+            (&[][..], false),
+        ] {
+            let argv = args.iter().map(OsString::from).collect::<Vec<_>>();
+            assert_eq!(attach_argv_matches(&argv, "room"), expected, "{args:?}");
+        }
     }
 
     #[test]

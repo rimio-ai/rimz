@@ -1,11 +1,49 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{MuxBackend, SessionHealth, SidebarPaneOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
+
+#[test]
+fn managed_attach_to_a_missing_session_exits_without_creating_a_server() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("missing-attach");
+    let mut client = AttachedClient::attach_with_lineage(&room, "0123456789abcdef", 120, 40);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = client.exit_status() {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        status.is_some_and(|status| !status.success()),
+        "managed attach to a missing session must exit nonzero; output: {}",
+        String::from_utf8_lossy(&client.output_bytes()),
+    );
+    assert!(
+        !room
+            .path()
+            .join("zellij/contract_version_1")
+            .join(room.name())
+            .exists(),
+        "managed attach must not create a session socket",
+    );
+    assert_eq!(
+        room.backend()
+            .session_liveness(room.name())
+            .expect("missing session liveness"),
+        rimz::mux::SessionLiveness::Absent,
+        "managed attach must not start a server",
+    );
+}
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -471,7 +509,7 @@ fn confirm_resume_tabs_reports_each_planned_tab_of_a_clientless_birth() {
 
 /// A *live* session that has no sidebar (the renderer self-closed or crashed
 /// while the session itself survived, or a prior launch was skipped and the
-/// session was born by a plain `attach --create`) must regain one on the next
+/// session was born outside RimZ) must regain one on the next
 /// `open_sidebar` — a sidebar-less rimz session is non-functional, and the
 /// only way to place a left pane in Zellij is at session birth. Regression
 /// test for "fresh `rimz .` shows a single full-width pane, no sidebar" on a

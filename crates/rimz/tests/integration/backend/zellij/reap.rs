@@ -14,10 +14,9 @@ fn remote_lineage_reap_kills_only_the_matching_attached_client() {
     let cwd = tempfile::tempdir().expect("session cwd");
     let name = room.name().to_owned();
     // Birth the session in the background and prove it answers actions before
-    // any client attaches. A PTY `attach --create` births and attaches in one
-    // unchecked step, and a starved host lets that client sit forever against a
-    // server that never came up — the session under test has to exist on a
-    // checked command.
+    // any client attaches. A creating PTY client would birth and attach in one
+    // unchecked step; a starved host could leave it waiting on a server that
+    // never came up. The session under test must exist on a checked command.
     room.create_plain_background(cwd.path(), "600");
 
     let mut client = AttachedClient::attach_with_lineage(&room, "0123456789abcdef", 120, 40);
@@ -113,10 +112,10 @@ fn wait_for_attached_lineage_client(pid: u32, session: &str, lineage: &str) {
             *listed
                 && comm.as_deref() == Some("zellij")
                 && argv.as_ref().is_some_and(|argv| {
-                    argv.len() == 4
+                    argv.len() >= 4
                         && argv[1].to_str() == Some("attach")
-                        && argv[2].to_str() == Some("--create")
-                        && argv[3].to_str() == Some(session)
+                        && argv[2].to_str() == Some(session)
+                        && argv[3].to_str() == Some("options")
                 })
                 && observed_lineage.as_deref() == Some(lineage)
                 && start_token.is_some()
