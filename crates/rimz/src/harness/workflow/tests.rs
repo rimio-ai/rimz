@@ -414,17 +414,46 @@ fn validation_rejects_each_invalid_spec() {
             "checks.pick.run",
         ),
     ];
+    let keyed_cases = [
+        (
+            "zero per-key visits",
+            format!("{VALID}\nmax-visits-per-key = 0\n"),
+            "steps.build.max-visits-per-key",
+            "must be at least 1",
+        ),
+        (
+            "per-key cap equals total",
+            format!("{VALID}\nmax-visits-per-key = 3\n"),
+            "steps.build.max-visits-per-key",
+            "must be below max-visits",
+        ),
+        (
+            "per-key cap exceeds total",
+            format!("{VALID}\nmax-visits-per-key = 4\n"),
+            "steps.build.max-visits-per-key",
+            "must be below max-visits",
+        ),
+        (
+            "per-key cap does not bound a cycle",
+            VALID.replace("max-visits = 3", "max-visits-per-key = 2"),
+            "steps.build",
+            "a per-key bound does not bound the cycle: a check can name a new key every time; max-visits is needed",
+        ),
+    ];
     let mut missed = Vec::new();
-    for (label, text, path) in cases {
+    for (label, text, path, message) in cases
+        .into_iter()
+        .map(|(label, text, path)| (label, text, path, ""))
+        .chain(keyed_cases)
+    {
         let (home, dir) = fixture();
         fs::write(dir.join("workflow.toml"), text).unwrap();
         let report = validate(&dir, home.path(), &LoadedDefinitions::default(), None);
-        if !report
-            .errors
-            .iter()
-            .any(|issue| issue.path.contains(path) || issue.message.contains(path))
-        {
-            missed.push(format!("{label}: expected {path}; {report:?}"));
+        if !report.errors.iter().any(|issue| {
+            (issue.path.contains(path) || issue.message.contains(path))
+                && issue.message.contains(message)
+        }) {
+            missed.push(format!("{label}: expected {path}: {message}; {report:?}"));
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
@@ -559,5 +588,9 @@ fn schema_is_derived_from_the_loader_types() {
     let value = serde_json::to_value(schema()).unwrap();
     assert_eq!(value["additionalProperties"], false);
     assert!(value["properties"]["workflow"].is_object());
+    assert_eq!(
+        value["$defs"]["Step"]["properties"]["max-visits-per-key"]["minimum"],
+        1
+    );
     insta::assert_json_snapshot!("schema", value);
 }

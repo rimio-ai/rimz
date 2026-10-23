@@ -3,11 +3,13 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
-    self as records, AttemptOutcome, Host, JournalEvent, Key, RunRecord, RunState,
+    self as records, AttemptOutcome, Host, JournalEvent, Key, KeyVisits, RunRecord, RunState,
+    StepVisits,
 };
 use serde_json::{Value, json};
 
 const STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=2\n";
+const KEYED_STEP: &str = "[workflow]\nscope='worktree'\nstart='build'\n[steps.build]\nagent='claude'\nprompt-file='prompt.md'\nthen='@done'\nmax-visits=5\nmax-visits-per-key=2\n";
 
 fn setup(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
     let dir = tempfile::tempdir().unwrap();
@@ -113,7 +115,10 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     );
     assert_eq!(
         capped.input,
-        Some(json!({"outcome":"cap","step":"build","visits":2,"max":2,"key":8}))
+        Some(json!({
+            "outcome":"cap", "step":"build", "bound":"max-visits",
+            "visits":2, "max":2, "key":8
+        }))
     );
     assert_eq!(host.launched.borrow().len(), 2);
     capped.visit_grant = 1;
@@ -124,6 +129,197 @@ fn launch_counts_keyed_visits_and_composes_live_signs() {
     let extended = advance_ok(&state, &record.id, &host);
     assert_eq!(extended.visits["build"].total, 3);
     assert_eq!(extended.visits["build"].keys[1].visits, 2);
+}
+
+#[test]
+fn per_key_cap_preserves_counts_sequence_and_route_evidence() {
+    let (_dir, state, mut record) = setup(KEYED_STEP);
+    record.key = Some(Key::Integer(7));
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 3,
+            keys: vec![
+                KeyVisits {
+                    key: record.key.clone(),
+                    visits: 2,
+                },
+                KeyVisits {
+                    key: Some(Key::Integer(8)),
+                    visits: 1,
+                },
+            ],
+        },
+    );
+    update(&state, &record);
+    let host = FakeHost::new();
+    let capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(
+        capped.park.as_ref().unwrap().reason,
+        records::ParkReason::Cap
+    );
+    assert_eq!(capped.park.as_ref().unwrap().text, None);
+    let input = json!({
+        "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
+        "visits":2, "max":2, "key":7
+    });
+    assert_eq!(capped.input.as_ref(), Some(&input));
+    assert_eq!(capped.visits, record.visits);
+    assert_eq!(capped.next_seq, record.next_seq);
+    assert!(host.launched.borrow().is_empty());
+    assert!(
+        records::journal(&state.workflow(&record.id))
+            .unwrap()
+            .iter()
+            .any(|row| matches!(
+                &row.event,
+                JournalEvent::Route { outcome, input: routed }
+                    if outcome == "cap" && routed == &input
+            ))
+    );
+}
+
+#[test]
+fn per_key_cap_leaves_other_keys_admissible() {
+    let (_dir, state, mut record) = setup(KEYED_STEP);
+    record.key = Some(Key::Integer(7));
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 2,
+            keys: vec![KeyVisits {
+                key: record.key.clone(),
+                visits: 2,
+            }],
+        },
+    );
+    update(&state, &record);
+    let host = FakeHost::new();
+    let mut capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(capped.state, RunState::Parked);
+    capped.key = Some(Key::Integer(8));
+    capped.state = RunState::Active;
+    capped.park = None;
+    update(&state, &capped);
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(host.launched.borrow().len(), 1);
+    assert_eq!(live.visits["build"].total, 3);
+    assert_eq!(live.visits["build"].keys[0].visits, 2);
+    assert_eq!(
+        live.visits["build"].keys[1],
+        KeyVisits {
+            key: capped.key,
+            visits: 1
+        }
+    );
+}
+
+#[test]
+fn total_cap_wins_when_both_visit_bounds_trip() {
+    let (_dir, state, mut record) = setup(KEYED_STEP);
+    record.key = Some(Key::Integer(7));
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 5,
+            keys: vec![
+                KeyVisits {
+                    key: record.key.clone(),
+                    visits: 2,
+                },
+                KeyVisits {
+                    key: Some(Key::Integer(8)),
+                    visits: 2,
+                },
+                KeyVisits {
+                    key: Some(Key::Integer(9)),
+                    visits: 1,
+                },
+            ],
+        },
+    );
+    update(&state, &record);
+    let host = FakeHost::new();
+    let capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        capped.input,
+        Some(json!({
+            "outcome":"cap", "step":"build", "bound":"max-visits",
+            "visits":5, "max":5, "key":7
+        }))
+    );
+    assert!(host.launched.borrow().is_empty());
+}
+
+#[test]
+fn unkeyed_visits_share_the_per_key_cap() {
+    let (_dir, state, mut record) = setup(KEYED_STEP);
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 2,
+            keys: vec![KeyVisits {
+                key: None,
+                visits: 2,
+            }],
+        },
+    );
+    update(&state, &record);
+    let host = FakeHost::new();
+    let capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(
+        capped.input,
+        Some(json!({
+            "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
+            "visits":2, "max":2
+        }))
+    );
+    assert!(host.launched.borrow().is_empty());
+}
+
+#[test]
+fn visit_grant_admits_exactly_that_many_more_visits_under_a_capped_key() {
+    let (_dir, state, mut record) = setup(KEYED_STEP);
+    record.key = Some(Key::String("lint".into()));
+    record.visits.insert(
+        "build".into(),
+        StepVisits {
+            total: 2,
+            keys: vec![KeyVisits {
+                key: record.key.clone(),
+                visits: 2,
+            }],
+        },
+    );
+    update(&state, &record);
+    let host = FakeHost::new();
+    let mut capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(capped.state, RunState::Parked);
+    capped.visit_grant = 2;
+    for count in 3..=4 {
+        capped.state = RunState::Active;
+        capped.park = None;
+        update(&state, &capped);
+        host.observed.borrow_mut().status = RunStatus::Running;
+        let live = advance_ok(&state, &record.id, &host);
+        assert_eq!(live.visits["build"].keys[0].visits, count);
+        host.observed.borrow_mut().status = RunStatus::Completed;
+        capped = advance_ok(&state, &record.id, &host);
+    }
+    capped.state = RunState::Active;
+    update(&state, &capped);
+    let capped = advance_ok(&state, &record.id, &host);
+    assert_eq!(capped.state, RunState::Parked);
+    assert_eq!(host.launched.borrow().len(), 2);
+    assert_eq!(
+        capped.input,
+        Some(json!({
+            "outcome":"cap", "step":"build", "bound":"max-visits-per-key",
+            "visits":4, "max":4, "key":"lint"
+        }))
+    );
 }
 
 #[test]

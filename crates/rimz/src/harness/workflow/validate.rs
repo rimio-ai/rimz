@@ -293,6 +293,17 @@ pub(super) fn validate_spec(
         if step.max_visits == Some(0) {
             report.error(&format!("{path}.max-visits"), "must be at least 1");
         }
+        if step.max_visits_per_key == Some(0) {
+            report.error(&format!("{path}.max-visits-per-key"), "must be at least 1");
+        }
+        if let (Some(per_key), Some(total)) = (step.max_visits_per_key, step.max_visits)
+            && per_key >= total
+        {
+            report.error(
+                &format!("{path}.max-visits-per-key"),
+                "must be below max-visits, since the total cap trips first",
+            );
+        }
         let mut edges = BTreeMap::new();
         if let Some(target) = &step.then {
             edges.insert("then".into(), target.clone());
@@ -353,7 +364,15 @@ pub(super) fn validate_spec(
         {
             report.error(
                 &format!("steps.{node}"),
-                "cycle through steps has no max-visits bound",
+                if step.max_visits_per_key.is_some() {
+                    concat!(
+                        "cycle through steps has no max-visits bound; ",
+                        "a per-key bound does not bound the cycle: ",
+                        "a check can name a new key every time; max-visits is needed"
+                    )
+                } else {
+                    "cycle through steps has no max-visits bound"
+                },
             );
         }
     }

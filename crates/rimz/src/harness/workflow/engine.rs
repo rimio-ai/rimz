@@ -406,19 +406,30 @@ fn prepare(
     }
     let mut eviction_error = None;
     if let Some(step) = spec.steps.get(&t.record.node) {
-        let visits = t.record.visits.get(&t.record.node).map_or(0, |v| v.total);
-        let max = step
-            .max_visits
-            .map(|max| max.saturating_add(t.record.visit_grant));
-        if let Some(max) = max
-            && visits >= max
-        {
+        let visits = t.record.visits.get(&t.record.node);
+        for (bound, max, visits) in [
+            ("max-visits", step.max_visits, visits.map_or(0, |v| v.total)),
+            (
+                "max-visits-per-key",
+                step.max_visits_per_key,
+                visits.map_or(0, |v| v.for_key(t.record.key.as_ref())),
+            ),
+        ] {
+            let Some(max) = max.map(|max| max.saturating_add(t.record.visit_grant)) else {
+                continue;
+            };
+            if visits < max {
+                continue;
+            }
             if !seen.insert(t.record.node.clone()) {
                 return Ok(Decision::Stop);
             }
             t.engine_route(
                 "cap",
-                json!({"outcome":"cap", "step":t.record.node, "visits":visits, "max":max}),
+                json!({
+                    "outcome":"cap", "step":t.record.node, "bound":bound,
+                    "visits":visits, "max":max
+                }),
                 step.on.cap.as_deref().unwrap_or("@user"),
                 ParkReason::Cap,
             )?;
@@ -554,13 +565,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
     if step {
         let visits = &record.visits[&record.node];
         context["visits"] = json!(visits.total);
-        context["visit"] = json!(
-            visits
-                .keys
-                .iter()
-                .find(|v| v.key == record.key)
-                .map_or(0, |v| v.visits)
-        );
+        context["visit"] = json!(visits.for_key(record.key.as_ref()));
     }
     crate::disk::atomic::write_temp_then_rename(&paths.context, &context)?;
     Ok(())

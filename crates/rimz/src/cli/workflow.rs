@@ -408,6 +408,17 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
             |max| format!("{} + {} grant", max, record.visit_grant),
         );
         writeln!(out, "step {name}: {} visits of {max}", visits.total)?;
+        if let Some(max) = spec.steps.get(name).and_then(|s| s.max_visits_per_key) {
+            for key in &visits.keys {
+                writeln!(
+                    out,
+                    "  key {}: {} visits of {max} + {} grant",
+                    serde_json::to_string(&key.key)?,
+                    key.visits,
+                    record.visit_grant,
+                )?;
+            }
+        }
     }
     writeln!(out, "history:")?;
     for entry in journal {
