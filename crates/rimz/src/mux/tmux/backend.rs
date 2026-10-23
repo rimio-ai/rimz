@@ -256,13 +256,13 @@ impl MuxBackend for TmuxBackend {
         self.read_lagging_view(session, pane)
     }
 
-    fn fit_view(
+    fn fit_views(
         &self,
-        view: &crate::ids::ViewId,
+        views: &[crate::ids::ViewId],
         target: crate::mux::ViewSize,
         sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<HashMap<PaneId, crate::mux::FittedPane>>> {
-        self.fit_hidden_view(view, target, sidebar_cols)
+    ) -> Result<Vec<crate::mux::ViewFit>> {
+        self.fit_hidden_views(views, target, sidebar_cols)
     }
 
     fn pane_content_size(

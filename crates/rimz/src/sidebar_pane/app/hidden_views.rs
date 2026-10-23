@@ -1,23 +1,16 @@
-//! Debounced, paced hidden-view geometry repair owned by the room host.
+//! Debounced hidden-view geometry repair owned by the room host.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
 use crate::diag::record::{DiagEvent, ViewFitTrigger};
-use crate::ids::{PaneId, ViewId};
+use crate::ids::PaneId;
 use crate::mux::focus_anchor::FocusAnchor;
-use crate::mux::{LaggingViews, ViewSize};
+use crate::mux::{ViewFit, ViewSize};
 
 const SWEEP_SETTLE: Duration = Duration::from_millis(500);
-const SWEEP_STEP: Duration = Duration::from_millis(200);
-
-#[derive(Debug, PartialEq, Eq)]
-enum Action {
-    Read,
-    Fit(ViewId, ViewSize),
-}
 
 #[derive(Debug, PartialEq, Eq)]
 struct Summary {
@@ -27,113 +20,65 @@ struct Summary {
     skipped: usize,
 }
 
+impl Summary {
+    fn from_fit(target: ViewSize, count: usize, result: &crate::mux::Result<Vec<ViewFit>>) -> Self {
+        let mut summary = Self {
+            target,
+            fitted: 0,
+            failed: 0,
+            skipped: 0,
+        };
+        match result {
+            Ok(outcomes) => {
+                for outcome in outcomes {
+                    match outcome {
+                        ViewFit::Fitted(_) => summary.fitted += 1,
+                        ViewFit::Failed => summary.failed += 1,
+                        ViewFit::Skipped => summary.skipped += 1,
+                    }
+                }
+            }
+            Err(_) => summary.failed = count,
+        }
+        summary
+    }
+}
+
 #[derive(Default)]
 struct SweepPlan {
     settle: Option<Instant>,
-    next_fit: Option<Instant>,
-    batch: Option<Batch>,
-}
-
-struct Batch {
-    summary: Summary,
-    queue: VecDeque<ViewId>,
 }
 
 impl SweepPlan {
-    fn command(&mut self, command: Command) {
-        match command {
-            Command::Kick(now) => self.kick(now),
-            Command::Fitted(view) => self.remove(&view),
-        }
-    }
-
     fn kick(&mut self, now: Instant) {
         self.settle = Some(now + SWEEP_SETTLE);
     }
 
-    fn action(&mut self, now: Instant) -> Option<Action> {
-        if let Some(settle) = self.settle {
-            if now < settle {
-                return None;
-            }
-            self.settle = None;
-            return Some(Action::Read);
+    fn ready(&mut self, now: Instant) -> bool {
+        if !self.settle.is_some_and(|settle| now >= settle) {
+            return false;
         }
-        if self.next_fit.is_some_and(|next| now < next) {
-            return None;
-        }
-        let batch = self.batch.as_ref()?;
-        batch
-            .queue
-            .front()
-            .map(|view| Action::Fit(view.clone(), batch.summary.target))
-    }
-
-    fn replace(&mut self, lag: Option<LaggingViews>) -> Option<Summary> {
-        let previous = self.batch.take().map(|batch| batch.summary);
-        self.batch = lag.map(|lag| Batch {
-            summary: Summary {
-                target: lag.target,
-                fitted: 0,
-                failed: 0,
-                skipped: 0,
-            },
-            queue: lag.views.into(),
-        });
-        previous
-    }
-
-    fn record_fit(&mut self, view: &ViewId, now: Instant, success: Option<bool>) {
-        self.remove(view);
-        self.next_fit = Some(now + SWEEP_STEP);
-        if let Some(batch) = &mut self.batch {
-            match success {
-                Some(true) => batch.summary.fitted += 1,
-                Some(false) => batch.summary.failed += 1,
-                None => batch.summary.skipped += 1,
-            }
-        }
-    }
-
-    fn remove(&mut self, view: &ViewId) {
-        if let Some(batch) = &mut self.batch {
-            batch.queue.retain(|queued| queued != view);
-        }
-    }
-
-    fn completed(&mut self) -> Option<Summary> {
-        if self.settle.is_some() || !self.batch.as_ref()?.queue.is_empty() {
-            return None;
-        }
-        self.batch.take().map(|batch| batch.summary)
+        self.settle = None;
+        true
     }
 
     fn delay(&self, now: Instant) -> Option<Duration> {
-        if let Some(settle) = self.settle {
-            return Some(settle.saturating_duration_since(now));
-        }
-        let batch = self.batch.as_ref()?;
-        (!batch.queue.is_empty())
-            .then(|| self.next_fit.unwrap_or(now).saturating_duration_since(now))
+        self.settle
+            .map(|settle| settle.saturating_duration_since(now))
     }
 }
 
 #[derive(Clone)]
-pub(super) struct Sweep(Sender<Command>);
+pub(super) struct Sweep(Sender<Instant>);
 
-pub(super) enum Command {
-    Kick(Instant),
-    Fitted(ViewId),
-}
-
-pub(super) fn channel() -> (Sweep, Receiver<Command>) {
+pub(super) fn channel() -> (Sweep, Receiver<Instant>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (Sweep(tx), rx)
 }
 
 impl Sweep {
     pub(super) fn kick(&self) {
-        let _ = self.0.send(Command::Kick(Instant::now()));
+        let _ = self.0.send(Instant::now());
     }
 
     pub(super) fn fit_jump(
@@ -150,23 +95,21 @@ impl Sweep {
                 return None;
             }
         };
-        let result = backend.fit_view(&lag.view, lag.target, sidebar_cols(runtime, lag.target));
+        let result = backend.fit_views(
+            std::slice::from_ref(&lag.view),
+            lag.target,
+            sidebar_cols(runtime, lag.target),
+        );
         emit(
             diag,
-            Summary {
-                target: lag.target,
-                fitted: usize::from(matches!(&result, Ok(Some(_)))),
-                failed: usize::from(result.is_err()),
-                skipped: usize::from(matches!(&result, Ok(None))),
-            },
+            Summary::from_fit(lag.target, 1, &result),
             ViewFitTrigger::Jump,
         );
         match result {
-            Ok(Some(rows)) => {
-                let _ = self.0.send(Command::Fitted(lag.view));
-                Some(rows)
-            }
-            Ok(None) => None,
+            Ok(outcomes) => outcomes.into_iter().find_map(|outcome| match outcome {
+                ViewFit::Fitted(rows) => Some(rows),
+                ViewFit::Skipped | ViewFit::Failed => None,
+            }),
             Err(err) => {
                 tracing::debug!(view = %lag.view, error = %err, "hidden-view jump fit failed");
                 None
@@ -176,7 +119,7 @@ impl Sweep {
 }
 
 pub(super) fn spawn(
-    rx: Receiver<Command>,
+    rx: Receiver<Instant>,
     session: String,
     diag: DiagSink,
     runtime: crate::RuntimePaths,
@@ -185,49 +128,39 @@ pub(super) fn spawn(
         let backend = crate::mux::backend_for(crate::ids::MuxName::Tmux);
         let mut plan = SweepPlan::default();
         loop {
-            while let Ok(command) = rx.try_recv() {
-                plan.command(command);
-            }
-            if let Some(summary) = plan.completed() {
-                emit(&diag, summary, ViewFitTrigger::Sweep);
+            while let Ok(kick) = rx.try_recv() {
+                plan.kick(kick);
             }
             let now = Instant::now();
-            match plan.action(now) {
-                Some(Action::Read) => {
-                    let lag = match backend.lagging_views(&session) {
-                        Ok(lag) => lag,
-                        Err(err) => {
-                            tracing::debug!(error = %err, "hidden-view sweep read failed");
-                            None
-                        }
-                    };
-                    if let Some(summary) = plan.replace(lag) {
-                        emit(&diag, summary, ViewFitTrigger::Sweep);
+            if plan.ready(now) {
+                let lag = match backend.lagging_views(&session) {
+                    Ok(Some(lag)) => lag,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        tracing::debug!(error = %err, "hidden-view sweep read failed");
+                        continue;
                     }
+                };
+                let result =
+                    backend.fit_views(&lag.views, lag.target, sidebar_cols(&runtime, lag.target));
+                if let Err(err) = &result {
+                    tracing::debug!(error = %err, "hidden-view sweep fit failed");
                 }
-                Some(Action::Fit(view, target)) => {
-                    let result = backend.fit_view(&view, target, sidebar_cols(&runtime, target));
-                    if let Err(err) = &result {
-                        tracing::debug!(%view, error = %err, "hidden-view sweep fit failed");
-                    }
-                    let success = match result {
-                        Ok(Some(_)) => Some(true),
-                        Ok(None) => None,
-                        Err(_) => Some(false),
-                    };
-                    plan.record_fit(&view, Instant::now(), success);
-                }
-                None => {
-                    let received = match plan.delay(now) {
-                        Some(delay) => rx.recv_timeout(delay),
-                        None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                    };
-                    match received {
-                        Ok(command) => plan.command(command),
-                        Err(RecvTimeoutError::Timeout) => (),
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                }
+                emit(
+                    &diag,
+                    Summary::from_fit(lag.target, lag.views.len(), &result),
+                    ViewFitTrigger::Sweep,
+                );
+                continue;
+            }
+            let received = match plan.delay(now) {
+                Some(delay) => rx.recv_timeout(delay),
+                None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            match received {
+                Ok(kick) => plan.kick(kick),
+                Err(RecvTimeoutError::Timeout) => (),
+                Err(RecvTimeoutError::Disconnected) => return,
             }
         }
     });
@@ -257,112 +190,14 @@ fn emit(diag: &DiagSink, summary: Summary, trigger: ViewFitTrigger) {
 mod tests {
     use super::*;
 
-    fn lag(views: &[&str]) -> Option<LaggingViews> {
-        Some(LaggingViews {
-            target: ViewSize {
-                cols: 240,
-                rows: 70,
-            },
-            views: views
-                .iter()
-                .map(|view| ViewId::new_unchecked(*view))
-                .collect(),
-        })
-    }
-
-    fn fit(view: &str) -> Option<Action> {
-        Some(Action::Fit(
-            ViewId::new_unchecked(view),
-            ViewSize {
-                cols: 240,
-                rows: 70,
-            },
-        ))
-    }
-
     #[test]
     fn kick_burst_reads_once_after_the_last_settle() {
         let now = Instant::now();
         let mut plan = SweepPlan::default();
         plan.kick(now);
         plan.kick(now + Duration::from_millis(300));
-        assert_eq!(plan.action(now + Duration::from_millis(799)), None);
-        assert_eq!(
-            plan.action(now + Duration::from_millis(800)),
-            Some(Action::Read)
-        );
-        plan.replace(lag(&[]));
-        assert_eq!(plan.action(now + Duration::from_secs(2)), None);
-        assert!(plan.completed().is_some());
-        assert_eq!(plan.completed(), None);
-    }
-
-    #[test]
-    fn mru_steps_and_a_restart_keep_the_resize_gap_and_replace_the_queue() {
-        let now = Instant::now();
-        let mut plan = SweepPlan::default();
-        plan.replace(lag(&["recent", "slow", "old"]));
-        assert_eq!(plan.action(now), fit("recent"));
-        plan.record_fit(&ViewId::new_unchecked("recent"), now, Some(true));
-        assert_eq!(
-            plan.action(now + SWEEP_STEP - Duration::from_nanos(1)),
-            None
-        );
-        assert_eq!(plan.action(now + SWEEP_STEP), fit("slow"));
-        plan.kick(now + Duration::from_millis(210));
-        // A slow fit returns just before a pending restart settles.
-        plan.record_fit(
-            &ViewId::new_unchecked("slow"),
-            now + Duration::from_millis(700),
-            Some(true),
-        );
-        assert_eq!(plan.action(now + Duration::from_millis(709)), None);
-        assert_eq!(
-            plan.action(now + Duration::from_millis(710)),
-            Some(Action::Read)
-        );
-        plan.replace(lag(&["new", "replacement"]));
-        assert_eq!(plan.action(now + Duration::from_millis(710)), None);
-        assert_eq!(plan.action(now + Duration::from_millis(900)), fit("new"));
-        plan.record_fit(
-            &ViewId::new_unchecked("new"),
-            now + Duration::from_millis(900),
-            Some(true),
-        );
-        assert_eq!(
-            plan.action(now + Duration::from_millis(1100)),
-            fit("replacement")
-        );
-    }
-
-    #[test]
-    fn jump_removes_a_queued_view_and_a_failed_fit_does_not_stop_the_sweep() {
-        let now = Instant::now();
-        let mut plan = SweepPlan::default();
-        plan.replace(lag(&["first", "jump", "skipped", "last"]));
-        plan.remove(&ViewId::new_unchecked("jump"));
-        assert_eq!(plan.action(now), fit("first"));
-        plan.record_fit(&ViewId::new_unchecked("first"), now, Some(false));
-        assert_eq!(plan.action(now + SWEEP_STEP), fit("skipped"));
-        plan.record_fit(&ViewId::new_unchecked("skipped"), now + SWEEP_STEP, None);
-        assert_eq!(plan.action(now + SWEEP_STEP * 2), fit("last"));
-        plan.record_fit(
-            &ViewId::new_unchecked("last"),
-            now + SWEEP_STEP * 2,
-            Some(true),
-        );
-        assert_eq!(
-            plan.completed(),
-            Some(Summary {
-                target: ViewSize {
-                    cols: 240,
-                    rows: 70
-                },
-                fitted: 1,
-                failed: 1,
-                skipped: 1,
-            })
-        );
-        assert_eq!(plan.action(now + Duration::from_secs(1)), None);
+        assert!(!plan.ready(now + Duration::from_millis(799)));
+        assert!(plan.ready(now + Duration::from_millis(800)));
+        assert!(!plan.ready(now + Duration::from_secs(2)));
     }
 }
