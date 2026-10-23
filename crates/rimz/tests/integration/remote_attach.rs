@@ -869,6 +869,69 @@ fn wait_for_tunnel_invocation(child: &mut std::process::Child, log: &Path) {
     }
 }
 
+fn wait_for_web_child<T>(
+    child: &mut std::process::Child,
+    stderr_path: &Path,
+    log: &Path,
+    event: &str,
+    mut ready: impl FnMut(Option<std::process::ExitStatus>) -> Option<T>,
+) -> T {
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    loop {
+        let status = child.try_wait().expect("poll remote web");
+        if let Some(value) = ready(status) {
+            return value;
+        }
+        let failure = if let Some(status) = status {
+            format!("remote web exited with {status} before {event}")
+        } else if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            format!("remote web timed out waiting for {event} within {COMMAND_TIMEOUT:?}")
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        let trace = if log.exists() {
+            shim_invocations(log)
+        } else {
+            Vec::new()
+        };
+        panic!(
+            "{failure}\nstderr:\n{}\ntrace={trace:?}",
+            std::fs::read_to_string(stderr_path).expect("read remote web stderr"),
+        );
+    }
+}
+
+fn wait_for_web_url(
+    child: &mut std::process::Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    log: &Path,
+) -> String {
+    wait_for_web_child(child, stderr_path, log, "URL", |_| {
+        let stdout = std::fs::read_to_string(stdout_path).expect("read remote web stdout");
+        stdout
+            .contains("/?room=rimz-project-a1b2c3\n")
+            .then_some(stdout)
+    })
+}
+
+fn wait_for_web_exit(
+    mut child: std::process::Child,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    log: &Path,
+) -> Output {
+    let status = wait_for_web_child(&mut child, stderr_path, log, "exit", |status| status);
+    Output {
+        status,
+        stdout: std::fs::read(stdout_path).expect("read remote web stdout"),
+        stderr: std::fs::read(stderr_path).expect("read remote web stderr"),
+    }
+}
+
 #[test]
 fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     use std::io::{BufRead as _, Write as _};
@@ -3093,22 +3156,24 @@ fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
     let log = env.project_root.join("ssh-trace.log");
     let request_log = env.project_root.join("tunnel-http.log");
     let stdout_path = env.project_root.join("stdout.log");
+    let stderr_path = env.project_root.join("stderr.log");
+    let tunnel_exit_gate = env.project_root.join("tunnel-exit");
     let plan = env.project_root.join("tunnel.plan");
     std::fs::write(&plan, "0\n").expect("write tunnel plan");
     let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
+    let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
 
     let mut child = remote_web_command(&env, &log)
         .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG", &request_log)
-        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "1200")
+        .env("RIMZ_TEST_SSH_TUNNEL_EXIT_GATE", &tunnel_exit_gate)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
         .stdout(stdout)
-        .stderr(Stdio::piped())
+        .stderr(stderr)
         .spawn()
         .expect("spawn remote web relay");
 
-    wait_for_tunnel_invocation(&mut child, &log);
-    let stdout = wait_for_notify_log(&stdout_path, &["/?room=rimz-project-a1b2c3\n"]);
+    let stdout = wait_for_web_url(&mut child, &stdout_path, &stderr_path, &log);
     let (port, _) = relay_url(&stdout);
     assert_ne!(tunnel_forward_ports(&log), [port]);
 
@@ -3133,7 +3198,8 @@ fn remote_web_relay_injects_auth_for_http_and_safari_websockets() {
     assert!(response.starts_with(b"HTTP/1.1 101 Switching Protocols"));
     assert!(response.ends_with(b"server-frame"));
 
-    let out = child.wait_with_output().expect("wait remote web relay");
+    std::fs::write(&tunnel_exit_gate, "").expect("release tunnel exit");
+    let out = wait_for_web_exit(child, &stdout_path, &stderr_path, &log);
     assert!(
         out.status.success(),
         "stderr:\n{}",
@@ -3251,16 +3317,28 @@ fn remote_web_retries_control_forward_exit_before_readiness() {
 fn remote_web_no_reconnect_stays_a_direct_one_shot() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
+    let stdout_path = env.project_root.join("stdout.log");
+    let stderr_path = env.project_root.join("stderr.log");
+    let tunnel_exit_gate = env.project_root.join("tunnel-exit");
     let plan = env.project_root.join("tunnel.plan");
     std::fs::write(&plan, "255\n0\n").expect("write tunnel plan");
+    let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
+    let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
 
-    let out = remote_web_command(&env, &log)
+    let mut child = remote_web_command(&env, &log)
         .arg("--no-reconnect")
         .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
-        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_TUNNEL_EXIT_GATE", &tunnel_exit_gate)
         .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
-        .bounded_output()
-        .expect("run one-shot remote web tunnel");
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("spawn one-shot remote web tunnel");
+
+    let stdout = wait_for_web_url(&mut child, &stdout_path, &stderr_path, &log);
+    relay_url(&stdout);
+    std::fs::write(&tunnel_exit_gate, "").expect("release tunnel exit");
+    let out = wait_for_web_exit(child, &stdout_path, &stderr_path, &log);
 
     assert!(!out.status.success());
     assert_eq!(master_invocation_count(&log), 0);
