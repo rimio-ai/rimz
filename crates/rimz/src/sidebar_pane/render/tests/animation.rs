@@ -536,7 +536,7 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
 }
 
 #[test]
-fn expanded_blank_team_member_does_not_keep_breath_grid_awake() {
+fn unselected_blank_team_member_does_not_keep_breath_grid_awake() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];

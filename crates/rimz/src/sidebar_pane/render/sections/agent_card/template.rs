@@ -37,8 +37,8 @@ impl CardStage {
     }
 
     /// The stage every `template` caller draws from: a read card quiet past
-    /// `stale_after_secs` is `Stale` unless selection, teammate reach, an
-    /// open delegation section, or `expanded` density keeps it open.
+    /// `stale_after_secs` is `Stale` unless live or held selection, an open
+    /// delegation section, or `expanded` density keeps it open.
     pub(super) fn resolve(
         row: &SidebarRow,
         density: CardDensityMode,
@@ -166,10 +166,7 @@ pub(super) fn template(
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
         CardStage::Engaged | CardStage::Stale => match (
-            matches!(
-                expansion.reach,
-                SelectionReach::Selected | SelectionReach::Held
-            ) || density == CardDensityMode::Expanded,
+            expanded || density == CardDensityMode::Expanded,
             expansion.delegation,
         ) {
             (true, true) => ENGAGED_EXPANDED,
@@ -226,9 +223,8 @@ mod tests {
         CardDensityMode::Expanded,
         CardDensityMode::Compact,
     ];
-    const REACHES: [SelectionReach; 4] = [
+    const REACHES: [SelectionReach; 3] = [
         SelectionReach::Unreached,
-        SelectionReach::Teammate,
         SelectionReach::Held,
         SelectionReach::Selected,
     ];
@@ -276,11 +272,7 @@ mod tests {
             (CardStage::Engaged | CardStage::Stale, _, false) => ENGAGED,
         }
         .to_vec();
-        if !matches!(
-            expansion.reach,
-            SelectionReach::Selected | SelectionReach::Held
-        ) && density != CardDensityMode::Expanded
-        {
+        if !expansion.reach.opens_card() && density != CardDensityMode::Expanded {
             slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
         }
         if expansion.reach == SelectionReach::Unreached

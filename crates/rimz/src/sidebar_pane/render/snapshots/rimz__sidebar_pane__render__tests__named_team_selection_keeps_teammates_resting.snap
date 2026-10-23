@@ -7,7 +7,7 @@ expression: screen
  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
  ¤ 3                                            $0.00
  ────────────────────────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 2   ☾ 0   ○ 0
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
 
 ▎⑂ team-expand · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌⢄ planner                                           ▐
@@ -17,14 +17,14 @@ expression: screen
 ▌  ⧉ subagents (1)                                   ▐
 ▌    ⣾ research · map the renderer                   ▐
 ▌                                                 <1m▐
-▎⢄ coder                                             🮇
+▎○ coder                                             🮇
 ▎  implement                                         🮇
 ▎  ▢ ────────────────────────────────────    0%      🮇
-▎  ⧉ subagents (1)                                   🮇
-▎⢄ stray                                             🮇
+▎✓ stray                                             🮇
 ▎  observe                                           🮇
 ▎  ▢ ────────────────────────────────────    0%      🮇
-▎  ⧉ subagents (1)                                   🮇
+
+
 
 
 

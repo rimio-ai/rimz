@@ -113,11 +113,6 @@ fn stale_cards_shrink_only_unread_free_resting_history() {
             line_texts(&lines).join("\n"),
         );
     }
-    row.as_agent_mut().unwrap().team = Some("crew".into());
-    let mut teammate = row.clone();
-    teammate.id = "teammate".into();
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
-        .push(teammate);
     for status in [
         AgentStatus::Running,
         AgentStatus::Waiting,
@@ -139,18 +134,16 @@ fn stale_cards_shrink_only_unread_free_resting_history() {
                 for reach in [
                     SelectionReach::Unreached,
                     SelectionReach::Selected,
-                    SelectionReach::Teammate,
+                    SelectionReach::Held,
                 ] {
                     *snapshot.rows_mut().next().unwrap() = row.clone();
                     let rolls = CostRolls::default();
                     let mut ctx = test_row_ctx(&snapshot, &theme, 70, usize::MAX, 0, &rolls);
-                    let held = [if reach == SelectionReach::Teammate {
-                        "teammate".into()
-                    } else {
-                        row.id.clone()
-                    }]
-                    .into();
-                    if reach != SelectionReach::Unreached {
+                    let held = [row.id.clone()].into();
+                    if reach == SelectionReach::Selected {
+                        ctx.selected_index = Some(0);
+                    }
+                    if reach == SelectionReach::Held {
                         ctx.held_expansions = &held;
                     }
                     let lines =
