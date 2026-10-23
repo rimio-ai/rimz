@@ -42,11 +42,12 @@
 //! `$RIMZ_TEST_SSH_TUNNEL_READY_GATE` holds a control-forward scripted by
 //! `$RIMZ_TEST_SSH_TUNNEL_PLAN` until its named file exists, then exits from
 //! that plan.
-//! Both gates ignore file contents and wait without a deadline.
+//! `$RIMZ_TEST_SSH_TUNNEL_EXIT_GATE` holds a direct tunnel after binding its
+//! listener until the named file exists, then exits from the tunnel plan.
+//! All three gates ignore file contents and wait without a deadline.
 //! `$RIMZ_TEST_SSH_TUNNEL_LISTEN` binds the direct tunnel's forwarded port.
 //! `$RIMZ_TEST_SSH_TUNNEL_HTTP_LOG` also binds it and logs HTTP requests,
 //! serving stub HTTP and WebSocket responses.
-//! `$RIMZ_TEST_SSH_TUNNEL_SLEEP_MS` delays the direct tunnel's planned exit.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -250,10 +251,8 @@ fn run_web_tunnel(argv: &[String]) -> ! {
         std::thread::spawn(move || serve_web_tunnel(listener, std::path::Path::new(&log)));
     }
     let _listener = listener;
-    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS")
-        && let Ok(ms) = ms.parse::<u64>()
-    {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+    if let Some(path) = env::var_os("RIMZ_TEST_SSH_TUNNEL_EXIT_GATE") {
+        wait_for_gate(std::path::Path::new(&path));
     }
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
 }
