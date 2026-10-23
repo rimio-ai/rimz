@@ -1050,6 +1050,10 @@ pub trait MuxBackend: Send + Sync {
     fn name(&self) -> MuxName;
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()>;
     fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec;
+    /// Whether this backend version can drop or refuse a freshly attaching client.
+    fn attach_may_drop_early(&self) -> bool {
+        false
+    }
     /// Attach to a live session without creating a missing session.
     fn attach_existing_command(&self, name: &str) -> CommandSpec;
     /// Attach a browser broadcast client without granting mux input where the

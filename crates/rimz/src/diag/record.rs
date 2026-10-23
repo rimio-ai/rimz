@@ -417,6 +417,12 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         errors: Vec<String>,
     },
+    ClientReattached {
+        attempt: u8,
+        exit_code: i32,
+        elapsed_ms: u64,
+        zellij_version: String,
+    },
     SidebarWidthIntent {
         trigger: SidebarWidthIntentTrigger,
         own_cols: u16,
@@ -714,6 +720,7 @@ impl DiagEvent {
                 ..
             }
             | Self::ClientReaped { settled: false, .. }
+            | Self::ClientReattached { .. }
             | Self::TickBudgetBreach {
                 recovered_after_ms: None,
                 ..
@@ -817,6 +824,7 @@ impl DiagEvent {
             Self::HealthAlert { .. } => "health_alert",
             Self::LinkAlert { .. } => "link_alert",
             Self::ClientReaped { .. } => "client_reaped",
+            Self::ClientReattached { .. } => "client_reattached",
             Self::SidebarWidthIntent { .. } => "sidebar_width_intent",
             Self::SidebarWidthNudge { .. } => "sidebar_width_nudge",
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
@@ -932,6 +940,7 @@ impl DiagEvent {
                 settled,
                 ..
             } => format!("{}:{killed_pids:?}:{settled}", self.kind_name()),
+            Self::ClientReattached { attempt, .. } => format!("{}:{attempt}", self.kind_name()),
             Self::SidebarWidthIntent {
                 trigger,
                 base_cols,
@@ -1375,6 +1384,15 @@ impl DiagEvent {
                 } else {
                     format!("; {}", errors.join("; "))
                 }
+            ),
+            Self::ClientReattached {
+                attempt,
+                exit_code,
+                elapsed_ms,
+                zellij_version,
+            } => format!(
+                "reattaching {zellij_version} client (attempt {attempt}); \
+                 exit {exit_code} after {elapsed_ms}ms"
             ),
             Self::SidebarWidthIntent {
                 trigger,

@@ -212,6 +212,12 @@ sccache --stop-server
 
 To keep host shells from compiling inside a server that a scoped pane started, also set `client_side_mode = true` in your sccache config file. [Scoped isolation](./security.md#scoped-isolation) covers what a scoped pane sees.
 
+### Zellij refuses a client right after it starts
+
+Zellij before 0.46 has a race that can report a running room as missing and refuse a new client. When the client exits with a nonzero code within two seconds and the room is still running, `rimz start` and `rimz attach` print a notice and attach again, at most twice. If both retries fail, run `rimz attach` again. Zellij 0.46 and newer remove this race; upgrade when available. See [multiplexer setup](./multiplexer.md).
+
+A "lost connection" drop exits with the same zero code as an explicit detach, so RimZ cannot tell them apart and does not attach again in either case. After a drop, run `rimz attach` again. Signal exits are not retried either.
+
 ### Zellij is live but not responding
 
 Zellij can still list a room after that room has stopped answering pane queries. Attaching then opens an alternate screen that cannot draw, so RimZ refuses before attach and leaves every pane untouched. `rimz doctor` confirms it with a `live but not responding` session-health verdict. If it does not recover, rebuild the room:

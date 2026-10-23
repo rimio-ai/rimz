@@ -4347,6 +4347,21 @@ fn version_serves_the_memoized_probe() {
 }
 
 #[test]
+fn early_attach_drop_hazard_ends_at_zellij_046() {
+    for (version, hazard) in [
+        ("zellij 0.45.1", true),
+        ("zellij 0.46.0", false),
+        ("zellij 0.47.0", false),
+        ("unparsable", false),
+    ] {
+        let backend = ZellijBackend::default();
+        backend.version.set(version.to_owned()).unwrap();
+        assert_eq!(backend.attach_may_drop_early(), hazard, "{version}");
+    }
+    assert!(!crate::mux::tmux::TmuxBackend::default().attach_may_drop_early());
+}
+
+#[test]
 fn zellij_session_options_respect_defaults_overrides_and_order() {
     use crate::config::{ZellijClipboard, ZellijForceClose};
     use ZellijOptionValue::{Bool, Int, Word};

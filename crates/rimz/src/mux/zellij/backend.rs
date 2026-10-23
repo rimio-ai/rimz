@@ -1172,6 +1172,15 @@ impl MuxBackend for ZellijBackend {
             .args(super::zellij_client_options_args(&config.zellij))
     }
 
+    fn attach_may_drop_early(&self) -> bool {
+        // Zellij #5630 retires client ids instead of reusing a recently removed one.
+        self.version()
+            .ok()
+            .as_deref()
+            .and_then(super::parse_version)
+            .is_some_and(|version| version < (0, 46, 0))
+    }
+
     fn attach_existing_command(&self, name: &str) -> CommandSpec {
         self.cmd().args(["attach", name])
     }

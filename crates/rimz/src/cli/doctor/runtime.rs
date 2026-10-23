@@ -1357,6 +1357,7 @@ fn classify_diagnostic(
             ..
         }
         | DiagEvent::ClientReaped { settled: false, .. }
+        | DiagEvent::ClientReattached { .. }
         | DiagEvent::TickBudgetBreach {
             recovered_after_ms: None,
             ..

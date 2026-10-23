@@ -43,6 +43,32 @@ fn stale_presence_rosters_round_trip_and_group_by_session_and_writer() {
 }
 
 #[test]
+fn client_reattaches_round_trip_exit_evidence_as_warnings() {
+    for (attempt, exit_code) in [(1, 1), (2, 23)] {
+        let wire = serde_json::json!({
+            "kind": "client_reattached", "attempt": attempt,
+            "exit_code": exit_code, "elapsed_ms": 50,
+            "zellij_version": "zellij 0.45.1",
+        });
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(
+            decoded.is_ok(),
+            "re-attach evidence must decode: {decoded:?}"
+        );
+        let event = decoded.unwrap();
+        assert_eq!(event.severity(), DiagSeverity::Warn);
+        assert_eq!(event.kind_name(), "client_reattached");
+        assert_eq!(event.identity_key(), format!("client_reattached:{attempt}"));
+        assert!(event.summary().contains("50ms"));
+        assert!(event.summary().contains("0.45.1"));
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+        let mut missing_exit_code = wire.clone();
+        missing_exit_code["exit_code"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<DiagEvent>(missing_exit_code).is_err());
+    }
+}
+
+#[test]
 fn subagent_pane_bind_timeouts_round_trip_with_run_identity() {
     let run_id = crate::RunId::new();
     for (caller, expected) in [

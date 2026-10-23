@@ -18,6 +18,8 @@ const ALTERNATE_SCROLL_DISABLE: &[u8] = b"\x1b[?1007l";
 const ALTERNATE_SCROLL_RESTORE: &[u8] = b"\x1b[?1007r";
 const ATTACH_PROCESS_POLL: Duration = Duration::from_millis(150);
 const REMOTE_ROOM_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
+const EARLY_ATTACH_EXIT_WINDOW: Duration = Duration::from_secs(2);
+const MAX_ATTACH_REATTACHES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RemoteRoomObservation {
@@ -81,6 +83,7 @@ struct RemoteRoomMonitor {
     backend: Box<dyn rimz::mux::MuxBackend>,
     session_name: String,
     watchdog: RemoteRoomWatchdog,
+    started: Instant,
 }
 
 impl RemoteRoomMonitor {
@@ -94,10 +97,12 @@ impl RemoteRoomMonitor {
                 ),
                 ..RemoteRoomWatchdog::default()
             },
+            started: Instant::now(),
         }
     }
 
-    fn poll(&mut self, elapsed: Duration) -> RemoteRoomPoll {
+    fn poll(&mut self) -> RemoteRoomPoll {
+        let elapsed = self.started.elapsed();
         let delay = self.watchdog.next_observation_in(elapsed);
         if !delay.is_zero() {
             return RemoteRoomPoll::Wait(delay);
@@ -150,12 +155,34 @@ pub(super) fn run_attach_action(
             let supervised = std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV)
                 .is_some_and(|marker| !marker.is_empty());
             let mut monitor = supervised.then(|| RemoteRoomMonitor::new(mux, session_name));
+            let backend = rimz::mux::backend_for(mux);
+            let version = backend
+                .attach_may_drop_early()
+                .then(|| backend.version().ok())
+                .flatten();
             let outcome = launch_attach_command_with_bracket(
                 spec,
                 alternate_scroll_bracket_enabled(
                     std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
                 ),
-                monitor.as_mut(),
+                |command| {
+                    run_attach_attempts(
+                        version.as_deref(),
+                        &mut std::io::stderr().lock(),
+                        || run_attach_process(command, monitor.as_mut()),
+                        || observe_remote_room(backend.as_ref(), session_name),
+                        |event| {
+                            if let Some(workspace_id) = workspace_id {
+                                rimz::diag::DiagSink::for_workspace(
+                                    workspace_id.clone(),
+                                    session_name,
+                                    None,
+                                )
+                                .emit_unlimited(event);
+                            }
+                        },
+                    )
+                },
             )?;
             let status = match outcome {
                 AttachOutcome::RoomEnded => {
@@ -313,7 +340,9 @@ pub(super) fn report_already_inside(
 }
 
 pub(crate) fn launch_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
-    let outcome = launch_attach_command_with_bracket(spec, true, None)?;
+    let outcome = launch_attach_command_with_bracket(spec, true, |command| {
+        run_attach_process(command, None).map(|(outcome, _)| outcome)
+    })?;
     if let AttachOutcome::Exited(status) = outcome
         && !status.success()
     {
@@ -325,7 +354,7 @@ pub(crate) fn launch_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()>
 fn launch_attach_command_with_bracket(
     spec: &rimz::mux::CommandSpec,
     bracket_alternate_scroll: bool,
-    monitor: Option<&mut RemoteRoomMonitor>,
+    run: impl FnOnce(&mut std::process::Command) -> std::io::Result<AttachOutcome>,
 ) -> Result<AttachOutcome> {
     let mut command = attach_command(spec);
     let stdout_is_terminal = std::io::stdout().is_terminal();
@@ -336,7 +365,7 @@ fn launch_attach_command_with_bracket(
         stdout_is_terminal,
         std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV).as_deref(),
         bracket_alternate_scroll,
-        |_| run_attach_process(&mut command, monitor),
+        |_| run(&mut command),
     )
 }
 
@@ -363,25 +392,78 @@ fn run_attach_command(
     status.with_context(|| format!("running `{}`", spec.display_line()))
 }
 
+fn run_attach_attempts(
+    version: Option<&str>,
+    stderr: &mut dyn Write,
+    mut run: impl FnMut() -> std::io::Result<(AttachOutcome, Duration)>,
+    mut observe: impl FnMut() -> RemoteRoomObservation,
+    mut emit: impl FnMut(rimz::diag::record::DiagEvent),
+) -> std::io::Result<AttachOutcome> {
+    let mut reattaches = 0;
+    loop {
+        let (outcome, elapsed) = run()?;
+        let AttachOutcome::Exited(status) = &outcome else {
+            return Ok(outcome);
+        };
+        let Some(exit_code) = status.code().filter(|code| *code != 0) else {
+            return Ok(outcome);
+        };
+        let Some(version) = version else {
+            return Ok(outcome);
+        };
+        if elapsed >= EARLY_ATTACH_EXIT_WINDOW || observe() != RemoteRoomObservation::Live {
+            return Ok(outcome);
+        }
+        if reattaches == MAX_ATTACH_REATTACHES {
+            let _ = writeln!(
+                stderr,
+                "rimz: the room is still running; run `rimz attach` again"
+            );
+            return Ok(outcome);
+        }
+        reattaches += 1;
+        emit(rimz::diag::record::DiagEvent::ClientReattached {
+            attempt: reattaches,
+            exit_code,
+            elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            zellij_version: version.to_owned(),
+        });
+        // Diagnostic I/O can outlive the room; do not spawn on the earlier verdict.
+        if observe() != RemoteRoomObservation::Live {
+            return Ok(outcome);
+        }
+        let _ = writeln!(
+            stderr,
+            concat!(
+                "rimz: Zellij refused the client right after it started; ",
+                "this is a known race in Zellij before 0.46; attaching again ({}/{})"
+            ),
+            reattaches, MAX_ATTACH_REATTACHES,
+        );
+    }
+}
+
 #[cfg(not(unix))]
 fn run_attach_process(
     command: &mut std::process::Command,
     monitor: Option<&mut RemoteRoomMonitor>,
-) -> std::io::Result<AttachOutcome> {
-    let Some(monitor) = monitor else {
-        return command.status().map(AttachOutcome::Exited);
-    };
-    let started = Instant::now();
+) -> std::io::Result<(AttachOutcome, Duration)> {
     let mut child = command.spawn()?;
+    let started = Instant::now();
+    let Some(monitor) = monitor else {
+        return child
+            .wait()
+            .map(|status| (AttachOutcome::Exited(status), started.elapsed()));
+    };
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(AttachOutcome::Exited(status));
+            return Ok((AttachOutcome::Exited(status), started.elapsed()));
         }
-        match monitor.poll(started.elapsed()) {
+        match monitor.poll() {
             RemoteRoomPoll::RoomEnded => {
                 child.kill()?;
                 child.wait()?;
-                return Ok(AttachOutcome::RoomEnded);
+                return Ok((AttachOutcome::RoomEnded, started.elapsed()));
             }
             RemoteRoomPoll::Wait(delay) => {
                 std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
@@ -394,15 +476,15 @@ fn run_attach_process(
 fn run_attach_process(
     command: &mut std::process::Command,
     mut monitor: Option<&mut RemoteRoomMonitor>,
-) -> std::io::Result<AttachOutcome> {
+) -> std::io::Result<(AttachOutcome, Duration)> {
     use nix::errno::Errno;
     use nix::sys::signal::{Signal, kill, raise};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
     use std::os::unix::process::ExitStatusExt;
 
-    let started = monitor.as_ref().map(|_| Instant::now());
     let child = command.spawn()?;
+    let started = Instant::now();
     let pid = Pid::from_raw(i32::try_from(child.id()).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -415,15 +497,17 @@ fn run_attach_process(
     loop {
         match waitpid(pid, Some(wait_flags)) {
             Ok(WaitStatus::Exited(_, code)) => {
-                return Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
-                    code << 8,
-                )));
+                return Ok((
+                    AttachOutcome::Exited(std::process::ExitStatus::from_raw(code << 8)),
+                    started.elapsed(),
+                ));
             }
             Ok(WaitStatus::Signaled(_, signal, dumped_core)) => {
                 let raw = signal as i32 | if dumped_core { 0x80 } else { 0 };
-                return Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
-                    raw,
-                )));
+                return Ok((
+                    AttachOutcome::Exited(std::process::ExitStatus::from_raw(raw)),
+                    started.elapsed(),
+                ));
             }
             Ok(WaitStatus::Stopped(_, _)) => {
                 // tmux's suspend-client stops only itself. Mirror that stop so
@@ -439,8 +523,7 @@ fn run_attach_process(
                 let Some(monitor) = monitor.as_deref_mut() else {
                     continue;
                 };
-                let elapsed = started.as_ref().map_or(Duration::ZERO, Instant::elapsed);
-                match monitor.poll(elapsed) {
+                match monitor.poll() {
                     RemoteRoomPoll::RoomEnded => {
                         match kill(pid, Signal::SIGKILL) {
                             Ok(()) | Err(Errno::ESRCH) => {}
@@ -453,7 +536,7 @@ fn run_attach_process(
                                 Err(err) => return Err(errno_io(err)),
                             }
                         }
-                        return Ok(AttachOutcome::RoomEnded);
+                        return Ok((AttachOutcome::RoomEnded, started.elapsed()));
                     }
                     RemoteRoomPoll::Wait(delay) => {
                         std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
@@ -496,289 +579,4 @@ fn print_attach_command(spec: &rimz::mux::CommandSpec) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn attach_action_matrix_and_nested_report_policy() {
-        for (stdin, stdout, inside) in [
-            (true, true, false),
-            (false, true, false),
-            (true, false, false),
-            (false, false, false),
-            (true, true, true),
-            (false, false, true),
-        ] {
-            assert_eq!(
-                attach_action(AttachMode::Attach, stdin, stdout, inside),
-                AttachAction::Launch
-            );
-            assert_eq!(
-                attach_action(AttachMode::Print, stdin, stdout, inside),
-                AttachAction::Print(PrintCause::Explicit)
-            );
-        }
-        assert_eq!(
-            attach_action(AttachMode::Auto, true, true, false),
-            AttachAction::Launch,
-        );
-        assert_eq!(
-            attach_action(AttachMode::Auto, false, true, false),
-            AttachAction::Print(PrintCause::NoTerminal),
-        );
-        assert_eq!(
-            attach_action(AttachMode::Auto, true, false, false),
-            AttachAction::Print(PrintCause::NoTerminal),
-        );
-        assert_eq!(
-            attach_action(AttachMode::Auto, true, true, true),
-            AttachAction::Print(PrintCause::InsideMux),
-        );
-        assert_eq!(
-            attach_action(AttachMode::Attach, false, false, true),
-            AttachAction::Launch,
-        );
-        assert_eq!(
-            attach_action(AttachMode::Print, true, true, false),
-            AttachAction::Print(PrintCause::Explicit),
-        );
-
-        assert!(should_report_already_inside(AttachMode::Auto, true));
-        assert!(!should_report_already_inside(AttachMode::Auto, false));
-        assert!(!should_report_already_inside(AttachMode::Print, true));
-        assert!(!should_report_already_inside(AttachMode::Attach, true));
-    }
-
-    #[test]
-    fn room_open_sentinel_requires_a_nonempty_supervised_request_not_a_tty() {
-        let spec = rimz::mux::CommandSpec::new("mux");
-        for supervised in [None, Some(OsStr::new("")), Some(OsStr::new("1"))] {
-            let mut output = Vec::new();
-            run_attach_command(&spec, &mut output, false, supervised, true, |stdout| {
-                stdout.write_all(b"child")?;
-                Ok(AttachOutcome::RoomEnded)
-            })
-            .expect("run piped attach");
-            let expected: &[u8] = if supervised.is_some_and(|value| !value.is_empty()) {
-                b"\x1b]7717;rimz-room-open\x07child"
-            } else {
-                b"child"
-            };
-            assert_eq!(output, expected, "supervised={supervised:?}");
-        }
-    }
-
-    #[test]
-    fn outer_scroll_marker_does_not_reach_the_multiplexer_environment() {
-        let command = attach_command(&rimz::mux::CommandSpec::new("mux"));
-
-        assert!(command.get_envs().any(|(key, value)| {
-            key == OsStr::new(rimz::remote::OUTER_SCROLL_BRACKET_ENV) && value.is_none()
-        }));
-    }
-
-    #[test]
-    fn outer_scroll_marker_suppresses_a_nested_bracket() {
-        assert!(alternate_scroll_bracket_enabled(None));
-        assert!(alternate_scroll_bracket_enabled(Some(OsStr::new(""))));
-        assert!(!alternate_scroll_bracket_enabled(Some(OsStr::new("1"))));
-    }
-
-    #[test]
-    fn alternate_scroll_sequences_are_exact() {
-        assert_eq!(ALTERNATE_SCROLL_SAVE, b"\x1b[?1007s");
-        assert_eq!(ALTERNATE_SCROLL_DISABLE, b"\x1b[?1007l");
-        assert_eq!(ALTERNATE_SCROLL_RESTORE, b"\x1b[?1007r");
-    }
-
-    #[test]
-    fn remote_session_loss_translates_only_missing_sessions() {
-        assert!(remote_session_lost_exit(RemoteRoomObservation::Gone));
-        assert!(!remote_session_lost_exit(RemoteRoomObservation::Live));
-        assert!(!remote_session_lost_exit(RemoteRoomObservation::Unknown));
-    }
-
-    #[test]
-    fn remote_room_watchdog_interval_accepts_only_positive_milliseconds() {
-        assert_eq!(
-            remote_room_watchdog_interval(Some("25")),
-            Duration::from_millis(25)
-        );
-        for raw in [None, Some("0"), Some("invalid")] {
-            assert_eq!(
-                remote_room_watchdog_interval(raw),
-                REMOTE_ROOM_WATCHDOG_INTERVAL,
-                "{raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn remote_room_watchdog_uses_a_custom_interval() {
-        let interval = Duration::from_millis(25);
-        let mut watchdog = RemoteRoomWatchdog {
-            interval,
-            ..RemoteRoomWatchdog::default()
-        };
-
-        assert_eq!(watchdog.next_observation_in(Duration::ZERO), Duration::ZERO);
-        assert!(!watchdog.observe(Duration::ZERO, RemoteRoomObservation::Live));
-        assert_eq!(watchdog.next_observation_in(Duration::ZERO), interval);
-        assert_eq!(watchdog.next_observation_in(interval), Duration::ZERO);
-        assert!(watchdog.observe(interval, RemoteRoomObservation::Gone));
-    }
-
-    #[test]
-    fn remote_room_watchdog_arms_on_live_and_fires_on_gone() {
-        let mut watchdog = RemoteRoomWatchdog::default();
-
-        assert_eq!(watchdog.next_observation_in(Duration::ZERO), Duration::ZERO);
-        assert!(!watchdog.observe(Duration::ZERO, RemoteRoomObservation::Live));
-        assert_eq!(
-            watchdog.next_observation_in(Duration::ZERO),
-            REMOTE_ROOM_WATCHDOG_INTERVAL
-        );
-        assert_eq!(
-            watchdog.next_observation_in(REMOTE_ROOM_WATCHDOG_INTERVAL),
-            Duration::ZERO
-        );
-        assert!(watchdog.observe(REMOTE_ROOM_WATCHDOG_INTERVAL, RemoteRoomObservation::Gone,));
-    }
-
-    #[test]
-    fn remote_room_watchdog_fails_open_until_live_is_observed() {
-        let mut watchdog = RemoteRoomWatchdog::default();
-
-        assert!(!watchdog.observe(Duration::ZERO, RemoteRoomObservation::Unknown));
-        assert!(!watchdog.observe(REMOTE_ROOM_WATCHDOG_INTERVAL, RemoteRoomObservation::Gone,));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn attach_brackets_child_output_and_preserves_its_failure() {
-        use std::os::unix::process::ExitStatusExt;
-
-        struct FlushedOutput<'a> {
-            bytes: Vec<u8>,
-            flushes: &'a std::cell::Cell<usize>,
-        }
-
-        impl Write for FlushedOutput<'_> {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.bytes.write(bytes)
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.flushes.set(self.flushes.get() + 1);
-                Ok(())
-            }
-        }
-
-        let spec = rimz::mux::CommandSpec::new("sh").args(["-c", "printf child; exit 23"]);
-        let flushes = std::cell::Cell::new(0);
-        let mut output = FlushedOutput {
-            bytes: Vec::new(),
-            flushes: &flushes,
-        };
-        let status = run_attach_command(
-            &spec,
-            &mut output,
-            true,
-            Some(OsStr::new("1")),
-            true,
-            |stdout| {
-                assert_eq!(
-                    flushes.get(),
-                    3,
-                    "scroll bracket and sentinel flush before mux launch"
-                );
-                stdout.write_all(b"child")?;
-                Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
-                    23 << 8,
-                )))
-            },
-        )
-        .expect("child status");
-
-        assert_eq!(
-            output.bytes,
-            [
-                ALTERNATE_SCROLL_SAVE,
-                ALTERNATE_SCROLL_DISABLE,
-                b"\x1b]7717;rimz-room-open\x07",
-                b"child",
-                ALTERNATE_SCROLL_RESTORE,
-            ]
-            .concat(),
-        );
-        let AttachOutcome::Exited(status) = status else {
-            panic!("expected child exit")
-        };
-        assert_eq!(status.code(), Some(23));
-    }
-
-    #[test]
-    fn attach_restores_terminal_bracket_when_the_room_ends() {
-        let spec = rimz::mux::CommandSpec::new("mux");
-        let mut output = Vec::new();
-        let outcome = run_attach_command(&spec, &mut output, true, None, true, |_| {
-            Ok(AttachOutcome::RoomEnded)
-        })
-        .expect("room-ended outcome");
-
-        assert!(matches!(outcome, AttachOutcome::RoomEnded));
-        assert_eq!(
-            output,
-            [
-                ALTERNATE_SCROLL_SAVE,
-                ALTERNATE_SCROLL_DISABLE,
-                ALTERNATE_SCROLL_RESTORE,
-            ]
-            .concat(),
-        );
-    }
-
-    #[test]
-    fn attach_restores_after_launch_error_and_skips_non_terminal_sequences() {
-        let spec = rimz::mux::CommandSpec::new("mux");
-        let mut terminal_output = Vec::new();
-        let result = run_attach_command(&spec, &mut terminal_output, true, None, true, |_| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "missing mux",
-            ))
-        });
-        assert_eq!(
-            terminal_output,
-            [
-                ALTERNATE_SCROLL_SAVE,
-                ALTERNATE_SCROLL_DISABLE,
-                ALTERNATE_SCROLL_RESTORE,
-            ]
-            .concat(),
-        );
-        assert!(result.unwrap_err().to_string().contains("running `mux`"));
-
-        let mut piped_output = Vec::new();
-        let result = run_attach_command(&spec, &mut piped_output, false, None, true, |stdout| {
-            stdout.write_all(b"child")?;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "missing mux",
-            ))
-        });
-        assert_eq!(piped_output, b"child");
-        assert!(result.unwrap_err().to_string().contains("running `mux`"));
-
-        let mut nested_output = Vec::new();
-        let result = run_attach_command(&spec, &mut nested_output, true, None, false, |stdout| {
-            stdout.write_all(b"child")?;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "missing mux",
-            ))
-        });
-        assert_eq!(nested_output, b"child");
-        assert!(result.unwrap_err().to_string().contains("running `mux`"));
-    }
-}
+mod tests;
