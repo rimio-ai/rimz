@@ -573,8 +573,17 @@ fn wait_for_probe_if_requested(log_path: &std::ffi::OsStr) {
 }
 
 fn ack_probe_stream() {
+    use std::os::fd::AsFd as _;
+
+    use nix::poll::{PollFd, PollFlags, poll};
+
     let stdin = std::io::stdin();
+    let mut stdin = std::io::BufReader::new(std::fs::File::from(
+        nix::unistd::dup(&stdin).expect("duplicate probe stdin"),
+    ));
     let mut stdout = std::io::stdout().lock();
+    // Count only caught-up probes before going silent: the newest seq is still in the
+    // supervisor's 30-probe window, even after a read backlog.
     let silent_after_acks = env::var("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
@@ -582,15 +591,30 @@ fn ack_probe_stream() {
     let reported_port = env::var("RIMZ_TEST_PROBE_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok());
-    for line in stdin.lock().lines().map_while(Result::ok) {
+    loop {
+        let mut line = String::new();
+        match stdin.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         let Some(seq) = value.get("seq").and_then(|seq| seq.as_u64()) else {
             continue;
         };
-        if silent_after_acks.is_some_and(|limit| ack_count >= limit) {
-            continue;
+        if let Some(limit) = silent_after_acks {
+            if ack_count >= limit || !stdin.buffer().is_empty() {
+                continue;
+            }
+            let mut fds = [PollFd::new(stdin.get_ref().as_fd(), PollFlags::POLLIN)];
+            poll(&mut fds, 0u16).expect("poll probe stdin");
+            if fds[0]
+                .revents()
+                .is_some_and(|events| events.contains(PollFlags::POLLIN))
+            {
+                continue;
+            }
         }
         match reported_port {
             Some(port) if ack_count > 0 => {
