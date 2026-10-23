@@ -199,15 +199,23 @@ impl TruecolorSignals {
 
     /// Whether 24-bit color is advertised by `COLORTERM` or terminfo.
     pub fn truecolor(&self) -> bool {
-        matches!(self.colorterm.as_deref(), Some("truecolor" | "24bit")) || self.terminfo
+        colorterm_truecolor(self.colorterm.as_deref()) || self.terminfo
     }
+}
+
+fn colorterm_truecolor(colorterm: Option<&str>) -> bool {
+    matches!(colorterm, Some("truecolor" | "24bit"))
 }
 
 /// 24-bit color advertised by the active terminal. The value is process static
 /// by convention, so cache it once rather than probing terminfo per frame.
+/// A truecolor `COLORTERM` settles the answer before terminfo is probed, which
+/// spawns `tput` up to eight times on the start-up path.
 pub fn truecolor() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| TruecolorSignals::detect().truecolor())
+    *CACHED.get_or_init(|| {
+        colorterm_truecolor(non_empty_env("COLORTERM").as_deref()) || terminfo_truecolor()
+    })
 }
 
 /// Write a buffered terminal frame with raw-mode-safe, self-clearing lines.
