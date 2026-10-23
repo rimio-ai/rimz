@@ -199,26 +199,48 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     );
 }
 
+struct RelaunchClock(std::cell::Cell<Instant>);
+
+impl RelaunchClock {
+    fn new() -> Self {
+        Self(std::cell::Cell::new(Instant::now()))
+    }
+
+    fn now(&self) -> Instant {
+        self.0.get()
+    }
+
+    fn advance(&self, duration: Duration) {
+        self.0.set(self.now() + duration);
+    }
+}
+
 #[test]
 fn a_relaunch_is_asked_again_until_its_wait_ends() {
     use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
 
-    assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Due, || None),
-        Due
-    );
-    assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Spent, || None),
-        Spent
-    );
-    assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || No, || None),
-        No,
-        "a zero wait still asks once"
-    );
+    let clock = RelaunchClock::new();
+    for answer in [Due, Spent, No] {
+        let asked = std::cell::Cell::new(0);
+        assert_eq!(
+            startup_relaunch_at(
+                clock.now(),
+                CHILD_WAIT_POLL,
+                || {
+                    asked.set(asked.get() + 1);
+                    answer
+                },
+                || None,
+                || clock.now(),
+                |duration| clock.advance(duration),
+            ),
+            answer
+        );
+        assert_eq!(asked.get(), 1, "a zero wait still asks once");
+    }
 
     let asked = std::cell::Cell::new(0);
-    let started = Instant::now();
+    let started = clock.now();
     let answer = startup_relaunch_at(
         started + Duration::from_secs(60),
         CHILD_WAIT_POLL,
@@ -227,23 +249,27 @@ fn a_relaunch_is_asked_again_until_its_wait_ends() {
             if asked.get() < 3 { Due } else { No }
         },
         || None,
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(answer, No, "the answer changed during the wait");
     assert_eq!(asked.get(), 3, "the wait ends at the first refusal");
-    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(clock.now(), started + CHILD_WAIT_POLL * 2);
 
     let asked = std::cell::Cell::new(0);
     let answer = startup_relaunch_at(
-        Instant::now() + CHILD_WAIT_POLL * 3,
+        clock.now() + CHILD_WAIT_POLL * 3,
         CHILD_WAIT_POLL,
         || {
             asked.set(asked.get() + 1);
             Due
         },
         || None,
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(answer, Due);
-    assert!(asked.get() >= 2, "asked after the wait, not only before it");
+    assert_eq!(asked.get(), 4, "asked at each poll through the deadline");
 }
 
 #[test]
@@ -251,75 +277,125 @@ fn a_parent_end_is_confirmed_once_at_the_relaunch_deadline() {
     use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
 
     for answer in [Due, Spent] {
-        let asked = std::cell::Cell::new(0);
+        let clock = RelaunchClock::new();
+        let started = clock.now();
+        let asked = RefCell::new(Vec::new());
         let confirmed = std::cell::Cell::new(0);
         let verdict = startup_relaunch_at(
-            Instant::now() + CHILD_WAIT_POLL * 3,
+            started + CHILD_WAIT_POLL * 3,
             CHILD_WAIT_POLL,
             || {
-                asked.set(asked.get() + 1);
+                asked.borrow_mut().push(clock.now());
                 answer
             },
             || {
                 confirmed.set(confirmed.get() + 1);
                 Some(true)
             },
+            || clock.now(),
+            |duration| clock.advance(duration),
         );
         assert_eq!(verdict, No, "a confirmed end cancels {answer:?}");
-        assert!(asked.get() >= 2, "the wait polled before its deadline");
+        assert_eq!(
+            *asked.borrow(),
+            [
+                started,
+                started + CHILD_WAIT_POLL,
+                started + CHILD_WAIT_POLL * 2,
+                started + CHILD_WAIT_POLL * 3,
+            ]
+        );
         assert_eq!(confirmed.get(), 1, "confirmed once, at the deadline only");
     }
 
+    let clock = RelaunchClock::new();
     let confirmed = std::cell::Cell::new(0);
     let verdict = startup_relaunch_at(
-        Instant::now(),
+        clock.now(),
         CHILD_WAIT_POLL,
         || Due,
         || {
             confirmed.set(confirmed.get() + 1);
             Some(false)
         },
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(verdict, Due, "an unconfirmed end leaves the answer");
     assert_eq!(confirmed.get(), 1);
 
     let stopped = std::cell::Cell::new(false);
     let verdict = startup_relaunch_at(
-        Instant::now(),
+        clock.now(),
         CHILD_WAIT_POLL,
         || if stopped.get() { No } else { Due },
         || {
             stopped.set(true);
             Some(false)
         },
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(verdict, No, "a stop during the confirmation still cancels");
 
     let asked = std::cell::Cell::new(0);
     let verdict = startup_relaunch_at(
-        Instant::now(),
+        clock.now(),
         CHILD_WAIT_POLL,
         || {
             asked.set(asked.get() + 1);
             Due
         },
         || None,
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(verdict, Due);
     assert_eq!(asked.get(), 1, "no confirmation ran, so no second ask");
 
     let confirmed = std::cell::Cell::new(false);
     let verdict = startup_relaunch_at(
-        Instant::now() + Duration::from_secs(60),
+        clock.now() + Duration::from_secs(60),
         CHILD_WAIT_POLL,
         || No,
         || {
             confirmed.set(true);
             Some(true)
         },
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
     assert_eq!(verdict, No);
     assert!(!confirmed.get(), "an early refusal asks no confirmation");
+}
+
+#[test]
+fn a_first_relaunch_ask_that_passes_the_deadline_confirms_once() {
+    use rimz::harness::run::StartupRelaunch::{Due, No};
+
+    let clock = RelaunchClock::new();
+    let asked = std::cell::Cell::new(0);
+    let confirmed = std::cell::Cell::new(0);
+    let verdict = startup_relaunch_at(
+        clock.now() + CHILD_WAIT_POLL * 3,
+        CHILD_WAIT_POLL,
+        || {
+            asked.set(asked.get() + 1);
+            if asked.get() == 1 {
+                clock.advance(Duration::from_millis(100));
+            }
+            Due
+        },
+        || {
+            confirmed.set(confirmed.get() + 1);
+            Some(true)
+        },
+        || clock.now(),
+        |duration| clock.advance(duration),
+    );
+    assert_eq!(verdict, No);
+    assert_eq!(asked.get(), 1, "the first ask already passed the deadline");
+    assert_eq!(confirmed.get(), 1);
 }
 
 #[test]
@@ -327,20 +403,20 @@ fn a_relaunch_refreshes_its_parent_after_the_deadline_before_the_last_ask() {
     use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
 
     let answers = [Due, Spent].map(|initial| {
+        let clock = RelaunchClock::new();
         let refreshed = std::cell::Cell::new(false);
-        let deadline = Instant::now() + CHILD_WAIT_POLL;
+        let deadline = clock.now() + CHILD_WAIT_POLL;
         startup_relaunch_at(
             deadline,
             CHILD_WAIT_POLL,
             || if refreshed.get() { No } else { initial },
             || {
-                assert!(
-                    Instant::now() >= deadline,
-                    "refresh must follow the deadline"
-                );
+                assert_eq!(clock.now(), deadline, "refresh must follow the deadline");
                 refreshed.set(true);
                 Some(false)
             },
+            || clock.now(),
+            |duration| clock.advance(duration),
         )
     });
 
@@ -354,21 +430,29 @@ fn a_relaunch_refreshes_its_parent_after_the_deadline_before_the_last_ask() {
 #[test]
 fn folding_card_evidence_asks_have_a_quarter_second_floor() {
     use rimz::harness::run::StartupRelaunch::Due;
+    let clock = RelaunchClock::new();
+    let started = clock.now();
     let mut asks = Vec::new();
     startup_relaunch_at(
-        Instant::now() + Duration::from_millis(550),
+        started + Duration::from_millis(550),
         Duration::from_millis(250),
         || {
-            asks.push(Instant::now());
+            asks.push(clock.now());
             Due
         },
         || None,
+        || clock.now(),
+        |duration| clock.advance(duration),
     );
-    assert!(asks.len() >= 2);
-    assert!(
-        asks.windows(2)
-            .all(|pair| pair[1].duration_since(pair[0]) >= Duration::from_millis(250)),
-        "card evidence asks must be at least 250 ms apart: {asks:?}"
+    assert_eq!(
+        asks,
+        [
+            started,
+            started + Duration::from_millis(250),
+            started + Duration::from_millis(500),
+            started + Duration::from_millis(750),
+        ],
+        "card evidence asks must be exactly 250 ms apart"
     );
 }
 

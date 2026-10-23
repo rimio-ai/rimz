@@ -646,8 +646,14 @@ fn run_loop(
         } else {
             CHILD_WAIT_POLL
         };
-        let mut verdict =
-            startup_relaunch_at(grace_ends, evidence_poll, &mut relaunch, confirm_parent_end);
+        let mut verdict = startup_relaunch_at(
+            grace_ends,
+            evidence_poll,
+            &mut relaunch,
+            confirm_parent_end,
+            Instant::now,
+            std::thread::sleep,
+        );
         if verdict == rimz::harness::run::StartupRelaunch::Due {
             // A provider killed mid-setup can leave the pane raw, where
             // Ctrl-C is a byte and the announced cancel never arrives.
@@ -656,8 +662,14 @@ fn run_loop(
             let retry_at = Instant::now()
                 .checked_add(relaunch_wait)
                 .context("invalid park relaunch wait")?;
-            verdict =
-                startup_relaunch_at(retry_at, evidence_poll, &mut relaunch, confirm_parent_end);
+            verdict = startup_relaunch_at(
+                retry_at,
+                evidence_poll,
+                &mut relaunch,
+                confirm_parent_end,
+                Instant::now,
+                std::thread::sleep,
+            );
         }
         match verdict {
             rimz::harness::run::StartupRelaunch::Due => {}
@@ -1233,20 +1245,22 @@ fn startup_relaunch_at(
     poll: Duration,
     mut relaunch: impl FnMut() -> rimz::harness::run::StartupRelaunch,
     parent_end_confirmed: impl FnOnce() -> Option<bool>,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
 ) -> rimz::harness::run::StartupRelaunch {
     loop {
         let answer = relaunch();
         if answer == rimz::harness::run::StartupRelaunch::No {
             return answer;
         }
-        if deadline <= Instant::now() {
+        if deadline <= now() {
             return match parent_end_confirmed() {
                 Some(true) => rimz::harness::run::StartupRelaunch::No,
                 Some(false) => relaunch(),
                 None => answer,
             };
         }
-        std::thread::sleep(poll);
+        sleep(poll);
     }
 }
 
