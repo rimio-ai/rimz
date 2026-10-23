@@ -226,9 +226,12 @@ pub(crate) fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSess
     matches.next().is_none().then_some(session)
 }
 
-/// Find a resumed session in the pane root's shallow single-child process
-/// chain. Branching process trees abstain so sibling agents cannot donate an
-/// unrelated session identity.
+/// Find a resumed session in the pane root's shallow process chain. Each step
+/// follows the one child that could host an agent. RimZ's own helpers (every
+/// `rimz` process but the exec wrapper, which labels as its kind) and children
+/// without a command line (a zombie, an unreadable process) cannot donate a
+/// session, so they are skipped; two remaining candidates abstain so sibling
+/// agents cannot donate an unrelated session identity.
 pub(crate) fn resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
     resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
 }
@@ -239,18 +242,22 @@ fn resumed_session_id_for_root_with(
     children: &dyn Fn(u32) -> Vec<u32>,
 ) -> Option<AgentSessionId> {
     let mut pid = root_pid;
+    let mut command = cmdline(root_pid);
     for _ in 0..=PROCESS_DESCENT_DEPTH {
-        if let Some(session) = cmdline(pid)
-            .as_deref()
-            .and_then(resumed_session_id_from_cmdline)
-        {
+        if let Some(session) = command.as_deref().and_then(resumed_session_id_from_cmdline) {
             return Some(session);
         }
-        let children = children(pid);
-        let [child] = children.as_slice() else {
+        let mut candidates = children(pid).into_iter().filter_map(|child| {
+            cmdline(child)
+                .filter(|command| {
+                    !command.trim().is_empty() && crate::proc::program_label(command) != "rimz"
+                })
+                .map(|command| (child, Some(command)))
+        });
+        let (Some(candidate), None) = (candidates.next(), candidates.next()) else {
             return None;
         };
-        pid = *child;
+        (pid, command) = candidate;
     }
     None
 }
@@ -499,5 +506,119 @@ mod tests {
                 .unwrap_or_default(),)
             .is_none()
         );
+    }
+
+    const CODEX_ID: &str = "019a1699-334b-76a3-a907-f58a8fde9cd6";
+    const KIRO_ID: &str = "sess_019a1699-334b-76a3-a907-f58a8fde9cd6";
+    const DUTY: &str =
+        r#"/home/me/.cargo/bin/rimz agents supervise-duty --request {"duty":"compact"}"#;
+    const DRAINER: &str = "/home/me/.cargo/bin/rimz hooks drain --project-root /repo";
+
+    /// The exec wrapper's argv for a resume in `plan_exec_argv`'s shape, its
+    /// request trimmed to the resume action.
+    fn exec_wrapper(kind: &str, session: &str) -> String {
+        format!(
+            r#"/home/me/.cargo/bin/rimz agents exec {kind} --request {{"request":{{"kind":"{kind}","action":{{"action":"resume","session_id":"{session}"}}}},"prompt_file":null}}"#
+        )
+    }
+
+    /// The same wrapper after a park re-exec.
+    fn parked_exec_wrapper(kind: &str, session: &str) -> String {
+        let wrapper = exec_wrapper(kind, session);
+        format!("{wrapper} --supervise /tmp/rimz/run/supervise.json")
+    }
+
+    /// Walk a fixture tree of `(pid, cmdline, children)` rows from pid 1.
+    fn walk(tree: &[(u32, Option<&str>, &[u32])]) -> Option<String> {
+        let row = |pid| tree.iter().find(|(row, ..)| *row == pid);
+        resumed_session_id_for_root_with(
+            1,
+            &|pid| row(pid).and_then(|(_, cmdline, _)| cmdline.map(str::to_owned)),
+            &|pid| {
+                row(pid)
+                    .map(|(.., children)| children.to_vec())
+                    .unwrap_or_default()
+            },
+        )
+        .as_deref()
+        .map(str::to_owned)
+    }
+
+    #[test]
+    fn resume_walk_sees_past_rimz_helpers_under_the_exec_wrapper() {
+        let codex = format!("codex resume {CODEX_ID} --dangerously-bypass-approvals-and-sandbox");
+        let kiro = format!("kiro-cli-chat --resume-id={KIRO_ID}");
+        let found: Vec<_> = [
+            (exec_wrapper("codex", CODEX_ID), &codex, DUTY),
+            (parked_exec_wrapper("codex", CODEX_ID), &codex, DRAINER),
+            (exec_wrapper("kiro", KIRO_ID), &kiro, DUTY),
+        ]
+        .iter()
+        .map(|(root, provider, helper)| {
+            let tree: &[(u32, Option<&str>, &[u32])] = &[
+                (1, Some(root), &[2, 5]),
+                (2, Some("/usr/bin/bwrap --args 3 --die-with-parent"), &[3]),
+                (3, Some("/usr/bin/bwrap --args 4 --unshare-pid"), &[4]),
+                (4, Some(provider), &[]),
+                (5, Some(helper), &[]),
+            ];
+            walk(tree)
+        })
+        .collect();
+        assert_eq!(
+            found,
+            [CODEX_ID, CODEX_ID, KIRO_ID].map(|id| Some(id.to_owned()))
+        );
+    }
+
+    #[test]
+    fn resume_walk_skips_dead_and_unreadable_children() {
+        let root = exec_wrapper("codex", CODEX_ID);
+        let codex = format!("codex resume {CODEX_ID}");
+        let found = [Some(""), None].map(|sibling| {
+            let tree: &[(u32, Option<&str>, &[u32])] = &[
+                (1, Some(&root), &[2, 3]),
+                (2, Some(&codex), &[]),
+                (3, sibling, &[]),
+            ];
+            walk(tree)
+        });
+        assert_eq!(found, [CODEX_ID, CODEX_ID].map(|id| Some(id.to_owned())));
+    }
+
+    #[test]
+    fn resume_walk_abstains_between_agent_candidates() {
+        let root = exec_wrapper("codex", CODEX_ID);
+        let first = format!("codex resume {CODEX_ID}");
+        for sibling in [
+            "codex resume 019a1699-0000-7000-8000-000000000000",
+            "make test",
+        ] {
+            let tree: &[(u32, Option<&str>, &[u32])] = &[
+                (1, Some(&root), &[2, 3, 4]),
+                (2, Some(&first), &[]),
+                (3, Some(sibling), &[]),
+                (4, Some(DUTY), &[]),
+            ];
+            assert_eq!(walk(tree), None, "resume beside {sibling}");
+        }
+    }
+
+    #[test]
+    fn resume_walk_counts_the_exec_wrapper_as_an_agent() {
+        let wrapper = exec_wrapper("kiro", KIRO_ID);
+        let kiro = format!("kiro-cli-chat --resume-id={KIRO_ID}");
+        let tree: &[(u32, Option<&str>, &[u32])] = &[
+            (1, Some("/bin/zsh"), &[2]),
+            (2, Some(&wrapper), &[3]),
+            (3, Some(&kiro), &[]),
+        ];
+        assert_eq!(walk(tree).as_deref(), Some(KIRO_ID));
+        for root in [
+            exec_wrapper("codex", CODEX_ID),
+            parked_exec_wrapper("codex", CODEX_ID),
+        ] {
+            assert_eq!(command_agent_kind(&root), Some("codex"), "{root}");
+        }
     }
 }
