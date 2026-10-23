@@ -21,15 +21,15 @@ const MAX_ROLLOUT_HEADER_BYTES: u64 = 1024 * 1024;
 
 /// Normalized identity and child metadata from a rollout's `session_meta`
 /// header. Hooks remain lifecycle authority; every field here is optional
-/// enrichment except `is_subagent`, which local root discovery uses to reject
-/// positively identified child rollouts.
+/// enrichment except `is_non_root`, which root discovery and exact-id lookup
+/// use to exclude child and internal threads.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct CodexRolloutHeader {
     pub(super) session_id: Option<String>,
     pub(super) cwd: Option<PathBuf>,
     pub(super) timestamp: Option<Timestamp>,
     pub(super) forked_from_id: Option<String>,
-    pub(super) is_subagent: bool,
+    pub(super) is_non_root: bool,
     pub(super) parent_thread_id: Option<String>,
     pub(super) depth: Option<u32>,
     pub(super) agent_nickname: Option<String>,
@@ -50,32 +50,28 @@ pub(super) fn read_rollout_header(path: &Path) -> Option<CodexRolloutHeader> {
     let RolloutKind::SessionMeta(payload) = record.kind else {
         return None;
     };
-    let spawn = match payload.source.as_ref() {
-        Some(CodexSessionSource::Structured(source)) => source
-            .subagent
-            .as_ref()
-            .and_then(|subagent| subagent.thread_spawn.as_ref()),
-        Some(CodexSessionSource::Name(name)) => {
-            let _ = name;
-            None
-        }
-        Some(CodexSessionSource::Other(value)) => {
-            let _ = value;
-            None
-        }
-        None => None,
-    };
-    let is_subagent = payload
-        .thread_source
-        .as_deref()
-        .is_some_and(|source| source.trim().eq_ignore_ascii_case("subagent"))
-        || spawn.is_some();
+    let subagent = payload
+        .source
+        .as_ref()
+        .and_then(|source| parse_raw::<CodexSubagentSource<'_>>(source.subagent.raw()));
+    let spawn = subagent
+        .as_ref()
+        .and_then(|subagent| subagent.thread_spawn.as_ref());
+    let is_non_root = payload
+        .source
+        .as_ref()
+        .is_some_and(|source| source.subagent.present() || source.internal.present())
+        || non_empty(payload.parent_thread_id.as_deref()).is_some()
+        || payload
+            .thread_source
+            .as_deref()
+            .is_some_and(|source| source.trim().eq_ignore_ascii_case("subagent"));
     Some(CodexRolloutHeader {
         session_id: owned_non_empty(payload.id.as_deref()),
         cwd: owned_non_empty(payload.cwd.as_deref()).map(PathBuf::from),
         timestamp: codex_timestamp(record.timestamp.as_ref()),
         forked_from_id: owned_non_empty(payload.forked_from_id.as_deref()),
-        is_subagent,
+        is_non_root,
         parent_thread_id: owned_non_empty(payload.parent_thread_id.as_deref())
             .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.parent_thread_id.as_deref()))),
         depth: spawn.and_then(|spawn| spawn.depth),
@@ -570,22 +566,20 @@ pub(crate) struct CodexSessionMetaPayload<'a> {
     agent_role: Option<Cow<'a, str>>,
     #[serde(borrow, default, deserialize_with = "deserialize_optional_cow_str")]
     multi_agent_version: Option<Cow<'a, str>>,
-    #[serde(borrow, default)]
+    #[serde(
+        borrow,
+        default,
+        deserialize_with = "deserialize_optional_object_lossy"
+    )]
     source: Option<CodexSessionSource<'a>>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum CodexSessionSource<'a> {
-    Name(#[serde(borrow, deserialize_with = "deserialize_cow_str")] Cow<'a, str>),
-    Structured(#[serde(borrow)] CodexStructuredSessionSource<'a>),
-    Other(IgnoredAny),
-}
-
 #[derive(Default, Deserialize)]
-struct CodexStructuredSessionSource<'a> {
+struct CodexSessionSource<'a> {
     #[serde(borrow, default)]
-    subagent: Option<CodexSubagentSource<'a>>,
+    subagent: RawField<'a>,
+    #[serde(borrow, default)]
+    internal: RawField<'a>,
 }
 
 #[derive(Default, Deserialize)]
