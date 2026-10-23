@@ -438,6 +438,7 @@ pub struct TaskFire<'a> {
     checkout: Option<PathBuf>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
+    record_hold: Option<CheckSignalGuard>,
     backlog_paths: Option<StatePaths>,
     absorbed: u64,
     needs_room: bool,
@@ -496,6 +497,7 @@ impl<'a> TaskFire<'a> {
             checkout: None,
             started,
             run_lock: None,
+            record_hold: None,
             backlog_paths: None,
             absorbed: 0,
             needs_room: false,
@@ -514,6 +516,11 @@ impl<'a> TaskFire<'a> {
 
     pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
         self.check_trip.take()
+    }
+
+    /// Hand an action's SIGTERM guard through terminal recording and run-lock release.
+    pub fn record_signal_guard(&mut self) -> &mut Option<CheckSignalGuard> {
+        &mut self.record_hold
     }
 
     /// Claim one waiting trigger before the CLI rechecks arming and trust.
@@ -562,10 +569,12 @@ impl<'a> TaskFire<'a> {
         spawn: impl FnOnce(&RuntimePaths, &Path, &str) -> std::io::Result<()>,
     ) -> Result<()> {
         if self.run_lock.is_none() {
+            self.record_hold = None;
             return Ok(());
         }
         let Some(paths) = self.backlog_paths.as_ref() else {
             self.run_lock = None;
+            self.record_hold = None;
             return Ok(());
         };
         let _guard = backlog_store::hold(paths)?;
@@ -586,6 +595,7 @@ impl<'a> TaskFire<'a> {
         })();
         // Even an unreadable backlog or a failed spawn releases under the protocol lock.
         self.run_lock = None;
+        self.record_hold = None;
         result
     }
 
@@ -1591,12 +1601,14 @@ impl<'a> TaskFire<'a> {
                 dir.to_string_lossy().into_owned(),
             );
             let started = Instant::now();
-            let mut outcome = run_check(
+            let mut outcome = run_command(
                 &dir,
                 &command,
-                shell_timeout,
+                WatchDeadline::KillAfter(shell_timeout),
                 self.check_echo.take().unwrap_or(CheckEcho::Capture),
                 &env,
+                |_, _| {},
+                &mut self.record_hold,
             )?;
             outcome.passed &= !outcome.timed_out;
             let mut record = check_record(&outcome);
@@ -1624,6 +1636,7 @@ impl<'a> TaskFire<'a> {
                 }
                 return Ok(ControlFlow::Break(GuardStop::Declined));
             }
+            self.record_hold = None;
         }
         if self.mode == LoopRunMode::Scheduled && self.entry.stay && !judges.is_empty() {
             let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
@@ -1670,6 +1683,7 @@ impl<'a> TaskFire<'a> {
             if has_verdict && !polarity_fires(self.entry.on, &outcome) {
                 return Ok(ControlFlow::Break(GuardStop::Declined));
             }
+            self.record_hold = None;
         }
         Ok(ControlFlow::Continue(()))
     }
@@ -1970,6 +1984,14 @@ impl<'a> TaskFire<'a> {
         // Construction and effect completion are linear; reaching this twice
         // is an internal state-machine violation, not a recoverable input.
         assert!(!self.finished, "loop task history transition written once");
+        if self.record_hold.is_none() {
+            match CheckSignalGuard::register(|| Ok(())) {
+                Ok(((), guard)) => self.record_hold = Some(guard),
+                Err(error) => {
+                    tracing::warn!(task = %self.name, %error, "failed to hold SIGTERM during loop recording");
+                }
+            }
+        }
         if let Some(at) = at {
             record.at = at;
         }
@@ -1999,7 +2021,9 @@ impl<'a> TaskFire<'a> {
 
     fn record_and_release(&mut self, record: &mut LoopRunRecord) -> RunTransition {
         let Some(holder) = self.run_lock.as_ref().map(|guard| guard.info) else {
-            return run_log::record_transition(&self.task, record);
+            let transition = run_log::record_transition(&self.task, record);
+            self.record_hold = None;
+            return transition;
         };
         let result = (|| -> Result<RunTransition> {
             let root = self.entry.resolved_root();
@@ -2019,6 +2043,7 @@ impl<'a> TaskFire<'a> {
                     // writing it here would let both sides record this run.
                     tracing::warn!(task = %self.name, %error, "failed to retire loop stop mark; leaving terminal history to the stop ladder");
                     self.run_lock = None;
+                    self.record_hold = None;
                     return Ok(RunTransition::Recorded);
                 }
             }
@@ -2027,6 +2052,7 @@ impl<'a> TaskFire<'a> {
             // Keep the terminal row and release in one critical section: a stop
             // must not install a new mark after this row has already been written.
             self.run_lock = None;
+            self.record_hold = None;
             if let Err(error) = release {
                 tracing::warn!(task = %self.name, %error, "failed to start loop backlog drain");
             }
@@ -3209,6 +3235,7 @@ pub fn run_check(
         echo,
         env,
         |_, _| {},
+        &mut None,
     )
 }
 
@@ -3245,7 +3272,8 @@ static CHECK_SIGNALS: Mutex<CheckSignalState> = Mutex::new(CheckSignalState {
     active: 0,
 });
 
-struct CheckSignalGuard {
+/// Keep SIGTERM handled until an action's terminal record releases its run lock.
+pub struct CheckSignalGuard {
     cancellation: Option<signal_hook::SigId>,
 }
 
@@ -3259,7 +3287,7 @@ impl CheckSignalGuard {
             None => {
                 let flag = Arc::new(AtomicBool::new(true));
                 // Unregistering signal-hook's iterator leaves SIGTERM ignored, so retain its
-                // default action between checks and loop-owned waits.
+                // default action whenever no action or terminal record owns a guard.
                 signal_hook::flag::register_conditional_default(
                     signal_hook::consts::SIGTERM,
                     Arc::clone(&flag),
@@ -3294,17 +3322,14 @@ impl Drop for CheckSignalGuard {
 
 struct CheckSignals {
     signals: signal_hook::iterator::Signals,
-    _guard: CheckSignalGuard,
 }
 
 impl CheckSignals {
-    fn new(signals: &[i32]) -> std::io::Result<Self> {
+    fn new(signals: &[i32], record_hold: &mut Option<CheckSignalGuard>) -> std::io::Result<Self> {
         let (signals, guard) =
             CheckSignalGuard::register(|| signal_hook::iterator::Signals::new(signals))?;
-        Ok(Self {
-            signals,
-            _guard: guard,
-        })
+        *record_hold = Some(guard);
+        Ok(Self { signals })
     }
 
     fn pending(&mut self) -> impl Iterator<Item = i32> + '_ {
@@ -3313,7 +3338,7 @@ impl CheckSignals {
 }
 
 /// Cancel a loop-owned run on SIGTERM until the returned guard is dropped.
-pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<impl Drop> {
+pub fn cancel_run_on_sigterm(cancellation: RunCancellation) -> std::io::Result<CheckSignalGuard> {
     let (handler, mut guard) = CheckSignalGuard::register(|| {
         signal_hook::flag::register(signal_hook::consts::SIGTERM, cancellation.signal_flag())
     })?;
@@ -3328,6 +3353,7 @@ pub(super) fn run_command(
     echo: CheckEcho,
     env: &BTreeMap<String, String>,
     mut check_in: impl FnMut(u64, String),
+    record_hold: &mut Option<CheckSignalGuard>,
 ) -> Result<CheckOutcome> {
     let (prefix, file, cap) = match echo {
         CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP),
@@ -3358,10 +3384,10 @@ pub(super) fn run_command(
     let (mut command, mut interrupts, kill_after, check_in_after) = match deadline {
         WatchDeadline::KillAfter(timeout) => (
             check_command(cmd),
-            Some(CheckSignals::new(&[
-                signal_hook::consts::SIGINT,
-                signal_hook::consts::SIGTERM,
-            ])?),
+            Some(CheckSignals::new(
+                &[signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM],
+                record_hold,
+            )?),
             Some(timeout),
             None,
         ),
@@ -3404,8 +3430,18 @@ pub(super) fn run_command(
     let mut check_in_at = check_in_after.map(|timeout| started + timeout);
     let mut interrupted = false;
     let mut terminated = false;
+    let mut forwarded = false;
     let mut pending_signals = Vec::new();
     let (status, timed_out) = loop {
+        if !forwarded
+            && let Some(status) = child
+                .try_wait()
+                .with_context(|| format!("waiting for loop check `{cmd}`"))?
+        {
+            interrupted = false;
+            terminated = false;
+            break (status, false);
+        }
         if let Some(interrupts) = &mut interrupts {
             for signal in interrupts.pending() {
                 interrupted = true;
@@ -3422,9 +3458,16 @@ pub(super) fn run_command(
                 }
             }
         }
-        pending_signals.retain(|signal| {
-            killpg(Pid::from_raw(child.id() as i32), *signal) == Err(Errno::ESRCH)
-        });
+        pending_signals.retain(
+            |signal| match killpg(Pid::from_raw(child.id() as i32), *signal) {
+                Ok(()) => {
+                    forwarded = true;
+                    false
+                }
+                Err(Errno::ESRCH) => true,
+                Err(_) => false,
+            },
+        );
         // A shell can exit before its group's TERM handlers. Keep the lock and
         // original timeout until those members close their output pipes.
         if (!terminated || (stdout.is_finished() && stderr.is_finished()))

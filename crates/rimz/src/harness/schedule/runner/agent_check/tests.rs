@@ -25,6 +25,7 @@ fn chain_judge(
     request: &HeadlessRequest,
     _: Duration,
     _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     let crate::harness::launch::ExecAction::Launch {
         prompt: Some(prompt),
@@ -151,7 +152,7 @@ fn resident_shell_cap_overrides_the_action_timeout_and_counts_as_failure() {
     entry.timeout = Some("30s".into());
     entry.check_timeout = Some("1s".into());
     let mut run = fire(entry, &catalog);
-    run.check_process = |_, _, _, _, _| panic!("timed out shell stops before judges");
+    run.check_process = |_, _, _, _, _, _| panic!("timed out shell stops before judges");
     let plan = run.prepare(&mut |_| Ok(())).unwrap();
     assert!(
         matches!(&plan, TaskFirePlan::Done(done) if done.record.result == LoopRunResult::CheckSkipped),
@@ -178,9 +179,10 @@ fn interrupt_between_judges_preserves_completed_stages() {
         request: &HeadlessRequest,
         timeout: Duration,
         interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
     ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
         assert!(!interrupted(), "no second judge may start");
-        let output = chain_judge(adapter, plan, request, timeout, interrupted)?;
+        let output = chain_judge(adapter, plan, request, timeout, interrupted, record_hold)?;
         INTERRUPT.get().unwrap().store(true, Ordering::SeqCst);
         Ok(output)
     }
@@ -239,7 +241,7 @@ fn held_second_tier_replays_after_the_shell_without_new_spend_or_assist() {
     let assists_before = declines_for_checkout();
     let mut next = fire(entry, &catalog);
     next.mode = LoopRunMode::Scheduled;
-    next.check_process = |_, _, _, _, _| panic!("held fire must not start any judge");
+    next.check_process = |_, _, _, _, _, _| panic!("held fire must not start any judge");
     let TaskFirePlan::Done(done) = next.prepare(&mut |_| Ok(())).unwrap() else {
         panic!("held verdict skips the action")
     };
@@ -292,7 +294,7 @@ fn shell_decline_clears_held_judge_before_the_next_fire() {
         for _ in 0..2 {
             let mut next = fire(entry.clone(), &catalog);
             next.mode = mode;
-            next.check_process = |_, _, _, _, _| panic!("shell decline must not ask judges");
+            next.check_process = |_, _, _, _, _, _| panic!("shell decline must not ask judges");
             assert!(
                 matches!(next.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::CheckSkipped && done.record.judge.is_empty())
             );
@@ -352,7 +354,7 @@ fn judge_budget_refusal_keeps_the_preceding_shell_stage() {
         },
     )
     .unwrap();
-    run.check_process = |_, _, _, _, _| panic!("budget refuses before judge process");
+    run.check_process = |_, _, _, _, _, _| panic!("budget refuses before judge process");
     let plan = run.prepare(&mut |_| Ok(())).unwrap();
     assert!(
         matches!(&plan, TaskFirePlan::Done(done) if done.record.result == LoopRunResult::BudgetSkipped),
@@ -477,6 +479,7 @@ fn pass(
     request: &HeadlessRequest,
     timeout: Duration,
     _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     assert_eq!(
         timeout,
@@ -506,8 +509,9 @@ fn fail(
     request: &HeadlessRequest,
     timeout: Duration,
     interrupted: &dyn Fn() -> bool,
+    record_hold: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
-    let result = pass(adapter, plan, request, timeout, interrupted)?;
+    let result = pass(adapter, plan, request, timeout, interrupted, record_hold)?;
     std::fs::write(
         &request.verdict_file,
         r#"{"pass":false,"reason":"No actionable work."}"#,
@@ -522,6 +526,7 @@ fn no_verdict(
     _: &HeadlessRequest,
     _: Duration,
     _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     Ok(output(b"not json", false))
 }
@@ -532,6 +537,7 @@ fn timeout(
     _: &HeadlessRequest,
     _: Duration,
     _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     let mut command = Command::new("sh");
     command
@@ -549,6 +555,7 @@ fn interrupted(
     _: &HeadlessRequest,
     _: Duration,
     _: &dyn Fn() -> bool,
+    _: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
     Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into())
 }
@@ -569,9 +576,10 @@ fn judge_account_budget_refuses_before_spawn_in_both_ladders() {
         request: &HeadlessRequest,
         timeout: Duration,
         interrupted: &dyn Fn() -> bool,
+        record_hold: &mut Option<CheckSignalGuard>,
     ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
         std::fs::write(plan.cwd.join("judge-spawned"), b"")?;
-        pass(adapter, plan, request, timeout, interrupted)
+        pass(adapter, plan, request, timeout, interrupted, record_hold)
     }
     let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
     for stay in [false, true] {
@@ -1044,8 +1052,9 @@ fn long_reason(
     request: &HeadlessRequest,
     timeout: Duration,
     interrupted: &dyn Fn() -> bool,
+    record_hold: &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, agent_check::ProcessErr> {
-    let output = pass(adapter, plan, request, timeout, interrupted)?;
+    let output = pass(adapter, plan, request, timeout, interrupted, record_hold)?;
     std::fs::write(
         &request.verdict_file,
         serde_json::to_vec(&HeadlessVerdict {

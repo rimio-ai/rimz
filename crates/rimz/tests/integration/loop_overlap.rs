@@ -78,6 +78,207 @@ fn start_check(env: &Env) -> std::process::Child {
     runner
 }
 
+#[cfg(target_os = "linux")]
+fn gated_check(env: &Env, code: i32) {
+    let path = env.rimz_home().join("loop.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    let check = format!(
+        "echo $$ > check-pid; touch check-ready; while ! test -e allow-exit; do sleep 0.025; done; exit {code}"
+    );
+    std::fs::write(
+        path,
+        config.replace("check='true'", &format!("check={check:?}")),
+    )
+    .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_process_state(pid: u32, state: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        if status
+            .lines()
+            .find(|line| line.starts_with("State:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            == Some(state)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pid {pid} never reached {state}: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn exit_check_with_pending_sigterm(env: &Env, runner: &std::process::Child) {
+    let pid = nix::unistd::Pid::from_raw(runner.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    wait_for_process_state(runner.id(), "T");
+    let check_pid = std::fs::read_to_string(env.project_root.join("check-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+    wait_for_process_state(check_pid, "Z");
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).unwrap();
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_sigterm_after_check_exit_preserves_its_status_before_the_next_poll() {
+    for code in [0, 7] {
+        let env = fixture("skip", None);
+        gated_check(&env, code);
+        let mut runner = start_check(&env);
+        exit_check_with_pending_sigterm(&env, &runner);
+        assert_eq!(runner.wait().unwrap().code(), Some(0));
+        let rows = read_loop_run_records(&env);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            rows[0].result,
+            if code == 0 {
+                LoopRunResult::Completed
+            } else {
+                LoopRunResult::Failed
+            },
+            "{rows:?}"
+        );
+        assert_eq!(rows[0].check.as_ref().unwrap().code, Some(code));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_sigterm_during_check_recording_keeps_the_result_and_drains() {
+    for cause in ["replace", "stop"] {
+        let env = fixture("replace", None);
+        gated_check(&env, 0);
+        let mut runner = start_check(&env);
+        let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "busy"));
+        let paths = env.store().paths().clone();
+        let lock_path = paths.root.join("locks/loop-backlog.lock");
+        let lock = rimz::disk::lock::WorkspaceLock::acquire(&lock_path).unwrap();
+        std::fs::write(
+            paths.root.join("records/loop-backlog.json"),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "tasks": {"busy": {
+                    "triggers": [{"arrived_at": Timestamp::now(), "signal": null, "absorbed": 0}],
+                    "stopping": {"pid": info.pid, "started_at": info.started_at, "cause": cause}
+                }}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let check_pid = std::fs::read_to_string(env.project_root.join("check-pid")).unwrap();
+        std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let at_record_lock = std::fs::read_dir(format!("/proc/{}/fd", runner.id()))
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|path| path == lock_path));
+            if !Path::new(&format!("/proc/{}", check_pid.trim())).exists() && at_record_lock {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "runner never reaped the check and reached its record lock"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(runner.id() as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        drop(lock);
+        assert_eq!(runner.wait().unwrap().code(), Some(0));
+        wait_for_loop_run_records(&env, "completed check and drained trigger", |rows| {
+            rows.len() == 2
+        });
+        let rows = read_loop_run_records(&env);
+        assert!(
+            rows.iter().all(|row| row.result == LoopRunResult::Completed
+                && row.check.as_ref().unwrap().code == Some(0)),
+            "{rows:?}"
+        );
+        let backlog = &show(&env, "busy")["backlog"];
+        assert!(backlog["stopping"].is_null(), "{backlog}");
+        assert_eq!(backlog["triggers"], json!([]));
+        assert!(
+            !loop_strikes_path(&env).exists(),
+            "a completed check must not strike"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_sigterm_after_judge_exit_keeps_its_verdict_before_the_next_poll() {
+    let env = fixture("skip", None);
+    env.write_config(&env.project_root, "[agents]\nisolation='host'\n");
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "codex",
+        r#"if [ "$1" = '--version' ]; then echo 'codex-cli 0.163.0'; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"Finished on my own."}' > "$1"; fi
+    shift
+done
+echo $$ > check-pid
+touch check-ready
+while ! test -e allow-exit; do sleep 0.025; done
+"#,
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.busy]\nroot={:?}\nagent='codex'\nprompt='work'\nevery='1h'\non='success'\n[tasks.busy.check]\nagent='codex'\nprompt='Any work?'\n",
+            env.project_root
+        ),
+    );
+    let mut runner = env
+        .rimz()
+        .env("PATH", path_with_front(&bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "judge-shell", &[]),
+        )
+        .args(["loop", "run", "busy"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_path(&env.project_root.join("check-ready"));
+    exit_check_with_pending_sigterm(&env, &runner);
+    assert_eq!(runner.wait().unwrap().code(), Some(0));
+    let rows = read_loop_run_records(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].result, LoopRunResult::CheckSkipped, "{rows:?}");
+    assert_eq!(rows[0].judge[0].verdict, Some(false), "{rows:?}");
+    assert_eq!(
+        rows[0].judge[0].reason.as_deref(),
+        Some("Finished on my own.")
+    );
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn stop_of_a_check_only_holder_skips_grace_after_its_definition_changes() {
     let mut durations = Vec::new();

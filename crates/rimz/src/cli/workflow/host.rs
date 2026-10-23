@@ -218,6 +218,7 @@ impl workflow::AttemptHost for Host<'_> {
                 request,
                 supervised::SupervisedPresentation::text(false),
                 &globals,
+                &mut None,
             )
         })();
         let (outcome, reason) = match result {

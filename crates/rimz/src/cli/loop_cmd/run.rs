@@ -322,6 +322,7 @@ pub(super) fn run_one(
                 prepared.request,
                 crate::cli::supervised::SupervisedPresentation::text(prepared.stream),
                 &run_globals,
+                fire.record_signal_guard(),
             )
             .and_then(|outcome| {
                 outcome

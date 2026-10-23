@@ -101,7 +101,7 @@ pub(in crate::cli) fn run_print(
 ) -> Result<Option<RunRecord>> {
     let output_format = presentation.output_format;
     let report_to = request.report_to;
-    let Some(outcome) = run_supervised(request, presentation, globals)? else {
+    let Some(outcome) = run_supervised(request, presentation, globals, &mut None)? else {
         return Ok(None);
     };
     let record = match outcome {
@@ -668,8 +668,8 @@ fn execute_attempt(
     prompt: &str,
     retry_of: Option<&rimz::RunId>,
     attempt: u32,
-    retries: u32,
-) -> Result<(AttemptOutcome, Option<impl Drop + use<>>)> {
+    termination: &mut Option<rimz::harness::schedule::runner::CheckSignalGuard>,
+) -> Result<AttemptOutcome> {
     let agent_cell = prepared
         .layout
         .agent_cells()
@@ -749,7 +749,7 @@ fn execute_attempt(
     record.reader.clone_from(&prepared.reader);
     let (close_pane_on_exit, exit_on_run_completion) =
         supervised::run_exit_policy(request.self_cleanup_on_completion && !request.keep);
-    let worktree_path = (prepared.launch.owns_checkout_lifecycle() && retries == 0)
+    let worktree_path = (prepared.launch.owns_checkout_lifecycle() && request.retries == 0)
         .then(|| prepared.launch.cwd.clone());
     let exec_request = rimz::harness::launch::ExecRequest {
         kind: prepared.kind.clone(),
@@ -800,7 +800,7 @@ fn execute_attempt(
             .context("binding run socket")?,
         )
     };
-    let termination = waiter
+    *termination = waiter
         .as_ref()
         .filter(|_| request.loop_task.is_some())
         .map(|waiter| {
@@ -814,17 +814,14 @@ fn execute_attempt(
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
     rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     if request.background {
-        return Ok((
-            AttemptOutcome::Background {
-                response_path: prepared
-                    .agent_launched
-                    .then(|| rimz::harness::run::response_path(prepared.store.paths(), &record))
-                    .flatten(),
-                agent_name: launch_identity.name.clone(),
-                run_id,
-            },
-            termination,
-        ));
+        return Ok(AttemptOutcome::Background {
+            response_path: prepared
+                .agent_launched
+                .then(|| rimz::harness::run::response_path(prepared.store.paths(), &record))
+                .flatten(),
+            agent_name: launch_identity.name.clone(),
+            run_id,
+        });
     }
     let Some(waiter) = waiter else {
         bail!("blocking run did not bind its completion waiter");
@@ -835,10 +832,10 @@ fn execute_attempt(
             .then(|| TranscriptCursor::new(true)),
     };
     let record = waiter.await_terminal(prepared, room, request)?;
-    Ok((
-        AttemptOutcome::Blocking(Box::new(BlockingAttempt { record, waiter })),
-        termination,
-    ))
+    Ok(AttemptOutcome::Blocking(Box::new(BlockingAttempt {
+        record,
+        waiter,
+    })))
 }
 
 fn verify_phase(
@@ -963,6 +960,7 @@ pub(in crate::cli) fn run_supervised(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
+    termination: &mut Option<rimz::harness::schedule::runner::CheckSignalGuard>,
 ) -> Result<Option<SupervisedRunOutcome>> {
     let Some(mut prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
@@ -1022,14 +1020,14 @@ pub(in crate::cli) fn run_supervised(
         ) {
             return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
         }
-        let (attempt_outcome, _termination) = execute_attempt(
+        let attempt_outcome = execute_attempt(
             &prepared,
             &room,
             &request,
             &prompt,
             retry_of.as_ref(),
             attempt,
-            retries,
+            termination,
         )?;
         let blocking = match attempt_outcome {
             AttemptOutcome::Background {

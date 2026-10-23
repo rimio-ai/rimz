@@ -1131,7 +1131,7 @@ pub(in crate::cli) fn launch_supervised_background(
 ) -> Result<BackgroundLaunchOutcome> {
     let args = AgentsArgs::from_launch(launch);
     let (request, presentation) = into_supervised_request(args)?;
-    let Some(outcome) = run_supervised(request, presentation, globals)? else {
+    let Some(outcome) = run_supervised(request, presentation, globals, &mut None)? else {
         return Ok(BackgroundLaunchOutcome::Aborted);
     };
     match outcome {
