@@ -807,9 +807,17 @@ fn verdict(anchor: Anchor, path: Option<PathBuf>, status: Status) -> Verdict {
     }
 }
 
+/// Whether an outline name answers to one anchor segment: the name itself, or
+/// the type an impl block names, by its last path segment so that
+/// `impl super::Type` answers to `Type`.
 fn matches_segment(name: &str, segment: &str) -> bool {
     let name = query::without_generics(name);
-    name == segment || name.split_whitespace().next_back() == Some(segment)
+    name == segment
+        || name
+            .split_whitespace()
+            .next_back()
+            .and_then(|implemented| implemented.rsplit("::").next())
+            == Some(segment)
 }
 
 fn matches_chain(node: &Candidate, chain: &[String]) -> bool {
