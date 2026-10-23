@@ -184,6 +184,111 @@ fn an_agent_honors_its_stop_mark_before_absorbing_or_launching() {
 
 #[cfg(unix)]
 #[test]
+fn a_replace_sigterm_after_verify_keeps_the_completed_result() {
+    let env = fixture("replace", None);
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let panes = env.project_root.join("panes.json");
+    std::fs::write(&panes, "[]").unwrap();
+    let fixture = ConsumedSpawn {
+        shell: write_fake_login_shell(&env, "rimz-test-sh", &[]),
+        agent_bin: crate::common::write_failing_agent_shim(&env, "codex", 1),
+        pane_fixture: panes,
+        session_name: workspace.session_name.to_string(),
+    };
+    let mux = crate::common::write_path_shim(
+        &env.home_root.join("mux-bin"),
+        "zellij",
+        r#"for arg do
+    if [ "$arg" = close-pane ]; then
+        touch "$RIMZ_TEST_CLOSE_READY"
+        while ! test -e "$RIMZ_TEST_ALLOW_CLOSE"; do sleep 0.025; done
+    fi
+done
+exec "$RIMZ_TEST_ZELLIJ_TRACE" "$@"
+"#,
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.busy]\nroot={:?}\nagent='codex'\nprompt='work'\nverify='true'\nsignal='trunk.moved'\noverlap='replace'\nthrottle='off'\n",
+            env.project_root
+        ),
+    );
+    let close_ready = env.project_root.join("close-ready");
+    let allow_close = env.project_root.join("allow-close");
+    let mut runner = fixture
+        .command(&env)
+        .args(["loop", "run", "busy"])
+        .env("RIMZ_ZELLIJ_BIN", mux)
+        .env(
+            "RIMZ_TEST_ZELLIJ_TRACE",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
+        .env("RIMZ_TEST_CLOSE_READY", &close_ready)
+        .env("RIMZ_TEST_ALLOW_CLOSE", &allow_close)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "busy"));
+    let store = env.store();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut run = loop {
+        if let Some(run) = rimz::harness::run::list(store.paths()).unwrap().first() {
+            break run.clone();
+        }
+        assert!(Instant::now() < deadline, "run was not recorded");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    run.pane_id = Some(rimz::ids::PaneId::parse("zellij:terminal_51").unwrap());
+    run.status = RunStatus::Completed;
+    run.completed_at = Some(Timestamp::now());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    wait_for_path(&close_ready);
+    let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert!(settled.verify.unwrap().passed);
+    assert!(settled.joined_at.is_some());
+    std::fs::write(
+        store.paths().root.join("records/loop-backlog.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "tasks": {"busy": {"triggers": [],
+                "stopping": {"pid": info.pid, "started_at": info.started_at, "cause": "replace"}
+            }}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(runner.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    std::fs::write(allow_close, "").unwrap();
+    let output = runner.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let rows = read_loop_run_records(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].result, LoopRunResult::Completed, "{rows:?}");
+    assert_eq!(rows[0].run_id.as_deref(), Some(run.run_id.as_str()));
+    assert!(show(&env, "busy")["backlog"]["stopping"].is_null());
+    assert!(
+        !loop_strikes_path(&env).exists(),
+        "a completed run must not add a strike"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_late_replace_sigterm_cancels_the_run_before_draining() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -669,7 +669,7 @@ fn execute_attempt(
     retry_of: Option<&rimz::RunId>,
     attempt: u32,
     retries: u32,
-) -> Result<AttemptOutcome> {
+) -> Result<(AttemptOutcome, Option<impl Drop + use<>>)> {
     let agent_cell = prepared
         .layout
         .agent_cells()
@@ -800,7 +800,7 @@ fn execute_attempt(
             .context("binding run socket")?,
         )
     };
-    let _termination = waiter
+    let termination = waiter
         .as_ref()
         .filter(|_| request.loop_task.is_some())
         .map(|waiter| {
@@ -814,14 +814,17 @@ fn execute_attempt(
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
     rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     if request.background {
-        return Ok(AttemptOutcome::Background {
-            response_path: prepared
-                .agent_launched
-                .then(|| rimz::harness::run::response_path(prepared.store.paths(), &record))
-                .flatten(),
-            agent_name: launch_identity.name.clone(),
-            run_id,
-        });
+        return Ok((
+            AttemptOutcome::Background {
+                response_path: prepared
+                    .agent_launched
+                    .then(|| rimz::harness::run::response_path(prepared.store.paths(), &record))
+                    .flatten(),
+                agent_name: launch_identity.name.clone(),
+                run_id,
+            },
+            termination,
+        ));
     }
     let Some(waiter) = waiter else {
         bail!("blocking run did not bind its completion waiter");
@@ -832,10 +835,10 @@ fn execute_attempt(
             .then(|| TranscriptCursor::new(true)),
     };
     let record = waiter.await_terminal(prepared, room, request)?;
-    Ok(AttemptOutcome::Blocking(Box::new(BlockingAttempt {
-        record,
-        waiter,
-    })))
+    Ok((
+        AttemptOutcome::Blocking(Box::new(BlockingAttempt { record, waiter })),
+        termination,
+    ))
 }
 
 fn verify_phase(
@@ -892,15 +895,6 @@ fn verify_phase(
         };
         let status = supervised::output::verify_status_label(&verify);
         let reprompt = rimz::harness::prompt_compose::verify_reprompt(cmd, &status, &verify.output);
-        let _termination = request
-            .loop_task
-            .as_ref()
-            .map(|_| {
-                rimz::harness::schedule::runner::cancel_run_on_sigterm(
-                    waiter.waiter.cancellation().clone(),
-                )
-            })
-            .transpose()?;
         record = match rimz::harness::run::settle_verify(
             prepared.store.paths(),
             &record.run_id,
@@ -1028,7 +1022,7 @@ pub(in crate::cli) fn run_supervised(
         ) {
             return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
         }
-        let attempt_outcome = execute_attempt(
+        let (attempt_outcome, _termination) = execute_attempt(
             &prepared,
             &room,
             &request,
