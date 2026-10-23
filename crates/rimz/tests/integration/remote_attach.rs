@@ -2479,6 +2479,50 @@ fn control_socket_preparation_failure_is_narrated_before_retry() {
 }
 
 #[test]
+fn supervised_ssh_escape_ends_connect_without_reconnecting() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    std::fs::write(&plan, "escape\n").expect("write plan");
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_REMOTE_GATETIME_MS", "60000")
+        .bounded_output()
+        .expect("run rimz remote connect --attach");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "escape exits cleanly: {stderr}");
+    assert_eq!(
+        main_invocation_count(&log),
+        1,
+        "the escape must not start another attach: {stderr}"
+    );
+    assert_eq!(
+        master_invocation_count(&log),
+        1,
+        "the escape must not start another master: {stderr}"
+    );
+    assert!(stderr.contains("rimz: detached from dev-box"), "{stderr}");
+    assert!(!stderr.contains("link to dev-box lost"), "{stderr}");
+    assert!(!stderr.contains("reconnecting"), "{stderr}");
+    assert!(
+        !stderr.contains("SSH control connection dropped"),
+        "{stderr}"
+    );
+    let invocations = shim_invocations(&log);
+    let control_path = invocations
+        .iter()
+        .find(|argv| is_master_invocation(argv))
+        .expect("master invocation")
+        .iter()
+        .find_map(|arg| arg.strip_prefix("ControlPath="))
+        .expect("master control path");
+    assert!(
+        !Path::new(control_path).exists(),
+        "the escape removes the master's control socket: {control_path}"
+    );
+}
+
+#[test]
 fn established_mux_disconnect_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

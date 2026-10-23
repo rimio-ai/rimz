@@ -182,7 +182,7 @@ The hidden master pins `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAl
 
 ### The interactive fallback
 
-A batch-mode master cannot answer a password, two-factor, or host-key prompt. On the initial connection, a master child that exits with stderr that `transport_failure` does not recognize releases the panel for exactly one foreground interactive attach; a master that times out never does. A failure in that attach is fatal, so RimZ never loops a password prompt. Recovery stays batch-only and retries until Ctrl-C. The fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
+A batch-mode master cannot answer a password, two-factor, or host-key prompt. On the initial connection, a master child that exits with stderr that `transport_failure` does not recognize releases the panel for exactly one foreground interactive attach; a master that times out never does. A failure in that attach is fatal, so RimZ never loops a password prompt. The exception is an established `255`, which enters recovery: with no confirmed master, `settle` gets no evidence, and the attach is itself the master (`ControlMaster=auto`), so `~.` there ends the whole connection and reads exactly as a drop. Recovery stays batch-only and retries until Ctrl-C. The fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
 
 ### The handoff
 
@@ -200,7 +200,7 @@ Every session ending first drains SSH pipe reads to EOF or a 200ms deadline. Tha
 
 A one-shot `--no-reconnect` attach owns the alternate-scroll (mode 1007) save, disable, and restore bracket in the local process and exports `RIMZ_OUTER_SCROLL_BRACKET`, so the remote does not nest a second bracket. Under reconnect supervision the local side sets no bracket, and the remote RimZ owns it.
 
-An attach over a confirmed master pipes and drains SSH stderr so control-client diagnostics cannot paint over the frame. `attach_error_summary` filters direct and shared-connection close notices and maps `mux_client` and control-socket errors to `SSH control connection dropped`; a transport exit with no remaining diagnostic gets the same summary. That cause carries into recovery or the fatal message, and a clean exit prints `rimz: detached from <host>`.
+An attach over a confirmed master pipes and drains SSH stderr so control-client diagnostics cannot paint over the frame. `attach_error_summary` filters direct and shared-connection close notices and maps `mux_client` and control-socket errors to `SSH control connection dropped`; a transport exit with no remaining diagnostic gets the same summary unless `settle` ends the connect because the master still answers. That cause carries into recovery or the fatal message, and a clean exit, the `~.` escape included, prints `rimz: detached from <host>`.
 
 ### Classifying the end
 
@@ -212,11 +212,16 @@ An attach over a confirmed master pipes and drains SSH stderr so control-client 
 | `0` | any | `CleanExit`: return to the caller. |
 | remote RimZ precondition sentinel (`65`, `66`, `67`, `127`) | any | `Fatal`: surface the version, path, or install fix and preserve the status through the typed CLI error. |
 | session-loss sentinel (`68`) | any | `CleanExit`: report `remote room on <host> ended` and return. |
-| `255` | established | `Retry`: enter background recovery. |
-| other nonzero | established, master ended | `Retry`: SSH liveness outranks the attach status. |
-| other nonzero | master alive, attach lived past gatetime | `Reattach`: replace only the multiplexer client over the existing SSH connection. |
+| `255` | established, master alive (process running and `-O check` passes) | `CleanExit`: the session closed without an exit status over a live connection, as `~.` does, regardless of gatetime. |
+| `255` | established; master ended, control check failed, or no evidence | `Retry`: enter background recovery. |
+| other nonzero | established, master ended or control check failed | `Retry`: SSH liveness outranks the attach status. |
+| other nonzero | master running and control check passed, attach lived past gatetime | `Reattach`: replace only the multiplexer client over the existing SSH connection. |
 | other nonzero | no settled evidence | `Fatal`: an immediate remote room or authentication failure. |
 | signal death | any | `Fatal`: something killed `ssh` deliberately. |
+
+`MasterGuard::is_alive` requires a running child and a successful `ssh -O check` within `CONTROL_MASTER_CHECK_TIMEOUT`; any check failure means not alive. The mux listener can close before its process exits during transport shutdown, so a process-only poll could mistake a real drop for `~.`.
+
+A signal-killed remote `rimz` or a remote command exiting `255` can produce the same status over a live master. These also end the connect; the room survives and the user can run `rimz remote connect` again.
 
 A session counts as established once its link probe receives the first ack, once a master (initial or recovery) is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). Living past the gatetime is also the evidence that the multiplexer attach ran instead of failing at launch. `ReconnectState` preserves establishment across sessions, and `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 

@@ -37,7 +37,7 @@ rimz remote connect dev --no-reconnect                   # one ssh run, no super
 rimz remote connect dev --no-resume                      # do not recover prior agents
 ```
 
-By default the connection is supervised: RimZ keeps an SSH ControlMaster open, reconnects after a drop, measures the link for the sidebar badge, and forwards new dev-server ports. It ends when you detach or the remote room ends. `--no-reconnect` hands the terminal to a single `ssh` run with none of that.
+By default the connection is supervised: RimZ keeps an SSH ControlMaster open, reconnects after a drop, measures the link for the sidebar badge, and forwards new dev-server ports. It ends when you detach, use the SSH escape `~.`, or the remote room ends. The exception is the one plain interactive `ssh` attempt RimZ falls back to when the first connection needs a password, two-factor, or host-key prompt: there `~.` closes the SSH connection itself and counts as a drop. `--no-reconnect` hands the terminal to a single `ssh` run with none of that.
 
 | Flag | Effect |
 | --- | --- |
@@ -75,7 +75,7 @@ Two ceilings bound a busy host: discovery keeps the 32 lowest qualifying ports, 
 
 ### Exit codes
 
-A supervised `connect` exits `0` when you detach or the remote room ends. A fatal SSH run preserves its exit status and prints the fix on stderr; a local path preflight refusal exits `67`. Signal death and other local errors exit `1`.
+A supervised `connect` exits `0` when you detach, use the SSH escape `~.` (except in the interactive fallback above), or the remote room ends. A fatal SSH run preserves its exit status and prints the fix on stderr; a local path preflight refusal exits `67`. Signal death and other local errors exit `1`.
 
 With or without `--no-reconnect`, the host's refusals come through as their own codes. Browser preparation also preserves the known host refusal codes below; other preparation failures exit `1`.
 

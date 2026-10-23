@@ -3,9 +3,12 @@
 //! Appends one line per invocation to the file at `$RIMZ_TEST_SSH_LOG` of the
 //! form `argv0\targv1\t...\n`. When `$RIMZ_TEST_SSH_PLAN` names a file, the
 //! shim pops that file's first line and exits with it as its status — the
-//! scripted exit sequence the reconnect tests drive (a dropped link is
-//! `255`, a clean detach `0`); without a plan it exits 0. Tests reach the
-//! shim through the `RIMZ_SSH_BIN` override, never PATH.
+//! scripted exit sequence the reconnect tests drive. A dropped link (`255`)
+//! removes the control marker before exiting, leaving the master process
+//! alive to model its shutdown window. The `escape` token exits 255 with the
+//! marker and master intact, as OpenSSH's `~.` does. A clean detach is `0`;
+//! without a plan it exits 0. Tests reach the shim through the `RIMZ_SSH_BIN`
+//! override, never PATH.
 //! `$RIMZ_TEST_SSH_RAW_TTY` simulates OpenSSH leaving the controlling tty raw;
 //! `$RIMZ_TEST_SSH_TTY_STATE_LOG` records whether each attach inherited sane
 //! shell flags before that transition.
@@ -117,15 +120,15 @@ fn main() {
             .expect("hold attach stdout after exit");
     }
 
-    if let Ok(argv) = env::var("RIMZ_TEST_SSH_EXEC_ARGV") {
-        let mut argv = argv.split('\t');
-        let program = argv.next().expect("exec argv has program");
+    if let Ok(exec_argv) = env::var("RIMZ_TEST_SSH_EXEC_ARGV") {
+        let mut exec_argv = exec_argv.split('\t');
+        let program = exec_argv.next().expect("exec argv has program");
         let status = std::process::Command::new(program)
-            .args(argv)
+            .args(exec_argv)
             .status()
             .expect("run visible attach command");
         if env::var_os("RIMZ_TEST_SSH_PLAN").is_some() {
-            exit_from_plan("RIMZ_TEST_SSH_PLAN");
+            exit_attach_from_plan(&argv);
         }
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -140,7 +143,7 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
-    exit_from_plan("RIMZ_TEST_SSH_PLAN");
+    exit_attach_from_plan(&argv);
 }
 
 #[cfg(unix)]
@@ -375,6 +378,25 @@ fn exit_from_plan(key: &str) -> ! {
     std::process::exit(pop_exit_plan(key).unwrap_or(0));
 }
 
+fn exit_attach_from_plan(argv: &[String]) -> ! {
+    let line = pop_plan_line("RIMZ_TEST_SSH_PLAN").unwrap_or_default();
+    let code = match line.as_str() {
+        "escape" => std::process::exit(255),
+        "" => 0,
+        _ => line.parse().expect("plan line is an exit code or escape"),
+    };
+    if code == 255
+        && let Some(path) = control_master_marker(argv)
+    {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!("remove control-master marker {}: {err}", path.display()),
+        }
+    }
+    std::process::exit(code);
+}
+
 fn pop_exit_plan(key: &str) -> Option<i32> {
     pop_plan_line(key).map(|line| {
         if line.is_empty() {
@@ -553,9 +575,6 @@ fn wait_for_probe_if_requested(log_path: &std::ffi::OsStr) {
 fn ack_probe_stream() {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
-    let exit_after_acks = env::var("RIMZ_TEST_PROBE_EXIT_AFTER_ACKS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok());
     let silent_after_acks = env::var("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
@@ -591,21 +610,5 @@ fn ack_probe_stream() {
         }
         stdout.flush().expect("flush ack");
         ack_count = ack_count.saturating_add(1);
-        if exit_after_acks.is_some_and(|limit| ack_count >= limit) {
-            remove_control_master_if_requested();
-            std::process::exit(0);
-        }
-    }
-}
-
-fn remove_control_master_if_requested() {
-    let Some(path) = env::var_os("RIMZ_TEST_REMOVE_CONTROL_MASTER_ON_PROBE_EXIT") else {
-        return;
-    };
-    let path = std::path::PathBuf::from(path);
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => panic!("remove control-master marker {}: {err}", path.display()),
     }
 }
