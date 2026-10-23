@@ -655,7 +655,7 @@ fn failed_zellij_dispatch_restores_baseline_while_sidebar_is_focused() {
     assert_failed_dispatch_restores_baseline(MuxName::Zellij);
 }
 
-/// Rules out the hypothesized late-confirmation A→B→A revert, not teammate growth at the top clamp.
+/// Rules out the hypothesized late-confirmation A→B→A revert.
 #[test]
 fn clicked_selection_stays_painted_through_late_native_confirmation_and_fence() {
     let mut rig = Rig::new();

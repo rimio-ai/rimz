@@ -71,8 +71,8 @@ fn filtered_team_cards_render_and_open_as_unfiltered() {
     assert_eq!(matched.style.fg, Some(theme.provider_brand_tone("claude")));
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 40);
     assert!(
-        screen.contains("context task"),
-        "the selected worker opens its teammate: {screen}"
+        !screen.contains("context task"),
+        "the unselected teammate stays compact: {screen}"
     );
     ui.make_up_filter = BodyLens::default();
     let unfiltered = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 40);
@@ -923,8 +923,7 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
     );
 }
 
-#[test]
-fn selecting_named_team_member_folds_teammate_entries() {
+fn named_team_snapshot() -> SidebarSnapshot {
     let mut planner = agent(
         "planner",
         "claude",
@@ -938,22 +937,32 @@ fn selecting_named_team_member_folds_teammate_entries() {
     let mut coder = agent(
         "coder",
         "codex",
-        AgentStatus::Running,
+        AgentStatus::Idle,
         Some("/repo/worktrees/team-expand"),
         Some("team-expand"),
         Some("implement"),
     );
     coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
+    coder.prompt = Some("implement".to_owned());
     let mut stray = agent(
         "stray",
         "claude",
-        AgentStatus::Running,
+        AgentStatus::Success,
         Some("/repo/worktrees/team-expand"),
         Some("team-expand"),
         Some("observe"),
     );
+    stray.team = Some("forge".to_owned());
     stray.role = Some("stray".to_owned());
+    stray.idle_stop = Some(crate::agents::PendingIdleStop {
+        stop: crate::agents::IdleStop {
+            after_secs: 180,
+            requested_at: fixed_now(),
+            requested_by: None,
+        },
+        due_at: None,
+    });
 
     let mut plan_child = agent(
         "plan-child",
@@ -968,7 +977,7 @@ fn selecting_named_team_member_folds_teammate_entries() {
     let mut code_child = agent(
         "code-child",
         "codex",
-        AgentStatus::Running,
+        AgentStatus::Success,
         None,
         None,
         Some("tests"),
@@ -978,7 +987,7 @@ fn selecting_named_team_member_folds_teammate_entries() {
     let mut stray_child = agent(
         "stray-child",
         "claude",
-        AgentStatus::Running,
+        AgentStatus::Success,
         None,
         None,
         Some("audit"),
@@ -986,14 +995,19 @@ fn selecting_named_team_member_folds_teammate_entries() {
     stray_child.parent_agent_id = Some("stray".into());
     stray_child.subagent_description = Some("stay collapsed".to_owned());
 
-    let snapshot = snapshot_with(vec![
+    snapshot_with(vec![
         planner,
         coder,
         stray,
         plan_child,
         code_child,
         stray_child,
-    ]);
+    ])
+}
+
+#[test]
+fn selecting_named_team_member_keeps_teammates_resting() {
+    let snapshot = named_team_snapshot();
     let selected_index = snapshot.worktree_groups[0]
         .rows
         .iter()
@@ -1019,11 +1033,11 @@ fn selecting_named_team_member_folds_teammate_entries() {
     );
     assert!(
         !rendered.contains("pin the frame"),
-        "a named teammate folds its entries behind the summary line:\n{rendered}"
+        "an unselected teammate keeps its entries hidden:\n{rendered}"
     );
     assert!(
         !rendered.contains("stay collapsed"),
-        "a non-team card keeps its resting shape:\n{rendered}"
+        "an unselected done teammate keeps its resting shape:\n{rendered}"
     );
     assert!(
         rendered
@@ -1037,14 +1051,103 @@ fn selecting_named_team_member_folds_teammate_entries() {
             .lines()
             .find(|line| line.contains("coder"))
             .is_some_and(|line| line.starts_with('▎')),
-        "the expanded teammate keeps the lane gutter:\n{rendered}"
+        "the resting teammate keeps the lane gutter:\n{rendered}"
     );
     assert_eq!(
         rendered.matches('▤').count(),
         1,
         "teammates do not gain stats: {rendered}"
     );
-    assert_snapshot("named_team_selection_folds_teammate_entries", rendered);
+    assert_eq!(
+        rendered.matches("subagents (1)").count(),
+        1,
+        "only the selected card shows its summary line: {rendered}"
+    );
+    assert!(
+        !rendered.contains("waits (1)"),
+        "the unselected done card keeps its waits hidden: {rendered}"
+    );
+    assert_snapshot("named_team_selection_keeps_teammates_resting", rendered);
+    assert_named_teammates_keep_resting_shape(false);
+}
+
+#[test]
+fn held_named_team_selection_keeps_teammates_resting() {
+    assert_named_teammates_keep_resting_shape(true);
+}
+
+fn assert_named_teammates_keep_resting_shape(held: bool) {
+    let theme = Theme::fixed(false);
+    for density in [
+        crate::config::CardDensityMode::Auto,
+        crate::config::CardDensityMode::Compact,
+        crate::config::CardDensityMode::Expanded,
+    ] {
+        for stale in [false, true] {
+            let mut snapshot = named_team_snapshot();
+            snapshot.theme.display.card_density = density;
+            if stale {
+                for row in snapshot.rows_mut() {
+                    row.unread = false;
+                    row.last_activity = fixed_now() - Duration::from_secs(172800);
+                }
+            }
+            let outside = snapshot_with(vec![agent(
+                "outside",
+                "claude",
+                AgentStatus::Running,
+                Some("/repo/outside"),
+                Some("outside"),
+                Some("another task"),
+            )]);
+            std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+                .push(outside.worktree_groups[0].clone());
+            let mut baseline = UiState::default();
+            baseline.selected_index = baseline.visible_roster(&snapshot).ordinal_of_id("outside");
+            let roster = baseline.visible_roster(&snapshot);
+            let planner = roster.ordinal_of_id("planner").unwrap();
+            let mut ui = baseline.clone();
+            if held {
+                ui.drawn_selection = Some("planner".into());
+                ui.freeze = Some(LayoutFreeze {
+                    frozen: Default::default(),
+                    armed_ms: fixed_now().as_millisecond(),
+                });
+            } else {
+                ui.selected_index = Some(planner);
+            }
+            let resting = super::super::compose_lines(&snapshot, None, &baseline, &theme, 54, 80);
+            let selected = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 80);
+            let card = |frame: &super::super::compose::ComposedFrame, id: &str| {
+                let ordinal = roster.ordinal_of_id(id).unwrap();
+                frame
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| frame.interactions.row_at_line(*index) == Some(ordinal))
+                    .map(|(_, line)| {
+                        line.spans[1..line.spans.len() - 1]
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for id in ["coder", "stray"] {
+                assert_eq!(
+                    card(&selected, id),
+                    card(&resting, id),
+                    "{id}: {density:?}, stale={stale}, held={held}"
+                );
+            }
+            assert!(
+                card(&selected, "planner")
+                    .iter()
+                    .any(|line| line.contains("map the renderer")),
+                "the live or held card keeps its own entries"
+            );
+        }
+    }
 }
 
 #[test]

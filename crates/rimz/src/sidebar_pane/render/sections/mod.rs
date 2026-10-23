@@ -57,28 +57,24 @@ pub(super) use provider::{
 pub(super) use worktree::worktree_group_lines_projected;
 pub(super) use worktree::{CardWalk, WorktreeRenderContext, worktree_group_lines_windowed};
 
-/// How far selection reaches a row: the live selection, a held source row, a named
-/// teammate opened alongside either, or neither. This controls expansion, not
-/// selection styling.
+/// Whether a row is the live selection, a held previous selection, or neither.
+/// This controls expansion, not selection styling.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SelectionReach {
     Selected,
     Held,
-    Teammate,
     #[default]
     Unreached,
 }
 
 impl SelectionReach {
-    /// Selection opens the card for the selected row and its teammates alike;
-    /// only live or held source rows gain session stats outside expanded density.
+    /// Live and held selections open their own engaged cards with session stats.
     pub(super) fn opens_card(self) -> bool {
         self != Self::Unreached
     }
 }
 
-/// The strongest reach from the live selection and held rows. A sibling is a
-/// teammate only when both rows belong to the same unit in this projected group.
+/// The row's own live or held selection, independent of its teammates.
 pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
@@ -93,29 +89,18 @@ pub(super) fn row_selection_reach(
     if selected_index == Some(row_index) {
         return SelectionReach::Selected;
     }
-    let sources = selected_index.into_iter().chain(
-        held_expansions
-            .iter()
-            .filter_map(|id| roster.ordinal_of_id(id)),
-    );
-    let mut reach = SelectionReach::Unreached;
-    for source in sources {
-        if row_index == source {
-            return SelectionReach::Held;
-        }
-        if range.contains(&source)
-            && let (Some(source), Some(row)) = (roster.row(source), roster.row(row_index))
-            && group.source().unit_key(source) == group.source().unit_key(row)
-        {
-            reach = SelectionReach::Teammate;
-        }
+    if held_expansions
+        .iter()
+        .any(|id| roster.ordinal_of_id(id) == Some(row_index))
+    {
+        return SelectionReach::Held;
     }
-    reach
+    SelectionReach::Unreached
 }
 
-/// What a card opens: reach distinguishes live or held selections from teammates,
-/// which open without session stats. Delegation entries follow the sticky header override, else open
-/// for a live or held source row or under `expanded` density.
+/// What a card opens: reach marks its own live or held selection.
+/// Delegation entries follow the sticky header override, else open for a live or
+/// held selection or under `expanded` density.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CardExpansion {
     pub(super) reach: SelectionReach,
@@ -132,10 +117,10 @@ impl CardExpansion {
         row: &SidebarRow,
         reach: SelectionReach,
     ) -> Self {
-        let delegation = overrides.get(&row.id).copied().unwrap_or(
-            matches!(reach, SelectionReach::Selected | SelectionReach::Held)
-                || density == CardDensityMode::Expanded,
-        );
+        let delegation = overrides
+            .get(&row.id)
+            .copied()
+            .unwrap_or(reach.opens_card() || density == CardDensityMode::Expanded);
         let history = row
             .as_agent()
             .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));

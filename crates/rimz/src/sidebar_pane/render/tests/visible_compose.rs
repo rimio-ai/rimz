@@ -229,16 +229,13 @@ fn paint_scope_tracks_window_epoch_and_selection() {
     assert_painted(&ui, (0..count).collect());
     write_back(&mut ui, third);
     let roster = ui.visible_roster(&snapshot);
-    let paired = ["card-0", "card-3"].map(|id| roster.ordinal_of_id(id).unwrap());
-    let solo = roster.ordinal_of_id("card-1").unwrap();
-    for selected in [paired[0], solo] {
+    let card_0 = roster.ordinal_of_id("card-0").unwrap();
+    let card_1 = roster.ordinal_of_id("card-1").unwrap();
+    for selected in [card_0, card_1] {
         ui.selected_index = Some(selected);
         let frame = compose_cached(&snapshot, &mut ui, 54, 40);
         let mut expected = visible_cards(&frame, &snapshot, &ui);
-        expected.extend(paired);
-        if selected == solo {
-            expected.insert(solo);
-        }
+        expected.extend([card_0, selected]);
         assert_painted(&ui, expected);
         write_back(&mut ui, frame);
     }
