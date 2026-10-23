@@ -17,11 +17,24 @@ pub(super) fn execute(
     _request: &HeadlessRequest,
     timeout: Duration,
     interrupted: &dyn Fn() -> bool,
+    record_hold: &mut Option<CheckSignalGuard>,
 ) -> Result<crate::proc::BoundedOutput, ProcessErr> {
-    let signals = RefCell::new(CheckSignals::new(&[signal_hook::consts::SIGTERM])?);
+    let signals = RefCell::new(CheckSignals::new(
+        &[signal_hook::consts::SIGTERM],
+        record_hold,
+    )?);
     let group = Cell::new(None);
     let terminated = Cell::new(false);
     let poll = || {
+        // The host owns reaping; a non-reaping liveness check lets an exited
+        // judge keep its verdict without releasing its PID before pipe drain.
+        if !terminated.get()
+            && group
+                .get()
+                .is_some_and(|pid| !crate::proc::process_is_live(pid, None))
+        {
+            return false;
+        }
         for _ in signals.borrow_mut().pending() {
             terminated.set(true);
             if let Some(pid) = group.get() {
@@ -69,7 +82,7 @@ pub(super) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
 }
 
 pub(super) fn run(
-    fire: &TaskFire<'_>,
+    fire: &mut TaskFire<'_>,
     judge: &Judge,
     dir: &Path,
     root: &Path,
@@ -173,11 +186,19 @@ pub(super) fn run(
     std::fs::write(&host_request.schema_file, CHECK_VERDICT_SCHEMA)?;
     request.headless = Some(host_request.clone());
     let (plan, warnings) = profile.prepare(request, &fire.config, dir, &workspace.project_root)?;
-    let output = (fire.check_process)(adapter, &plan, &host_request, timeout, &|| {
-        fire.check_interrupts
-            .as_ref()
-            .is_some_and(throttle::Interrupts::raised)
-    });
+    let interrupts = &fire.check_interrupts;
+    let output = (fire.check_process)(
+        adapter,
+        &plan,
+        &host_request,
+        timeout,
+        &|| {
+            interrupts
+                .as_ref()
+                .is_some_and(throttle::Interrupts::raised)
+        },
+        &mut fire.record_hold,
+    );
     let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let (mut result, timed_out, interrupted, tail) = match output {
         Ok(output) => {
@@ -307,6 +328,7 @@ pub(super) type ProcessRunner = fn(
     &HeadlessRequest,
     Duration,
     &dyn Fn() -> bool,
+    &mut Option<CheckSignalGuard>,
 ) -> std::result::Result<crate::proc::BoundedOutput, ProcessErr>;
 
 #[cfg(test)]

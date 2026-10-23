@@ -1083,7 +1083,8 @@ path = "crates/rimz/src/harness"
 # runner::CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # runner::TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # runner::cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
-surface-budget = 960
+# runner::{CheckSignalGuard, TaskFire::record_signal_guard} hold SIGTERM through terminal recording (+2).
+surface-budget = 962
 
 [[verdict]]
 kind = "item"
@@ -2583,7 +2584,8 @@ allowed-dependencies = [
 # CheckOutcome::terminated carries SIGTERM cancellation to supervised verify (+1).
 # TaskFire::with_arrived_at carries signal firing time across the CLI boundary (+1).
 # cancel_run_on_sigterm shares check signal bookkeeping with loop-owned waits (+1).
-surface-budget = 59
+# CheckSignalGuard and TaskFire::record_signal_guard hold SIGTERM through terminal recording (+2).
+surface-budget = 61
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
@@ -2869,6 +2871,16 @@ reason = "Supervised verify must cancel on a caught SIGTERM, not re-prompt as it
 kind = "item"
 key = "harness::schedule::runner::cancel_run_on_sigterm"
 reason = "Loop-owned supervised waits share the check driver's SIGTERM bookkeeping to cancel durably without overriding its conditional default."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::CheckSignalGuard"
+reason = "A loop fire owns the action driver's SIGTERM guard across CLI cleanup and terminal recording until its run lock releases."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::TaskFire::record_signal_guard"
+reason = "The CLI arms the supervised action's guard directly in the fire so errors and returns leave no fatal signal gap before terminal recording."
 
 [[verdict]]
 kind = "item"

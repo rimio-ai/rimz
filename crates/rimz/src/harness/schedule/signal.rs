@@ -379,6 +379,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         CheckEcho::Tee { file },
         &std::collections::BTreeMap::new(),
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
+        &mut None,
     )?;
     let check = check_record(&outcome);
     emit(
@@ -511,6 +512,7 @@ fn probe_check(
         },
         &std::collections::BTreeMap::new(),
         |_, _| {},
+        &mut None,
     )?;
     let record = check_record(&outcome);
     let probe = match record.code {

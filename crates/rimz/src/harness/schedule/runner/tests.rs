@@ -1745,6 +1745,7 @@ fn polled_watch_probe_runs_to_exit_without_checkin() {
         CheckEcho::Capture,
         &BTreeMap::new(),
         |_, _| panic!("a probe never checks in"),
+        &mut None,
     )
     .unwrap();
     assert_eq!(output.code, Some(3));
@@ -1775,6 +1776,7 @@ fn watch_exit_during_checkin_delivery_is_not_lost() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         },
+        &mut None,
     ).unwrap();
     assert_eq!(notices, 1);
     assert_eq!(output.code, Some(3));
