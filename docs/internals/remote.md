@@ -418,7 +418,7 @@ tmux reports pane root pids natively. Zellij pane pids come from the process tab
 
 ## Test seams
 
-Every clock and probe in the module has an environment override, which keeps the integration tests deterministic.
+The table below lists the module's test overrides. Every other duration is fixed, so a test satisfies it or waits it out. A test passes the two-second DSR fence (`SETTLE_MAX`) at once by answering `ESC[5n` with `ESC[0n`; the fallback quiet window (`SETTLE_QUIET`, 250ms), the panel tick (`PANEL_TICK`, 80ms), and the control-master check interval (`CONTROL_MASTER_CHECK_INTERVAL`, 200ms) are waited out.
 
 | Variable | Controls |
 | --- | --- |
