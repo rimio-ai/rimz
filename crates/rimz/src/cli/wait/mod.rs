@@ -1,4 +1,4 @@
-//! `rimz wait` — self-only timer, process, check, file, and command waits over the loop scheduler.
+//! `rimz wait` — self waits, room wake-ups, and scoped cancellation over the loop scheduler.
 
 use std::time::Duration;
 
@@ -8,7 +8,6 @@ use clap::{Args, Subcommand};
 use rimz::config::{CheckOn, TaskTarget, WatchSpec};
 use rimz::harness::ancestry::CallerIdentity;
 use rimz::harness::schedule::arm::TaskName;
-use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
 
 use super::{Ctx, GlobalFlags};
@@ -29,16 +28,17 @@ pub struct WaitCommand {
 
 #[derive(Debug, Subcommand)]
 enum WaitSubcmd {
-    /// List pending waits and subscriptions aimed at you.
+    /// List your own waits, or the whole room from a user shell.
     #[command(alias = "ls")]
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Cancel your pending wait or subscription, including its watched command.
+    /// Cancel any of your waits or subscriptions by name, including its watched command.
     Cancel {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         name: Option<TaskName>,
+        /// Cancel only waits you armed with `rimz wait`, leaving subscriptions intact.
         #[arg(long)]
         all: bool,
         #[arg(long)]
@@ -129,13 +129,6 @@ fn caller_agent<'a>(
         bail!("RimZ identified the calling agent but its live session is unavailable");
     }
     Ok(Some(agent))
-}
-
-fn caller_session(ctx: &Ctx) -> Result<Option<(AgentKind, AgentSessionId)>> {
-    let caller = caller(ctx)?;
-    let snapshot = ctx.resolution_snapshot()?;
-    Ok(caller_agent(&snapshot, caller.as_ref())?
-        .map(|agent| (agent.kind.clone(), agent.agent_id.clone())))
 }
 
 fn parse_on(raw: Option<&str>) -> CheckOn {

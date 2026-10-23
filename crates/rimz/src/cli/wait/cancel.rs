@@ -14,12 +14,18 @@ pub(super) fn run(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    caller_session(&ctx)?.context(
+    let caller = caller(&ctx)?;
+    let snapshot = ctx.resolution_snapshot()?;
+    let agent = caller_agent(&snapshot, caller.as_ref())?.context(
         "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
     )?;
-    let pending = list::pending_rows(&ctx)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
     let names = if all {
-        pending.into_iter().map(|row| row.name).collect::<Vec<_>>()
+        pending
+            .into_iter()
+            .filter(list::WakeRow::is_self)
+            .map(|row| row.name)
+            .collect::<Vec<_>>()
     } else {
         let name = name.expect("clap requires a name or --all").to_string();
         if !pending.iter().any(|row| row.name == name) {
@@ -32,7 +38,7 @@ pub(super) fn run(
         catalog.remove(name)?;
         stop_watcher(ctx.runtime(), name)?;
     }
-    let pending = list::pending_rows(&ctx)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
     if json {
         return super::super::render::json(
             &serde_json::json!({ "canceled": names, "pending": pending }),
@@ -42,5 +48,5 @@ pub(super) fn run(
     if !names.is_empty() {
         writeln!(out, "canceled {}", names.join(", "))?;
     }
-    list::write_rows(&mut out, pending)
+    list::write_rows(&mut out, &ctx, Some(agent), &snapshot.agents, pending)
 }
