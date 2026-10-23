@@ -207,7 +207,7 @@ Every same-instance root carries the [launch identity](./instances.md#launch-ide
 | Clocks | created at the header timestamp; last activity at the file mtime |
 | Projection | `IdentityOnly` |
 
-The cache never reads the store, so a cwd match alone is not identity proof: the snapshot fold admits the fallback only when the rollout postdates the pane's process start or RimZ's launch clock.
+The cache never reads the store, so a cwd match alone is not identity proof: the snapshot fold applies the [pane reservation and incarnation-clock rules](./instances.md#local-session-observations), which admit the newest launch owner's own session on its matched live pane without a clock.
 
 ## Subagents
 

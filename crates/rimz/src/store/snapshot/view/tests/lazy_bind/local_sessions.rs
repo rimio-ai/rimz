@@ -1313,6 +1313,49 @@ fn registered_launched_child_accepts_its_own_session_observation() {
 }
 
 #[test]
+fn registered_launched_child_accepts_its_own_session_without_clock_checks() {
+    for (registered_at, process_start) in [(Some(ago(5)), Some(ago(30))), (None, None)] {
+        let (mut snapshot, mut child_pane) = provisional_codex_adopted_by_discovery(true);
+        let child = std::sync::Arc::make_mut(&mut snapshot.agents)
+            .iter_mut()
+            .find(|agent| agent.agent_id == "real-child")
+            .unwrap();
+        child.registered_at = registered_at;
+        child_pane.pane_process_start = process_start;
+        let mut parent_pane = pane("%1", "claude", "/repo/main");
+        parent_pane.pane_process_start = Some(ago(30));
+        let panes = vec![parent_pane, child_pane.clone()];
+        let mut observation = identity_observation("codex", "real-child", 1);
+        observation.transcript_path = PathBuf::from("/codex/refreshed/real-child.jsonl");
+
+        let (snapshot, diagnostics) =
+            snapshot.with_local_sessions_and_diagnostics(&panes, vec![observation]);
+        let snapshot = snapshot.with_live_panes(panes, None);
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let child = rollup_agent(&snapshot, "real-child");
+        assert!(child.is_launched_child());
+        assert_eq!(
+            child.parent_agent_id,
+            Some(AgentSessionId::from("launch_parent"))
+        );
+        assert_eq!(
+            child.transcript_path.as_deref(),
+            Some("/codex/refreshed/real-child.jsonl")
+        );
+        assert_eq!(rows(&snapshot).len(), 1, "no standalone child row");
+        let nested = row(&snapshot, "real-parent").sub_agents();
+        assert_eq!(nested.len(), 1);
+        assert_eq!(nested[0].id, "real-child");
+        assert_eq!(nested[0].pane.as_ref(), Some(&child_pane.pane_id));
+        assert_eq!(
+            snapshot.agent_bound_to_pane(&child_pane).unwrap().agent_id,
+            "real-child"
+        );
+    }
+}
+
+#[test]
 fn discovery_keeps_an_adopted_provisional_root_a_root_row() {
     let (snapshot, child_pane) = provisional_codex_adopted_by_discovery(false);
 
