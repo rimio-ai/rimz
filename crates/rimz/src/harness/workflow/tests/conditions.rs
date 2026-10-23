@@ -220,3 +220,47 @@ fn condition_subscriptions_follow_checkout_terms_not_branches_or_windows() {
         assert!(subscriptions.iter().all(|(_, matches)| matches.is_empty()));
     }
 }
+
+#[test]
+fn forge_demand_includes_only_default_scoped_declared_wakes() {
+    for runner in [
+        "run='true'\non.ok='@done'",
+        "shell='true'\non={pass='@done',fail='@user'}",
+        "agent='claude'\nprompt-file='prompts/build.md'\non.ok='@done'",
+    ] {
+        for (wake, demanded) in [
+            ("wake=['ci.failed']", true),
+            ("wake=['pr.*']", true),
+            (
+                "wake=[{signal='pr.opened', match={repo='owner/repo'}}]",
+                true,
+            ),
+            ("wake=[{signal='ci.*', match={path='*'}}]", false),
+            (
+                "wake=[{signal='pr.opened', match={path='/another'}}]",
+                false,
+            ),
+            ("wake=[{signal='ci.failed', match={branch='main'}}]", false),
+            ("wake=['review.ready', 'team.stage']", false),
+            ("wake=[]", false),
+            ("", false),
+        ] {
+            let text = format!(
+                "[workflow]\nscope='worktree'\nstart='now'\n[checks.now]\nrun='true'\non.ok='@done'\n[checks.later]\n{runner}\n{wake}\n"
+            );
+            let spec: WorkflowSpec = toml::from_str(&text).unwrap();
+            let expected = demanded.then(std::collections::BTreeSet::new);
+            assert_eq!(spec.forge_branches().unwrap(), expected, "{text}");
+
+            let spec: WorkflowSpec = toml::from_str(&format!(
+                "{text}[checks.condition]\nelse='pending'\non={{ready='@done',pending='@wait'}}\n[[checks.condition.cases]]\nwhen=['pr[main]=merged || ci[release]=passed']\noutcome='ready'\n"
+            ))
+            .unwrap();
+            assert_eq!(
+                spec.forge_branches().unwrap(),
+                Some(["main".into(), "release".into()].into_iter().collect()),
+                "{text}"
+            );
+        }
+    }
+}
