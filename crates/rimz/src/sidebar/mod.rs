@@ -379,7 +379,9 @@ pub(crate) fn reconcile_session_sidebars(
     opts: &SidebarPaneOptions,
     wait: Duration,
 ) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
-    reconcile_session(backend, opts, wait)
+    reconcile_session(backend, opts, wait, || {
+        crate::diag::DiagSink::for_workspace(opts.workspace_id.clone(), &opts.session_name, None)
+    })
 }
 
 struct SessionLiveness<'a> {
@@ -407,6 +409,7 @@ fn reconcile_session<B: SidebarMux + ?Sized>(
     backend: &B,
     opts: &SidebarPaneOptions,
     wait: Duration,
+    make_sink: impl FnOnce() -> crate::diag::DiagSink,
 ) -> Result<Option<crate::mux::SidebarRecovery>, SidebarReconcileErr> {
     let runtime = &opts.runtime;
     let lock_path = runtime.sidebar_reconcile_lock(backend.name(), &opts.session_name);
@@ -427,11 +430,24 @@ fn reconcile_session<B: SidebarMux + ?Sized>(
         workspace_id: opts.workspace_id.as_str(),
         session_name: &opts.session_name,
     };
-    Ok(Some(backend.reconcile_sidebars(opts, &live)?))
+    let report = backend.reconcile_sidebars(opts, &live)?;
+    if !report.repairs.is_empty() {
+        let sink = make_sink();
+        for repair in &report.repairs {
+            sink.emit(crate::diag::record::DiagEvent::SidebarViewRepaired {
+                view: repair.view.clone(),
+                closed: repair.closed.clone(),
+                added: repair.added.clone(),
+            });
+        }
+    }
+    Ok(Some(report))
 }
 
 fn ensure_session_view<B: SidebarMux + ?Sized>(backend: &B, opts: &SidebarPaneOptions) {
-    match reconcile_session(backend, opts, Duration::from_secs(2)) {
+    match reconcile_session(backend, opts, Duration::from_secs(2), || {
+        crate::diag::DiagSink::for_workspace(opts.workspace_id.clone(), &opts.session_name, None)
+    }) {
         Ok(Some(_)) => {}
         Ok(None) => tracing::debug!(
             session = %opts.session_name,
