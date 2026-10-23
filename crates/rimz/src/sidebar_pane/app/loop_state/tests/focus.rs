@@ -1479,6 +1479,65 @@ fn requested_focus_anchor(
 }
 
 #[test]
+fn a_hidden_fold_retires_its_anchor_in_scratch_after_a_shared_read() {
+    let own = zellij("sidebar_0");
+    let mut rig = Rig::with_own_pane(own.clone());
+    {
+        let mut view = rig.view();
+        view.ctx().current.own_view = Some(own_view());
+        view.ctx().current.viewed_panes.clear();
+    }
+    rig.views.lock().unwrap().reconcile(
+        &[crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(0),
+            pane_id: own.clone(),
+        }],
+        true,
+        rig.state.pane.clock.now(),
+        Duration::from_secs(60),
+    );
+    rig.state.frame_timing();
+    let shared = rig
+        .views
+        .lock()
+        .unwrap()
+        .presentation(&own, rig.state.pane.clock.now(), false)
+        .0;
+    rig.views.lock().unwrap().reconcile(
+        &[],
+        true,
+        rig.state.pane.clock.now(),
+        Duration::from_secs(60),
+    );
+    rig.state.pane.optimistic_watch_until = None;
+    let now_ms = rig.state.pane.clock.now_ms();
+    let anchor = requested_focus_anchor(zellij("terminal_2"), 0, now_ms - 60_000, None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.state.fold_transition(|state, v, prepared| {
+        assert!(
+            state
+                .pending_focus_intent(v, prepared, now_ms, state.clock.now())
+                .is_none()
+        );
+    });
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+    assert_eq!(
+        rig.state
+            .inspect_view(|_, view| view.retired_anchor.map(|(_, stamp)| stamp)),
+        Some(anchor.issued_at_ms)
+    );
+    assert_eq!(
+        rig.views
+            .lock()
+            .unwrap()
+            .retained(shared)
+            .unwrap()
+            .retired_anchor,
+        None
+    );
+}
+
+#[test]
 fn a_shared_fold_retires_its_anchor_in_that_view() {
     let own = zellij("sidebar_0");
     let mut rig = Rig::with_own_pane(own.clone());
