@@ -2,6 +2,8 @@
 //!
 //! Writes one `argv0\targv1\t...\n` line per invocation to `$RIMZ_TEST_ZELLIJ_LOG`, then returns a small zellij-shaped response or applies stateful filesystem side effects.
 //! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
+//! `$RIMZ_TEST_ZELLIJ_HOLD_ESCAPE` holds lone Escape writes until the log path with extension
+//! `.escape-released` exists (10 s timeout).
 //! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE` makes `action close-pane` exit non-zero after logging it.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 //! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
@@ -342,6 +344,27 @@ fn handle_write(log_path: &Path, args: &[String]) {
         | FailureMode::FailEnter
         | FailureMode::SocketOverflowOnBirth
         | FailureMode::BirthFails => {}
+    }
+    if env::var_os("RIMZ_TEST_ZELLIJ_HOLD_ESCAPE").is_none()
+        || !matches!(
+            args,
+            [.., action, write, flag, _, byte]
+                if action == "action"
+                    && write == "write"
+                    && flag == "--pane-id"
+                    && byte == "27"
+        )
+    {
+        return;
+    }
+    let released = log_path.with_extension("escape-released");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !released.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "RIMZ_TEST_ZELLIJ_HOLD_ESCAPE was not released within 10 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 

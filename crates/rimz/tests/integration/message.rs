@@ -376,11 +376,17 @@ fn interrupt_without_signal(queued: bool) {
     let (env, panes) = interrupt_fixture("codex");
     let id = queued.then(|| queue_add(&env, "@codex", "new direction"));
     let trace = env.project_root.join("interrupt-unconfirmed.log");
+    let released = trace.with_extension("escape-released");
+    let window = Duration::from_millis(200);
     let mut command = traced_rimz(&env, &trace);
     command
         .env("RIMZ_TEST_PANE_LIST", &panes)
         .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
-        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "200");
+        .env(
+            "RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS",
+            window.as_millis().to_string(),
+        )
+        .env("RIMZ_TEST_ZELLIJ_HOLD_ESCAPE", "1");
     if let Some(id) = id {
         command.args(["message", "interrupt", &id]);
     } else {
@@ -396,9 +402,13 @@ fn interrupt_without_signal(queued: bool) {
         assert!(started.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(10));
     }
-    let key_pressed = Instant::now();
+    // Hold the key a full window, so one opened before the press has elapsed by the release.
+    std::thread::sleep(window);
+    // Start before releasing the key so scheduling lag cannot shorten the measured window.
+    let confirmation_started = Instant::now();
+    std::fs::write(released, b"").unwrap();
     let output = child.wait_with_output().unwrap();
-    let confirmation_wait = key_pressed.elapsed();
+    let confirmation_wait = confirmation_started.elapsed();
     assert!(output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("interrupt not confirmed"), "{stderr}");
@@ -420,11 +430,7 @@ fn interrupt_without_signal(queued: bool) {
     ] {
         assert!(stderr.contains(text), "missing {text}: {stderr}");
     }
-    assert!(started.elapsed() >= Duration::from_millis(200));
-    assert!(
-        confirmation_wait >= Duration::from_millis(100),
-        "{confirmation_wait:?}"
-    );
+    assert!(confirmation_wait >= window, "{confirmation_wait:?}");
     assert!(
         confirmation_wait < Duration::from_secs(3),
         "{confirmation_wait:?}"
