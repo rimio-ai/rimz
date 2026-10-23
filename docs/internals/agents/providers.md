@@ -345,7 +345,7 @@ A new agent gets an account block and balance bars by filling these types from i
 
 1. Fill `AgentAccount` on the session's `AgentContext` from the transport, override `probe_account` for the idle case, or both.
 2. Fill `AgentRateLimits` from the transport: each window with `used_percentage`, a reset instant, and either `duration_mins` or a stable scope id and label.
-3. Where a read-only account-usage surface exists, implement `probe_account_usage`, declare `direct_account_usage`, and fill `ExtraCredits`. Use `Disabled` only when the provider says paid usage is off.
+3. Where a read-only account-usage surface exists, implement `probe_account_usage`, declare `direct_account_usage`, and fill `ExtraCredits`. If the account identifies a sub-provider, override `has_quota_surface` for those with readable quotas; its default is `false`. Use `Disabled` only when the provider says paid usage is off.
 4. Set the spec's color and name, and add curated art to [`emblems.toml`](../../../crates/rimz/src/agents/emblems.toml); every built-in must have art distinct from the fallback.
 5. Implement the transcript spend parser ([spending.md](./spending.md#per-provider-parsing)).
 6. Keep every step best-effort: a missing fact is an omitted label, a `v?`, or an unknown track, never an error.

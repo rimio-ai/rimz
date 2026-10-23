@@ -28,6 +28,10 @@ impl Adapter {
             Self::OpenCode => "opencode",
         }
     }
+
+    pub(super) fn has_quota_surface(self, provider: &str) -> bool {
+        quota_surface(self, provider).is_some()
+    }
 }
 
 pub(super) struct Config {
@@ -356,21 +360,17 @@ pub fn expects_usage_reading(
     if metered == Some(false) {
         return false;
     }
-    let Some(spec) = super::spec_by_kind(kind.as_str()) else {
+    let Ok(definition) = super::registry::definition_by_kind(kind.as_str()) else {
         return false;
     };
+    let spec = definition.spec();
     if !spec.expected_windows.is_empty() {
         return true;
     }
     if !spec.capabilities.direct_account_usage || metered != Some(true) {
         return false;
     }
-    let adapter = match kind.as_str() {
-        "pi" => Adapter::Pi,
-        "opencode" => Adapter::OpenCode,
-        _ => return true,
-    };
-    sub_provider.is_some_and(|provider| quota_surface(adapter, provider).is_some())
+    sub_provider.is_none_or(|provider| definition.has_quota_surface(provider))
 }
 
 fn oauth_scope(adapter: Adapter, provider: &str) -> Option<ProviderAccountScope> {
@@ -437,6 +437,13 @@ mod tests {
     }
 
     #[test]
+    fn undeclared_sub_provider_quota_surfaces_do_not_expect_readings() {
+        let kind = crate::ids::AgentKind::new_unchecked("copilot");
+        assert!(expects_usage_reading(&kind, Some(true), None));
+        assert!(!expects_usage_reading(&kind, Some(true), Some("openai")));
+    }
+
+    #[test]
     fn reading_expectations_keep_static_windows_and_direct_metered_accounts() {
         for kind in ["claude", "codex", "kimi"] {
             let kind = crate::ids::AgentKind::new_unchecked(kind);
@@ -458,6 +465,13 @@ mod tests {
                 "{kind}"
             );
             assert!(!expects_usage_reading(&kind, None, None), "{kind}");
+        }
+        let qwen = crate::ids::AgentKind::new_unchecked("qwen");
+        for provider in [
+            "Alibaba Coding Plan (International)",
+            "Alibaba Coding Plan (China)",
+        ] {
+            assert!(expects_usage_reading(&qwen, Some(true), Some(provider)));
         }
     }
 

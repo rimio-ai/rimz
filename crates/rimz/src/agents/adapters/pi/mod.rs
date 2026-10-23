@@ -595,6 +595,10 @@ impl crate::agents::capabilities::ContextCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for PiAdapter {
+    fn has_quota_surface(&self, sub_provider: &str) -> bool {
+        crate::agents::delegated_account::Adapter::Pi.has_quota_surface(sub_provider)
+    }
+
     fn probe_account(
         &self,
         _login_env: &BTreeMap<String, String>,

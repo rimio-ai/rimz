@@ -1021,6 +1021,12 @@ pub trait AccountCapability: CoreCapability {
         AccountUsageProbe::Unsupported
     }
 
+    /// Whether this adapter can read quotas for a backing sub-provider.
+    /// Defaults to no sub-provider quota surface.
+    fn has_quota_surface(&self, _sub_provider: &str) -> bool {
+        false
+    }
+
     /// Resolve exact provider-account applicability and identity for a managed launch.
     fn resolve_managed_launch(
         &self,

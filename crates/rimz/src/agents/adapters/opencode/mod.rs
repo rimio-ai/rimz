@@ -697,6 +697,10 @@ impl crate::agents::capabilities::ContextCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for OpencodeAdapter {
+    fn has_quota_surface(&self, sub_provider: &str) -> bool {
+        crate::agents::delegated_account::Adapter::OpenCode.has_quota_surface(sub_provider)
+    }
+
     fn probe_account(
         &self,
         _login_env: &BTreeMap<String, String>,
