@@ -2,15 +2,20 @@
 //! private and transient names for an account that shares the default's
 //! history, settings alone for a standalone one. A link into the provider's
 //! own home at a private or transient name is removed in either mode.
+//! Links under HOME are relative from the account home's real location to
+//! the provider's configured home. Currency is by text; another spelling of
+//! the same existing entry is replaced in place without moving data aside.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::num::NonZeroUsize;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use super::capabilities::SharedHomeKind;
 use super::runtime_control::DaemonSessions;
 use super::{AgentDefinition, ProviderLogin, skill_links};
+use crate::disk::atomic;
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::ids::{AgentKind, LoginKey};
 use crate::utils::path::normalize_path_lexical;
@@ -93,6 +98,11 @@ pub enum ShareErr {
     Io {
         path: PathBuf,
         source: std::io::Error,
+    },
+    #[error("cannot relink {}: {source}; fix access to that path, then rerun `rimz accounts add`", path.display())]
+    Relink {
+        path: PathBuf,
+        source: atomic::AtomicErr,
     },
     #[error("cannot adopt {}: {source}; fix the settings file, then rerun `rimz accounts add`", path.display())]
     Adopt {
@@ -203,6 +213,7 @@ impl std::fmt::Display for ShareReport {
 enum Action {
     Link,
     Current,
+    Replace,
     /// Real in the account home and absent from the provider's own.
     Move(fs::FileType),
     SetAside(fs::FileType),
@@ -212,6 +223,7 @@ struct PlannedLink {
     name: String,
     slot: PathBuf,
     target: PathBuf,
+    link_text: PathBuf,
     action: Action,
 }
 
@@ -230,21 +242,34 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>, ShareErr> {
     }
 }
 
-/// Where the link at `slot` points, resolved against its directory.
-fn link_target(slot: &Path) -> Result<PathBuf, ShareErr> {
-    let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
-    // Slots are named entries joined onto the account home.
-    let parent = slot.parent().expect("a home entry has a parent");
-    Ok(normalize_path_lexical(&parent.join(link)))
+/// Resolve existing text from the real account home before the stale scan's
+/// lexical comparison, without requiring the target to exist.
+fn link_target(named_home: &Path, link: &Path) -> Result<PathBuf, ShareErr> {
+    if link.is_absolute() {
+        return Ok(normalize_path_lexical(link));
+    }
+    let real_home = named_home
+        .canonicalize()
+        .map_err(|error| io_err(named_home, error))?;
+    Ok(normalize_path_lexical(&real_home.join(link)))
 }
 
-fn classify(slot: &Path, target: &Path) -> Result<Action, ShareErr> {
+/// Only matching text is current. A spelling change that reaches the same
+/// existing entry needs no migration or live-writer gate.
+fn classify(slot: &Path, target: &Path, link_text: &Path) -> Result<Action, ShareErr> {
     let Some(existing) = metadata(slot)? else {
         return Ok(Action::Link);
     };
     if existing.is_symlink() {
-        return Ok(if link_target(slot)? == target {
+        let existing_text = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
+        return Ok(if existing_text.as_os_str() == link_text.as_os_str() {
             Action::Current
+        } else if fs::metadata(slot)
+            .ok()
+            .zip(fs::metadata(target).ok())
+            .is_some_and(|(slot, target)| slot.dev() == target.dev() && slot.ino() == target.ino())
+        {
+            Action::Replace
         } else {
             Action::SetAside(existing.file_type())
         });
@@ -342,6 +367,7 @@ pub fn reconcile(
             adapter,
             named: named_home,
             default: &default_home,
+            user: ambient.get("HOME").map(Path::new),
             shared: login.shares_history(),
             lock: &crate::disk::paths::account_lock(login.kind()),
             account: &account,
@@ -359,10 +385,26 @@ struct Homes<'a> {
     account: &'a LoginKey,
     named: &'a Path,
     default: &'a Path,
+    user: Option<&'a Path>,
     shared: bool,
     lock: &'a Path,
     /// The live sessions a provider daemon holds under `named`.
     daemon_writes: &'a dyn Fn() -> DaemonSessions,
+}
+
+fn relative_prefix(named_home: &Path, default_home: &Path, user: Option<&Path>) -> Option<PathBuf> {
+    let user = user.filter(|home| !home.as_os_str().is_empty())?;
+    let real_user = user.canonicalize().ok()?;
+    let real_named = named_home.canonicalize().ok()?;
+    let below_user = real_named.strip_prefix(real_user).ok()?;
+    let configured_user = normalize_path_lexical(&std::path::absolute(user).ok()?);
+    let provider = default_home.strip_prefix(configured_user).ok()?;
+    let mut prefix = PathBuf::new();
+    for _ in below_user.components() {
+        prefix.push("..");
+    }
+    prefix.push(provider);
+    Some(prefix)
 }
 
 fn reconcile_homes(
@@ -378,6 +420,8 @@ fn reconcile_homes(
         .map(|home| normalize_path_lexical(&home))
         .map_err(|error| io_err(homes.default, error))?;
     let _lock = WorkspaceLock::acquire(homes.lock)?;
+    let prefix = relative_prefix(&named_home, &default_home, homes.user)
+        .unwrap_or_else(|| default_home.clone());
 
     let included = adapter.shared_home_entries();
     let mut names: Vec<String> = included.iter().map(|entry| entry.name.to_owned()).collect();
@@ -407,20 +451,25 @@ fn reconcile_homes(
     for name in &names {
         let slot = named_home.join(name);
         let target = default_home.join(name);
-        let action = classify(&slot, &target)?;
+        let link_text = prefix.join(name);
+        let action = classify(&slot, &target, &link_text)?;
         plan.push(PlannedLink {
             name: name.clone(),
             slot,
             target,
+            link_text,
             action,
         });
     }
     let mut stale = Vec::new();
     for name in in_account {
         let slot = named_home.join(&name);
-        if !names.contains(&name)
-            && metadata(&slot)?.is_some_and(|entry| entry.is_symlink())
-            && link_target(&slot)?.starts_with(&default_home)
+        if names.contains(&name) || !metadata(&slot)?.is_some_and(|entry| entry.is_symlink()) {
+            continue;
+        }
+        let link = fs::read_link(&slot).map_err(|error| io_err(&slot, error))?;
+        if link.as_os_str() == prefix.join(&name).as_os_str()
+            || link_target(&named_home, &link)?.starts_with(&default_home)
         {
             stale.push((name, slot));
         }
@@ -530,6 +579,7 @@ fn apply(
         name,
         slot,
         target,
+        link_text,
         action,
     } in plan
     {
@@ -554,6 +604,12 @@ fn apply(
                 continue;
             }
             Action::Link => {}
+            Action::Replace => {
+                atomic::symlink_atomically(&link_text, &slot)
+                    .map_err(|source| ShareErr::Relink { path: slot, source })?;
+                report.linked.push(name);
+                continue;
+            }
             Action::Move(_) => {
                 fs::create_dir_all(default_home).map_err(|error| io_err(default_home, error))?;
                 match fs::rename(&slot, &target) {
@@ -586,7 +642,7 @@ fn apply(
                 report.set_aside.push((slot.clone(), aside));
             }
         }
-        std::os::unix::fs::symlink(&target, &slot).map_err(|error| io_err(&slot, error))?;
+        std::os::unix::fs::symlink(&link_text, &slot).map_err(|error| io_err(&slot, error))?;
         report.linked.push(name);
     }
     for (name, slot) in stale {
@@ -601,8 +657,8 @@ fn apply(
 }
 
 /// Move the entry at `slot` to `aside`. A relative link resolves against the
-/// directory holding it, so it is rewritten against the account home it
-/// leaves and keeps pointing where the user aimed it.
+/// real directory holding it, so it is rewritten against the canonical
+/// account home without folding `..`, preserving the kernel's resolution.
 fn set_aside(
     named_home: &Path,
     slot: &Path,
@@ -612,7 +668,10 @@ fn set_aside(
     if kind.is_symlink() {
         let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
         if link.is_relative() {
-            std::os::unix::fs::symlink(named_home.join(link), aside)
+            let real_home = named_home
+                .canonicalize()
+                .map_err(|error| io_err(named_home, error))?;
+            std::os::unix::fs::symlink(real_home.join(link), aside)
                 .map_err(|error| io_err(aside, error))?;
             return fs::remove_file(slot).map_err(|error| io_err(slot, error));
         }

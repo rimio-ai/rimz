@@ -7673,7 +7673,7 @@ fn seats_of_one_batch_on_a_shared_account_set_its_history_aside_once() {
     }
     assert_eq!(
         std::fs::read_link(work.join("sessions")).unwrap(),
-        native.join("sessions")
+        std::path::Path::new("../.codex/sessions")
     );
     let stamps: Vec<_> = std::fs::read_dir(work.join(".rimz-aside"))
         .unwrap()

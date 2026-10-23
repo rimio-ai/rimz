@@ -811,7 +811,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     assert!(home.join("settings.json").is_symlink(), "{added}");
     assert_eq!(
         std::fs::read_link(home.join("settings.json")).unwrap(),
-        target
+        Path::new("../.claude/settings.json")
     );
     assert!(std::fs::read_to_string(&target).unwrap().contains("rimz"));
     assert!(
@@ -825,7 +825,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     assert!(rerun.contains("already linked to"), "{rerun}");
     assert_eq!(
         std::fs::read_link(home.join("settings.json")).unwrap(),
-        target
+        Path::new("../.claude/settings.json")
     );
     let moved = failed(&accounts(
         &env,
@@ -940,7 +940,7 @@ fn accounts_add_shares_everything_but_credentials_and_sets_conflicts_aside() {
     assert_eq!(std::fs::read_to_string(&kept).unwrap(), original);
     assert_eq!(
         std::fs::read_link(&settings).unwrap(),
-        native.join("settings.json")
+        Path::new("../.claude/settings.json")
     );
     assert!(
         added.contains(&format!(
@@ -953,7 +953,7 @@ fn accounts_add_shares_everything_but_credentials_and_sets_conflicts_aside() {
     for name in ["projects", "todos"] {
         assert_eq!(
             std::fs::read_link(home.join(name)).unwrap(),
-            native.join(name)
+            Path::new("../.claude").join(name)
         );
     }
     assert_eq!(
@@ -991,7 +991,7 @@ fn accounts_add_shares_everything_but_credentials_and_sets_conflicts_aside() {
     ));
     assert_eq!(
         std::fs::read_link(home.join("projects")).unwrap(),
-        native.join("projects")
+        Path::new("../.claude/projects")
     );
 }
 
