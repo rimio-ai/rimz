@@ -12,11 +12,22 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use super::{DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
+use super::{Agent, DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
 
 #[derive(Deserialize)]
 struct Workspace {
     session_name: String,
+}
+
+#[derive(Deserialize)]
+struct Team {
+    instances: Vec<TeamInstance>,
+}
+
+#[derive(Deserialize)]
+struct TeamInstance {
+    channel: String,
+    members: Vec<Agent>,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +235,7 @@ fn start(workspace: &Path, binary: PathBuf, mux: &str, sandbox: &HostSandbox) ->
         &["teams", "forge", "-w", "probe", "--isolation", "host"],
     )?;
     room.cwd = home.join("room-worktrees/probe");
+    room.wait_for_team()?;
     room.rimz(
         "open board",
         &["teams", "flip", "Build", "room opened", "--team", "forge"],
@@ -377,6 +389,30 @@ impl Room<'_> {
         }
     }
 
+    fn wait_for_team(&self) -> Result<()> {
+        let team: Team = self.json("team roster", &["teams", "show", "forge#probe", "--json"])?;
+        let team = team
+            .instances
+            .first()
+            .context("launched forge#probe cohort is missing")?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let panes = self.json("team pane list", &["pane", "list", "--json"])?;
+            let missing = missing_team_members(&panes, team);
+            if missing.is_empty() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "team panes timed out: missing agent panes in #{} for {}",
+                    team.channel,
+                    missing.join(", ")
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     fn ready(&self) -> Result<Panes> {
         let started = Instant::now();
         loop {
@@ -507,6 +543,23 @@ fn client_count(clients: &[u8]) -> usize {
         .filter(|line| !line.trim().is_empty())
         .skip(1)
         .count()
+}
+
+fn missing_team_members(panes: &Panes, team: &TeamInstance) -> Vec<String> {
+    let tab_name = format!("#{}", team.channel);
+    let projected: Vec<_> = panes
+        .tabs
+        .iter()
+        .filter(|tab| tab.name.as_deref() == Some(&tab_name))
+        .flat_map(|tab| &tab.panes)
+        .filter(|pane| pane.kind == "agent")
+        .filter_map(|pane| pane.agent.as_ref().map(|agent| agent.handle.as_str()))
+        .collect();
+    team.members
+        .iter()
+        .map(|member| format!("{}#{}", member.handle, team.channel))
+        .filter(|handle| !projected.contains(&handle.as_str()))
+        .collect()
 }
 
 fn verify_stub(path: &OsStr, stub: &Path, executable: impl Fn(&Path) -> bool) -> Result<()> {
@@ -682,6 +735,50 @@ fn render_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_projection_waits_for_every_rostered_member_in_its_tab() {
+        let team: Team = serde_json::from_str(
+            r##"{"instances":[{"channel":"probe","members":[
+                {"handle":"@coder"},{"handle":"@reviewer"},{"handle":"@auditor"}
+            ]}]}"##,
+        )
+        .unwrap();
+        let team = &team.instances[0];
+        let stale: Panes = serde_json::from_str(
+            r##"{"tabs":[{"name":"#probe","panes":[
+                {"kind":"agent","pane_id":"zellij:terminal_7","agent":{"handle":"@coder#probe"}}
+            ]}]}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            missing_team_members(&stale, team),
+            ["@reviewer#probe", "@auditor#probe"]
+        );
+        let panes: Panes = serde_json::from_str(
+            r##"{"tabs":[{"name":"shell","panes":[
+                {"kind":"agent","pane_id":"tmux:%1","agent":{"handle":"@reviewer#probe"}}
+            ]},{"name":"#probe","panes":[
+                {"kind":"agent","pane_id":"tmux:%2","agent":{"handle":"@coder#probe"}},
+                {"kind":"process","pane_id":"tmux:%3","agent":{"handle":"@reviewer#probe"}},
+                {"kind":"agent","pane_id":"tmux:%4","agent":{"handle":"@auditor#other"}}
+            ]}]}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            missing_team_members(&panes, team),
+            ["@reviewer#probe", "@auditor#probe"]
+        );
+        let ready: Panes = serde_json::from_str(
+            r##"{"tabs":[{"name":"#probe","panes":[
+                {"kind":"agent","pane_id":"tmux:%2","agent":{"handle":"@coder#probe"}},
+                {"kind":"agent","pane_id":"tmux:%3","agent":{"handle":"@reviewer#probe"}},
+                {"kind":"agent","pane_id":"tmux:%4","agent":{"handle":"@auditor#probe"}}
+            ]}]}"##,
+        )
+        .unwrap();
+        assert!(missing_team_members(&ready, team).is_empty());
+    }
 
     #[test]
     fn client_argv_accepts_both_managed_attach_shapes_not_bootstrap_or_other_sessions() {
