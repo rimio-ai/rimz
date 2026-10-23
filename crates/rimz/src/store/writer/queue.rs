@@ -1150,10 +1150,12 @@ impl Store {
     }
 
     /// Requeue expired claims, abandoning them at the attempt cap, and requeue
-    /// or time out stale pane writes after their acknowledgement window. An open receiver compaction bracket holds a `Sent` record
-    /// without a time limit because the composer queues the original write and
-    /// submits it when compaction ends; resending would duplicate the turn.
-    /// Pending same-kind ingress stamped between the write and its deadline also holds it until applied.
+    /// or time out stale pane writes at their shared acknowledgement deadline,
+    /// including any prior deferral. An open receiver compaction bracket holds
+    /// a `Sent` record without a time limit because the composer queues the
+    /// original write and submits it when compaction ends; resending would
+    /// duplicate the turn. Pending same-kind ingress stamped within one body
+    /// window of the write also holds it until applied.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_messages(
         &self,
@@ -1249,8 +1251,9 @@ impl Store {
                     return MessageUpdate::SilentRewrite;
                 }
                 if pending_ingress.iter().any(|(frame, _)| {
+                    let last_sent_at = message.last_sent_at.unwrap_or(message.updated_at);
                     frame.source == message.kind
-                        && (message.last_sent_at.unwrap_or(message.updated_at)..deadline)
+                        && (last_sent_at..last_sent_at + message.body.delivery_window())
                             .contains(&frame.ts)
                 }) {
                     message.retry_after = Some(now + message.body.delivery_window());

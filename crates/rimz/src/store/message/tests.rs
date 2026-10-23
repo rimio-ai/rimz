@@ -993,6 +993,14 @@ fn delivery_policy_is_per_body_and_sent_time_survives_legacy_records() {
         legacy.sent_reconcile_deadline(),
         Some(updated_at + MessageBody::Prompt.delivery_window())
     );
+    let retry_after = last_sent_at + MessageBody::Prompt.delivery_window() * 2;
+    for mut record in [sent, legacy] {
+        record.retry_after = Some(retry_after);
+        assert_eq!(record.sent_reconcile_deadline(), Some(retry_after));
+        assert_eq!(record.wake_deadline(updated_at), Some(retry_after));
+        assert!(!record.sent_hold_expired(retry_after - Duration::from_nanos(1)));
+        assert!(record.sent_hold_expired(retry_after));
+    }
 }
 
 #[test]

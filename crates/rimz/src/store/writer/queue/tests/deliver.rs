@@ -1462,6 +1462,49 @@ fn stale_sent_ingress_ignores_applied_frame() {
 }
 
 #[test]
+fn stale_sent_ingress_ignores_frame_stamped_during_deferral() {
+    use crate::disk::lock::SharedAppendLock;
+    use crate::ids::EventId;
+    use crate::store::ingress::{self, HookIngress};
+
+    let q = Queue::new();
+    let sent_at = Timestamp::now();
+    let window = MessageBody::Prompt.delivery_window();
+    let deadline = sent_at + window * 2;
+    let sent = q.queue_with(1, |message| {
+        message.status = MessageStatus::Sent;
+        message.last_sent_at = Some(sent_at);
+        message.retry_after = Some(deadline);
+    });
+    let frame = HookIngress {
+        schema_version: "1".into(),
+        event_id: EventId::new(),
+        ts: sent_at + window + window / 2,
+        source: sent.kind.clone(),
+        event: Some("UserPromptSubmit".into()),
+        payload: "{}".into(),
+        cwd: q._dir.path().to_owned(),
+        hook_pid: std::process::id(),
+        env: Default::default(),
+    };
+    let lock = SharedAppendLock::acquire(&q.inner.paths.hook_ingress_lock).unwrap();
+    ingress::append(&q.inner.paths, &frame, &lock).unwrap();
+    drop(lock);
+
+    assert_eq!(
+        q.reconcile_stale_messages("session", deadline, 3).unwrap(),
+        ReconcileReport {
+            requeued: 1,
+            ..Default::default()
+        }
+    );
+    let requeued = q.by_id(&sent.message_id);
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert_eq!(requeued.unconfirmed_sends, 1);
+    assert_eq!(requeued.retry_after, None);
+}
+
+#[test]
 fn stale_sent_message_is_deferred_while_receiver_compacts() {
     let q = Queue::new();
     let sent = q.sent(1);
@@ -1502,6 +1545,71 @@ fn stale_sent_message_is_deferred_while_receiver_compacts() {
     assert_eq!(messages[0].unconfirmed_sends, 0);
     assert_eq!(messages[0].retry_after, Some(now + window));
     assert_eq!(messages[0].wake_deadline(now), Some(now + window));
+}
+
+#[test]
+fn stale_sent_message_waits_for_deferral_after_compaction_closes() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let window = sent.body.delivery_window();
+    let now = sent.last_sent_at.unwrap() + window;
+    for (event_name, signal) in [
+        ("SessionStart", LifecycleSignal::Registered),
+        ("PreCompact", LifecycleSignal::Compacting),
+    ] {
+        let observation = AgentLifecycleObservation::new(Some(sent.agent_id.clone()), signal);
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            sent.kind.as_str(),
+            event_name,
+            &observation,
+        ))
+        .unwrap();
+    }
+    assert_eq!(
+        q.reconcile_stale_messages("session", now, 3).unwrap(),
+        ReconcileReport::default()
+    );
+    let held = q.by_id(&sent.message_id);
+    let retry_after = held.retry_after.unwrap();
+    let observation = AgentLifecycleObservation::new(
+        Some(sent.agent_id.clone()),
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        },
+    );
+    q.append_event(&EventEnvelope::agent_lifecycle(
+        q.workspace_id.clone(),
+        "session",
+        sent.kind.as_str(),
+        "PostCompact",
+        &observation,
+    ))
+    .unwrap();
+    let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
+
+    assert_eq!(
+        q.reconcile_stale_messages("session", retry_after - Duration::from_nanos(1), 3)
+            .unwrap(),
+        ReconcileReport::default()
+    );
+    assert_eq!(q.by_id(&sent.message_id), held);
+    assert_eq!(
+        std::fs::read(&q.inner.paths.events_log).unwrap(),
+        events_before
+    );
+    assert_eq!(
+        q.reconcile_stale_messages("session", retry_after, 3)
+            .unwrap()
+            .requeued,
+        1
+    );
+    let message = q.by_id(&sent.message_id);
+    assert_eq!(message.status, MessageStatus::Queued);
+    assert_eq!(message.unconfirmed_sends, 1);
+    assert_eq!(q.reason("message.queued"), "reconcile");
 }
 
 #[test]
