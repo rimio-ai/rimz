@@ -38,6 +38,103 @@ fn record(name: &str, root: &Path, result: LoopRunResult, minutes: i64) -> LoopR
 }
 
 #[test]
+fn expanded_wakes_nest_live_children_and_fall_back_without_agent_rows() {
+    use crate::common::wait::{register_agent, register_calling_agent};
+    use rimz::agents::LaunchParams;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    register_agent(
+        &env,
+        "child-session",
+        "child-launch",
+        "modern-notch",
+        LaunchParams {
+            profile: Some("gatekeeper".into()),
+            parent_agent_id: Some("launch-session".into()),
+            launch_depth: Some(1),
+            ..Default::default()
+        },
+    );
+    let wait = |session: &str, handle: &str| TaskEntry {
+        root: env.project_root.clone(),
+        at: Some("23:59".into()),
+        wait: Some(TaskTarget {
+            kind: AgentKind::new_unchecked("claude"),
+            session: session.into(),
+            handle: handle.into(),
+        }),
+        wait_meta: Some(
+            serde_json::from_value(json!({"armed_at": Timestamp::now(), "delay": "5m"})).unwrap(),
+        ),
+        ..Default::default()
+    };
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([
+            ("child-wait".into(), wait("child-session", "@stale-child")),
+            ("root-wait".into(), wait("provider-session", "@stale-root")),
+            ("orphan-wait".into(), wait("missing", "@stored")),
+        ])),
+    );
+    let output = crate::common::wait::agent_wait(&env)
+        .args(["loop", "list", "--all"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("  @planner#main › @gatekeeper (@modern-notch)\n"),
+        "{text}"
+    );
+    assert!(text.contains("  @planner#main (you)\n"), "{text}");
+    assert!(text.contains("  @stored\n"), "{text}");
+    assert!(!text.contains("@stale"), "{text}");
+    assert!(text.contains("3 waits · all healthy"), "{text}");
+}
+
+#[test]
+fn expanded_waits_tolerate_an_unreadable_room_store() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "orphan-wait".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                at: Some("23:59".into()),
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: "missing".into(),
+                    handle: "@stored".into(),
+                }),
+                wait_meta: Some(
+                    serde_json::from_value(json!({"armed_at": Timestamp::now(), "delay": "5m"}))
+                        .unwrap(),
+                ),
+                ..Default::default()
+            },
+        )])),
+    );
+    let paths = env.state_path_for(&env.project_root);
+    std::fs::remove_file(&paths.workspace_record).unwrap();
+    std::fs::create_dir(&paths.workspace_record).unwrap();
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
+    assert!(
+        text.contains("  @stored\n") && text.contains("orphan-wait"),
+        "{text}"
+    );
+    let json = loop_ok(&env, &["loop", "list", "--json"]);
+    assert!(json.contains("orphan-wait"), "{json}");
+}
+
+#[test]
 fn show_resolves_other_rooms_and_retired_names_but_mutations_stay_local() {
     let env = Env::new();
     let other = env.home_root.join("other-room");
@@ -398,7 +495,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     for section in ["ROUTINE", "WAITING", "DONE", "WAKE-UPS"] {
         assert!(text.contains(section), "{text}");
     }
-    assert!(text.contains("2 wake agents · all healthy"), "{text}");
+    assert!(text.contains("2 subscriptions · all healthy"), "{text}");
     assert!(text.contains("launched claude @leader"), "{text}");
     assert!(text.contains("(and 3 older · --all)"), "{text}");
     assert!(
@@ -541,7 +638,7 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
     );
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(!text.contains("of 3 met"), "{text}");
-    assert!(text.contains("1 wake agents · 1 need you"), "{text}");
+    assert!(text.contains("1 subscription · 1 need you"), "{text}");
     let value: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     let rows = value["rooms"][0]["tasks"].as_array().unwrap();
@@ -1006,7 +1103,7 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
         ],
     );
     let folded = loop_ok(&env, &["loop", "list"]);
-    assert!(folded.contains("4 wake agents · all healthy"), "{folded}");
+    assert!(folded.contains("4 subscriptions · all healthy"), "{folded}");
     assert!(
         !folded.contains("generated-") && !folded.contains("sweep"),
         "{folded}"
@@ -1302,6 +1399,18 @@ fn lost_watch_needs_attention_and_keeps_caller_markers() {
             && !text.contains("private command"),
         "{text}"
     );
+    let expanded = env
+        .rimz()
+        .current_dir(&checkout)
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch_coder")
+        .args(["loop", "list", "--all"])
+        .output()
+        .unwrap();
+    assert!(expanded.status.success());
+    let expanded = String::from_utf8(expanded.stdout).unwrap();
+    assert!(expanded.contains("  @coder#feature (you)\n"), "{expanded}");
+    assert!(expanded.contains("lost · armed 12m ago"), "{expanded}");
     let runtime = env.runtime_paths();
     let holder = RunLockInfo {
         pid: 42_424,
