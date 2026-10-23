@@ -137,7 +137,7 @@ ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
 
 Expect one `sidebar host` line and one `sidebar serve` line per tab, never a child `serve` painter. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it.
 
-Five checks cover what a unit test cannot:
+Six checks cover what a unit test cannot:
 
 1. **Host death.** Kill the host by PID with `kill -9`. Each supervisor reads the end of its stream, clears its pane to `sidebar: host went away` and `retrying in 1s`, then attaches to a successor host one of them starts. Check both a young host and one that has painted for over a minute: both follow notice-and-retry, with delays doubling to 60 seconds on repeated failures. Look on each tab, then repeat the `ps` and confirm one new host and the same supervisors. No supervisor paints cards while the host is unavailable. The successor host starts with no fold, so each sidebar paints the placeholder until its first fold arrives. When you time successive kills, wait more than 60 seconds between them. `RIMZ_TEST_SIDEBAR_STABLE_RUN_MS` shortens that window on a testkit build, but `sandbox room` strips every `RIMZ_*` variable from the room it holds, so it cannot be set there; space the kills instead. A kill that lands inside the previous host's first minute gets the doubled retry delay, not the 1 s first retry, and its timing measures the backoff.
 2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat leaves the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
@@ -168,6 +168,25 @@ Five checks cover what a unit test cannot:
    ```
 
    Expect `Notification test sent: 1`, one send to `host.<digest>.wake.sock`, and a new `bell_ring` decision for each of the three renderer instances. Compare them with `sidebar renderers --json`. Only the reviewer's tab rings: the daemon tab reports `daemon_view` and the unrelated shell tab reports `pane_not_in_view`. Notifications emit terminal control bytes, not a painted banner; a pane capture cannot prove delivery. On both tmux and Zellij, check the per-instance decisions at the consumer, then Look and Capture each tab to confirm it still paints.
+
+6. **Degraded room.** Make the shared refresh fail while the rest of the room's state stays readable. To do that, move the event log aside and put an unreadable directory at its path. Do not run `chmod 000` on the whole state directory: the producer reads an unreadable store as an empty room, so the cards fall back to generic rows and no alert is raised. With `SESSION` set as in check 5:
+
+   ```sh
+   LOG="$ROOT/home/.rimz/ws/$SESSION/log/events.log.jsonl"
+   mv "$LOG" "$LOG.held"
+   mkdir "$LOG"
+   chmod 000 "$LOG"
+   ```
+
+   Hold the fault for at least 40 seconds and Look at each tab during it. Every sidebar keeps its last cards under `⚠ Sidebar degraded for …: snapshot failed:`, with a reason that ends in `Permission denied (os error 13)`. No tab shows `sidebar: host went away`, and the `ps` above lists the same host and supervisors. Then restore the log:
+
+   ```sh
+   chmod 700 "$LOG"
+   rmdir "$LOG"
+   mv "$LOG.held" "$LOG"
+   ```
+
+   Within about two seconds, each sidebar paints fresh content under the dim `⚠ last alert …s ago` notice.
 
 ## Make one sidebar unresponsive
 
