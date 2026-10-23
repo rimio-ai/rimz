@@ -142,6 +142,10 @@ pub(crate) fn identity(kind: &str) -> anstyle::Style {
     THEME.identity(kind)
 }
 
+pub(crate) fn model_shade(kind: &str, step: usize) -> anstyle::Style {
+    THEME.style(resolve_provider_brand(kind, &THEME.providers).shade(&THEME.palette, step))
+}
+
 pub(crate) fn identity_name(kind: &str) -> String {
     resolve_provider_identity(kind, &THEME.providers).product_name
 }

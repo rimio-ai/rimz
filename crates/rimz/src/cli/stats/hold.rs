@@ -1,4 +1,5 @@
-use super::panel::{PanelGlyphs, render_panel, resolve_panel_glyphs};
+use super::dashboard::{Dashboard, TabAssists};
+use super::panel::{PanelGlyphs, resolve_panel_glyphs};
 use super::*;
 
 pub(super) struct RefreshWorker {
@@ -193,27 +194,28 @@ impl HeldStats {
         let mut frame = anstream::AutoStream::new(Vec::new(), choice);
         match (self.current.as_ref(), self.refresh_failure.as_deref()) {
             (Some(stats), _) => {
-                let today_day = stats.today_day(unix_secs_now());
-                let assists =
-                    AssistStats::load(&logs_dir(), self.active, Timestamp::now(), &stats.timezone);
-                render_panel(
-                    &mut frame,
-                    panel::PanelStats {
-                        usage: stats,
-                        assists: &assists,
-                        active: self.active,
-                    },
-                    today_day,
-                    self.dollars,
-                    &self.glyphs,
-                    true,
-                    "\n",
-                )?;
+                let records = rimz::harness::assist_log::recent(&logs_dir(), None);
+                let now = Timestamp::now();
+                let assists = TabAssists::from_records(records, now, &stats.timezone);
+                let dashboard = Dashboard {
+                    stats,
+                    assists: &assists,
+                    today: stats.today_day(now.as_second().max(0) as u64),
+                    dollars: self.dollars,
+                    glyphs: &self.glyphs,
+                };
+                let cols = render::terminal_columns(80);
+                let rows = stdout.is_terminal().then(|| render::terminal_rows(24));
+                frame.write_all(dashboard.frame(self.active, cols, rows).text.as_bytes())?;
             }
             (None, Some(error)) => panel::render_unavailable(&mut frame, error, "\n")?,
             (None, None) => return Ok(()),
         }
-        rimz::tui::replace_frame(w, &frame.into_inner())?;
+        let mut frame = frame.into_inner();
+        while frame.last() == Some(&b'\n') {
+            frame.pop();
+        }
+        rimz::tui::replace_frame(w, &frame)?;
         Ok(())
     }
 }

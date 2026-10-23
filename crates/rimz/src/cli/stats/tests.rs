@@ -3,6 +3,8 @@ use rimz::agents::spending::{EffortTally, EffortWindow};
 use rimz::theme::theme_glyphs;
 use std::path::{Path, PathBuf};
 
+mod held;
+
 #[test]
 fn window_flag_accepts_each_mode_and_rejects_assists() {
     let command = || StatsArgs::augment_args(clap::Command::new("stats"));
@@ -81,26 +83,33 @@ fn role_stats(
 }
 
 fn full_panel_text(stats: &Stats, held: bool) -> String {
-    let mut out = Vec::new();
     if held {
-        render_panel(
-            &mut out,
-            PanelStats {
-                usage: stats,
-                assists: &AssistStats::default(),
-                active: Window::Today,
-            },
+        return strip_ansi(&held_frame(
+            stats,
+            &AssistStats::default(),
+            Window::Today,
             20_000,
-            false,
-            &panel_glyphs(),
-            false,
-            "\n",
-        )
-        .unwrap();
-    } else {
-        panel::render_spend(&mut out, stats, 20_000, false, None, Window::Today, "\n").unwrap();
+        ));
     }
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, stats, 20_000, false, None, Window::Today, "\n").unwrap();
     strip_ansi(std::str::from_utf8(&out).unwrap())
+}
+
+fn held_frame(stats: &Stats, assists: &AssistStats, active: Window, today: i64) -> String {
+    dashboard::Dashboard {
+        stats,
+        assists: &dashboard::TabAssists {
+            tabs: std::array::from_fn(|_| assists.clone()),
+            earliest: None,
+            ..Default::default()
+        },
+        today,
+        dollars: false,
+        glyphs: &panel_glyphs(),
+    }
+    .frame(active, 119, None)
+    .text
 }
 
 fn effort_role(tally: SpendTally, effort: EffortWindow) -> rimz::agents::spending::RoleTally {
@@ -199,12 +208,24 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
         let stats = Stats::from_provider(cache);
         for held in [false, true] {
             let text = full_panel_text(&stats, held);
-            let agents = text
-                .find(if held { "Agents\n" } else { "Agents (" })
-                .expect(&text);
-            let teams = text
-                .find(if held { "Teams\n" } else { "Teams (" })
-                .expect(&text);
+            if held {
+                let row = text
+                    .lines()
+                    .find(|line| line.contains("recon"))
+                    .expect(&text);
+                assert!(text.contains("AGENT-TIME") && text.contains("MESSAGES"));
+                assert!(
+                    row.contains("$60") && row.contains("100%") && row.contains("6h12m"),
+                    "{row}"
+                );
+                assert!(row.contains(messages), "{row}");
+                for role in ["coder", "planner", "reviewer"] {
+                    assert!(!text.contains(role), "{text}");
+                }
+                continue;
+            }
+            let agents = text.find("Agents (").expect(&text);
+            let teams = text.find("Teams (").expect(&text);
             let children = text.find("Subagents").expect(&text);
             assert!(agents < teams && teams < children, "{text}");
             let row = text
@@ -218,12 +239,7 @@ fn teams_sum_seats_and_render_effort_without_role_rows() {
                     "panels never unfold team roles: {text}"
                 );
             }
-            if held {
-                assert!(
-                    !text.contains("ACTIVE") && !text.contains("MESSAGES"),
-                    "{text}"
-                );
-            } else {
+            {
                 assert!(
                     text.contains("ACTIVE") && text.contains("MESSAGES"),
                     "{text}"
@@ -357,7 +373,12 @@ fn effort_only_rows_survive_panels_and_json() {
         let stats = Stats::from_provider(cache);
         for held in [false, true] {
             let text = full_panel_text(&stats, held);
-            for section in ["Agents", "Teams", "Subagents"] {
+            let sections = if held {
+                &["Agents", "Subagents"][..]
+            } else {
+                &["Agents", "Teams", "Subagents"][..]
+            };
+            for section in sections {
                 assert!(
                     text.contains(section),
                     "effort alone admits {section}: {text}"
@@ -391,6 +412,11 @@ fn teams_cap_compact_rows_and_keep_effort_notes_after_the_last_section() {
     assert!(text.contains("2 other teams"), "{text}");
     for held in [false, true] {
         let text = full_panel_text(&stats, held);
+        if held {
+            assert!(!text.contains("active time and messages recorded since"));
+            assert!(text.contains("Where it went · roles recorded since Oct 04"));
+            continue;
+        }
         let note = text
             .find("active time and messages recorded since Oct 04")
             .expect(&text);
@@ -405,9 +431,7 @@ fn teams_cap_compact_rows_and_keep_effort_notes_after_the_last_section() {
 #[test]
 fn agent_sections_show_only_real_profiles_in_the_selected_window() {
     let bare = every_window(tally(100, 10.0, 1));
-    // A token-only profile is a held row but not a one-shot row, so it shows
-    // Agents only on the held panel.
-    for (profile, show_one_shot, show_held) in [
+    for (profile, show_one_shot, show_held_profile) in [
         (tally(100, 20.0, 1), false, false),
         (every_window(tally(100, 20.0, 1)), true, true),
         (every_window(tally(100, 0.0, 1)), false, true),
@@ -422,8 +446,13 @@ fn agent_sections_show_only_real_profiles_in_the_selected_window() {
         );
         for held in [false, true] {
             let text = full_panel_text(&stats, held);
-            let agents = if held { "Agents\n" } else { "Agents (" };
-            let show = if held { show_held } else { show_one_shot };
+            if held {
+                assert!(text.contains("Agents"));
+                assert_eq!(text.contains("builder"), show_held_profile, "{text}");
+                continue;
+            }
+            let agents = "Agents (";
+            let show = show_one_shot;
             assert_eq!(text.contains(agents), show, "{text}");
             assert!(text.contains("Providers"), "{text}");
             assert!(
@@ -440,15 +469,8 @@ fn agent_sections_show_only_real_profiles_in_the_selected_window() {
                     .unwrap();
                 assert!(section.contains("removed-plugin"), "{section}");
                 assert!(section.contains("builder"), "{section}");
-                if held {
-                    assert!(
-                        !section.contains("tok/s"),
-                        "profile rows have no held rate: {section}"
-                    );
-                } else {
-                    for column in ["SESSIONS", "TOKENS", "HIT", "TOK/S"] {
-                        assert!(section.contains(column), "{section}");
-                    }
+                for column in ["SESSIONS", "TOKENS", "HIT", "TOK/S"] {
+                    assert!(section.contains(column), "{section}");
                 }
             }
         }
@@ -473,6 +495,16 @@ fn role_note_follows_last_visible_profile_section() {
         );
         for held in [false, true] {
             let text = full_panel_text(&stats, held);
+            if held {
+                let note = text
+                    .find("Where it went · roles recorded since Oct 04")
+                    .expect(&text);
+                if let Some(last) = last {
+                    assert!(note < text.rfind(last).unwrap(), "{text}");
+                }
+                assert!(!text.contains("earlier spend shows under Providers only"));
+                continue;
+            }
             if let Some(last) = last {
                 let note = text.find("roles recorded since Oct 04").expect(&text);
                 assert!(text.rfind(last).unwrap() < note, "{text}");
@@ -493,7 +525,7 @@ fn empty_history_held_frame_omits_role_note() {
     let mut stats = role_stats(BTreeMap::new(), BTreeMap::new());
     stats.by_day.clear();
     let text = full_panel_text(&stats, true);
-    assert!(text.contains("No token usage recorded yet"));
+    assert!(text.contains("No agent sessions recorded on this machine yet."));
     assert!(!text.contains("recorded since"), "{text}");
 }
 
@@ -726,22 +758,7 @@ fn models_use_the_producing_kind_identity_on_both_surfaces() {
     let mut plain = Vec::new();
     panel::render_spend(&mut plain, &stats, 20_000, false, None, Window::Today, "\n").unwrap();
     assert!(String::from_utf8(plain).unwrap().contains(&expected));
-    let mut held = Vec::new();
-    render_panel(
-        &mut held,
-        PanelStats {
-            usage: &stats,
-            assists: &AssistStats::default(),
-            active: Window::Today,
-        },
-        20_000,
-        false,
-        &panel_glyphs(),
-        false,
-        "\n",
-    )
-    .unwrap();
-    assert!(String::from_utf8(held).unwrap().contains(&expected));
+    assert!(held_frame(&stats, &AssistStats::default(), Window::Today, 20_000).contains(&expected));
 }
 
 #[test]
@@ -882,64 +899,6 @@ fn provider_breakdowns_default_to_today() {
             .unwrap()
             .contains("Providers (today)")
     );
-}
-
-#[test]
-fn provider_rate_is_optional_and_full_tier_only() {
-    let text = |cells: &[StatCell], compact| {
-        let mut lines = Vec::new();
-        emit_stat_section(
-            &mut lines,
-            "Agents",
-            cells,
-            StatSectionLayout {
-                compact,
-                left_w: stat_left_width(&[cells, &[]], compact),
-                pct_w: stat_pct_width(&[cells, &[]]),
-                bar_w: 0,
-            },
-            &panel_glyphs(),
-        );
-        strip_ansi(&lines.join("\n"))
-    };
-    let timed = SpendBreakdown {
-        kind: "codex",
-        name: "Codex".into(),
-        window: SpendWindow {
-            timed_ms: 2_000,
-            timed_output: 100,
-            ..spend_window(200, 5.0, 100, 100, 0, 1)
-        },
-        share: 1.0,
-        folded: false,
-    };
-    let untimed = SpendBreakdown {
-        kind: "claude",
-        name: "Claude".into(),
-        window: spend_window(50, 1.0, 30, 20, 0, 1),
-        share: 0.2,
-        folded: false,
-    };
-    let rows = provider_cells(&[timed, untimed], 6, &panel_glyphs());
-    let full = text(&rows, false);
-    assert!(full.contains("50 tok/s"));
-    assert!(
-        full.lines()
-            .any(|line| line.contains("Claude") && line.contains('-'))
-    );
-    assert!(!text(&rows, true).contains("tok/s"));
-    let untimed = provider_cells(
-        &[SpendBreakdown {
-            kind: "codex",
-            name: "Codex".into(),
-            window: SpendWindow::default(),
-            share: 0.0,
-            folded: false,
-        }],
-        5,
-        &panel_glyphs(),
-    );
-    assert!(!text(&untimed, false).contains("tok/s"));
 }
 
 #[test]
@@ -1088,22 +1047,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
     assert!(!today.contains("Models (year)"));
     assert!(today.contains("RUNS"));
     assert!(!today.contains("MODEL"));
-    let mut held = Vec::new();
-    render_panel(
-        &mut held,
-        PanelStats {
-            usage: &stats,
-            assists: &assists,
-            active: Window::Year,
-        },
-        20_011,
-        false,
-        &panel_glyphs(),
-        true,
-        "\n",
-    )
-    .unwrap();
-    let held = String::from_utf8(held).unwrap();
+    let held = held_frame(&stats, &assists, Window::Year, 20_011);
     assert!(held.contains(TAGLINE));
     assert!(held.contains("Subagents"));
     assert!(strip_ansi(&held).contains("recorded since Oct 14"));
@@ -1865,11 +1809,12 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         effort_since_secs: None,
         teams: BTreeMap::new(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
+        chart: Default::default(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    stats.total.year.tokens = 42;
+    stats.total.year.usd = 42.0;
 
     state.accept_refresh(Ok(stats), &mut out).unwrap();
     assert!(state.has_frame());
@@ -1881,7 +1826,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     assert!(state.has_frame());
     assert!(state.has_refresh_failure());
     let frame = String::from_utf8(out.clone()).unwrap();
-    assert!(frame.contains("Year 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year $42"), "frame was {frame:?}");
     assert!(
         !frame.contains("Spending refresh unavailable"),
         "held frame must outrank the failure: {frame:?}"
@@ -1892,7 +1837,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
         .unwrap();
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("Year 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year $42"), "frame was {frame:?}");
 }
 
 #[test]
@@ -1920,6 +1865,7 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
                 effort_since_secs: None,
                 teams: BTreeMap::new(),
                 by_day: BTreeMap::new(),
+                chart: Default::default(),
                 by_model: BTreeMap::new(),
                 by_provider: BTreeMap::new(),
                 total: SpendTally::default(),
@@ -1992,18 +1938,19 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
         effort_since_secs: None,
         teams: BTreeMap::new(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
+        chart: Default::default(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    stats.total.year.tokens = 42;
+    stats.total.year.usd = 42.0;
     out.clear();
     state.accept_refresh(Ok(stats), &mut out).unwrap();
 
     assert!(state.has_frame());
     assert!(!state.has_refresh_failure());
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("Year 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year $42"), "frame was {frame:?}");
     assert!(!frame.contains("Spending refresh unavailable"));
 }
 
@@ -2032,6 +1979,7 @@ fn refresh_result_carries_success_error_and_panic() {
             effort_since_secs: None,
             teams: BTreeMap::new(),
             by_day: BTreeMap::new(),
+            chart: Default::default(),
             by_model: BTreeMap::new(),
             by_provider: BTreeMap::new(),
             total: SpendTally::default(),
@@ -2109,6 +2057,7 @@ fn heatmap_cells_render_spaced() {
         effort_since_secs: None,
         teams: BTreeMap::new(),
         by_day,
+        chart: Default::default(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
         total: SpendTally::default(),
@@ -2155,368 +2104,6 @@ fn month_row_skips_one_column_leading_partial_month() {
 }
 
 #[test]
-fn windows_lines_fold_cache_read_for_trailing_windows() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally {
-            week: spend_window(7, 0.0, 0, 0, 3, 0),
-            month: spend_window(30, 0.0, 0, 0, 20, 0),
-            year: spend_window(365, 0.0, 0, 0, 35, 0),
-            ..Default::default()
-        },
-    };
-    let mut lines = Vec::new();
-
-    windows_lines(&mut lines, &stats, None);
-
-    assert_eq!(lines.len(), 1);
-    let row = strip_ansi(&lines[0]);
-    assert!(!row.contains("All time"));
-    assert!(row.contains("Week 10"));
-    assert!(row.contains("Month 50"));
-    assert!(row.contains("Year 400"));
-    assert!(!row.contains('$'));
-    assert!(!row.contains('◇'));
-}
-
-#[test]
-fn windows_lines_paint_only_the_active_tab_as_a_chip() {
-    let mut stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    stats.total.week.tokens = 7;
-    stats.total.day.tokens = 1;
-    stats.total.day.cache_read = 2;
-    stats.total.headline.tokens = 999;
-    stats.total.month.tokens = 30;
-    stats.total.year.tokens = 365;
-    let mut lines = Vec::new();
-
-    windows_lines(&mut lines, &stats, Some(Window::Week));
-
-    let active_start = active_tab().render().to_string();
-    assert_eq!(lines[0].matches(&active_start).count(), 1);
-    assert!(lines[0].contains(&render::paint(active_tab(), " Week 7   ")));
-    let row = strip_ansi(&lines[0]);
-    assert!(!row.contains("All time"));
-    assert!(row.contains("Today 3"), "{row}");
-    assert!(row.find("Today").unwrap() < row.find("Week").unwrap());
-    assert!(row.contains("Week 7"));
-    assert!(row.contains("Month 30"));
-    assert!(row.contains("Year 365"));
-}
-
-#[test]
-fn panel_fit_preserves_data_before_header_chrome() {
-    let used = |plan: PanelPlan, assist_rows: usize, note_rows: usize| {
-        PANEL_FIXED_ROWS
-            + usize::from(plan.header) * PANEL_HEADER_ROWS
-            + usize::from(plan.model_rows > 0) * SECTION_CHROME_ROWS
-            + usize::from(plan.provider_rows > 0) * SECTION_CHROME_ROWS
-            + usize::from(plan.agent_rows > 0) * SECTION_CHROME_ROWS
-            + usize::from(plan.team_rows > 0) * SECTION_CHROME_ROWS
-            + usize::from(plan.subagent_rows > 0) * SECTION_CHROME_ROWS
-            + plan.model_rows
-            + plan.provider_rows
-            + plan.agent_rows
-            + plan.team_rows
-            + plan.subagent_rows
-            + usize::from(assist_rows > 0) * (2 + assist_rows)
-            + usize::from(plan.agent_rows > 0 || plan.team_rows > 0 || plan.subagent_rows > 0)
-                * note_rows
-    };
-
-    let all_five = fit(Some(55), true, [8, 10, 7, 6, 6], 0, 0);
-    assert!(all_five.header && all_five.team_rows >= 3, "{all_five:?}");
-    let teams_last = fit(Some(33), true, [8, 10, 7, 6, 6], 0, 2);
-    assert_eq!(teams_last.subagent_rows, 0);
-    assert_eq!(teams_last.agent_rows, 0);
-    assert!(teams_last.team_rows > 0, "{teams_last:?}");
-    let subagents_first = fit(Some(36), true, [8, 10, 7, 6, 6], 0, 2);
-    assert_eq!(subagents_first.subagent_rows, 0);
-    assert!(subagents_first.agent_rows > 0 && subagents_first.team_rows > 0);
-    for rows in 26..80 {
-        let plan = fit(Some(rows), true, [8, 10, 7, 6, 6], 0, 2);
-        assert!(used(plan, 0, 2) < rows, "{rows}: {plan:?}");
-        assert!(plan.subagent_rows == 0 || plan.agent_rows > 0);
-        assert!(plan.agent_rows == 0 || plan.team_rows > 0);
-    }
-
-    let tall = fit(Some(80), true, [4, 5, 4, 0, 3], 2, 0);
-    assert_eq!(
-        tall,
-        PanelPlan {
-            header: true,
-            model_rows: 4,
-            provider_rows: 5,
-            agent_rows: 4,
-            team_rows: 0,
-            subagent_rows: 3,
-        }
-    );
-    assert!(used(tall, 2, 0) <= 79);
-
-    let floor = fit(Some(49), true, [8, 10, 7, 0, 6], 0, 0);
-    assert_eq!(
-        floor,
-        PanelPlan {
-            header: true,
-            model_rows: 3,
-            provider_rows: 3,
-            agent_rows: 3,
-            team_rows: 0,
-            subagent_rows: 3,
-        }
-    );
-    assert!(used(floor, 0, 0) <= 48);
-
-    let without_header = fit(Some(40), true, [8, 10, 7, 0, 6], 0, 0);
-    assert_eq!(
-        without_header,
-        PanelPlan {
-            header: false,
-            model_rows: 3,
-            provider_rows: 3,
-            agent_rows: 3,
-            team_rows: 0,
-            subagent_rows: 3,
-        }
-    );
-    assert!(used(without_header, 0, 0) <= 39);
-
-    let very_short = fit(Some(32), true, [8, 10, 7, 0, 6], 0, 0);
-    assert_eq!(
-        very_short,
-        PanelPlan {
-            header: false,
-            model_rows: 1,
-            provider_rows: 1,
-            agent_rows: 1,
-            team_rows: 0,
-            subagent_rows: 1,
-        }
-    );
-    assert!(used(very_short, 0, 0) <= 31);
-
-    let no_subagents = fit(Some(31), true, [8, 10, 7, 0, 6], 0, 2);
-    assert!(!no_subagents.header);
-    assert_eq!(no_subagents.subagent_rows, 0);
-    assert_eq!(no_subagents.agent_rows, 1);
-    assert!(no_subagents.model_rows > 0 && no_subagents.provider_rows > 0);
-    assert!(used(no_subagents, 0, 2) <= 30);
-
-    let no_profiles = fit(Some(30), true, [8, 10, 7, 0, 6], 0, 2);
-    assert_eq!(no_profiles.subagent_rows, 0);
-    assert_eq!(no_profiles.agent_rows, 0);
-    assert!(no_profiles.model_rows > 0 && no_profiles.provider_rows > 0);
-    assert!(used(no_profiles, 0, 2) <= 29);
-
-    for note_rows in [0, 2] {
-        for rows in 26..80 {
-            let plan = fit(Some(rows), true, [8, 10, 7, 0, 6], 0, note_rows);
-            assert!(
-                used(plan, 0, note_rows) < rows,
-                "{rows}-row pane must not overflow: {plan:?}"
-            );
-            assert!(plan.model_rows > 0 && plan.provider_rows > 0);
-            assert!(plan.subagent_rows == 0 || plan.agent_rows > 0);
-        }
-    }
-
-    let no_breakdowns = fit(Some(24), true, [0; 5], 0, 0);
-    assert!(!no_breakdowns.header);
-    assert!(used(no_breakdowns, 0, 0) <= 23);
-
-    assert_eq!(
-        fit(None, true, [8, 10, 7, 0, 6], 2, 0),
-        PanelPlan {
-            header: true,
-            model_rows: MAX_MODELS,
-            provider_rows: MAX_SPEND_ROWS,
-            agent_rows: MAX_SPEND_ROWS,
-            team_rows: 0,
-            subagent_rows: MAX_SPEND_ROWS,
-        }
-    );
-    assert_eq!(
-        fit(Some(24), false, [8, 10, 7, 0, 6], 0, 0),
-        PanelPlan {
-            header: false,
-            model_rows: MAX_MODELS,
-            provider_rows: MAX_SPEND_ROWS,
-            agent_rows: MAX_SPEND_ROWS,
-            team_rows: 0,
-            subagent_rows: MAX_SPEND_ROWS,
-        }
-    );
-}
-
-#[test]
-fn model_cells_show_usd_and_cache_read_detail() {
-    let glyphs = panel_glyphs();
-    let spend = model_tally(1_700_000, 12.4, 1_200_000, 500_000, 2_500_000);
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            ("claude-opus-4-8".to_owned(), spend),
-            ("gpt-5".to_owned(), model_tally(1_950_000, 0.0, 0, 0, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-    let name_w = models
-        .iter()
-        .map(|(name, _, _)| display_width(name))
-        .max()
-        .unwrap_or(0);
-    let mut lines = Vec::new();
-
-    let cells = model_cells(
-        &models,
-        name_w,
-        &glyphs,
-        models.iter().map(|(_, spend, _)| spend.usd).sum(),
-    );
-    let pct_w = stat_pct_width(&[&cells, &[]]);
-    let layout = stat_section_layout(&[&cells, &[]], pct_w, 120);
-    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
-    let raw_row = lines
-        .iter()
-        .find(|line| line.contains("Opus 4.8"))
-        .expect("opus row");
-    assert!(raw_row.contains(&render::paint(render::palette::alarm(), "68%")));
-    let row = strip_ansi(raw_row);
-
-    assert!(row.contains("Opus 4.8"));
-    assert!(row.contains("100.0%"));
-    assert!(row.contains("$12"));
-    assert!(row.contains("↘ 1.2M"));
-    assert!(row.contains("↗ 500.0K"));
-    assert!(row.contains("◌ 2.5M"));
-    assert!(row.contains("· 68%"));
-}
-
-#[test]
-fn model_rate_column_is_windowed_optional_and_full_tier_only() {
-    let mut timed = model_tally(1_000, 10.0, 600, 400, 90);
-    timed.year.timed_ms = 6_000;
-    timed.year.timed_output = 400;
-    timed.week = timed.year.clone();
-    timed.week.timed_ms = 4_000;
-    let untimed = model_tally(500, 5.0, 400, 100, 0);
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_model: model_map([
-            ("timed".to_owned(), timed.clone()),
-            ("untimed".to_owned(), untimed.clone()),
-        ]),
-        by_day: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    let glyphs = panel_glyphs();
-    let render_rows = |models: &[(String, SpendWindow, String)], compact| {
-        let cells = model_cells(
-            models,
-            7,
-            &glyphs,
-            models.iter().map(|(_, spend, _)| spend.usd).sum(),
-        );
-        let mut lines = Vec::new();
-        emit_stat_section(
-            &mut lines,
-            "Models",
-            &cells,
-            StatSectionLayout {
-                compact,
-                left_w: stat_left_width(&[&cells, &[]], compact),
-                pct_w: stat_pct_width(&[&cells, &[]]),
-                bar_w: 0,
-            },
-            &glyphs,
-        );
-        lines
-            .into_iter()
-            .map(|line| strip_ansi(&line))
-            .collect::<Vec<_>>()
-    };
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-    let full = render_rows(&models, false);
-    assert!(full.iter().any(|row| row.contains("67 tok/s")));
-    assert!(
-        full.iter()
-            .any(|row| row.contains("Untimed") && row.contains("·        -"))
-    );
-    let compact = render_rows(&models, true);
-    assert!(compact.iter().all(|row| !row.contains("tok/s")));
-    let untimed_models = models
-        .iter()
-        .map(|(name, spend, kind)| {
-            (
-                name.clone(),
-                SpendWindow {
-                    timed_ms: 0,
-                    timed_output: 0,
-                    ..spend.clone()
-                },
-                kind.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(compact, render_rows(&untimed_models, true));
-    assert!(
-        render_rows(&untimed_models, false)
-            .iter()
-            .all(|row| !row.contains("tok/s"))
-    );
-    let week = render_rows(&model_breakdown(&stats, Window::Week, MAX_MODELS), false);
-    assert!(week.iter().any(|row| row.contains("100 tok/s")));
-    let other = render_rows(&model_breakdown(&stats, Window::Year, 1), false);
-    assert!(
-        other
-            .iter()
-            .any(|row| row.contains("Other") && row.contains("67 tok/s"))
-    );
-}
-
-#[test]
 fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let mut claude = tally(100, 1.0, 1);
     claude.year.input = 10;
@@ -2545,6 +2132,7 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         effort_since_secs: None,
         teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
+        chart: Default::default(),
         by_model: model_map([
             ("claude-opus-4-8".to_owned(), claude_model),
             ("output-only".to_owned(), model_tally(10, 1.0, 0, 10, 0)),
@@ -2578,267 +2166,6 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
 }
 
 #[test]
-fn model_breakdown_ranks_by_usd_before_tokens() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            (
-                "claude-opus-4-8".to_owned(),
-                model_tally(100, 12.0, 40, 60, 0),
-            ),
-            ("gpt-5".to_owned(), model_tally(1_000, 1.0, 400, 600, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-
-    assert_eq!(models[0].0, "Opus 4.8");
-    assert_eq!(models[1].0, "GPT 5");
-}
-
-#[test]
-fn model_breakdown_drops_models_without_selected_window_activity() {
-    let mut week_model = model_tally(1_000, 10.0, 400, 600, 90);
-    week_model.week = spend_window(100, 1.0, 40, 60, 9, 0);
-    let year_only = model_tally(2_000, 20.0, 800, 1_200, 180);
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            ("claude-opus-4-8".to_owned(), week_model),
-            ("gpt-5".to_owned(), year_only),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-
-    let models = model_breakdown(&stats, Window::Week, MAX_MODELS);
-
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0].0, "Opus 4.8");
-    assert_eq!(models[0].1.tokens, 100);
-    assert_eq!(models[0].1.cache_read, 9);
-}
-
-#[test]
-fn model_breakdown_reserves_the_last_capped_row_for_other() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
-            ("model-b".to_owned(), model_tally(400, 4.0, 400, 0, 0)),
-            ("model-c".to_owned(), model_tally(300, 3.0, 300, 0, 0)),
-            ("model-d".to_owned(), model_tally(200, 2.0, 200, 0, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-
-    let models = model_breakdown(&stats, Window::Year, 3);
-
-    assert_eq!(models.len(), 3);
-    assert_eq!(models[0].0, "Model A");
-    assert_eq!(models[1].0, "Model B");
-    assert_eq!(models[2].0, "Other");
-    assert_eq!(models[2].1.tokens, 500);
-    assert_eq!(models[2].1.usd, 5.0);
-}
-
-#[test]
-fn model_breakdown_folds_rows_below_one_percent_into_other() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
-            ("model-b".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
-            ("model-c".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
-            ("model-d".to_owned(), model_tally(25, 0.25, 25, 0, 0)),
-            ("model-e".to_owned(), model_tally(25, 0.25, 25, 0, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-
-    assert_eq!(model_breakdown_size(&stats, Window::Year), 4);
-    assert_eq!(
-        models
-            .iter()
-            .map(|(name, _, _)| name.as_str())
-            .collect::<Vec<_>>(),
-        ["Model A", "Model B", "Model C", "Other"]
-    );
-    assert_eq!(models[3].1.tokens, 50);
-    assert_eq!(models[3].1.input, 50);
-    assert_eq!(models[3].1.usd, 0.5);
-}
-
-#[test]
-fn model_breakdown_folds_unpriced_rows_by_work_token_share() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            ("model-a".to_owned(), model_tally(9_800, 0.0, 9_800, 0, 0)),
-            ("model-b".to_owned(), model_tally(150, 0.0, 150, 0, 0)),
-            ("model-c".to_owned(), model_tally(50, 0.0, 50, 0, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-
-    assert_eq!(
-        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
-        ["Model A", "Model B", "Other"]
-    );
-    assert_eq!(models[2].1.tokens, 50);
-    assert_eq!(models[2].1.usd, 0.0);
-    assert_eq!(model_breakdown_size(&stats, Window::Year), models.len());
-}
-
-fn dual_share_models() -> Stats {
-    Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            (
-                "model-a".into(),
-                model_tally(10_000, 400.0, 6_000, 4_000, 400_000),
-            ),
-            (
-                "model-b".into(),
-                model_tally(70_000, 40.0, 40_000, 30_000, 400_000),
-            ),
-            (
-                "model-c".into(),
-                model_tally(18_000, 6.07, 10_000, 8_000, 0),
-            ),
-            ("model-d".into(), model_tally(500, 5.65, 300, 200, 0)),
-            ("model-e".into(), model_tally(1_430, 0.12, 1_000, 430, 0)),
-            ("model-f".into(), model_tally(50, 0.10, 30, 20, 100)),
-            ("model-g".into(), model_tally(20, 0.06, 15, 5, 200)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: tally(100_000, 452.0, 0),
-    }
-}
-
-#[test]
-fn model_breakdown_names_work_token_share_without_cache_reads() {
-    let stats = dual_share_models();
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-
-    assert_eq!(
-        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
-        [
-            "Model A", "Model B", "Model C", "Model D", "Model E", "Other"
-        ]
-    );
-    assert_eq!(models[5].1, spend_window(70, 0.16, 45, 25, 300, 0));
-    assert!(models[5].2.is_empty());
-    assert_eq!(model_breakdown_size(&stats, Window::Year), 6);
-    let glyphs = panel_glyphs();
-    let cells = model_cells(&models, 7, &glyphs, stats.total.year.usd);
-    let layout = stat_section_layout(&[&cells], stat_pct_width(&[&cells]), 120);
-    let mut lines = Vec::new();
-    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
-    let token_row = lines.iter().find(|line| line.contains("Model E")).unwrap();
-    assert!(strip_ansi(token_row).contains("0.0%"));
-    assert_eq!(token_row.matches(glyphs.bar_filled.as_str()).count(), 0);
-}
-
-#[test]
-fn model_breakdown_cap_keeps_work_over_a_larger_dollar_share() {
-    let stats = dual_share_models();
-    let models = model_breakdown(&stats, Window::Year, 5);
-
-    assert_eq!(
-        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
-        ["Model A", "Model B", "Model C", "Model E", "Other"]
-    );
-    assert!((models[4].1.usd - 5.81).abs() < 1e-12);
-    let mut expected = spend_window(570, 0.0, 345, 225, 300, 0);
-    expected.usd = models[4].1.usd;
-    assert_eq!(models[4].1, expected);
-}
-
-#[test]
-fn model_breakdown_admits_dollar_only_rows_and_folds_unknown_models() {
-    let mut stats = dual_share_models();
-    stats.by_model = model_map([
-        ("model-a".into(), model_tally(0, 10.0, 0, 0, 0)),
-        ("model-b".into(), model_tally(200, 2.0, 150, 50, 0)),
-        (String::new(), model_tally(10_000, 100.0, 6_000, 4_000, 0)),
-        ("cache-only".into(), model_tally(0, 0.0, 0, 0, 1_000_000)),
-    ]);
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-
-    assert_eq!(
-        models.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
-        ["Model A", "Model B", "Other"]
-    );
-    assert_eq!(models[2].1, stats.by_model[""].tally.year);
-    assert_eq!(model_breakdown_size(&stats, Window::Year), models.len());
-    let all_folded = model_breakdown(&stats, Window::Year, 1);
-    assert_eq!(all_folded.len(), 1);
-    assert_eq!(all_folded[0].0, "Other");
-    assert_eq!(all_folded[0].1.usd, 112.0);
-    assert_eq!(all_folded[0].1.tokens, 10_200);
-    assert_eq!(all_folded[0].1.cache_read, 0);
-    assert!(model_breakdown(&stats, Window::Year, 0).is_empty());
-}
-
-#[test]
 fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
     let theme = ThemeConfig {
         style: Some(rimz::config::ThemeStyle::Modern),
@@ -2853,280 +2180,6 @@ fn modern_theme_flips_stats_token_glyphs_to_nerd_font() {
 fn agent_display_name_uses_descriptor_and_kind_fallback() {
     assert_eq!(agent_display_name("claude"), "Claude");
     assert_eq!(agent_display_name("mystery"), "Mystery");
-}
-
-#[test]
-fn provider_cells_rank_by_dollars_and_skip_empty_providers() {
-    let mut claude = tally(300, 3.0, 2);
-    claude.year.cache_read = 50;
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::from([
-            ("claude".to_owned(), claude),
-            ("codex".to_owned(), tally(100, 9.0, 4)),
-        ]),
-        total: tally(0, 12.0, 0),
-    };
-    let mut lines = Vec::new();
-    let glyphs = panel_glyphs();
-    let agents = provider_breakdown(&stats, Window::Year, Some(MAX_SPEND_ROWS));
-    let name_w = agents
-        .iter()
-        .map(|agent| display_width(&agent.name))
-        .max()
-        .unwrap_or(0);
-
-    let cells = provider_cells(&agents, name_w, &glyphs);
-    let pct_w = stat_pct_width(&[&[], &cells]);
-    let layout = stat_section_layout(&[&[], &cells], pct_w, 120);
-    emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
-
-    assert!(lines[0].contains("Agents"));
-    let codex = lines
-        .iter()
-        .position(|line| line.contains("Codex"))
-        .expect("codex row");
-    let claude = lines
-        .iter()
-        .position(|line| line.contains("Claude"))
-        .expect("claude row");
-    assert!(codex < claude, "larger trailing-year dollar spend leads");
-    let codex = strip_ansi(&lines[codex]);
-    let claude = strip_ansi(&lines[claude]);
-    assert!(codex.contains("$9.00 · ◎ 4 · ◇ 100"), "{codex:?}");
-    assert!(codex.contains("75.0%"));
-    assert!(!codex.contains("sess"));
-    assert!(!codex.contains("(66.7%)"));
-    assert!(claude.contains("$3.00 · ◎ 2 · ◇ 350"), "{claude:?}");
-    assert!(claude.contains("◇ 350 · 100%"));
-    assert!(claude.contains("25.0%"));
-
-    let empty_cells = provider_cells(&[], 0, &glyphs);
-    let mut empty_lines = Vec::new();
-    emit_stat_section(
-        &mut empty_lines,
-        "Agents",
-        &empty_cells,
-        StatSectionLayout {
-            compact: false,
-            left_w: 0,
-            pct_w: 0,
-            bar_w: MIN_SHARE_BAR_WIDTH,
-        },
-        &glyphs,
-    );
-    assert!(empty_lines.is_empty());
-}
-
-#[test]
-fn provider_breakdown_folds_tail_totals_into_other() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::from([
-            ("agent-a".to_owned(), tally(500, 5.0, 5)),
-            ("agent-b".to_owned(), tally(400, 4.0, 4)),
-            ("agent-c".to_owned(), tally(300, 3.0, 3)),
-            ("agent-d".to_owned(), tally(200, 2.0, 2)),
-            ("agent-e".to_owned(), tally(100, 1.0, 1)),
-        ]),
-        total: tally(0, 15.0, 0),
-    };
-
-    let agents = provider_breakdown(&stats, Window::Year, Some(3));
-
-    assert_eq!(agents.len(), 3);
-    assert_eq!(agents[0].window.sessions, 5);
-    assert_eq!(agents[1].window.sessions, 4);
-    let other = &agents[2];
-    assert_eq!(other.name, "Other");
-    assert!(other.folded);
-    assert_eq!(other.window.sessions, 6);
-    assert_eq!(other.window.tokens, 600);
-    assert_eq!(other.window.usd, 6.0);
-    assert!((other.share - 0.4).abs() < f64::EPSILON);
-
-    let glyphs = panel_glyphs();
-    let cells = provider_cells(&agents, "Agent A".len(), &glyphs);
-    let layout = stat_section_layout(&[&[], &cells], stat_pct_width(&[&[], &cells]), 120);
-    let mut lines = Vec::new();
-    emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
-    let other = lines
-        .iter()
-        .find(|line| line.contains("Other"))
-        .expect("folded row");
-    assert!(other.contains(&render::paint(render::palette::muted(), "●")));
-    assert!(other.contains(&render::paint(render::palette::muted(), "Other")));
-
-    let all = provider_breakdown(&stats, Window::Year, None);
-    assert_eq!(all.len(), 5, "uncapped JSON data stays complete");
-}
-
-#[test]
-fn provider_breakdown_folds_rows_below_one_percent_into_other() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::from([
-            ("agent-a".to_owned(), tally(9_800, 98.0, 196)),
-            ("agent-b".to_owned(), tally(100, 1.0, 2)),
-            ("agent-c".to_owned(), tally(50, 0.5, 1)),
-            ("agent-d".to_owned(), tally(25, 0.25, 1)),
-        ]),
-        total: tally(0, 100.0, 0),
-    };
-
-    let agents = provider_breakdown(&stats, Window::Year, Some(MAX_SPEND_ROWS));
-
-    assert_eq!(provider_breakdown_size(&stats, Window::Year), 3);
-    assert_eq!(
-        agents
-            .iter()
-            .map(|agent| agent.name.as_str())
-            .collect::<Vec<_>>(),
-        ["Agent-a", "Agent-b", "Other"]
-    );
-    assert_eq!(agents[1].window.sessions, 2, "one percent stays named");
-    assert_eq!(agents[2].window.sessions, 2);
-    assert_eq!(agents[2].window.tokens, 75);
-    assert_eq!(agents[2].window.usd, 0.75);
-    assert!((agents[2].share - 0.0075).abs() < f64::EPSILON);
-
-    let all = provider_breakdown(&stats, Window::Year, None);
-    assert_eq!(all.len(), 4, "uncapped JSON data stays complete");
-    assert!(all.iter().all(|agent| !agent.folded));
-}
-
-#[test]
-fn provider_breakdown_names_work_and_folds_unpriced_tail() {
-    let mut stats = dual_share_models();
-    stats.by_provider = BTreeMap::from([
-        ("agent-a".into(), tally(9_000, 90.0, 9)),
-        ("agent-b".into(), tally(800, 10.0, 8)),
-        ("agent-c".into(), tally(150, 0.0, 2)),
-        ("agent-d".into(), tally(50, 0.0, 1)),
-    ]);
-    stats.total = tally(1_000_000, 100.0, 20);
-    let agents = provider_breakdown(&stats, Window::Year, Some(MAX_SPEND_ROWS));
-
-    assert_eq!(
-        agents
-            .iter()
-            .map(|row| row.name.as_str())
-            .collect::<Vec<_>>(),
-        ["Agent-a", "Agent-b", "Agent-c", "Other"]
-    );
-    assert_eq!(agents[2].share, 0.0);
-    assert!(!agents[2].folded);
-    assert_eq!(agents[3].window, stats.by_provider["agent-d"].year);
-    assert_eq!(agents[3].share, 0.0);
-    assert!(agents[3].folded);
-    assert_eq!(provider_breakdown_size(&stats, Window::Year), agents.len());
-}
-
-#[test]
-fn provider_breakdown_cap_keeps_earlier_display_rows_at_equal_significance() {
-    let mut stats = dual_share_models();
-    stats.by_provider = BTreeMap::from([
-        ("agent-a".into(), tally(9_700, 100.0, 9)),
-        ("agent-b".into(), tally(100, 0.0, 1)),
-        ("agent-c".into(), tally(100, 0.0, 2)),
-        ("agent-d".into(), tally(100, 0.0, 3)),
-    ]);
-    let agents = provider_breakdown(&stats, Window::Year, Some(3));
-
-    assert_eq!(
-        agents
-            .iter()
-            .map(|row| row.name.as_str())
-            .collect::<Vec<_>>(),
-        ["Agent-a", "Agent-b", "Other"]
-    );
-    assert_eq!(agents[2].window.tokens, 200);
-    assert_eq!(agents[2].window.sessions, 5);
-    assert!(agents[2].folded);
-    assert_eq!(provider_breakdown_size(&stats, Window::Year), 4);
-}
-
-#[test]
-fn profile_breakdown_folds_against_profile_spend_not_fleet() {
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::from([
-            ("implementer".to_owned(), role_tally(tally(500, 0.5, 5))),
-            ("explorer".to_owned(), role_tally(tally(300, 0.3, 3))),
-            ("finder".to_owned(), role_tally(tally(1, 0.001, 1))),
-        ]),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: tally(0, 100.0, 0),
-    };
-
-    let tallies = RoleView::Subagents.rows(&stats, Window::Year);
-    let rows = profile_breakdown(&tallies, stats.total.year.usd, Some(MAX_SPEND_ROWS));
-
-    assert_eq!(
-        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-        ["implementer", "explorer", "Other"],
-        "profiles under 1% of the fleet stay named; only the section's own tail folds"
-    );
-    assert!(
-        (rows[0].share - 0.005).abs() < f64::EPSILON,
-        "share stays fleet-relative"
-    );
-}
-
-#[test]
-fn profile_breakdown_names_the_sections_work_and_unpriced_profiles() {
-    let mut stats = dual_share_models();
-    stats.subagents = BTreeMap::from([
-        ("implementer".into(), role_tally(tally(9_700, 99.8, 9))),
-        ("explorer".into(), role_tally(tally(200, 0.2, 2))),
-        ("finder".into(), role_tally(tally(100, 0.0, 1))),
-    ]);
-    stats.total = tally(1_000_000, 1_000.0, 100);
-    let tallies = RoleView::Subagents.rows(&stats, Window::Year);
-    let rows = profile_breakdown(&tallies, stats.total.year.usd, Some(MAX_SPEND_ROWS));
-
-    assert_eq!(
-        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-        ["implementer", "explorer", "finder"]
-    );
-    assert!((rows[1].share - 0.0002).abs() < f64::EPSILON);
-    assert_eq!(rows[2].share, 0.0);
-    assert!(rows.iter().all(|row| !row.folded));
 }
 
 #[test]
@@ -3151,7 +2204,7 @@ fn stats_json_lists_unpriced_usage_without_folding_or_empty_windows() {
             every_window(model_tally(0, 0.0, 0, 0, 1_000_000)),
         ),
     ]);
-    let mut stats = dual_share_models();
+    let mut stats = role_stats(BTreeMap::new(), BTreeMap::new());
     stats.by_model = rows
         .iter()
         .map(|(id, tally)| (id.clone(), produced(tally.clone())))
@@ -3213,206 +2266,7 @@ fn stats_json_lists_unpriced_usage_without_folding_or_empty_windows() {
 }
 
 #[test]
-fn share_bar_fills_proportionally() {
-    let glyphs = panel_glyphs();
-    let counts = |share| {
-        let bar = strip_ansi(&share_bar(share, MIN_SHARE_BAR_WIDTH, &glyphs));
-        (
-            bar.matches(glyphs.bar_filled.as_str()).count(),
-            bar.matches(glyphs.bar_track.as_str()).count(),
-        )
-    };
-
-    assert_eq!(counts(0.0), (0, MIN_SHARE_BAR_WIDTH));
-    assert_eq!(counts(100.0), (MIN_SHARE_BAR_WIDTH, 0));
-    assert_eq!(counts(46.6), (5, 5));
-}
-
-#[test]
-fn stat_share_bar_stretches_to_panel_width() {
-    let glyphs = panel_glyphs();
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([
-            (
-                "claude-opus-4-8".to_owned(),
-                model_tally(1_000, 12.0, 200, 800, 50),
-            ),
-            ("gpt-5".to_owned(), model_tally(1_000, 0.0, 0, 0, 0)),
-        ]),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-    let name_w = models
-        .iter()
-        .map(|(name, _, _)| display_width(name))
-        .max()
-        .unwrap_or(0);
-    let cells = model_cells(
-        &models,
-        name_w,
-        &glyphs,
-        models.iter().map(|(_, spend, _)| spend.usd).sum(),
-    );
-    let pct_w = stat_pct_width(&[&cells, &[]]);
-    let panel_width = 120;
-    let layout = stat_section_layout(&[&cells, &[]], pct_w, panel_width);
-    let mut lines = Vec::new();
-
-    assert!(layout.bar_w > 0);
-    emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
-    let row = strip_ansi(
-        lines
-            .iter()
-            .find(|line| line.contains("Opus 4.8"))
-            .expect("model row"),
-    );
-
-    assert_eq!(display_width(&row), panel_width);
-}
-
-#[test]
-fn stat_sections_share_a_percent_column() {
-    let glyphs = panel_glyphs();
-    let stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: model_map([(
-            "claude-opus-4-8".to_owned(),
-            model_tally(1_000, 12.0, 200, 800, 50),
-        )]),
-        by_provider: BTreeMap::from([("claude".to_owned(), tally(1_000, 12.0, 4))]),
-        total: tally(0, 12.0, 0),
-    };
-    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
-    let agents = provider_breakdown(&stats, Window::Year, Some(MAX_SPEND_ROWS));
-    let name_w = models
-        .iter()
-        .map(|(name, _, _)| display_width(name))
-        .chain(agents.iter().map(|agent| display_width(&agent.name)))
-        .max()
-        .unwrap_or(0);
-    let model_rows = model_cells(
-        &models,
-        name_w,
-        &glyphs,
-        models.iter().map(|(_, spend, _)| spend.usd).sum(),
-    );
-    let agent_rows = provider_cells(&agents, name_w, &glyphs);
-    let pct_w = stat_pct_width(&[&model_rows, &agent_rows]);
-    let layout = stat_section_layout(&[&model_rows, &agent_rows], pct_w, 120);
-    let mut lines = Vec::new();
-
-    emit_stat_section(&mut lines, "Models", &model_rows, layout, &glyphs);
-    emit_stat_section(&mut lines, "Agents", &agent_rows, layout, &glyphs);
-    let model = strip_ansi(
-        lines
-            .iter()
-            .find(|line| line.contains("Opus 4.8"))
-            .expect("model row"),
-    );
-    let agent = strip_ansi(
-        lines
-            .iter()
-            .find(|line| line.contains("Claude"))
-            .expect("agent row"),
-    );
-    let pct_col = |line: &str| {
-        display_width(
-            line.get(..line.rfind("100.0%").expect("share percentage"))
-                .unwrap(),
-        )
-    };
-
-    assert_eq!(pct_col(&model), pct_col(&agent));
-}
-
-#[test]
-fn insights_sessions_line_has_no_glyph() {
-    let mut stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    stats.total.year.sessions = 7;
-    let mut lines = Vec::new();
-
-    insights_lines(&mut lines, &stats, 0, 80, Window::Year);
-
-    let row = strip_ansi(&lines[0]);
-    let modern_glyphs = resolve_panel_glyphs(&ThemeConfig {
-        style: Some(rimz::config::ThemeStyle::Modern),
-        ..Default::default()
-    });
-    assert!(row.trim_start().starts_with("Sessions: 7"));
-    assert!(!row.contains('◎'));
-    assert!(!row.contains(modern_glyphs.sessions.as_str()));
-}
-
-#[test]
-fn insights_sessions_scope_to_the_active_window() {
-    let mut stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    stats.total.week.sessions = 2;
-    stats.total.week.usd = 12.0;
-    stats.total.year.sessions = 7;
-    stats.total.year.usd = 99.0;
-    stats.by_day.insert(0, day(1, 12.0));
-    let mut lines = Vec::new();
-
-    insights_lines(&mut lines, &stats, 0, 80, Window::Week);
-
-    let row = strip_ansi(&lines[0]);
-    assert!(
-        row.trim_start().starts_with("Sessions: 2"),
-        "row was {row:?}"
-    );
-    assert!(row.contains("$12"), "row was {row:?}");
-    assert!(!row.contains("$99"), "row was {row:?}");
-    let rendered = strip_ansi(&lines.join("\n"));
-    assert!(rendered.contains("Cost/session: $6.00"), "{rendered}");
-    assert!(rendered.contains("Daily avg: $12.00"), "{rendered}");
-}
-
-#[test]
-fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
+fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
     let today = 20_000;
     let mut current = tally(900, 60.0, 10);
     current.day = spend_window(30, 12.0, 20, 10, 5, 2);
@@ -3432,6 +2286,7 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
             (today - 1, day(50, 18.0)),
             (today - 100, day(900, 30.0)),
         ]),
+        chart: Default::default(),
         by_model: model_map([
             ("current-model".into(), current.clone()),
             ("old-model".into(), old.clone()),
@@ -3440,44 +2295,18 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
         total: current,
     };
     let active = Window::Week.prev();
-    let models = model_breakdown(&stats, active, MAX_MODELS);
-    assert_eq!(
-        models.len(),
-        1,
-        "only today's model belongs in the breakdown"
-    );
-    assert_eq!(models[0].1, stats.total.day);
-    let agents = provider_breakdown(&stats, active, Some(MAX_SPEND_ROWS));
+    let agents = provider_breakdown(&stats, active);
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].window, stats.total.day);
-    let mut out = Vec::new();
-    render_panel(
-        &mut out,
-        PanelStats {
-            usage: &stats,
-            assists: &AssistStats::default(),
-            active,
-        },
-        today,
-        false,
-        &panel_glyphs(),
-        false,
-        "\n",
-    )
-    .unwrap();
-    let rendered = strip_ansi(std::str::from_utf8(&out).unwrap());
+    let rendered = strip_ansi(&held_frame(&stats, &AssistStats::default(), active, today));
     for expected in [
-        "Today 35",
-        "Current Model",
+        "Today $12",
+        "Current Mod",
         "Codex",
-        "Sessions: 2",
-        "Cost/session: $6.00",
-        "Spend: $12.00",
-        "Active days: 2/28",
-        "Most active day:",
-        "Longest streak: 2 days",
-        "Current streak: 2 days",
-        "Daily avg: $20.00",
+        "today $12 so far · yesterday $18",
+        "2 of last 28 days active",
+        "streak 2 days",
+        "busiest",
     ] {
         assert!(
             rendered.contains(expected),
@@ -3485,7 +2314,7 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
         );
     }
     assert!(rendered.contains(&fmt_day(today - 100)), "{rendered}");
-    for absent in ["Old Model", "Claude", "vs prior", "$50", "$60"] {
+    for absent in ["Old Model", "Claude", "vs prior", "$50"] {
         assert!(
             !rendered.contains(absent),
             "unexpected {absent}: {rendered}"
@@ -3494,64 +2323,24 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
 }
 
 #[test]
-fn insights_append_the_prior_window_spend_trend() {
-    let today = 20_000;
-    let mut stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::new(),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    for back in 0..7 {
-        stats.by_day.insert(today - back, day(1, 2.0));
-        stats.by_day.insert(today - 7 - back, day(1, 1.0));
-    }
-    stats.total.week.usd = 14.0;
-    let mut lines = Vec::new();
-
-    insights_lines(&mut lines, &stats, today, 80, Window::Week);
-
-    let rendered = strip_ansi(&lines.join("\n"));
+fn model_rate_column_is_windowed_and_other_is_untimed_on_dashboard() {
+    let (stats, assists) = held::fixture();
+    let year = strip_ansi(&held::frame(&stats, &assists, Window::Year, 119, None).text);
+    let week = strip_ansi(&held::frame(&stats, &assists, Window::Week, 119, None).text);
     assert!(
-        rendered.contains("Spend: $14.00 (↑100% vs prior week)"),
-        "{rendered}"
+        year.lines()
+            .any(|line| line.contains("Fable 5.1")
+                && line.split_whitespace().any(|cell| cell == "50"))
     );
-    assert!(rendered.contains("Cost/session: —"), "{rendered}");
-}
-
-#[test]
-fn year_daily_average_keeps_recent_activity() {
-    let today = 20_000;
-    let mut stats = Stats {
-        timezone: "UTC".into(),
-        refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
-        agents: BTreeMap::new(),
-        subagents: BTreeMap::new(),
-        recorded_since_secs: None,
-        effort_since_secs: None,
-        teams: BTreeMap::new(),
-        by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
-        by_model: BTreeMap::new(),
-        by_provider: BTreeMap::new(),
-        total: SpendTally::default(),
-    };
-    stats.total.year.usd = 12.0;
-    let mut lines = Vec::new();
-
-    insights_lines(&mut lines, &stats, today, 80, Window::Year);
-
-    let rendered = strip_ansi(&lines.join("\n"));
-    assert!(rendered.contains("Active days: 1/28"), "{rendered}");
-    assert!(rendered.contains("Daily avg: $6.00"), "{rendered}");
+    let week_model = week
+        .lines()
+        .find(|line| line.contains("Opus 5.5") && !line.contains("Other"))
+        .expect(&week);
+    assert!(week_model.contains('–'), "{week_model}");
+    assert!(
+        year.lines()
+            .any(|line| line.contains("Other") && line.contains('–'))
+    );
 }
 
 #[test]
@@ -3971,7 +2760,7 @@ fn idle_compact_assist_renders_threshold_and_accepts_legacy_record() {
 #[test]
 fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
     let mut lines = Vec::new();
-    panel_lines(&mut lines, &AssistStats::default(), 80);
+    panel_lines(&mut lines, &AssistStats::default(), 80, "Assists");
     assert!(lines.is_empty());
 
     let stats = AssistStats {
@@ -4001,7 +2790,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             "Auto-resume: 2 (7 agents)",
         ]
     );
-    panel_lines(&mut lines, &stats, 80);
+    panel_lines(&mut lines, &stats, 80, "Assists");
     assert_eq!(lines.len(), 3, "header plus two paired count rows");
     let panel = strip_ansi(&lines.join("\n"));
     assert!(panel.contains("Assists"));
@@ -4039,7 +2828,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
         }],
     };
     lines.clear();
-    panel_lines(&mut lines, &failed_only, 80);
+    panel_lines(&mut lines, &failed_only, 80, "Assists");
     assert!(lines.is_empty());
 }
 
@@ -4206,6 +2995,7 @@ fn today_index_uses_the_publications_zone() {
         effort_since_secs: None,
         teams: BTreeMap::new(),
         by_day: BTreeMap::new(),
+        chart: Default::default(),
         by_model: BTreeMap::new(),
         by_provider: BTreeMap::new(),
         total: SpendTally::default(),

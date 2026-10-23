@@ -1,0 +1,14 @@
+---
+source: crates/rimz/src/cli/stats/tests/held.rs
+expression: "strip_ansi(&frame(&stats, &assists, Window::Today, 119, Some(76)).text)"
+---
+                                           ██████╗ ██╗███╗   ███╗  ███████╗
+                                           ██╔══██╗██║████╗ ████║  ╚══███╔╝
+                                           ██████╔╝██║██╔████╔██║    ███╔╝
+                                           ██╔══██╗██║██║╚██╔╝██║   ███╔╝
+                                           ██║  ██║██║██║ ╚═╝ ██║  ███████╗
+                                           ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚══════╝
+                                        The control room for your coding agents
+
+   No agent sessions recorded on this machine yet.
+   Spend appears here after your first agent session; rimz stats reads it from each agent's own session files.

@@ -1,7 +1,7 @@
 //! `rimz stats` — account-global spend, local-day activity, and model,
 //! provider, solo-profile, team, and subagent-profile breakdowns, readable in or out
 //! of a room or project.
-//! The wordmark and activity insights remain in the held dashboard.
+//! The held dashboard adds a model spend chart and compact activity summary.
 //! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
@@ -55,16 +55,8 @@ const MAX_WEEKS: usize = 52;
 const MIN_WEEKS: usize = 4;
 /// Left weekday-label column width (`"  Wed "`).
 const GUTTER: usize = 6;
-/// Breakdown rows shown before the tail folds into the final "Other" row.
-const MAX_MODELS: usize = 6;
-const MAX_SPEND_ROWS: usize = 6;
-/// A named breakdown row must carry at least one percent of its section's
-/// dollars or work tokens (input plus output, excluding cache reads).
-const MIN_BREAKDOWN_SHARE: f64 = 0.01;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
-const MIN_SHARE_BAR_WIDTH: usize = 10;
-const STAT_GUTTER: usize = 3;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const EMPTY_REFRESH_RETRY: Duration = Duration::from_secs(5);
 const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
@@ -318,6 +310,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 mod assists;
+mod dashboard;
 mod fmt;
 mod hold;
 mod json;
@@ -340,6 +333,7 @@ struct Stats {
     recorded_since_secs: Option<u64>,
     effort_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
+    chart: rimz::agents::spending::ChartSpend,
     by_model: BTreeMap<String, ModelTally>,
     by_provider: BTreeMap<String, SpendTally>,
     total: SpendTally,
@@ -355,6 +349,7 @@ impl Stats {
             refreshed_at_ms,
             day_cutoff_secs,
             roles,
+            chart,
             ..
         } = cache;
         let Spending {
@@ -370,6 +365,7 @@ impl Stats {
             recorded_since_secs: roles.recorded_since_secs,
             effort_since_secs: roles.effort_since_secs,
             by_day: days,
+            chart,
             by_model: models,
             by_provider,
             total,

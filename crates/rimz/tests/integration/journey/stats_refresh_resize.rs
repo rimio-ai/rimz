@@ -258,12 +258,20 @@ pub(super) fn wait_for_tagline_col(
     pred: impl Fn(usize) -> bool,
     budget: Duration,
 ) -> Option<usize> {
+    wait_for_screen(parser, |text| tagline_col(text).is_some_and(&pred), budget)
+        .and_then(|text| tagline_col(&text))
+}
+
+pub(super) fn wait_for_screen(
+    parser: &Arc<Mutex<vt100::Parser>>,
+    pred: impl Fn(&str) -> bool,
+    budget: Duration,
+) -> Option<String> {
     let deadline = Instant::now() + budget;
     loop {
-        if let Some(col) = tagline_col(&screen(parser))
-            && pred(col)
-        {
-            return Some(col);
+        let text = screen(parser);
+        if pred(&text) {
+            return Some(text);
         }
         if Instant::now() >= deadline {
             return None;
