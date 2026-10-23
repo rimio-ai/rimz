@@ -298,7 +298,8 @@ fn probe_accounts(
     let unavailable_count = batch.results.len().saturating_sub(success_count);
     for result in &batch.results {
         if result.outcome_class == ProbeOutcomeClass::Unavailable {
-            tracing::warn!(
+            tracing::info!(
+                target: crate::observability::BREADCRUMB_TARGET,
                 kind = result.key.kind.as_str(),
                 tags.operation = "accounts.probe_unavailable",
                 "provider account probe unavailable",

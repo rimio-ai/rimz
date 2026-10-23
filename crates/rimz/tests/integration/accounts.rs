@@ -42,6 +42,38 @@ fn unsupported_login_check_does_not_claim_logout() {
 }
 
 #[test]
+fn unavailable_login_probe_keeps_accounts_stderr_quiet() {
+    let env = Env::new();
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        "case \"$1\" in --version) echo 2.1.304;; auth) exit 42;; esac",
+    );
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["hooks", "install", "claude"])
+            .output()
+            .unwrap(),
+    );
+    let plain = accounts(&env, &["--refresh"]);
+    succeeded(&plain);
+    assert!(
+        plain.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let alias = hermetic(&env, &mut env.rimz())
+        .args(["providers", "--refresh"])
+        .output()
+        .unwrap();
+    succeeded(&alias);
+    assert_eq!(
+        String::from_utf8_lossy(&alias.stderr),
+        "rimz: warning: `rimz providers` is deprecated and goes in the next release; use `rimz accounts` (`rimz accounts show <kind>` for one provider)\n"
+    );
+}
+
+#[test]
 fn bare_accounts_runs_list() {
     let env = Env::new();
     let bare = succeeded(&accounts(&env, &[]));
