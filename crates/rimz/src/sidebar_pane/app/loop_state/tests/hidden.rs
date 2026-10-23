@@ -184,7 +184,7 @@ fn defer_name(rig: &mut Rig, name: &str) {
     rig.lazy_fold(snapshot, SnapshotSource::Produced);
     assert_eq!(
         rig.state.content_applications, before,
-        "hidden content stays in the mailbox"
+        "hidden content stays unread in the views"
     );
 }
 

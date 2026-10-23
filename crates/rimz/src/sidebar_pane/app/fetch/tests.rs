@@ -2462,11 +2462,9 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
         );
         fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
         worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
-        let update = advancing_rx
-            .try_recv()
-            .expect("unrelated subscriber keeps advancing");
-        assert_eq!(shown_panes(&update), ["terminal_7", &newest]);
-        assert!(advancing_rx.try_recv().is_err());
+        let updates = advancing_rx.take();
+        assert_eq!(updates.len(), 1, "unrelated subscriber keeps advancing");
+        assert_eq!(shown_panes(&updates[0]), ["terminal_7", &newest]);
     }
     assert_eq!(
         stalled_rx

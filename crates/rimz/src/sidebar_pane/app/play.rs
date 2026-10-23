@@ -277,7 +277,7 @@ impl Column {
         })
     }
 
-    fn send(&mut self, scenario: &Scenario) -> Result<()> {
+    fn send(&mut self, scenario: &Scenario) {
         let mut snapshot = scenario.at(self.at);
         if matches!(self.surface, Surface::Text) {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
@@ -294,7 +294,6 @@ impl Column {
             source: SnapshotSource::Produced,
         });
         self.state.completion.store(true, Ordering::Relaxed);
-        Ok(())
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {
@@ -303,7 +302,7 @@ impl Column {
             self.state
                 .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
         if self.requests.try_iter().count() > 0 {
-            self.send(scenario)?;
+            self.send(scenario);
             let result =
                 self.state
                     .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
@@ -359,7 +358,7 @@ impl Column {
                     .filter(|index| matches!(scenario.beats[*index].action, Action::Ui(_))),
             );
             if changed {
-                self.send(scenario)?;
+                self.send(scenario);
             }
             let mut painted = self.advance(scenario)?;
             if !painted && !self.pending_ui.is_empty() {
