@@ -79,13 +79,86 @@ fn start_check(env: &Env) -> std::process::Child {
 }
 
 #[test]
+fn stop_of_a_check_only_holder_skips_grace_after_its_definition_changes() {
+    let mut durations = Vec::new();
+    for removed in [false, true] {
+        let env = fixture("replace", None);
+        terminating_check(&env);
+        let mut runner = start_check(&env);
+        std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+        let redefined = format!(
+            "[tasks.busy]\nroot={:?}\nagent='claude'\nprompt='work'\nsignal='trunk.moved'\noverlap='replace'\n",
+            env.project_root
+        );
+        write_loop_config(&env, if removed { "" } else { &redefined });
+        let started = Instant::now();
+        let output = env.rimz().args(["loop", "stop", "busy"]).output().unwrap();
+        durations.push(started.elapsed());
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("stopped · SIGTERM"),
+            "{output:?}"
+        );
+        assert_eq!(runner.wait().unwrap().code(), Some(130));
+        assert!(env.project_root.join("check-ended").exists());
+        let rows = read_loop_run_records(&env);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].result, LoopRunResult::Canceled, "{rows:?}");
+    }
+    assert!(
+        durations
+            .iter()
+            .all(|elapsed| *elapsed < Duration::from_secs(5)),
+        "check-only holders must stop without the cancel grace, regardless of today's definition: {durations:?}"
+    );
+}
+
+#[test]
+fn replace_of_a_check_only_holder_starts_the_next_check_without_grace() {
+    let env = fixture("replace", None);
+    terminating_check(&env);
+    let mut runner = start_check(&env);
+    std::fs::write(env.project_root.join("allow-exit"), "").unwrap();
+    let started = Instant::now();
+    let replacement = env
+        .rimz()
+        .args(["loop", "run", "busy"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_path(&env.project_root.join("next-check"));
+    let elapsed = started.elapsed();
+    let output = replacement.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(runner.wait().unwrap().code(), Some(130));
+    wait_for_loop_run_records(&env, "replacement recorded", |rows| rows.len() == 3);
+    let rows = read_loop_run_records(&env);
+    assert_eq!(
+        rows.iter().map(|row| row.result).collect::<Vec<_>>(),
+        [
+            LoopRunResult::Deferred,
+            LoopRunResult::Replaced,
+            LoopRunResult::Completed
+        ],
+        "{rows:?}"
+    );
+    assert!(!env.project_root.join("orphan").exists());
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the next check must start without the cancel grace: {elapsed:?}"
+    );
+}
+
+#[test]
 fn a_check_that_finishes_inside_stop_grace_keeps_its_result() {
     for cause in ["replace", "stop"] {
         let env = fixture("replace", None);
+        env.install_agent_hooks("claude");
         write_loop_config(
             &env,
             &format!(
-                "[tasks.busy]\nroot={:?}\ncheck='touch check-ready; while ! test -e allow-exit; do sleep 0.05; done'\nsignal='trunk.moved'\noverlap='replace'\n",
+                "[tasks.busy]\nroot={:?}\nagent='claude'\nprompt='work'\ncheck='touch check-ready; while ! test -e allow-exit; do sleep 0.05; done'\non='fail'\nsignal='trunk.moved'\noverlap='replace'\n",
                 env.project_root
             ),
         );
@@ -118,7 +191,7 @@ fn a_check_that_finishes_inside_stop_grace_keeps_its_result() {
         assert!(
             rows.iter().all(|row| matches!(
                 row.result,
-                LoopRunResult::Completed | LoopRunResult::Deferred
+                LoopRunResult::CheckSkipped | LoopRunResult::Deferred
             )),
             "a stop request must not retype a check that finished on its own: {rows:?}"
         );
