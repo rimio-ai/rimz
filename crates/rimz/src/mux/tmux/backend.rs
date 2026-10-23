@@ -607,7 +607,7 @@ impl MuxBackend for TmuxBackend {
             }
         }
         if let Some(stack) = stack {
-            let members = if beside.is_some() {
+            let members = if beside.is_some() || !mark.is_empty() {
                 self.stack_members(&pane_id, &stack)
             } else {
                 Ok(members)
