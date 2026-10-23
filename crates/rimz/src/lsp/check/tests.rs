@@ -1334,6 +1334,18 @@ fn outlines_match_language_neutral_ancestor_subsequences() {
         check_symbol(anchor("a.rs::Type::method"), "a.rs".into(), &flat).status,
         Status::Ok
     );
+    let child_impl = outline(json!([node(
+        "impl super::Backend",
+        19,
+        0,
+        9,
+        json!([node("probe", 6, 2, 8, json!([]))])
+    )]))
+    .unwrap();
+    assert_eq!(
+        check_symbol(anchor("a.rs::Backend::probe"), "a.rs".into(), &child_impl).status,
+        Status::Ok
+    );
     let module = outline(json!([node("tests", 2, 0, 0, json!([]))])).unwrap();
     let missing = check_symbol(anchor("a.rs::tests::helper"), "a.rs".into(), &module);
     assert_eq!(missing.status, Status::MissingSymbol);
