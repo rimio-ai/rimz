@@ -150,6 +150,8 @@ An unregistered kind gets a title-cased name (`provider_title_case`) and `BrandC
 
 `BrandColor::tone(&Palette)` converts a brand to a `Tone`. A registered definition's `BrandColor::Brand` carries both a truecolor RGB and a hand-picked xterm index, and at indexed depth it emits the authored index instead of quantizing the RGB, because the nearest cube cell to a brand color is often not the one a person would pick. A configured `color` resolves like a slot override: a role through the palette, RGB quantized by depth, a raw index unchanged.
 
+`BrandColor::shade(&Palette, step)` derives model tones from that resolved brand, including provider colour overrides. Step zero is exactly the identity tone. Later ranks blend in OKLab toward the farther of black and white: light brands, including Grok's white, darken; dark brands lighten. A blend rather than a bare lightness shift keeps a saturated brand inside the gamut, where a clamped lightness drop stalls on a dark hue. Each rank's emitted colour at the palette's depth, ANSI and cube colours included, sits at least `MODEL_SHADE_STRIDE` (0.1) lightness past the previous rank's, so two models of one provider read apart in a stacked bar. A rank beyond the lightness range retains its final tone.
+
 Identity depends only on the provider kind and the theme config, never on whether the dashboard shows that provider's panel. Human-facing provider names, agent handles, tabs, and emblems all resolve through it; JSON fields keep the definition's own values.
 
 ## Interface language

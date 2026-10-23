@@ -10,6 +10,10 @@
 
 pub type Rgb = (u8, u8, u8);
 
+pub(super) fn lightness(rgb: Rgb) -> f32 {
+    Oklab::from_rgb(rgb).l
+}
+
 /// Perceptually-even interpolation between two sRGB colors: `amount` of `0.0`
 /// returns `left`, `1.0` returns `right`, blended in OKLab so the midpoint
 /// reads as the visual midpoint.
