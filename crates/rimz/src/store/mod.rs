@@ -226,12 +226,14 @@ impl Store {
     /// falling back to a re-projection on a miss. The fast path is lock-free
     /// — it reads no event log and takes no lock — so a hot fleet's snapshot
     /// fetches never contend with the agent hooks appending events.
-    /// `latest.json` publication is cadence-gated; the cached view
-    /// carries the same runtime liveness expel as [`Self::snapshot`], so the
-    /// served rollup matches the live read; the extent stamp catches a fetch
-    /// racing a just-appended event and re-projects instead. Cached snapshots
-    /// also attach cache-class agent context so every address resolver sees the
-    /// same rest certificates as pane ownership.
+    /// `latest.json` publication is cadence-gated, and the cached view carries
+    /// the runtime liveness expel as of its last publish: an owner that died
+    /// since stays until the next append. A reader that decides on current
+    /// liveness rechecks each row with [`runtime::agent_liveness`], as
+    /// `harness::schedule::takeover::read` does. The extent stamp catches a
+    /// fetch racing a just-appended event and re-projects instead. Cached
+    /// snapshots also attach cache-class agent context so every address
+    /// resolver sees the same rest certificates as pane ownership.
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
         let snapshot = match self
             .hook_transaction
