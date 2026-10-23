@@ -1,5 +1,7 @@
 //! Room-plane realtime event overlay policy and storage.
 
+use std::sync::Arc;
+
 use crate::agents::LifecycleSignal;
 use crate::ids::PaneId;
 use crate::sidebar::timing::EVENT_STORE_TTL;
@@ -52,7 +54,7 @@ pub(super) struct StoredEvent {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EventStore {
-    events: Vec<StoredEvent>,
+    events: Arc<Vec<StoredEvent>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,26 +80,34 @@ impl EventStore {
             received_at_ms,
             event,
         };
-        if let Some(existing) = self
+        if let Some(index) = self
             .events
-            .iter_mut()
-            .find(|event| event_key(&event.event).as_ref() == Some(&key))
+            .iter()
+            .position(|event| event_key(&event.event).as_ref() == Some(&key))
         {
+            let existing = &self.events[index];
             if (next.sent_at_ms, next.received_at_ms)
                 >= (existing.sent_at_ms, existing.received_at_ms)
+                && existing != &next
             {
-                *existing = next;
+                Arc::make_mut(&mut self.events)[index] = next;
             }
         } else {
-            self.events.push(next);
+            Arc::make_mut(&mut self.events).push(next);
         }
         self.enforce_cap();
     }
 
     pub(crate) fn prune(&mut self, now_ms: u64) {
         let ttl_ms = EVENT_STORE_TTL.as_millis() as u64;
-        self.events
-            .retain(|event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms);
+        if self
+            .events
+            .iter()
+            .any(|event| now_ms.saturating_sub(event.received_at_ms) > ttl_ms)
+        {
+            Arc::make_mut(&mut self.events)
+                .retain(|event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms);
+        }
         self.enforce_cap();
     }
 
@@ -119,10 +129,10 @@ impl EventStore {
         if self.events.len() <= MAX_EVENTS {
             return;
         }
-        self.events
-            .sort_by_key(|event| (event.received_at_ms, event.sent_at_ms));
-        let overflow = self.events.len() - MAX_EVENTS;
-        self.events.drain(0..overflow);
+        let events = Arc::make_mut(&mut self.events);
+        events.sort_by_key(|event| (event.received_at_ms, event.sent_at_ms));
+        let overflow = events.len() - MAX_EVENTS;
+        events.drain(0..overflow);
     }
 }
 
