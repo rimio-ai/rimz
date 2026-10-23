@@ -998,6 +998,75 @@ fn dated_long_window_keeps_undated_lifted_window_cache_fresh() {
 }
 
 #[test]
+fn producer_keeps_in_use_readings_outside_the_dashboard_selection() {
+    use crate::sidebar::enrich::{PanelScope, fold_machine_config_with};
+
+    for selection in ["['claude']", "[]"] {
+        let (_dir, workspace, runtime) = runtime();
+        let config: crate::config::MachineConfig = toml::from_str(&format!(
+            "[theme.display]\nprovider_list = {selection}\nprovider_tabs = 'never'\nmax_provider_blocks = 1\n"
+        ))
+        .unwrap();
+        let logins = RoomLoginSet::native();
+        let accounts = ["claude", "copilot"]
+            .into_iter()
+            .map(|kind| {
+                (
+                    login_key(kind),
+                    crate::agents::AgentAccount {
+                        metered: Some(true),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut seeded = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel(
+                "copilot",
+                vec![rl_window(
+                    30,
+                    Some(Timestamp::from_second(4_000_000_000).unwrap()),
+                )],
+            )],
+        );
+        refresh_rate_limits(&mut seeded, &runtime, &logins);
+        let fold = |scope| {
+            fold_machine_config_with(
+                snapshot_with_panels(workspace.clone(), Vec::new()),
+                &config,
+                accounts.clone(),
+                &BTreeMap::new(),
+                Default::default(),
+                &config.remote_control,
+                &logins,
+                scope,
+            )
+        };
+        let mut producer = fold(PanelScope::InUse);
+        refresh_rate_limits(&mut producer, &runtime, &logins);
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        assert!(
+            cache.entries.contains_key(&login_key("copilot")),
+            "{selection}"
+        );
+        assert_eq!(
+            cache.entries[&login_key("copilot")].limits.windows[0].used_percentage,
+            Some(30)
+        );
+        assert!(
+            producer
+                .providers
+                .iter()
+                .any(|panel| panel.kind == "copilot")
+        );
+        let current = fold(PanelScope::Current);
+        assert_eq!(current.providers.len(), 1);
+        assert_eq!(current.providers[0].kind, "claude");
+    }
+}
+
+#[test]
 fn producer_cache_tracks_logged_in_panels() {
     let (_dir, workspace, runtime) = runtime();
     let future = Timestamp::from_second(4_000_000_000).unwrap();

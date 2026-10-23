@@ -1079,6 +1079,11 @@ pub(super) fn fold_machine_config_with(
 ) -> SidebarSnapshot {
     snapshot.apply_machine_config(config);
 
+    if matches!(scope, PanelScope::InUse) {
+        // Producer work covers every in-use login, regardless of dashboard layout.
+        snapshot.theme.display.provider_list = vec!["all".to_owned()];
+    }
+
     // Stamp each agent row's context-severity verdict now that the
     // `[theme.display.context_meter]` bands are known — classified once here, on both the
     // producer and consumer fold, so the renderer's color ramp and any future
