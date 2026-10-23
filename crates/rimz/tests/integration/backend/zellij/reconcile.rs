@@ -78,7 +78,17 @@ impl RepairRoom {
                 )
             },
         );
-        birth_kdl_session(&self.room, &self.env.project_root, &layout, "repair CLI");
+        // `rimz start` births a room in the RimZ home its repairs later run
+        // in, and the reap guard spares a process from another home.
+        let mut create = self.room.command();
+        create.env("RIMZ_HOME", self.env.rimz_home());
+        create_kdl_session(
+            &self.room,
+            create,
+            &self.env.project_root,
+            &layout,
+            "repair CLI",
+        );
     }
 
     fn repair(&self) -> std::process::Output {
@@ -335,6 +345,13 @@ fn repair_cli_docks_a_sidebar_when_a_lone_work_pane_has_floats_shown() {
     assert_eq!(sidebar.pane_y, 0, "{sidebar:?}");
     assert_eq!(sidebar.pane_rows, 50, "{sidebar:?}");
     assert!((sidebar.pane_columns as i64 - 60).abs() <= 5, "{sidebar:?}");
+    // The stub serves a sidebar from one process, so a second one is the
+    // anchored split's unplaced pane, which the fallback must have reaped.
+    assert_eq!(
+        serve_processes_for(fixture.room.name()).expect("scan sidebar serve processes"),
+        1,
+        "the unplaced anchored sidebar's serve process was reaped",
+    );
     let work_after = after
         .panes
         .iter()
@@ -1448,8 +1465,17 @@ fn write_kdl_layout(
 }
 
 fn birth_kdl_session(session: &LiveZellijSession, cwd: &Path, layout: &Path, label: &str) {
-    let created = session
-        .command()
+    create_kdl_session(session, session.command(), cwd, layout, label);
+}
+
+fn create_kdl_session(
+    session: &LiveZellijSession,
+    mut create: std::process::Command,
+    cwd: &Path,
+    layout: &Path,
+    label: &str,
+) {
+    let created = create
         .args(["attach", "--create-background", session.name(), "options"])
         .arg("--default-cwd")
         .arg(cwd)
