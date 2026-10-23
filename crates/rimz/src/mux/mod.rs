@@ -1275,7 +1275,8 @@ pub trait MuxBackend: Send + Sync {
     /// failure, and still attempts focus restoration before returning the report.
     /// Unlike [`Self::open_sidebar`], this never deletes or recreates the session.
     /// Samples `live` exactly once after the native pane listing used by the
-    /// planner, before planning or any structural or geometry repair.
+    /// planner, before planning and before any sidebar add, close, or Zellij's
+    /// pre-execution geometry repair.
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
