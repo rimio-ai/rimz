@@ -14,6 +14,7 @@ use rimz::harness::schedule::arming::ArmState;
 use rimz::harness::schedule::runner::parse_task_timeout;
 use rimz::harness::schedule::{self, DeliveryOwner, TaskActionKind, Trigger, delivery_owner};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::store::snapshot::SidebarSnapshot;
 use serde::Serialize;
 
 use super::render as ui;
@@ -304,7 +305,7 @@ fn peers(agents: &[AgentState]) -> Vec<&AgentState> {
 pub(super) fn write_self(
     out: &mut impl Write,
     agent: &AgentState,
-    agents: &[AgentState],
+    snapshot: &SidebarSnapshot,
     rows: &[WakeRow],
     current_root: &Path,
     now: Timestamp,
@@ -333,7 +334,7 @@ pub(super) fn write_self(
         .join(" · ");
     let header = format!(
         "{} · {}",
-        rimz::address::agent_handle(agent, &peers(agents), true),
+        rimz::address::agent_handle(agent, &rimz::address::addressable_agents(snapshot), true),
         wait_count(waits.len())
     );
     if waits.is_empty() && !also.is_empty() {
@@ -660,6 +661,46 @@ pub(super) fn action_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_header_ignores_a_pane_shadowed_root() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%1");
+        let mut owner = rimz::testkit::agent_state("claude", "owner", now);
+        owner.channel = Some("lane".to_owned());
+        owner.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
+        let mut shadow = rimz::testkit::agent_state("claude", "cleared", now);
+        shadow.channel = owner.channel.clone();
+        shadow.pane = owner.pane.clone();
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(Path::new("/repo")),
+            vec![owner, shadow],
+            now,
+        );
+        let owner = &snapshot.agents[0];
+        snapshot.agent_panes = vec![rimz::store::snapshot::PaneAgent {
+            checkout: None,
+            root_lane: false,
+            kind: owner.kind.clone(),
+            kind_ordinal: owner.kind_ordinal,
+            name: owner.name.clone(),
+            name_explicit: owner.name_explicit,
+            profile: owner.profile.clone(),
+            role: owner.role.clone(),
+            channel: owner.channel.clone(),
+            agent_id: Some(owner.agent_id.clone()),
+            pane_id,
+            pane_pid: None,
+            worktree_path: owner.worktree_path.clone(),
+            worktree_branch: owner.worktree_branch.clone(),
+        }]
+        .into();
+
+        let mut out = Vec::new();
+        let owner = &snapshot.agents[0];
+        write_self(&mut out, owner, &snapshot, &[], Path::new("/repo"), now).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "@claude#lane · no waits\n");
+    }
 
     #[test]
     fn subscriptions_pluralize_distinct_worktrees() {
