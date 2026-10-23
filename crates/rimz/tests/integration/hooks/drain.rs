@@ -109,6 +109,7 @@ fn reload_command(env: &Env, binary: &std::path::Path) -> Command {
             env.project_root.join("reload.trace"),
         )
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .env("RIMZ_TEST_SKIP_STATS_RELOAD", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
@@ -135,6 +136,7 @@ fn reload_does_not_start_an_absent_drainer() {
 #[test]
 #[cfg(target_os = "linux")]
 fn reload_replaces_the_drainer_after_its_inflight_frame() {
+    use std::os::unix::fs::MetadataExt as _;
     use std::os::unix::net::UnixListener;
 
     let env = Env::new();
@@ -144,7 +146,11 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     let binary = env.rimz_bin();
     let binaries = tempfile::tempdir_in(binary.parent().unwrap()).unwrap();
     let first = binaries.path().join("first-rimz");
-    let second = binaries.path().join("second-rimz");
+    // Build B is written where reload stages it, so staging reuses it: a clone of a
+    // just-written binary waits on the filesystem inside reload's window.
+    let builds = env.rimz_home().join("builds");
+    std::fs::create_dir_all(&builds).unwrap();
+    let patched = builds.join("second-rimz");
     std::fs::hard_link(binary, &first).unwrap();
     let note = env.project_root.join("build-id.note");
     let dump = Command::new("objcopy")
@@ -165,13 +171,17 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
         .arg("--update-section")
         .arg(format!(".note.gnu.build-id={}", note.display()))
         .arg(&first)
-        .arg(&second)
+        .arg(&patched)
         .output()
         .unwrap();
     assert!(patch.status.success(), "{patch:?}");
     let first_id = rimz::build_id::of_file(&first).unwrap();
-    let second_id = rimz::build_id::of_file(&second).unwrap();
+    let second_id = rimz::build_id::of_file(&patched).unwrap();
     assert_ne!(first_id, second_id);
+    let second = builds.join(&second_id).join("rimz");
+    std::fs::create_dir(builds.join(&second_id)).unwrap();
+    std::fs::rename(&patched, &second).unwrap();
+    let staged = std::fs::metadata(&second).unwrap();
     store
         .record_room_bin(&workspace, first, first_id.clone())
         .unwrap();
@@ -204,12 +214,19 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     // The spawn lock holds its stop request until a frame is in flight.
     let spawning =
         WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
-    let reload = reload_command(&env, &second).spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while rimz::build_id::of_file(&store.paths().room_bin).unwrap() != second_id {
-        assert!(Instant::now() < deadline, "reload never recorded build B");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let mut reload = reload_command(&env, &second).spawn().unwrap();
+    wait_for_readiness(
+        &store,
+        Some(&mut reload),
+        "reload never recorded build B",
+        || (rimz::build_id::of_file(&store.paths().room_bin).unwrap() == second_id).then_some(()),
+    );
+    let recorded = std::fs::metadata(&store.paths().room_bin).unwrap();
+    assert_eq!(
+        (recorded.dev(), recorded.ino()),
+        (staged.dev(), staged.ino()),
+        "stage_build_under copied the pre-staged build again"
+    );
     let barrier_path = store.runtime_paths().sock_dir.join("reload-apply.sock");
     let barrier = UnixListener::bind(&barrier_path).unwrap();
     let mut frame = stop_frame(&env);
@@ -226,17 +243,17 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     .unwrap();
     let mut release = apply_barrier(&store, None, &barrier, "apply never reached its barrier");
     drop(spawning);
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_spawn_lock())
-        .unwrap()
-        .is_some()
-    {
-        assert!(
-            Instant::now() < deadline,
-            "reload never requested a frame-boundary stop"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_readiness(
+        &store,
+        Some(&mut reload),
+        "reload never requested a frame-boundary stop",
+        || {
+            WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_spawn_lock())
+                .unwrap()
+                .is_none()
+                .then_some(())
+        },
+    );
     let mut pending = stop_frame(&env);
     pending.payload =
         json!({"session_id":"reload-pending", "last_assistant_message":"finished"}).to_string();
@@ -245,10 +262,9 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
     release.write_all(&[1]).unwrap();
     let output = reload.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("1 hook drainer"),
-        "{output:?}"
-    );
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(report.contains("1 hook drainer"), "{output:?}");
+    assert!(report.contains("onto the current build"), "{output:?}");
     let successor = drainer_connection(&store, None);
     let after =
         nix::sys::socket::getsockopt(&successor, nix::sys::socket::sockopt::PeerCredentials)
@@ -267,25 +283,22 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
         rimz::build_id::of_file(std::path::Path::new(&format!("/proc/{after}/exe"))).unwrap(),
         second_id
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let cursor = ingress::read_cursor(store.paths()).unwrap();
-        let length = std::fs::metadata(&store.paths().hook_ingress_log)
-            .unwrap()
-            .len();
-        if frames
-            .iter()
-            .all(|(frame, _)| derived(&env, &frame.event_id).len() == 1)
-            && cursor.applied == length
-        {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "successor did not apply every frame exactly once"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_readiness(
+        &store,
+        None,
+        "successor did not apply every frame exactly once",
+        || {
+            let cursor = ingress::read_cursor(store.paths()).unwrap();
+            let length = std::fs::metadata(&store.paths().hook_ingress_log)
+                .unwrap()
+                .len();
+            (frames
+                .iter()
+                .all(|(frame, _)| derived(&env, &frame.event_id).len() == 1)
+                && cursor.applied == length)
+                .then_some(())
+        },
+    );
 }
 
 #[test]
@@ -714,7 +727,8 @@ fn effort_write_failure_warns_without_changing_the_hook_reply() {
 const READINESS_HANG_GUARD: Duration = Duration::from_secs(60);
 
 /// Polls `probe` until it is ready. `child` is the process whose exit makes readiness
-/// impossible; `None` when the test holds no handle to it, bounded by the hang guard alone.
+/// impossible, and its piped stderr joins the exit panic; `None` when the test holds no handle
+/// to it, bounded by the hang guard alone.
 #[track_caller]
 fn wait_for_readiness<T>(
     store: &rimz::Store,
@@ -731,8 +745,12 @@ fn wait_for_readiness<T>(
             if let Some(ready) = probe() {
                 return ready;
             }
+            let stderr = child
+                .and_then(|child| child.stderr.take())
+                .map(|pipe| format!("; stderr: {:?}", std::io::read_to_string(pipe)))
+                .unwrap_or_default();
             panic!(
-                "{boundary}: process exited with {status}; log: {:?}",
+                "{boundary}: process exited with {status}{stderr}; log: {:?}",
                 std::fs::read_to_string(store.paths().hook_drainer_log())
             );
         }
