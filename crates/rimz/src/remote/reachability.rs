@@ -285,6 +285,32 @@ mod tests {
     }
 
     #[test]
+    fn network_down_caps_every_safety_ladder_step() {
+        let started = Instant::now();
+        let cap = Duration::from_millis(200);
+        let policy = ReconnectPolicy {
+            backoff_cap: cap,
+            ..ReconnectPolicy::default()
+        };
+        let mut pacer = AttemptPacer::new(policy, started, true, true);
+        pacer.note_attempt_failed(started);
+        pacer.note_internet(false, started);
+        pacer.note_server(false, started);
+
+        let mut due = started;
+        for attempt in 1..=14 {
+            due += cap;
+            assert!(
+                !pacer.may_attempt(due - Duration::from_millis(1)),
+                "attempt {attempt} must wait for the cap"
+            );
+            assert!(pacer.may_attempt(due), "attempt {attempt} due at the cap");
+            pacer.begin_attempt(due);
+            pacer.note_attempt_failed(due);
+        }
+    }
+
+    #[test]
     fn network_edges_reset_and_fire_immediately() {
         let started = Instant::now();
         let mut pacer = AttemptPacer::new(ReconnectPolicy::default(), started, false, true);
