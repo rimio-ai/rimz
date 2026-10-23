@@ -79,7 +79,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 50;
+pub const SNAPSHOT_VERSION: u32 = 51;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

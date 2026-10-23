@@ -350,6 +350,7 @@ fn project_sub_agent(
         task: child.task.clone(),
         profile: child.profile.clone(),
         model: child.model.clone(),
+        fast: child.is_launched_child() && child.fast_mode(),
         effort: child.effort.clone(),
         description: child
             .subagent_description

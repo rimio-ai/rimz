@@ -494,6 +494,7 @@ fn provider_child_attention_matches_declared_status_count() {
             name: "Explore".to_owned(),
             petname: None,
             provider_native: true,
+            fast: false,
             stalled: false,
             status: AgentStatus::Waiting,
             phase: TurnPhase::Idle,

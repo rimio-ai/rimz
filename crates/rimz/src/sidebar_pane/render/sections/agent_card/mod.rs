@@ -346,17 +346,18 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// live cell an agent row wears — the thinking head while the child reasons,
 /// the working fill while it acts, or the static `✓`/`!` verdict once it
 /// finishes — then its type and description, with its known cost pinned right.
-/// Line 2 carries the typed token figure, model, and reasoning effort on a
-/// per-card column grid, with a five-cell clock pinned right: plain muted
-/// runtime, frozen on finish; a running child quiet for five minutes instead
-/// shows a face and quiet age heated over the configured stall window. A
-/// stalled child keeps that quiet clock in alarm. Children stay at the
-/// soft middle weight and indent past the parent's stats. The token glyph
-/// distinguishes current window occupancy from a whole-run total; unknown
-/// figures leave a blank slot. A metadata-free finished child degrades to its
-/// bare type line, its frozen runtime pinned ahead of its cost. Entry lines for
-/// `rows`, laid on the metadata grid of every child in `grid`, so rows rendered
-/// in separate bands share one set of columns.
+/// Line 2 carries the typed token figure, model with an optional still fast-mode
+/// bolt, reasoning effort, and compactions on a per-card column grid, with a
+/// five-cell clock pinned right: plain muted runtime, frozen on finish; a
+/// running child quiet for five minutes instead shows a face and quiet age
+/// heated over the configured stall window. A stalled child keeps that quiet
+/// clock in alarm. Children stay at the soft middle weight and indent past the
+/// parent's stats. The token glyph distinguishes current window occupancy from
+/// a whole-run total; unknown figures leave a blank slot. A metadata-free
+/// finished child degrades to its bare type line, its frozen runtime pinned
+/// ahead of its cost. Entry lines for `rows`, laid on the metadata grid of
+/// every child in `grid`, so rows rendered in separate bands share one set of
+/// columns.
 fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
     grid: &[SidebarSubAgent],
@@ -381,8 +382,15 @@ fn sub_agent_entry_lines(
         .unwrap_or(0);
     let model_col = grid
         .iter()
-        .filter_map(|sub| sub.model.as_deref())
-        .map(|model| text_width(&model_label_parts(model).0))
+        .filter_map(|sub| {
+            let model = sub.model.as_deref()?;
+            let bolt_width = if sub.fast {
+                1 + text_width(theme.glyph(GlyphRole::CardFast))
+            } else {
+                0
+            };
+            Some(text_width(&model_label_parts(model).0) + bolt_width)
+        })
         .max()
         .unwrap_or(0);
     for sub in rows {
@@ -487,6 +495,8 @@ fn sub_agent_metadata_line(
     let tokens = sub_agent_tokens(sub);
     let finished = sub_agent_finished(sub);
     let clock = sub_agent_clock(ctx, sub);
+    let left_width = content_width(ctx.width)
+        .saturating_sub(clock.as_ref().map_or(0, |clock| clock.width() + 1));
     let model = sub.model.as_deref();
     let effort = sub.effort.as_deref();
     if tokens.is_none()
@@ -503,9 +513,10 @@ fn sub_agent_metadata_line(
     append_sub_agent_model(
         theme,
         &mut left,
-        model,
+        sub,
         token_col,
         model_col,
+        left_width,
         &mut prev_rendered,
     );
     append_sub_agent_effort(
@@ -521,8 +532,6 @@ fn sub_agent_metadata_line(
         // The leading seam has no figure before it to separate.
         compactions.remove(0);
     }
-    let left_width = content_width(ctx.width)
-        .saturating_sub(clock.as_ref().map_or(0, |clock| clock.width() + 1));
     if spans_width(&left) + spans_width(&compactions) <= left_width {
         left.extend(compactions);
     }
@@ -585,9 +594,10 @@ fn append_sub_agent_tokens(
 fn append_sub_agent_model(
     theme: &Theme,
     left: &mut Vec<Span<'static>>,
-    model: Option<&str>,
+    sub: &SidebarSubAgent,
     token_col: usize,
     model_col: usize,
+    left_width: usize,
     prev_rendered: &mut bool,
 ) {
     if model_col == 0 {
@@ -598,7 +608,7 @@ fn append_sub_agent_model(
     } else {
         0
     };
-    match model {
+    match sub.model.as_deref() {
         Some(model) => {
             if *prev_rendered {
                 left.push(Span::styled(value_seam(theme), theme.muted()));
@@ -609,10 +619,22 @@ fn append_sub_agent_model(
             // hold wide characters, and `{:<N}` pads by char count.
             let label = model_label_parts(model).0;
             let pad = model_col.saturating_sub(text_width(&label));
-            left.push(Span::styled(
-                format!("{label}{}", " ".repeat(pad)),
-                theme.muted(),
-            ));
+            let bolt = theme.glyph(GlyphRole::CardFast);
+            let bolt_width = 1 + text_width(bolt);
+            if sub.fast && spans_width(left) + text_width(&label) + bolt_width <= left_width {
+                left.push(Span::styled(label, theme.muted()));
+                left.push(Span::raw(" "));
+                left.push(Span::styled(
+                    bolt.to_owned(),
+                    theme.styled(Component::FastMode, Modifier::BOLD),
+                ));
+                left.push(Span::raw(" ".repeat(pad.saturating_sub(bolt_width))));
+            } else {
+                left.push(Span::styled(
+                    format!("{label}{}", " ".repeat(pad)),
+                    theme.muted(),
+                ));
+            }
             *prev_rendered = true;
         }
         None => left.push(Span::raw(" ".repeat(seam + model_col))),

@@ -517,6 +517,7 @@ fn full_entry_has_a_stable_projection() {
                 name: "explorer".to_owned(),
                 petname: Some("swift-otter".to_owned()),
                 provider_native: false,
+                fast: false,
                 stalled: false,
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
