@@ -83,8 +83,21 @@ done
 
 #[test]
 fn judge_process_objects_retry_limit_and_dead_host_policy() {
+    struct NameModeOnPanic(&'static str);
+    impl Drop for NameModeOnPanic {
+        #[expect(
+            clippy::print_stderr,
+            reason = "names the failing mode beside the panic"
+        )]
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                eprintln!("judge mode {} failed", self.0);
+            }
+        }
+    }
     let digest = hex::encode(sha2::Sha256::digest(b"Build it"));
     for mode in ["object", "file", "missing", "limited", "dead-host"] {
+        let _named = NameModeOnPanic(mode);
         let (env, _) = fixture(
             &format!(
                 "{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\ntimeout='1h'\n"
