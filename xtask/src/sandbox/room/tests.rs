@@ -164,7 +164,13 @@ fn with_ready_room(test: impl FnOnce(&Room<'_>, &RoomRecord)) {
         r#"#!/bin/sh
 printf '%s\n' "$*" >> queries
 case "$*" in
-'--tmux pane list --json') exec cat panes.json ;;
+'--tmux pane list --json')
+    if test -f roster-error; then
+        printf '%s\n' 'multiplexer unavailable' >&2
+        exit 1
+    fi
+    exec cat panes.json ;;
+'--tmux pane focus '*) exec sh focus.sh "$4" ;;
 '--tmux sidebar renderers --json') exec cat renderers.json ;;
 '--tmux sidebar snapshot --json') exec cat snapshot.json ;;
 *) exit 1 ;;
@@ -175,8 +181,9 @@ esac
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(
         cwd.join("panes.json"),
-        r##"{"session":"private","tabs":[{"panes":[
-            {"kind":"sidebar","pane_id":"tmux:%1"},
+        r##"{"session":"private","tabs":[
+            {"view_id":"@1","panes":[{"kind":"sidebar","pane_id":"tmux:%1"}]},
+            {"view_id":"@2","panes":[
             {"kind":"sidebar","pane_id":"tmux:%3"},
             {"kind":"agent","pane_id":"tmux:%4","agent":{"handle":"@coder#probe"}},
             {"kind":"agent","pane_id":"tmux:%5","agent":{"handle":"@reviewer#probe"}}
@@ -318,6 +325,207 @@ fn tab_number_follows_the_view_id_not_the_listing_order() {
         .collect();
     // The first two follow their own position; the unidentified tab falls back to its index.
     assert_eq!(numbers, [2, 1, 3]);
+}
+
+fn prepare_visit(room: &Room<'_>, script: &str) -> Tab {
+    std::fs::write(room.cwd.join("focus.sh"), script).unwrap();
+    let mut panes: Panes =
+        serde_json::from_slice(&std::fs::read(room.cwd.join("panes.json")).unwrap()).unwrap();
+    panes.tabs.remove(1)
+}
+
+#[test]
+fn look_follows_a_replaced_sidebar_in_the_same_view() {
+    with_ready_room(|room, record| {
+        let tab = prepare_visit(
+            room,
+            r#"case "$1" in
+    tmux:%3)
+        cp replacement.json panes.json
+        printf '%s\n' "can't find pane: %3" >&2
+        exit 1 ;;
+    tmux:%9) exit 0 ;;
+esac
+exit 1
+"#,
+        );
+        std::fs::write(
+            room.cwd.join("replacement.json"),
+            r#"{"session":"private","tabs":[
+                {"view_id":"@2","panes":[{"kind":"sidebar","pane_id":"tmux:%9"}]},
+                {"view_id":"@1","panes":[{"kind":"sidebar","pane_id":"tmux:%1"}]}
+            ]}"#,
+        )
+        .unwrap();
+
+        let result = room.look(&record.session, 1, &tab);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(room.cwd.join("queries")).unwrap(),
+            "--tmux pane focus tmux:%3\n--tmux pane list --json\n--tmux pane focus tmux:%9\n"
+        );
+    });
+}
+
+#[test]
+fn look_refuses_a_missing_sidebar_or_unidentified_tab() {
+    for (view_id, tabs, reason) in [
+        (
+            Some("@2"),
+            serde_json::json!([{"view_id":"@2","panes":[{"kind":"shell","pane_id":"tmux:%9"}]}]),
+            "lists no sidebar",
+        ),
+        (
+            Some("@2"),
+            serde_json::json!([{"view_id":"@1","panes":[{"kind":"sidebar","pane_id":"tmux:%9"}]}]),
+            "tab @2 is gone",
+        ),
+        (
+            None,
+            serde_json::json!([{"panes":[{"kind":"sidebar","pane_id":"tmux:%9"}]}]),
+            "tab has no view_id",
+        ),
+    ] {
+        with_ready_room(|room, record| {
+            let mut tab = prepare_visit(
+                room,
+                "cp replacement.json panes.json\nprintf '%s\\n' \"can't find pane: %3\" >&2\nexit 1\n",
+            );
+            tab.view_id = view_id.map(str::to_owned);
+            std::fs::write(
+                room.cwd.join("replacement.json"),
+                serde_json::to_vec(&serde_json::json!({"session":"private","tabs":tabs})).unwrap(),
+            )
+            .unwrap();
+
+            let error = room.look(&record.session, 1, &tab).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains(reason), "{message}");
+            assert!(message.contains("can't find pane: %3"), "{message}");
+            assert_eq!(
+                std::fs::read_to_string(room.cwd.join("queries")).unwrap(),
+                "--tmux pane focus tmux:%3\n--tmux pane list --json\n"
+            );
+        });
+    }
+}
+
+#[test]
+fn look_preserves_a_failure_on_the_still_listed_first_sidebar() {
+    with_ready_room(|room, record| {
+        let tab = prepare_visit(room, "printf '%s\\n' 'permission denied' >&2\nexit 1\n");
+        std::fs::write(
+            room.cwd.join("panes.json"),
+            r#"{"session":"private","tabs":[{"view_id":"@2","panes":[
+                {"kind":"sidebar","pane_id":"tmux:%3"},
+                {"kind":"sidebar","pane_id":"tmux:%9"}
+            ]}]}"#,
+        )
+        .unwrap();
+        let error = room.look(&record.session, 1, &tab).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("still lists visited pane tmux:%3"),
+            "{message}"
+        );
+        assert!(message.contains("permission denied"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(room.cwd.join("queries")).unwrap(),
+            "--tmux pane focus tmux:%3\n--tmux pane list --json\n"
+        );
+    });
+}
+
+#[test]
+fn look_preserves_both_errors_when_the_roster_read_fails() {
+    with_ready_room(|room, record| {
+        let tab = prepare_visit(
+            room,
+            "touch roster-error\nprintf '%s\\n' \"can't find pane: %3\" >&2\nexit 1\n",
+        );
+        let error = room.look(&record.session, 1, &tab).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("can't find pane: %3"), "{message}");
+        assert!(message.contains("roster re-read failed"), "{message}");
+        assert!(message.contains("multiplexer unavailable"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(room.cwd.join("queries")).unwrap(),
+            "--tmux pane focus tmux:%3\n--tmux pane list --json\n"
+        );
+    });
+}
+
+#[test]
+fn look_retries_a_superseded_focus_without_reading_the_roster() {
+    with_ready_room(|room, record| {
+        let tab = prepare_visit(
+            room,
+            &format!(
+                "if test ! -f superseded; then\n    touch superseded\n    printf '%s\\n' '{FOCUS_SUPERSEDED}' >&2\n    exit 1\nfi\n"
+            ),
+        );
+        let result = room.look(&record.session, 1, &tab);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(room.cwd.join("queries")).unwrap(),
+            "--tmux pane focus tmux:%3\n--tmux pane focus tmux:%3\n"
+        );
+    });
+}
+
+#[test]
+fn look_bounds_replacements_and_superseded_focuses_together() {
+    for superseded in [false, true] {
+        with_ready_room(|room, record| {
+            let tab = prepare_visit(
+                room,
+                &format!(
+                    r#"if test -f superseded; then
+    printf '%s\n' '{FOCUS_SUPERSEDED}' >&2
+    exit 1
+fi
+cp "after-${{1##*%}}.json" panes.json
+printf '%s\n' "can't find pane: $1" >&2
+if test -f supersede-next; then touch superseded; fi
+exit 1
+"#,
+                ),
+            );
+            for (before, after) in [(3, 9), (9, 10), (10, 11)] {
+                std::fs::write(
+                    room.cwd.join(format!("after-{before}.json")),
+                    serde_json::to_vec(&serde_json::json!({
+                        "session":"private",
+                        "tabs":[{"view_id":"@2","panes":[{
+                            "kind":"sidebar","pane_id":format!("tmux:%{after}")
+                        }]}]
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            if superseded {
+                std::fs::write(room.cwd.join("supersede-next"), "").unwrap();
+            }
+
+            let error = room.look(&record.session, 1, &tab).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("attempts exhausted"), "{message}");
+            let last_error = if superseded {
+                FOCUS_SUPERSEDED
+            } else {
+                "can't find pane: tmux:%10"
+            };
+            assert!(message.contains(last_error), "{message}");
+            let queries = std::fs::read_to_string(room.cwd.join("queries")).unwrap();
+            let expected = if superseded {
+                "--tmux pane focus tmux:%3\n--tmux pane list --json\n--tmux pane focus tmux:%9\n--tmux pane focus tmux:%9\n"
+            } else {
+                "--tmux pane focus tmux:%3\n--tmux pane list --json\n--tmux pane focus tmux:%9\n--tmux pane list --json\n--tmux pane focus tmux:%10\n--tmux pane list --json\n"
+            };
+            assert_eq!(queries, expected);
+        });
+    }
 }
 
 #[cfg(target_os = "linux")]
