@@ -463,11 +463,14 @@ fn fresh_pane_allows_bind(
     fresh_binding_at: jiff::Timestamp,
 ) -> Result<(), LocalSessionBindRejectReason> {
     let launch_owner = binding_index.latest_launch_agent(pane, &observation.kind);
-    if launch_owner.is_some_and(|owner| {
-        owner.kind == observation.kind
-            && owner.agent_id != observation.session_id
-            && !owner.agent_id.is_provisional()
-    }) {
+    // The owner's stamp already matched this pane incarnation, and a fork's
+    // rollout can predate its own registration hook.
+    if launch_owner.is_some_and(|owner| owner.agent_id == observation.session_id) {
+        return Ok(());
+    }
+    if launch_owner
+        .is_some_and(|owner| owner.kind == observation.kind && !owner.agent_id.is_provisional())
+    {
         return Err(LocalSessionBindRejectReason::PaneReserved);
     }
 
