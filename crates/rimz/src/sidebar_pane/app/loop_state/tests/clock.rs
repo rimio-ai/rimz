@@ -6,34 +6,49 @@ fn tab_read_dwell_ignores_wall_steps() {
     let clock = LoopClock::play("2026-06-09T12:00:00Z".parse().unwrap());
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_99");
     let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock.clone());
-    rig.view().current = agent_snapshot(&rig.ws);
-    rig.view().current.own_view = Some(SidebarOwnView {
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    rig.view().ctx().current.own_view = Some(SidebarOwnView {
         sibling_count: 1,
         working_pane_ids: vec![],
         own_view_is_daemon: false,
     });
-    rig.view().current.viewed_panes = vec![own];
-    rig.view().presentation.viewing_own_tab = Some(false);
+    rig.view().ctx().current.viewed_panes = vec![own];
+    rig.view().ui().viewing_own_tab = Some(false);
     let marks = ReadMarks::load(&rig.runtime);
     let mut clear = ReadClear::default();
     let wall = clock.timestamp();
-    rig.view()
-        .sweep_tab_read_receipts(None, &marks, wall, &mut clear);
+    rig.state.with_view_for_test(Route::READ, |pane, v| {
+        pane.sweep_tab_read_receipts(v, None, &marks, wall, &mut clear);
+    });
     assert_eq!(
-        rig.view().tab_read_dwell_until,
+        rig.view().ctx().tab_read_dwell_until,
         Some(clock.now() + TAB_READ_DWELL)
     );
-    rig.view()
-        .sweep_tab_read_receipts(None, &marks, wall + Duration::from_secs(3_600), &mut clear);
+    rig.state.with_view_for_test(Route::READ, |pane, v| {
+        pane.sweep_tab_read_receipts(
+            v,
+            None,
+            &marks,
+            wall + Duration::from_secs(3_600),
+            &mut clear,
+        );
+    });
     assert!(
-        rig.view().tab_read_dwell_until.is_some(),
+        rig.view().ctx().tab_read_dwell_until.is_some(),
         "a forward wall step is not a read"
     );
     clock.advance(TAB_READ_DWELL);
-    rig.view()
-        .sweep_tab_read_receipts(None, &marks, wall - Duration::from_secs(3_600), &mut clear);
+    rig.state.with_view_for_test(Route::READ, |pane, v| {
+        pane.sweep_tab_read_receipts(
+            v,
+            None,
+            &marks,
+            wall - Duration::from_secs(3_600),
+            &mut clear,
+        );
+    });
     assert!(
-        rig.view().tab_read_dwell_until.is_none(),
+        rig.view().ctx().tab_read_dwell_until.is_none(),
         "a backward wall step cannot extend the dwell"
     );
 }
@@ -46,12 +61,13 @@ fn body_filter_observation_is_not_backdated_to_the_fold() {
         ..Default::default()
     };
     crate::sidebar::body_filter::write(&rig.runtime, &filter).unwrap();
-    let previous = rig.state.current.clone();
+    let previous = rig.state.views.mirror().clone();
     let stale = Instant::now() - Duration::from_secs(1);
     let before_load = Instant::now();
-    rig.state
-        .reconcile_selection_and_order(&previous, None, None, false, true, stale);
-    assert!(rig.view().filter_observed_at.unwrap() >= before_load);
+    rig.state.fold_transition(|pane, v, prepared| {
+        pane.reconcile_selection_and_order(v, prepared, &previous, None, None, false, true, stale);
+    });
+    assert!(rig.view().ctx().filter_observed_at.unwrap() >= before_load);
     rig.shared_fold(
         agent_snapshot(&rig.ws),
         Arc::new(super::super::super::fetch::FoldInputs {
@@ -60,14 +76,14 @@ fn body_filter_observation_is_not_backdated_to_the_fold() {
         }),
     );
     assert_eq!(
-        rig.view().presentation.make_up_filter,
+        rig.view().ui().make_up_filter,
         filter,
         "an older worker cut cannot undo the filter just loaded"
     );
     {
         let mut guard = rig.view();
-        let state = &mut *guard;
-        assert_eq!(state.presentation.visible_roster(&state.current).len(), 0);
+        let (ui, context) = guard.pair();
+        assert_eq!(ui.visible_roster(&context.current).len(), 0);
     }
 }
 
@@ -99,11 +115,14 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         own_view_is_daemon: false,
     });
     rig.fold(snapshot, SnapshotSource::Produced);
-    rig.state.config.notification_prefs.enabled = true;
-    rig.state.config.notification_prefs.remind_secs = 1;
-    rig.state.config.notification_prefs.command = Some("exit 99".into());
+    rig.state.pane.config.notification_prefs.enabled = true;
+    rig.state.pane.config.notification_prefs.remind_secs = 1;
+    rig.state.pane.config.notification_prefs.command = Some("exit 99".into());
     clock.advance(Duration::from_secs(1));
-    assert_eq!(rig.state.clock.timestamp(), epoch + Duration::from_secs(1));
+    assert_eq!(
+        rig.state.pane.clock.timestamp(),
+        epoch + Duration::from_secs(1)
+    );
     rig.state.handle_notification(
         &mut rig.terminal,
         SidebarEvent::Notify {
@@ -121,11 +140,11 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
 
     rig.state.paint_now(&mut rig.terminal, clock.now()).unwrap();
     assert_eq!(
-        rig.view().presentation.frame_ms,
+        rig.view().ui().frame_ms,
         1_000,
         "paint uses scenario elapsed time"
     );
-    let row = rig.state.ui.interactions.line_for_row(0).unwrap() as u16;
+    let row = rig.state.pane.ui.interactions.line_for_row(0).unwrap() as u16;
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut inbox = WakeupInbox::new(rx);
     tx.send(Wakeup::MouseClick { column: 2, row }).unwrap();
@@ -136,16 +155,16 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
     assert!(painted);
     assert!(deadline > clock.now());
     assert!(
-        rig.state.last_heartbeat.is_none(),
+        rig.state.pane.last_heartbeat.is_none(),
         "play publishes no heartbeat"
     );
-    assert_eq!(rig.view().presentation.selected_pane, Some(target));
+    assert_eq!(rig.view().ui().selected_pane, Some(target));
     assert!(
-        rig.state.clicked_row.is_some(),
+        rig.state.pane.clicked_row.is_some(),
         "click reached the focus effect"
     );
     assert_eq!(
-        rig.view().presentation.freeze.as_ref().unwrap().armed_ms,
+        rig.view().ui().freeze.as_ref().unwrap().armed_ms,
         clock.now_ms() as i64
     );
     assert_eq!(clock.focus_calls.load(Ordering::Relaxed), 0);
@@ -153,7 +172,7 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
         .unwrap();
     assert!(
-        rig.state.caps_refresh_deadline.is_none(),
+        rig.state.pane.caps_refresh_deadline.is_none(),
         "play never arms an external caps probe"
     );
 
