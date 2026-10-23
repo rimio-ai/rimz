@@ -7860,6 +7860,90 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
 }
 
 #[test]
+fn sweep_holds_unconfirmed_prompt_while_resumed_codex_starts() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("codex");
+    for event in ["SessionStart", "rimz.agent-resumed"] {
+        append_lifecycle(
+            &env,
+            "codex",
+            event,
+            "sess-starting",
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"));
+            },
+        );
+    }
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+    let trace = env.project_root.join("starting-reconcile.log");
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@codex", "--", "start once"]),
+        "send to starting Codex",
+    );
+    let message_id = MessageId::parse(&sent_id_from_stdout(&output.stdout)).unwrap();
+    assert_text_then_enter(&trace, &user_message("start once"));
+    let sent = message_by_id(&env, &message_id);
+    let window = Duration::from_secs(5);
+    std::thread::sleep(
+        (sent.last_sent_at.unwrap() + window)
+            .duration_since(jiff::Timestamp::now())
+            .try_into()
+            .unwrap_or_default(),
+    );
+
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "5000")
+            .args(["message", "sweep"]),
+        "sweep starting Codex",
+    );
+
+    assert_eq!(
+        trace_lines(&trace)
+            .iter()
+            .filter(|line| is_paste(line, &user_message("start once")))
+            .count(),
+        1,
+        "a startup draft must not receive a second paste"
+    );
+    let held = message_by_id(&env, &message_id);
+    assert_eq!(held.status, MessageStatus::Sent);
+    assert_eq!(held.unconfirmed_sends, 0);
+    assert_eq!(held.attempts, sent.attempts);
+    assert_eq!(held.last_sent_at, sent.last_sent_at);
+    assert_eq!(held.last_error, None);
+    assert!(held.retry_after.is_some());
+
+    run_hook_for_owner(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-starting",
+            "prompt": user_message("start once"),
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+        env.agent_owner_pid(),
+    );
+    let delivered = env
+        .store()
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == message_id)
+        .expect("delivered startup prompt");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert_eq!(delivered.unconfirmed_sends, 0);
+    assert_eq!(delivered.last_error, None);
+}
+
+#[test]
 fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
     use rimz::disk::lock::{SharedAppendLock, WorkspaceLock};
     use rimz::store::ingress::{self, HookIngress};

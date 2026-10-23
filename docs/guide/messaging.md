@@ -251,6 +251,8 @@ Ten statuses cover a record's whole life. `queued` and `claimed` are still live;
 
 A message can remain `sent` while RimZ catches up with the agent's hooks. If a hook from that provider, recorded after the send and inside its confirmation window, is still waiting to be processed, RimZ waits rather than sending another copy or timing out a command.
 
+A prompt sent while an agent is starting after a resume also stays `sent`, keeping its queue position rather than being typed again. RimZ waits until the agent reports its first activity since the resume, or ten confirmation windows pass after the resume (five minutes by default), then lets the most recently armed confirmation deadline finish before retrying. An ordinary startup hold adds no warning in `rimz doctor`. A write from before the resume still retries normally, because it went to the previous process.
+
 `message steer` delivers past the schedule, the conditions, the queue order, and the gate. An open prompt still stops it unless you add `--force`. An expired automatic command cannot be steered; cancel it or requeue it after the sweep records its expiry.
 
 ## Agents message each other

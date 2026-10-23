@@ -1613,6 +1613,223 @@ fn stale_sent_message_waits_for_deferral_after_compaction_closes() {
 }
 
 #[test]
+fn stale_sent_prompt_is_held_while_receiver_starts() {
+    for kind in ["claude", "codex"] {
+        for (resume_gap, unconfirmed_sends) in [(Duration::ZERO, 0), (Duration::from_secs(1), 3)] {
+            let q = Queue::new();
+            let sent = q.sent_with(1, |message| {
+                message.kind = AgentKind::new_unchecked(kind);
+                message.unconfirmed_sends = unconfirmed_sends;
+                message.gate = DeliveryGate::Any;
+            });
+            let window = sent.body.delivery_window();
+            let sent_at = sent.last_sent_at.unwrap();
+            append_receiver_lifecycle(
+                &q,
+                &sent,
+                "rimz.agent-resumed",
+                LifecycleSignal::Registered,
+                sent_at - resume_gap,
+            );
+            let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
+            let now = sent_at + window;
+
+            assert_eq!(
+                q.reconcile_stale_messages("session", now, 3).unwrap(),
+                ReconcileReport::default(),
+                "{kind}, {resume_gap:?}, {unconfirmed_sends}"
+            );
+            let held = q.by_id(&sent.message_id);
+            let mut expected = sent.clone();
+            expected.retry_after = Some(now + window);
+            assert_eq!(held, expected);
+            assert_eq!(
+                std::fs::read(&q.inner.paths.events_log).unwrap(),
+                events_before
+            );
+            let following = q.queue_with(2, |message| message.kind = sent.kind.clone());
+            assert!(
+                q.claim_delivery_batch(&following.message_id, AgentStatus::Idle, now)
+                    .unwrap()
+                    .is_none(),
+                "the startup hold must retain the prompt's FIFO slot"
+            );
+        }
+    }
+}
+
+fn append_receiver_lifecycle(
+    q: &Queue,
+    message: &MessageRecord,
+    event_name: &str,
+    signal: LifecycleSignal,
+    at: Timestamp,
+) {
+    let observation = AgentLifecycleObservation::new(Some(message.agent_id.clone()), signal);
+    let mut event = EventEnvelope::agent_lifecycle(
+        q.workspace_id.clone(),
+        "session",
+        message.kind.as_str(),
+        event_name,
+        &observation,
+    );
+    event.timestamp = at;
+    q.append_event(&event).unwrap();
+}
+
+#[test]
+fn stale_sent_prompt_requeues_after_receiver_starts_and_deferral_expires() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let window = sent.body.delivery_window();
+    let sent_at = sent.last_sent_at.unwrap();
+    append_receiver_lifecycle(
+        &q,
+        &sent,
+        "rimz.agent-resumed",
+        LifecycleSignal::Registered,
+        sent_at,
+    );
+    let now = sent_at + window;
+    assert_eq!(
+        q.reconcile_stale_messages("session", now, 3).unwrap(),
+        ReconcileReport::default()
+    );
+    append_receiver_lifecycle(
+        &q,
+        &sent,
+        "SessionStart",
+        LifecycleSignal::Registered,
+        now + Duration::from_nanos(1),
+    );
+    let retry_after = q.by_id(&sent.message_id).retry_after.unwrap();
+    assert_eq!(
+        q.reconcile_stale_messages("session", retry_after - Duration::from_nanos(1), 3)
+            .unwrap(),
+        ReconcileReport::default()
+    );
+    assert_eq!(q.by_id(&sent.message_id).status, MessageStatus::Sent);
+    assert_eq!(
+        q.reconcile_stale_messages("session", retry_after, 3)
+            .unwrap()
+            .requeued,
+        1
+    );
+    let message = q.by_id(&sent.message_id);
+    assert_eq!(message.status, MessageStatus::Queued);
+    assert_eq!(message.unconfirmed_sends, 1);
+    assert_eq!(q.reason("message.queued"), "reconcile");
+}
+
+#[test]
+fn stale_sent_prompt_startup_hold_ends_at_ten_windows() {
+    for unconfirmed_sends in [0, 3] {
+        let q = Queue::new();
+        let sent = q.sent_with(1, |message| message.unconfirmed_sends = unconfirmed_sends);
+        let resumed_at = sent.last_sent_at.unwrap();
+        let window = sent.body.delivery_window();
+        append_receiver_lifecycle(
+            &q,
+            &sent,
+            "rimz.agent-resumed",
+            LifecycleSignal::Registered,
+            resumed_at,
+        );
+        assert_eq!(
+            q.reconcile_stale_messages("session", resumed_at + window * 9, 3)
+                .unwrap(),
+            ReconcileReport::default()
+        );
+        let report = q
+            .reconcile_stale_messages("session", resumed_at + window * 10, 3)
+            .unwrap();
+        if unconfirmed_sends == 3 {
+            assert_eq!(report.timed_out, 1);
+            assert_eq!(q.history()[0].status, MessageStatus::TimedOut);
+            assert_eq!(q.reason("message.timed_out"), "reconcile");
+        } else {
+            assert_eq!(report.requeued, 1);
+            assert_eq!(q.by_id(&sent.message_id).status, MessageStatus::Queued);
+            assert_eq!(q.by_id(&sent.message_id).unconfirmed_sends, 1);
+            assert_eq!(q.reason("message.queued"), "reconcile");
+        }
+    }
+}
+
+#[test]
+fn starting_receiver_retries_pre_resume_writes_and_times_out_commands() {
+    for body in [MessageBody::Prompt, MessageBody::Command] {
+        let q = Queue::new();
+        let sent = q.sent_with(1, |message| message.body = body);
+        let sent_at = sent.last_sent_at.unwrap();
+        let resumed_at = if body == MessageBody::Prompt {
+            sent_at + Duration::from_nanos(1)
+        } else {
+            sent_at - Duration::from_nanos(1)
+        };
+        append_receiver_lifecycle(
+            &q,
+            &sent,
+            "rimz.agent-resumed",
+            LifecycleSignal::Registered,
+            resumed_at,
+        );
+        let report = q
+            .reconcile_stale_messages("session", sent_at + body.delivery_window(), 3)
+            .unwrap();
+        if body == MessageBody::Prompt {
+            assert_eq!(report.requeued, 1);
+            assert_eq!(q.by_id(&sent.message_id).unconfirmed_sends, 1);
+        } else {
+            assert_eq!(report.timed_out, 1);
+            assert_eq!(q.history()[0].status, MessageStatus::TimedOut);
+            assert_eq!(q.history()[0].unconfirmed_sends, 0);
+        }
+    }
+}
+
+#[test]
+fn correlated_turn_start_confirms_prompt_during_startup_hold() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let sent_at = sent.last_sent_at.unwrap();
+    append_receiver_lifecycle(
+        &q,
+        &sent,
+        "rimz.agent-resumed",
+        LifecycleSignal::Registered,
+        sent_at,
+    );
+    let now = sent_at + sent.body.delivery_window();
+    assert_eq!(
+        q.reconcile_stale_messages("session", now, 3).unwrap(),
+        ReconcileReport::default()
+    );
+    append_receiver_lifecycle(
+        &q,
+        &sent,
+        "UserPromptSubmit",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        now + Duration::from_nanos(1),
+    );
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                prompt: Some(&user_message(&sent.text)),
+            },
+            "session",
+        )
+        .unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].status, MessageStatus::Delivered);
+    assert_eq!(delivered[0].unconfirmed_sends, 0);
+    assert_eq!(delivered[0].last_error, None);
+}
+
+#[test]
 fn stale_sent_message_requeues_once_compaction_bracket_closes() {
     let q = Queue::new();
     let sent = q.sent(1);
