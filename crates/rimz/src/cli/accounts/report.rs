@@ -637,6 +637,44 @@ impl AccountRow {
     fn without_login(&self) -> bool {
         matches!(self.login, None | Some(ProviderStatus::LoggedOut))
     }
+
+    fn state(&self) -> RowState {
+        if !self.installed {
+            return RowState::NotInstalled;
+        }
+        if setup_problem(self) {
+            return RowState::SetupProblem;
+        }
+        if matches!(self.entitlement, Entitlement::Lapsed { .. }) {
+            return RowState::Lapsed;
+        }
+        if rimz::agents::spec_by_kind(self.kind.as_str())
+            .is_some_and(|spec| spec.user_coverage.account.is_unsupported())
+        {
+            return RowState::NoLoginCheck;
+        }
+        if self.login == Some(ProviderStatus::LoggedOut) {
+            return RowState::LoggedOut;
+        }
+        if self.probed_at.is_none() {
+            return RowState::NotProbed;
+        }
+        match self.login {
+            Some(ProviderStatus::LoggedIn) => RowState::LoggedIn,
+            _ => RowState::ProbeFailed,
+        }
+    }
+}
+
+enum RowState {
+    NotInstalled,
+    SetupProblem,
+    Lapsed,
+    NoLoginCheck,
+    LoggedOut,
+    NotProbed,
+    LoggedIn,
+    ProbeFailed,
 }
 
 /// What one run read about a login: its probe record and its panel.
@@ -814,7 +852,7 @@ fn write_overview(
     let other: Vec<_> = single_logins
         .iter()
         .copied()
-        .filter(|row| all || status_label(row, false) == "logged in")
+        .filter(|row| all || matches!(row.state(), RowState::LoggedIn))
         .collect();
     if !other.is_empty() {
         if printed {
@@ -917,11 +955,10 @@ fn write_other_providers(
     headers.push("VERSION");
     let mut table = render::Table::new(headers).indent(3);
     for row in reports {
-        let state = status_label(row, false);
-        let login = if state == "logged in" && row.plan_label.is_some() {
+        let login = if matches!(row.state(), RowState::LoggedIn) && row.plan_label.is_some() {
             plan_cell(row)
         } else {
-            cell(state).fg(plan_tone(row))
+            cell(status_label(row, false)).fg(plan_tone(row))
         };
         let mut cells = vec![
             cell(render::palette::identity_name(row.kind.as_str()))
@@ -958,8 +995,8 @@ fn unchecked_logins(reports: &[&AccountRow]) -> Option<String> {
     let mut unsupported = Vec::new();
     for row in reports.iter().filter(|row| row.installed) {
         let kind = row.kind.as_str();
-        match status_label(row, false).as_str() {
-            "probe failed" => {
+        match row.state() {
+            RowState::ProbeFailed => {
                 let cause = row.probe_error.as_deref();
                 if let Some((_, kinds)) = failures.iter_mut().find(|(seen, _)| *seen == cause) {
                     kinds.push(kind);
@@ -967,8 +1004,8 @@ fn unchecked_logins(reports: &[&AccountRow]) -> Option<String> {
                     failures.push((cause, vec![kind]));
                 }
             }
-            "not probed" => unprobed.push(kind),
-            "no login check" => unsupported.push(kind),
+            RowState::NotProbed => unprobed.push(kind),
+            RowState::NoLoginCheck => unsupported.push(kind),
             _ => {}
         }
     }
@@ -1456,30 +1493,15 @@ fn plan_cell(report: &AccountRow) -> render::Cell {
 }
 
 fn status_label(report: &AccountRow, cause: bool) -> String {
-    if !report.installed {
-        return "not installed".to_owned();
-    }
-    if setup_problem(report) {
-        return report.status.as_str().to_owned();
-    }
-    if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
-        return "lapsed".to_owned();
-    }
-    if rimz::agents::spec_by_kind(report.kind.as_str())
-        .is_some_and(|spec| spec.user_coverage.account.is_unsupported())
-    {
-        return "no login check".to_owned();
-    }
-    if report.login == Some(ProviderStatus::LoggedOut) {
-        return "logged out".to_owned();
-    }
-    if report.probed_at.is_none() {
-        return "not probed".to_owned();
-    }
-    match report.login {
-        Some(ProviderStatus::LoggedIn) => "logged in".to_owned(),
-        Some(ProviderStatus::LoggedOut) => "logged out".to_owned(),
-        _ => match report.probe_error.as_deref().filter(|_| cause) {
+    match report.state() {
+        RowState::NotInstalled => "not installed".to_owned(),
+        RowState::SetupProblem => report.status.as_str().to_owned(),
+        RowState::Lapsed => "lapsed".to_owned(),
+        RowState::NoLoginCheck => "no login check".to_owned(),
+        RowState::LoggedOut => "logged out".to_owned(),
+        RowState::NotProbed => "not probed".to_owned(),
+        RowState::LoggedIn => "logged in".to_owned(),
+        RowState::ProbeFailed => match report.probe_error.as_deref().filter(|_| cause) {
             Some(error) => format!("probe failed: {error}"),
             None => "probe failed".to_owned(),
         },
