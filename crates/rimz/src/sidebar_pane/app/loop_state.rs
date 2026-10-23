@@ -700,104 +700,12 @@ impl LoopState {
             pane.freeze_remaining(v, now_ms)
         })
     }
-}
 
-impl PaneState {
-    fn freeze_remaining(&mut self, v: &mut ViewBorrow<'_>, now_ms: i64) -> Option<Duration> {
-        let hold = v.state.freeze.as_ref()?;
-        Some(Duration::from_millis(
-            (hold.deadline_ms(self.parked(v, now_ms as u64)) - now_ms).max(0) as u64,
-        ))
-    }
-}
-
-impl LoopState {
     fn frame_timing(&mut self) -> (bool, Duration) {
         self.views
             .with(&mut self.pane, Route::READ, PaneState::frame_timing)
     }
-}
 
-impl PaneState {
-    fn frame_timing(&mut self, v: &mut ViewBorrow<'_>) -> (bool, Duration) {
-        let clock = frame_clock(
-            self.clock.now(),
-            v.context.anim_start,
-            v.context.current.theme.display.resolved_refresh_ms(),
-        );
-        let alert_active = alert_active(v.context);
-        let watched = self.watched(v);
-        let animating = watched
-            && render::animation_interval(
-                &v.context.current,
-                v.state,
-                &self.ui,
-                clock.phase,
-                alert_active,
-            )
-            .is_some();
-        let active = !self.self_close.confirming_empty()
-            && (watched && (animating || self.dirty || self.focus_marker_due(v, self.clock.now())));
-        let mut timeout = if active {
-            self.next_frame
-                .saturating_duration_since(self.clock.now())
-                .max(FRAME_MIN_TIMEOUT)
-        } else {
-            // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer.
-            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
-                self.clock
-                    .now()
-                    .saturating_duration_since(self.last_self_close_check),
-            );
-            let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
-            if watched
-                && let Some(remaining) =
-                    self.freeze_remaining(v, self.clock.timestamp().as_millisecond())
-            {
-                timeout = timeout.min(remaining);
-            }
-            timeout.max(FRAME_MIN_TIMEOUT)
-        };
-        if watched && let Some(FocusMarker::Dwelling(until)) = v.context.focus_marker {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(until) = v
-            .context
-            .tab_read_dwell_until
-            .filter(|_| v.context.current.own_view.is_some())
-        {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(deadline) = self
-            .width_control
-            .feedback_deadline()
-            .into_iter()
-            .chain(self.caps_refresh_deadline)
-            .min()
-        {
-            timeout = timeout.min(
-                deadline
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(remaining) = gate_remaining(&v.context.gate, self.clock.timestamp()) {
-            timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
-        }
-        (active, timeout)
-    }
-}
-
-impl LoopState {
     /// Whether an attached client's focus currently lands in this sidebar's tab.
     /// Unknown ownership or own-view state reads as watched so uncertainty never
     /// suppresses motion.
@@ -812,25 +720,7 @@ impl LoopState {
         }
         self.observed_watched()
     }
-}
 
-impl PaneState {
-    fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
-        self.watches_view(snapshot.own_view.as_ref(), &snapshot.viewed_panes)
-    }
-
-    fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
-        let Some(own_pane) = self.config.own_pane.as_ref() else {
-            return true;
-        };
-        let Some(view) = own_view else {
-            return true;
-        };
-        own_tab_viewed(viewed_panes, view, own_pane)
-    }
-}
-
-impl LoopState {
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
         self.drain_snapshot(fetch, true);
     }
@@ -905,115 +795,7 @@ impl LoopState {
     fn alert_active(&self) -> bool {
         self.inspect_view(|_, view| alert_active(view))
     }
-}
 
-impl PaneState {
-    /// Whether the next fold equal to the one just applied may arrive as a
-    /// clock-only delivery. Renderer-local reconciliation state blocks it, so
-    /// that state always meets full content. Exhaustive: a new field must be
-    /// named here, as a blocker or as irrelevant to delivery.
-    fn admits_clock_only(&self, ui: &ViewState, view: &ViewContext, rejected: bool) -> bool {
-        let Self {
-            // Blockers: an exit, a held overlay or focus fence, a gate episode,
-            // a failure streak, a frozen order, an armed read dwell, an empty
-            // confirmation, and a pending focus repair each resolve on a fold.
-            should_exit,
-            fold_effects: _,
-            baseline_seed: _,
-            ui: _,
-            self_close,
-            pending_focus_repair,
-            #[cfg(test)]
-                content_applications: _,
-            #[cfg(test)]
-                projections: _,
-            #[cfg(test)]
-                fold_preparations: _,
-            // Derived from `current`, which equal content leaves unchanged.
-            nav_keys: _,
-            // Loop wiring and identity, fixed for the attachment.
-            config: _,
-            clock: _,
-            runtime: _,
-            host_wake_path: _,
-            diag: _,
-            completion: _,
-            own: _,
-            observe_tx: _,
-            wake: _,
-            room_caps: _,
-            request_reload: _,
-            baseline_changed: _,
-            // Focus-anchor bookkeeping: a live intent or fence holds
-            // `overlay_baseline`, and an anchor change is content.
-            pending_focus_push: _,
-            painted_focus_anchor_ms: _,
-            painted_at: _,
-            painted_height: _,
-            paints: _,
-            paint_reports: _,
-            // Paint, animation, and frame scheduling, which a clock-only
-            // delivery drives itself.
-            paint: _,
-            titled: _,
-            dirty: _,
-            paint_hold: _,
-            next_frame: _,
-            prev_width: _,
-            caps_refresh_deadline: _,
-            width_control: _,
-            observer: _,
-            clicked_row: _,
-            click_guard: _,
-            hold_expired_since_paint: _,
-            optimistic_watch_until: _,
-            // Maintenance stamps, read against `current`.
-            fetched_at: _,
-            last_self_close_check: _,
-            last_heartbeat: _,
-            // Baseline reporting, read from `ui` outside the fold.
-            last_reported_baseline: _,
-            painted_baseline: _,
-            painted_selection: _,
-            focus_peers: _,
-            input_jump: _,
-        } = self;
-        let ViewContext {
-            overlay_baseline,
-            gate,
-            health,
-            tab_read_dwell_until,
-            pending_input_focus,
-            focus_marker: _,
-            current: _,
-            last_focus_observation: _,
-            last_pulled_rows: _,
-            observation: _,
-            fold_inputs: _,
-            observed_anchor: _,
-            last_folded_focus_intent: _,
-            live_focus_source: _,
-            focus_landing: _,
-            focus_rollback: _,
-            retired_anchor: _,
-            confirmed_focus_intent_ms: _,
-            filter_observed_at: _,
-            anim_start: _,
-        } = view;
-        !should_exit
-            && !rejected
-            && overlay_baseline.is_none()
-            && *gate == GateState::default()
-            && health.failure_streak == 0
-            && ui.freeze.is_none()
-            && tab_read_dwell_until.is_none()
-            && !self_close.confirming_empty()
-            && pending_focus_repair.is_none()
-            && pending_input_focus.is_none()
-    }
-}
-
-impl LoopState {
     pub(super) fn share_width_geometry(
         &mut self,
         geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
@@ -1067,30 +849,7 @@ impl LoopState {
             });
         }
     }
-}
 
-impl PaneState {
-    fn on_focus_failed(
-        &mut self,
-        v: &mut ViewBorrow<'_>,
-        prepared: &FoldPreparation,
-        pane: PaneId,
-        error: String,
-    ) {
-        if v.context.pending_input_focus.as_ref() == Some(&pane) {
-            v.context.pending_input_focus = None;
-        }
-        let Some(label) = v.context.roll_back_focus(v.state, &pane, self.clock.now()) else {
-            return;
-        };
-        self.fold_fused_now(v, prepared);
-        v.context
-            .alert_focus_failure(&label, &error, self.clock.timestamp());
-        self.dirty = true;
-    }
-}
-
-impl LoopState {
     /// A client swap between dispatch and failure routes this pane away from the view that
     /// clicked; the rollback and its alert stay with that view, whose selection follows at its next fold.
     fn fail_rerouted_focus(&mut self, pane: &PaneId, error: &str) -> bool {
@@ -1170,195 +929,15 @@ impl LoopState {
         }
         rejected
     }
-}
 
-impl PaneState {
-    fn reduce_snapshot(
-        &mut self,
-        v: &mut ViewBorrow<'_>,
-        prepared: &FoldPreparation,
-        update: FetchUpdate,
-        seed: bool,
-    ) -> bool {
-        let (update, context) = update.into_parts();
-        v.context.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
-        if let Some(observation) = context.and_then(|context| context.observation.clone()) {
-            v.context.observation = Some(observation);
-        }
-        if let FetchUpdate::Unchanged { clock, .. } = update {
-            clock.apply(&mut v.context.current);
-            v.context.last_focus_observation.panes_observed_at_ms =
-                v.context.current.panes_observed_at_ms;
-            self.fetched_at = self.clock.now();
-            self.last_self_close_check = self.clock.now();
-            self.dirty = true;
-            v.context.fold_inputs = None;
-            self.release_paint_hold_after_snapshot(v, false);
-            return false;
-        }
-        let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
-        let mut fused_event_sent_at_ms = None;
-        let update = match update {
-            FetchUpdate::Snapshot {
-                snapshot,
-                phase,
-                source,
-            } => {
-                #[cfg(test)]
-                {
-                    self.content_applications += 1;
-                }
-                let now_ms = self.clock.now_ms();
-                let pulled = *snapshot;
-                v.context.last_focus_observation = FocusObservation::from_snapshot(&pulled);
-                if v.context.observation.is_some() {
-                    v.context.last_pulled_rows = pulled.rows().count();
-                }
-                let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
-                let events = v.events.clone();
-                let (mut snapshot, focus_event_sent_at_ms) =
-                    v.context
-                        .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
-                if intent.is_none()
-                    && focus_event_sent_at_ms.is_none_or(|stamp| v.focus_event != Some(stamp))
-                    && let Some(focused) = &v.focused
-                {
-                    snapshot.focused_pane.clone_from(focused);
-                }
-                fused_event_sent_at_ms = focus_event_sent_at_ms;
-                FetchUpdate::Snapshot {
-                    snapshot: Box::new(snapshot),
-                    phase,
-                    source,
-                }
-            }
-            failed @ FetchUpdate::Failed { .. } => failed,
-            FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
-            FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
-            FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
-        };
-        self.fetched_at = self.clock.now();
-        let rejected = self.fold_outcome(v, prepared, update, true, seed, fused_event_sent_at_ms);
-        v.context.fold_inputs = None;
-        if snapshot_ok {
-            self.last_self_close_check = self.clock.now();
-            self.fold_effects.retry_focus_repair = true;
-        }
-        self.release_paint_hold_after_snapshot(v, rejected);
-        rejected
-    }
-
-    fn release_paint_hold_after_snapshot(&mut self, v: &mut ViewBorrow<'_>, rejected: bool) {
-        // Release by pane stamp alone. A `Fresh` frame is fresh against the
-        // request that fetched it, and a request sent before the grow can land
-        // after it with a pane list that still counts the closed sibling.
-        if !self.should_exit
-            && !rejected
-            && !self.self_close.confirming_empty()
-            && self
-                .paint_hold
-                .releases_on_stamp(v.context.current.panes_observed_at_ms)
-        {
-            // The snapshot folded a post-signal pane frame. Its own-view
-            // verdict has decided the resize-grow case: exit without
-            // painting when alone, or release the hold and paint at the new
-            // size when siblings remain.
-            self.paint_hold.release();
-        }
-    }
-
-    /// Fuse the last pulled snapshot with the overlay event store and any
-    /// pending focus intent as of `now_ms`.
-    fn fused_snapshot(
-        &mut self,
-        v: &mut ViewBorrow<'_>,
-        prepared: &FoldPreparation,
-        now_ms: u64,
-    ) -> (SidebarSnapshot, Option<u64>) {
-        let pulled = v
-            .context
-            .overlay_baseline
-            .take()
-            .unwrap_or_else(|| v.context.current.clone());
-        let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
-        let events = v.events.clone();
-        let (mut snapshot, stamp) = v
-            .context
-            .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
-        if intent.is_none()
-            && stamp.is_none_or(|stamp| v.focus_event != Some(stamp))
-            && let Some(focused) = &v.focused
-        {
-            snapshot.focused_pane.clone_from(focused);
-        }
-        (snapshot, stamp)
-    }
-}
-
-impl LoopState {
     fn fold_fused_now(&mut self) {
         self.fold_transition(PaneState::fold_fused_now);
     }
-}
 
-impl PaneState {
-    /// Fold a synthetic fused frame and snap the frame deadline so this
-    /// turn's frame phase paints it now.
-    fn fold_fused_now(&mut self, v: &mut ViewBorrow<'_>, prepared: &FoldPreparation) {
-        self.fold_effects.invalidate = true;
-        let (fused, fused_event_sent_at_ms) = self.fused_snapshot(v, prepared, self.clock.now_ms());
-        self.fold_outcome(
-            v,
-            prepared,
-            FetchUpdate::Snapshot {
-                snapshot: Box::new(fused),
-                phase: FetchPhase::Interim,
-                source: SnapshotSource::Cached,
-            },
-            false,
-            false,
-            fused_event_sent_at_ms,
-        );
-        self.next_frame = self.clock.now();
-    }
-}
-
-impl LoopState {
     fn fold_focus_intent(&mut self, anchor: crate::mux::focus_anchor::FocusAnchor) {
         self.fold_transition(|pane, v, prepared| pane.fold_focus_intent(v, prepared, anchor));
     }
-}
 
-impl PaneState {
-    fn fold_focus_intent(
-        &mut self,
-        v: &mut ViewBorrow<'_>,
-        prepared: &FoldPreparation,
-        anchor: crate::mux::focus_anchor::FocusAnchor,
-    ) {
-        if anchor.session_name != self.config.session_name
-            || v.context.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
-        {
-            return;
-        }
-        // The pushed intent is newer than every cut folded before it, the catch-up fold included,
-        // even on a clock that has not moved since: that older read must not retire this anchor.
-        let sampled_at = self.clock.now();
-        v.context.observed_anchor = Some((sampled_at, Some(anchor.clone())));
-        let previous = v
-            .context
-            .fold_inputs
-            .replace(Arc::new(super::fetch::FoldInputs {
-                sampled_at,
-                anchor: Some(anchor),
-                filter: v.state.make_up_filter.clone(),
-            }));
-        self.fold_fused_now(v, prepared);
-        v.context.fold_inputs = previous;
-    }
-}
-
-impl LoopState {
     fn on_focus_push(
         &mut self,
         mut push: FocusPush,
@@ -2168,106 +1747,7 @@ impl LoopState {
         }
         Ok(outcome)
     }
-}
 
-impl PaneState {
-    fn reduce_input(
-        &mut self,
-        v: &mut ViewBorrow<'_>,
-        wakeups: Vec<Wakeup>,
-        now: Instant,
-    ) -> InputOutcome {
-        let keys = &v.context.current.sidebar.keys;
-        if self.nav_keys.0 != *keys {
-            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
-        }
-        let mut outcome = InputOutcome::default();
-        let mut user_input = false;
-        for wakeup in wakeups {
-            user_input |= !matches!(wakeup, Wakeup::Resize);
-            let wheel = matches!(wakeup, Wakeup::Scroll { .. });
-            let alert_active = alert_active(v.context);
-            let live_frame = self
-                .click_guard
-                .as_ref()
-                .filter(|guard| now < guard.until && matches!(wakeup, Wakeup::MouseClick { .. }))
-                .map(|guard| {
-                    (
-                        std::mem::replace(&mut self.ui.interactions, guard.interactions.clone()),
-                        std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
-                    )
-                });
-            let previous_selection = v.state.selected_pane.clone();
-            let previous_row = v
-                .state
-                .selected_index
-                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
-                .map(|row| row.id.clone());
-            let applied = handle_wakeup(
-                wakeup,
-                v.state,
-                &mut self.ui,
-                &v.context.current,
-                &self.nav_keys.1,
-                alert_active,
-            );
-            if let Some((interactions, roster)) = live_frame {
-                self.ui.interactions = interactions;
-                self.ui.painted_roster = roster;
-            }
-            self.clicked_row = None;
-            let selected_row = v
-                .state
-                .selected_index
-                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
-                .map(|row| row.id.clone());
-            if selected_row != previous_row {
-                v.context.pending_input_focus = None;
-                v.state.own_input_reveal = true;
-                v.context.focus_marker = None;
-                v.state.focus_marker_ready = false;
-            }
-            if v.state.selected_pane != previous_selection {
-                v.context.focus_rollback = None;
-            }
-            for effect in &applied.effects {
-                if let InputEffect::Focus(pane) = effect {
-                    v.context.pending_input_focus = Some(pane.clone());
-                    let owner = v
-                        .state
-                        .selected_pane
-                        .as_ref()
-                        .and_then(|selected| v.context.current.row_owning_pane(selected))
-                        .filter(|row| row.pane_ids().any(|id| id == pane))
-                        .or_else(|| v.context.current.row_owning_pane(pane));
-                    v.context.focus_rollback = owner.map(|row| FocusRollback {
-                        target: pane.clone(),
-                        baseline: v.state.baseline_pane.clone(),
-                        label: row.display_name().to_owned(),
-                    });
-                    self.arm_clicked_row(v, pane, now);
-                }
-            }
-            if applied.redraw && !wheel {
-                v.state.scroll_ease.cancel();
-            }
-            if applied.effects.contains(&InputEffect::DismissAlert) {
-                v.context.health.alert = None;
-            }
-            outcome.redraw |= applied.redraw;
-            outcome.effects.extend(applied.effects);
-        }
-        if user_input
-            && (outcome.redraw || !outcome.effects.is_empty())
-            && !outcome.effects.contains(&InputEffect::Reload)
-        {
-            layout_freeze::arm_freeze(v.state, self.clock.timestamp_at(now).as_millisecond());
-        }
-        outcome
-    }
-}
-
-impl LoopState {
     /// Mark a row read without jumping (`m`): write the room receipt,
     /// clear the row locally for an instant repaint, trace the clear, wake the
     /// room so the host prunes the episode and peer tabs converge, and refetch
@@ -2682,9 +2162,564 @@ impl LoopState {
             return Ok(());
         }
     }
+
+    fn arm_paint_hold_on_grow(&mut self, width: u16, now: Instant) -> bool {
+        if !self.pane.paint_hold.is_engaged()
+            && self.pane.self_close.seen_sibling
+            && resize_grew(self.pane.prev_width, width)
+            && grow_beyond_legit(width, self.pane.width_control.max_legit_cols())
+        {
+            self.pane.paint_hold.engage(
+                now,
+                self.pane.clock.timestamp_at(now).as_millisecond().max(0) as u64,
+            );
+            return true;
+        }
+        false
+    }
+
+    fn focus_anchor(&mut self, observed: Instant) -> Option<crate::mux::focus_anchor::FocusAnchor> {
+        self.fold_transition(|pane, v, prepared| pane.focus_anchor(v, prepared, observed))
+    }
+
+    #[cfg(test)]
+    fn focus_placement(&self, pane: &PaneId) -> Option<crate::mux::focus_anchor::FocusPlacement> {
+        self.inspect_view(|state, context| self.pane.focus_placement(state, context, pane))
+    }
+
+    fn owns_focus_target(&self, pane: &PaneId) -> bool {
+        self.pane.owns_focus_target(self.views.mirror(), pane)
+    }
+
+    fn focus_peers_for(&self, pane: &PaneId) -> Option<FocusPeers> {
+        if self.owns_focus_target(pane) {
+            return None;
+        }
+        self.pane.focus_peers.clone()
+    }
+
+    fn focus_push_size_matches(&self, push: &FocusPush, terminal: &Terminal<PaneBackend>) -> bool {
+        let Some(expected) = self.pane.config.own_pane.as_ref().and_then(|pane| {
+            push.expected_panes
+                .as_ref()
+                .and_then(|panes| panes.get(pane))
+        }) else {
+            return false;
+        };
+        terminal
+            .size()
+            .is_ok_and(|size| expected.cols == Some(size.width) && expected.rows == size.height)
+    }
+
+    fn painted_focus_verdict(
+        &self,
+        anchor: &crate::mux::focus_anchor::FocusAnchor,
+        push: Option<&FocusPush>,
+    ) -> Option<PushVerdict> {
+        self.inspect_view(|state, _| {
+            self.pane.painted_focus_verdict(
+                state,
+                self.views.mirror(),
+                &self.pane.painted_selection,
+                anchor,
+                push,
+            )
+        })
+    }
+
+    fn events(&self) -> MutexGuard<'_, EventStore> {
+        self.views
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl PaneState {
+    fn freeze_remaining(&mut self, v: &mut ViewBorrow<'_>, now_ms: i64) -> Option<Duration> {
+        let hold = v.state.freeze.as_ref()?;
+        Some(Duration::from_millis(
+            (hold.deadline_ms(self.parked(v, now_ms as u64)) - now_ms).max(0) as u64,
+        ))
+    }
+
+    fn frame_timing(&mut self, v: &mut ViewBorrow<'_>) -> (bool, Duration) {
+        let clock = frame_clock(
+            self.clock.now(),
+            v.context.anim_start,
+            v.context.current.theme.display.resolved_refresh_ms(),
+        );
+        let alert_active = alert_active(v.context);
+        let watched = self.watched(v);
+        let animating = watched
+            && render::animation_interval(
+                &v.context.current,
+                v.state,
+                &self.ui,
+                clock.phase,
+                alert_active,
+            )
+            .is_some();
+        let active = !self.self_close.confirming_empty()
+            && (watched && (animating || self.dirty || self.focus_marker_due(v, self.clock.now())));
+        let mut timeout = if active {
+            self.next_frame
+                .saturating_duration_since(self.clock.now())
+                .max(FRAME_MIN_TIMEOUT)
+        } else {
+            // Cap by the watchdog so the self-close backstop fires on time even
+            // when the data tick is much longer.
+            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
+                self.clock
+                    .now()
+                    .saturating_duration_since(self.last_self_close_check),
+            );
+            let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
+            if watched
+                && let Some(remaining) =
+                    self.freeze_remaining(v, self.clock.timestamp().as_millisecond())
+            {
+                timeout = timeout.min(remaining);
+            }
+            timeout.max(FRAME_MIN_TIMEOUT)
+        };
+        if watched && let Some(FocusMarker::Dwelling(until)) = v.context.focus_marker {
+            timeout = timeout.min(
+                until
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(until) = v
+            .context
+            .tab_read_dwell_until
+            .filter(|_| v.context.current.own_view.is_some())
+        {
+            timeout = timeout.min(
+                until
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(deadline) = self
+            .width_control
+            .feedback_deadline()
+            .into_iter()
+            .chain(self.caps_refresh_deadline)
+            .min()
+        {
+            timeout = timeout.min(
+                deadline
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(remaining) = gate_remaining(&v.context.gate, self.clock.timestamp()) {
+            timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
+        }
+        (active, timeout)
+    }
+
+    fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
+        self.watches_view(snapshot.own_view.as_ref(), &snapshot.viewed_panes)
+    }
+
+    fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
+        let Some(own_pane) = self.config.own_pane.as_ref() else {
+            return true;
+        };
+        let Some(view) = own_view else {
+            return true;
+        };
+        own_tab_viewed(viewed_panes, view, own_pane)
+    }
+
+    /// Whether the next fold equal to the one just applied may arrive as a
+    /// clock-only delivery. Renderer-local reconciliation state blocks it, so
+    /// that state always meets full content. Exhaustive: a new field must be
+    /// named here, as a blocker or as irrelevant to delivery.
+    fn admits_clock_only(&self, ui: &ViewState, view: &ViewContext, rejected: bool) -> bool {
+        let Self {
+            // Blockers: an exit, a held overlay or focus fence, a gate episode,
+            // a failure streak, a frozen order, an armed read dwell, an empty
+            // confirmation, and a pending focus repair each resolve on a fold.
+            should_exit,
+            fold_effects: _,
+            baseline_seed: _,
+            ui: _,
+            self_close,
+            pending_focus_repair,
+            #[cfg(test)]
+                content_applications: _,
+            #[cfg(test)]
+                projections: _,
+            #[cfg(test)]
+                fold_preparations: _,
+            // Derived from `current`, which equal content leaves unchanged.
+            nav_keys: _,
+            // Loop wiring and identity, fixed for the attachment.
+            config: _,
+            clock: _,
+            runtime: _,
+            host_wake_path: _,
+            diag: _,
+            completion: _,
+            own: _,
+            observe_tx: _,
+            wake: _,
+            room_caps: _,
+            request_reload: _,
+            baseline_changed: _,
+            // Focus-anchor bookkeeping: a live intent or fence holds
+            // `overlay_baseline`, and an anchor change is content.
+            pending_focus_push: _,
+            painted_focus_anchor_ms: _,
+            painted_at: _,
+            painted_height: _,
+            paints: _,
+            paint_reports: _,
+            // Paint, animation, and frame scheduling, which a clock-only
+            // delivery drives itself.
+            paint: _,
+            titled: _,
+            dirty: _,
+            paint_hold: _,
+            next_frame: _,
+            prev_width: _,
+            caps_refresh_deadline: _,
+            width_control: _,
+            observer: _,
+            clicked_row: _,
+            click_guard: _,
+            hold_expired_since_paint: _,
+            optimistic_watch_until: _,
+            // Maintenance stamps, read against `current`.
+            fetched_at: _,
+            last_self_close_check: _,
+            last_heartbeat: _,
+            // Baseline reporting, read from `ui` outside the fold.
+            last_reported_baseline: _,
+            painted_baseline: _,
+            painted_selection: _,
+            focus_peers: _,
+            input_jump: _,
+        } = self;
+        let ViewContext {
+            overlay_baseline,
+            gate,
+            health,
+            tab_read_dwell_until,
+            pending_input_focus,
+            focus_marker: _,
+            current: _,
+            last_focus_observation: _,
+            last_pulled_rows: _,
+            observation: _,
+            fold_inputs: _,
+            observed_anchor: _,
+            last_folded_focus_intent: _,
+            live_focus_source: _,
+            focus_landing: _,
+            focus_rollback: _,
+            retired_anchor: _,
+            confirmed_focus_intent_ms: _,
+            filter_observed_at: _,
+            anim_start: _,
+        } = view;
+        !should_exit
+            && !rejected
+            && overlay_baseline.is_none()
+            && *gate == GateState::default()
+            && health.failure_streak == 0
+            && ui.freeze.is_none()
+            && tab_read_dwell_until.is_none()
+            && !self_close.confirming_empty()
+            && pending_focus_repair.is_none()
+            && pending_input_focus.is_none()
+    }
+
+    fn on_focus_failed(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        pane: PaneId,
+        error: String,
+    ) {
+        if v.context.pending_input_focus.as_ref() == Some(&pane) {
+            v.context.pending_input_focus = None;
+        }
+        let Some(label) = v.context.roll_back_focus(v.state, &pane, self.clock.now()) else {
+            return;
+        };
+        self.fold_fused_now(v, prepared);
+        v.context
+            .alert_focus_failure(&label, &error, self.clock.timestamp());
+        self.dirty = true;
+    }
+
+    fn reduce_snapshot(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        update: FetchUpdate,
+        seed: bool,
+    ) -> bool {
+        let (update, context) = update.into_parts();
+        v.context.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
+        if let Some(observation) = context.and_then(|context| context.observation.clone()) {
+            v.context.observation = Some(observation);
+        }
+        if let FetchUpdate::Unchanged { clock, .. } = update {
+            clock.apply(&mut v.context.current);
+            v.context.last_focus_observation.panes_observed_at_ms =
+                v.context.current.panes_observed_at_ms;
+            self.fetched_at = self.clock.now();
+            self.last_self_close_check = self.clock.now();
+            self.dirty = true;
+            v.context.fold_inputs = None;
+            self.release_paint_hold_after_snapshot(v, false);
+            return false;
+        }
+        let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
+        let mut fused_event_sent_at_ms = None;
+        let update = match update {
+            FetchUpdate::Snapshot {
+                snapshot,
+                phase,
+                source,
+            } => {
+                #[cfg(test)]
+                {
+                    self.content_applications += 1;
+                }
+                let now_ms = self.clock.now_ms();
+                let pulled = *snapshot;
+                v.context.last_focus_observation = FocusObservation::from_snapshot(&pulled);
+                if v.context.observation.is_some() {
+                    v.context.last_pulled_rows = pulled.rows().count();
+                }
+                let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
+                let events = v.events.clone();
+                let (mut snapshot, focus_event_sent_at_ms) =
+                    v.context
+                        .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
+                if intent.is_none()
+                    && focus_event_sent_at_ms.is_none_or(|stamp| v.focus_event != Some(stamp))
+                    && let Some(focused) = &v.focused
+                {
+                    snapshot.focused_pane.clone_from(focused);
+                }
+                fused_event_sent_at_ms = focus_event_sent_at_ms;
+                FetchUpdate::Snapshot {
+                    snapshot: Box::new(snapshot),
+                    phase,
+                    source,
+                }
+            }
+            failed @ FetchUpdate::Failed { .. } => failed,
+            FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
+            FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
+            FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
+        };
+        self.fetched_at = self.clock.now();
+        let rejected = self.fold_outcome(v, prepared, update, true, seed, fused_event_sent_at_ms);
+        v.context.fold_inputs = None;
+        if snapshot_ok {
+            self.last_self_close_check = self.clock.now();
+            self.fold_effects.retry_focus_repair = true;
+        }
+        self.release_paint_hold_after_snapshot(v, rejected);
+        rejected
+    }
+
+    fn release_paint_hold_after_snapshot(&mut self, v: &mut ViewBorrow<'_>, rejected: bool) {
+        // Release by pane stamp alone. A `Fresh` frame is fresh against the
+        // request that fetched it, and a request sent before the grow can land
+        // after it with a pane list that still counts the closed sibling.
+        if !self.should_exit
+            && !rejected
+            && !self.self_close.confirming_empty()
+            && self
+                .paint_hold
+                .releases_on_stamp(v.context.current.panes_observed_at_ms)
+        {
+            // The snapshot folded a post-signal pane frame. Its own-view
+            // verdict has decided the resize-grow case: exit without
+            // painting when alone, or release the hold and paint at the new
+            // size when siblings remain.
+            self.paint_hold.release();
+        }
+    }
+
+    /// Fuse the last pulled snapshot with the overlay event store and any
+    /// pending focus intent as of `now_ms`.
+    fn fused_snapshot(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        now_ms: u64,
+    ) -> (SidebarSnapshot, Option<u64>) {
+        let pulled = v
+            .context
+            .overlay_baseline
+            .take()
+            .unwrap_or_else(|| v.context.current.clone());
+        let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
+        let events = v.events.clone();
+        let (mut snapshot, stamp) = v
+            .context
+            .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
+        if intent.is_none()
+            && stamp.is_none_or(|stamp| v.focus_event != Some(stamp))
+            && let Some(focused) = &v.focused
+        {
+            snapshot.focused_pane.clone_from(focused);
+        }
+        (snapshot, stamp)
+    }
+
+    /// Fold a synthetic fused frame and snap the frame deadline so this
+    /// turn's frame phase paints it now.
+    fn fold_fused_now(&mut self, v: &mut ViewBorrow<'_>, prepared: &FoldPreparation) {
+        self.fold_effects.invalidate = true;
+        let (fused, fused_event_sent_at_ms) = self.fused_snapshot(v, prepared, self.clock.now_ms());
+        self.fold_outcome(
+            v,
+            prepared,
+            FetchUpdate::Snapshot {
+                snapshot: Box::new(fused),
+                phase: FetchPhase::Interim,
+                source: SnapshotSource::Cached,
+            },
+            false,
+            false,
+            fused_event_sent_at_ms,
+        );
+        self.next_frame = self.clock.now();
+    }
+
+    fn fold_focus_intent(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        anchor: crate::mux::focus_anchor::FocusAnchor,
+    ) {
+        if anchor.session_name != self.config.session_name
+            || v.context.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
+        {
+            return;
+        }
+        // The pushed intent is newer than every cut folded before it, the catch-up fold included,
+        // even on a clock that has not moved since: that older read must not retire this anchor.
+        let sampled_at = self.clock.now();
+        v.context.observed_anchor = Some((sampled_at, Some(anchor.clone())));
+        let previous = v
+            .context
+            .fold_inputs
+            .replace(Arc::new(super::fetch::FoldInputs {
+                sampled_at,
+                anchor: Some(anchor),
+                filter: v.state.make_up_filter.clone(),
+            }));
+        self.fold_fused_now(v, prepared);
+        v.context.fold_inputs = previous;
+    }
+
+    fn reduce_input(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        wakeups: Vec<Wakeup>,
+        now: Instant,
+    ) -> InputOutcome {
+        let keys = &v.context.current.sidebar.keys;
+        if self.nav_keys.0 != *keys {
+            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
+        }
+        let mut outcome = InputOutcome::default();
+        let mut user_input = false;
+        for wakeup in wakeups {
+            user_input |= !matches!(wakeup, Wakeup::Resize);
+            let wheel = matches!(wakeup, Wakeup::Scroll { .. });
+            let alert_active = alert_active(v.context);
+            let live_frame = self
+                .click_guard
+                .as_ref()
+                .filter(|guard| now < guard.until && matches!(wakeup, Wakeup::MouseClick { .. }))
+                .map(|guard| {
+                    (
+                        std::mem::replace(&mut self.ui.interactions, guard.interactions.clone()),
+                        std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
+                    )
+                });
+            let previous_selection = v.state.selected_pane.clone();
+            let previous_row = v
+                .state
+                .selected_index
+                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
+                .map(|row| row.id.clone());
+            let applied = handle_wakeup(
+                wakeup,
+                v.state,
+                &mut self.ui,
+                &v.context.current,
+                &self.nav_keys.1,
+                alert_active,
+            );
+            if let Some((interactions, roster)) = live_frame {
+                self.ui.interactions = interactions;
+                self.ui.painted_roster = roster;
+            }
+            self.clicked_row = None;
+            let selected_row = v
+                .state
+                .selected_index
+                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
+                .map(|row| row.id.clone());
+            if selected_row != previous_row {
+                v.context.pending_input_focus = None;
+                v.state.own_input_reveal = true;
+                v.context.focus_marker = None;
+                v.state.focus_marker_ready = false;
+            }
+            if v.state.selected_pane != previous_selection {
+                v.context.focus_rollback = None;
+            }
+            for effect in &applied.effects {
+                if let InputEffect::Focus(pane) = effect {
+                    v.context.pending_input_focus = Some(pane.clone());
+                    let owner = v
+                        .state
+                        .selected_pane
+                        .as_ref()
+                        .and_then(|selected| v.context.current.row_owning_pane(selected))
+                        .filter(|row| row.pane_ids().any(|id| id == pane))
+                        .or_else(|| v.context.current.row_owning_pane(pane));
+                    v.context.focus_rollback = owner.map(|row| FocusRollback {
+                        target: pane.clone(),
+                        baseline: v.state.baseline_pane.clone(),
+                        label: row.display_name().to_owned(),
+                    });
+                    self.arm_clicked_row(v, pane, now);
+                }
+            }
+            if applied.redraw && !wheel {
+                v.state.scroll_ease.cancel();
+            }
+            if applied.effects.contains(&InputEffect::DismissAlert) {
+                v.context.health.alert = None;
+            }
+            outcome.redraw |= applied.redraw;
+            outcome.effects.extend(applied.effects);
+        }
+        if user_input
+            && (outcome.redraw || !outcome.effects.is_empty())
+            && !outcome.effects.contains(&InputEffect::Reload)
+        {
+            layout_freeze::arm_freeze(v.state, self.clock.timestamp_at(now).as_millisecond());
+        }
+        outcome
+    }
+
     fn compose_frame(
         &mut self,
         v: &mut ViewBorrow<'_>,
@@ -2754,26 +2789,7 @@ impl PaneState {
         self.observe_paint(v, now);
         (Ok(()), frame)
     }
-}
 
-impl LoopState {
-    fn arm_paint_hold_on_grow(&mut self, width: u16, now: Instant) -> bool {
-        if !self.pane.paint_hold.is_engaged()
-            && self.pane.self_close.seen_sibling
-            && resize_grew(self.pane.prev_width, width)
-            && grow_beyond_legit(width, self.pane.width_control.max_legit_cols())
-        {
-            self.pane.paint_hold.engage(
-                now,
-                self.pane.clock.timestamp_at(now).as_millisecond().max(0) as u64,
-            );
-            return true;
-        }
-        false
-    }
-}
-
-impl PaneState {
     /// Fold one fetch outcome into the render state: gate it against the
     /// last-known-good frame, update health, snapshot, and selection, and
     /// report whether the loop should exit.
@@ -2994,15 +3010,7 @@ impl PaneState {
         self.dirty = true;
         applied.rejected
     }
-}
 
-impl LoopState {
-    fn focus_anchor(&mut self, observed: Instant) -> Option<crate::mux::focus_anchor::FocusAnchor> {
-        self.fold_transition(|pane, v, prepared| pane.focus_anchor(v, prepared, observed))
-    }
-}
-
-impl PaneState {
     fn focus_anchor(
         &mut self,
         v: &mut ViewBorrow<'_>,
@@ -3019,16 +3027,7 @@ impl PaneState {
         v.context
             .observe_focus_anchor(&self.config.session_name, observed, loaded, own_pane)
     }
-}
 
-impl LoopState {
-    #[cfg(test)]
-    fn focus_placement(&self, pane: &PaneId) -> Option<crate::mux::focus_anchor::FocusPlacement> {
-        self.inspect_view(|state, context| self.pane.focus_placement(state, context, pane))
-    }
-}
-
-impl PaneState {
     fn focus_placement(
         &self,
         view: &ViewState,
@@ -3051,15 +3050,7 @@ impl PaneState {
                     .collect(),
             })
     }
-}
 
-impl LoopState {
-    fn owns_focus_target(&self, pane: &PaneId) -> bool {
-        self.pane.owns_focus_target(self.views.mirror(), pane)
-    }
-}
-
-impl PaneState {
     fn owns_focus_target(&self, snapshot: &SidebarSnapshot, pane: &PaneId) -> bool {
         snapshot.own_view.as_ref().is_some_and(|view| {
             self.config
@@ -3068,47 +3059,7 @@ impl PaneState {
                 .is_some_and(|own| own_tab_viewed(std::slice::from_ref(pane), view, own))
         })
     }
-}
 
-impl LoopState {
-    fn focus_peers_for(&self, pane: &PaneId) -> Option<FocusPeers> {
-        if self.owns_focus_target(pane) {
-            return None;
-        }
-        self.pane.focus_peers.clone()
-    }
-
-    fn focus_push_size_matches(&self, push: &FocusPush, terminal: &Terminal<PaneBackend>) -> bool {
-        let Some(expected) = self.pane.config.own_pane.as_ref().and_then(|pane| {
-            push.expected_panes
-                .as_ref()
-                .and_then(|panes| panes.get(pane))
-        }) else {
-            return false;
-        };
-        terminal
-            .size()
-            .is_ok_and(|size| expected.cols == Some(size.width) && expected.rows == size.height)
-    }
-
-    fn painted_focus_verdict(
-        &self,
-        anchor: &crate::mux::focus_anchor::FocusAnchor,
-        push: Option<&FocusPush>,
-    ) -> Option<PushVerdict> {
-        self.inspect_view(|state, _| {
-            self.pane.painted_focus_verdict(
-                state,
-                self.views.mirror(),
-                &self.pane.painted_selection,
-                anchor,
-                push,
-            )
-        })
-    }
-}
-
-impl PaneState {
     fn painted_focus_verdict(
         &self,
         ui: &ViewState,
@@ -3215,18 +3166,7 @@ impl PaneState {
         self.watched(v)
             && matches!(v.context.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until)
     }
-}
 
-impl LoopState {
-    fn events(&self) -> MutexGuard<'_, EventStore> {
-        self.views
-            .events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl PaneState {
     fn observe_commit(&mut self, v: &mut ViewBorrow<'_>) {
         let Some(common) = &v.context.observation else {
             return;
@@ -3402,9 +3342,7 @@ impl PaneState {
                 Some(duration_millis(LAYOUT_FREEZE)),
             ));
     }
-}
 
-impl PaneState {
     fn watched(&self, v: &ViewBorrow<'_>) -> bool {
         v.target.shared_id().is_some()
             || self
