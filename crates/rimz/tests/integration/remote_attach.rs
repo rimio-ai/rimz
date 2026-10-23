@@ -2905,7 +2905,10 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
 
 #[test]
 fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
-    const PARKED: Duration = Duration::from_millis(3000);
+    // The bound is the only proof of the kill, so ssh parks far past it: a lost kill fails by
+    // seconds, not by poll lag.
+    const KILL_BOUND: Duration = Duration::from_secs(5);
+    const PARKED: Duration = Duration::from_secs(15);
 
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -2938,11 +2941,8 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
 
     wait_for_main_invocations(&mut child, &log, 1, COMMAND_TIMEOUT);
     let first_attach_seen = Instant::now();
-    wait_for_main_invocations(&mut child, &log, 2, COMMAND_TIMEOUT);
-    assert!(
-        first_attach_seen.elapsed() < PARKED,
-        "the replacement attach must beat the parked three-second ssh child"
-    );
+    wait_for_main_invocations(&mut child, &log, 2, KILL_BOUND);
+    let reattached_after = first_attach_seen.elapsed();
     child
         .kill()
         .expect("stop supervisor after observing reattach");
@@ -2952,7 +2952,7 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
         stderr.contains(
             "link to dev-box confirmed dead — host reachable, session silent; reconnecting now"
         ),
-        "the evidence-backed zombie kill is visible: {stderr}"
+        "zombie kill notice after reattach in {reattached_after:?}: {stderr}"
     );
 }
 
