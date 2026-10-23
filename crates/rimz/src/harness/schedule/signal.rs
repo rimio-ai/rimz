@@ -78,10 +78,32 @@ impl FromStr for SignalSelector {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SignalResolution {
+pub(in crate::harness) enum SignalResolution {
     Ignore,
     Skip,
     Deliver,
+}
+
+pub(in crate::harness) fn resolve_subscription(
+    selector: &SignalSelector,
+    matches: &std::collections::BTreeMap<String, String>,
+    signal: &Signal,
+) -> SignalResolution {
+    if selector.family() != signal.name.family()
+        || !matches.iter().all(|(key, expected)| {
+            signal
+                .payload
+                .get(key)
+                .is_some_and(|value| is_match_wildcard(expected) || match_value(value) == *expected)
+        })
+    {
+        return SignalResolution::Ignore;
+    }
+    if selector.matches(&signal.name) {
+        SignalResolution::Deliver
+    } else {
+        SignalResolution::Skip
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
