@@ -115,8 +115,9 @@ pub(crate) fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
     })
 }
 
-/// Publish a directory symlink through a sibling rename and durable parent barrier.
-pub(crate) fn symlink_dir_atomically(target: &Path, link: &Path) -> Result<()> {
+/// Publish a symlink, to a file or a directory alike, through a sibling rename and durable
+/// parent barrier, replacing whatever entry `link` names.
+pub(crate) fn symlink_atomically(target: &Path, link: &Path) -> Result<()> {
     publish_temp(link, Fsync::Durable, |tmp| {
         std::os::unix::fs::symlink(target, tmp).map_err(AtomicErr::io(tmp))
     })
