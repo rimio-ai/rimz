@@ -2905,8 +2905,8 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
 
 #[test]
 fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
-    // The bound is the only proof of the kill, so ssh parks far past it: a lost kill fails by
-    // seconds, not by poll lag.
+    // The bound is the only proof that the kill came in time, so ssh parks far past it: a lost
+    // or late kill fails at the bound, never at the park.
     const KILL_BOUND: Duration = Duration::from_secs(5);
     const PARKED: Duration = Duration::from_secs(15);
 
