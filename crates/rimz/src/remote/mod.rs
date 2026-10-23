@@ -41,8 +41,8 @@ const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
-/// The exit code OpenSSH reserves for its own transport and usage errors —
-/// the "link died" signal the reconnect loop watches for.
+/// OpenSSH's transport, usage, and missing-exit-status code. A session closed
+/// without a status over a live ControlMaster (as `~.` does) also returns it.
 pub const SSH_TRANSPORT_EXIT: i32 = 255;
 
 /// The exit code the guarded snippet returns when the remote host has no
@@ -867,8 +867,8 @@ pub fn attach_error_summary(stderr: &str) -> Option<String> {
 
 /// Whether OpenSSH reports that Ctrl-C interrupted the remote command.
 ///
-/// SSH maps a remote `SIGINT` to its generic status 255, so the diagnostic is
-/// the only distinction from a dropped established transport.
+/// SSH maps a remote `SIGINT` to its generic status 255, so recognize the
+/// diagnostic before transport classification.
 pub fn attach_interrupted(exit_code: Option<i32>, stderr: &str) -> bool {
     exit_code == Some(SSH_TRANSPORT_EXIT)
         && stderr
@@ -920,10 +920,9 @@ fn env_ms(key: &str) -> Option<Duration> {
 /// What the supervisor does with a finished ssh session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// ssh exited 0 — the user detached while the remote mux session stayed
-    /// live.
-    /// A lost remote session is translated to [`REMOTE_SESSION_LOST_EXIT`]
-    /// before ssh returns.
+    /// The attach ended cleanly: ssh exited 0, the remote room ended
+    /// ([`REMOTE_SESSION_LOST_EXIT`]), or a session closed with status 255 over
+    /// a live ControlMaster (as `~.` does).
     CleanExit,
     /// Not worth retrying — auth failure, missing remote rimz, a stuck remote
     /// room, or a deliberate kill. Surface the exit and stop.
@@ -945,7 +944,8 @@ pub struct ReconnectState {
 
 impl ReconnectState {
     /// Settle one finished ssh process. Terminal attaches supply ControlMaster
-    /// liveness and whether the foreground client lived past the gatetime;
+    /// liveness (the owned master process is running and a bounded `ssh -O check`
+    /// succeeds) and whether the foreground client lived past the gatetime;
     /// callers without a multiplexer client pass `None`.
     pub fn settle(
         &mut self,
@@ -965,7 +965,10 @@ impl ReconnectState {
                 | REMOTE_PATH_MISSING_EXIT),
             ) => Verdict::Fatal { code },
             Some(REMOTE_SESSION_LOST_EXIT) => Verdict::CleanExit,
-            Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
+            Some(SSH_TRANSPORT_EXIT) if self.established => match evidence {
+                Some((true, _)) => Verdict::CleanExit,
+                _ => Verdict::Retry,
+            },
             Some(_)
                 if self.established
                     && evidence.is_some_and(|(control_alive, _)| !control_alive) =>

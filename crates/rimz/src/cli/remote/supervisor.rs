@@ -327,7 +327,7 @@ pub(super) fn supervise_remote(
         let attach_evidence = supervisor
             .master
             .as_mut()
-            .map(MasterGuard::is_running)
+            .map(|master| master.is_alive(&target))
             .transpose()?
             .map(|control_alive| (control_alive, outcome.lived_past_gatetime));
         if outcome.established {
@@ -1334,13 +1334,21 @@ struct MasterGuard {
 }
 
 impl MasterGuard {
-    fn is_running(&mut self) -> Result<bool> {
-        self.child
+    /// A live connection has a running master that still answers `ssh -O check`.
+    /// Its listener can close before the process exits during transport shutdown;
+    /// a failed or timed-out check therefore means it is not alive.
+    fn is_alive(&mut self, target: &RemoteTarget) -> Result<bool> {
+        let running = self
+            .child
             .as_mut()
             .context("SSH ControlMaster is not running")?
             .try_wait()
-            .context("polling SSH ControlMaster")
-            .map(|status| status.is_none())
+            .context("polling SSH ControlMaster")?
+            .is_none();
+        Ok(running
+            && control_check_spec(target, &self.control_path)
+                .run_with_timeout(CONTROL_MASTER_CHECK_TIMEOUT)
+                .is_ok())
     }
 
     /// Wait for the owning ControlMaster. Master-owned forwards remain live

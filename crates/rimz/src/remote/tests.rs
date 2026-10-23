@@ -931,6 +931,19 @@ fn unreachable_retry_delay_uses_the_user_safety_ladder() {
 fn reconnect_state_settles_established_sessions_and_failures() {
     let mut state = ReconnectState::default();
 
+    for (evidence, verdict) in [
+        ((true, true), Verdict::CleanExit),
+        ((true, false), Verdict::CleanExit),
+        ((false, true), Verdict::Retry),
+        ((false, false), Verdict::Retry),
+    ] {
+        assert_eq!(
+            ReconnectState::default().settle(Some(SSH_TRANSPORT_EXIT), true, Some(evidence)),
+            verdict,
+            "transport exit with evidence {evidence:?}"
+        );
+    }
+
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false, None),
         Verdict::Fatal {
