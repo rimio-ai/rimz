@@ -1,4 +1,4 @@
-//! Borrow the plane's presentation only during in-memory transitions.
+//! `ViewAccess` lends explicit client views to `PaneState` with a pre-lock overlay cut.
 
 use super::super::views::{ViewId, Views};
 use super::*;

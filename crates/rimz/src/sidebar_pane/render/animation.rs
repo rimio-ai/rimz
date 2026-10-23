@@ -55,7 +55,7 @@ pub(super) enum AnimationCadence {
 /// rows, and every unread row past the lead resting at its static crest — keeps
 /// idling on the slow data tick. A stalled agent is projected to `failed`
 /// upstream, so it reads as an attention row here. The cockpit's headline-spend
-/// count-up rides a separate gate (`UiState::tally`), so a finished-turn climb
+/// count-up rides a separate gate (`ViewState::tally`), so a finished-turn climb
 /// keeps the tick alive even when every row is otherwise static.
 ///
 /// Deliberately unfiltered by the make-up filter: the cockpit's attention

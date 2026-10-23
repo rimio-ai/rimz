@@ -283,7 +283,7 @@ On Zellij, `list-clients` replies without the `CLIENT_ID` header are foreign, no
 | Zellij plugin sample withheld (`clients_withheld: true`) | Admit the host sample only when it names a pane absent from the prior frame's pane-ID set, or the prior focused pane is no longer live; otherwise keep the live prior with `FocusOrigin::Prior`, even for an empty or unavailable sample |
 | Realtime `FocusChanged` between pulls | Updated |
 
-The attached-client sample is the only runtime authority for focus. Hidden tabs carry no RimZ focus state, and the renderer's `UiState::baseline_pane` is only a local highlight and restoration hint. `PaneRef` and pane topology carry no focus bit: `rimz pane list` reports identity and process context without an active mark, hook recovery uses a fresh unique client view to choose among plural candidates, and `rimz sidebar focus --toggle` requires the same unambiguous view. Upstream roster focus marks never enter RimZ's model, diagnostics, binding, or repair decisions.
+The attached-client sample is the only runtime authority for focus. Hidden tabs carry no RimZ focus state, and the view's `ViewState::baseline_pane` is only a local highlight and restoration hint. `PaneRef` and pane topology carry no focus bit: `rimz pane list` reports identity and process context without an active mark, hook recovery uses a fresh unique client view to choose among plural candidates, and `rimz sidebar focus --toggle` requires the same unambiguous view. Upstream roster focus marks never enter RimZ's model, diagnostics, binding, or repair decisions.
 
 ### Jumping to a pane
 

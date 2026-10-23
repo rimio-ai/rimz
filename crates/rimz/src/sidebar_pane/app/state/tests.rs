@@ -455,7 +455,6 @@ impl ApplyHarness {
     }
 
     /// The view this pane's next painted fold borrows, routed and made as that borrow would.
-    /// Outside a borrow the pane's own copies are scratch, so a test seeds and reads here.
     fn routed_view<T>(&mut self, access: impl FnOnce(&mut ViewState, &mut ViewContext) -> T) -> T {
         let now = std::time::Instant::now();
         let mut views = self.views.lock().unwrap();
