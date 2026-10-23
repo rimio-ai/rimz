@@ -909,6 +909,7 @@ impl RunMonitor {
         parent_changed: bool,
         mut spawn: impl FnMut(Duty) -> Result<DutyChild>,
     ) -> bool {
+        self.receipt_dirty |= parent_changed;
         self.waiting_for_receipt = false;
         let mut record = match rimz::harness::run::load(&context.paths, &context.run_id) {
             Ok(record) => record,
@@ -951,8 +952,7 @@ impl RunMonitor {
             return record.status.is_terminal() && run_ready(context);
         }
         if let Some(ordinal) = self.awaiting_reopen {
-            if record.follow_ups <= ordinal && self.follow_up_holds(&context.paths, parent_changed)
-            {
+            if record.follow_ups <= ordinal && self.follow_up_holds(&context.paths) {
                 return false;
             }
             // The follow-up read can wait on the workspace lock; refresh the cleanup decision afterward.
@@ -982,8 +982,7 @@ impl RunMonitor {
         self.receipt_dirty |= ready && !self.run_was_ready;
         self.run_was_ready = ready;
         let queue_changed = self.refresh_queue_stamp(&context.paths);
-        self.receipt_dirty |=
-            parent_changed || queue_changed || self.reported_revision != Some(record.updated_at);
+        self.receipt_dirty |= queue_changed || self.reported_revision != Some(record.updated_at);
         if let Some(code) = self.receipt.as_mut().and_then(DutyChild::poll) {
             self.receipt = None;
             self.receipt_ready = code == 0;
@@ -1019,12 +1018,12 @@ impl RunMonitor {
         ready && self.receipt_ready && !self.receipt_dirty && self.receipt.is_none()
     }
 
-    fn follow_up_holds(&mut self, paths: &rimz::StatePaths, parent_changed: bool) -> bool {
+    fn follow_up_holds(&mut self, paths: &rimz::StatePaths) -> bool {
         let Some(message_id) = self.follow_up_message.clone() else {
             return true;
         };
         let queue_changed = self.refresh_queue_stamp(paths);
-        self.receipt_dirty |= parent_changed || queue_changed;
+        self.receipt_dirty |= queue_changed;
         if self.follow_up_held.is_none() || queue_changed {
             self.follow_up_held = Some(
                 match rimz::store::message::read_status(paths, &message_id) {

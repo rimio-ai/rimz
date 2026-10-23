@@ -805,6 +805,47 @@ mod monitor {
     }
 
     #[test]
+    fn parent_frame_survives_a_failed_run_record_read() {
+        let (_dir, context, _record) = fixture(rimz::store::run::RunStatus::Completed);
+        let missing = RunPaths {
+            run_id: rimz::ids::RunId::new(),
+            paths: context.paths.clone(),
+            runtime: context.runtime.clone(),
+        };
+        let now = Instant::now();
+        let mut monitor = RunMonitor::new(true, StopPolicy::ParentReceived, None, now);
+        let calls = RefCell::new(Vec::new());
+        let mut spawn = |duty| {
+            calls.borrow_mut().push(duty);
+            Ok(DutyChild::Fake(Rc::new(RefCell::new(Some(3)))))
+        };
+        assert!(!monitor.poll(&context, now, false, &mut spawn));
+        assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL, false, &mut spawn));
+        assert_eq!(calls.borrow().len(), 1);
+        assert!(!monitor.poll(&missing, now + RUN_MONITOR_POLL, true, &mut spawn));
+        assert!(!monitor.poll(&context, now + PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert_eq!(
+            calls.borrow().len(),
+            2,
+            "the parent frame must survive the failed read and request one receipt"
+        );
+        assert!(!monitor.poll(&context, now + 2 * PARENT_RECEIPT_POLL, false, &mut spawn));
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: true,
+                },
+                Duty::Receipt {
+                    run_id: context.run_id.clone(),
+                    report: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn receipt_after_waiter_leaves_requires_a_fresh_answer() {
         let (_dir, context, record) = fixture(rimz::store::run::RunStatus::Completed);
         let waiter = rimz::harness::run_wake::RunWaiter::bind(
