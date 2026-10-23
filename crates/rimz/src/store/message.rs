@@ -857,7 +857,7 @@ impl MessageRecord {
         self.status == MessageStatus::Queued && self.expires_at().is_some_and(|at| now >= at)
     }
 
-    /// Shared reconciliation and read-side deadline, including any compaction or ingress deferral.
+    /// Shared reconciliation and read-side deadline, including any hold's deferral.
     pub fn sent_reconcile_deadline(&self) -> Option<Timestamp> {
         (self.status == MessageStatus::Sent).then(|| {
             self.retry_after.unwrap_or_else(|| {
@@ -866,7 +866,7 @@ impl MessageRecord {
         })
     }
 
-    /// Read-side mirror of the reconciler's deadline, including a compaction or ingress deferral.
+    /// Read-side mirror of the reconciler's deadline, including any hold's deferral.
     pub(crate) fn sent_hold_expired(&self, now: Timestamp) -> bool {
         self.sent_reconcile_deadline()
             .is_some_and(|deadline| now >= deadline)

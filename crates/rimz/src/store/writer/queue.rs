@@ -17,6 +17,8 @@ use super::super::{Result, Store, ingress, message};
 use super::Txn;
 use super::UnresolvedMessage;
 
+const PROVIDER_START_HOLD_WINDOWS: u32 = 10;
+
 impl MessageRecord {
     fn requeue(&mut self, now: Timestamp, error: impl Into<String>) {
         self.status = MessageStatus::Queued;
@@ -1155,7 +1157,9 @@ impl Store {
     /// a `Sent` record without a time limit because the composer queues the
     /// original write and submits it when compaction ends; resending would
     /// duplicate the turn. Pending same-kind ingress stamped within one body
-    /// window of the write also holds it until applied.
+    /// window of the write also holds it until applied. A prompt written since its
+    /// receiver's resume stays held until the next lifecycle observation or ten
+    /// delivery windows from the resume, whichever comes first.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_messages(
         &self,
@@ -1250,18 +1254,30 @@ impl Store {
                     message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;
                 }
+                let last_sent_at = message.last_sent_at.unwrap_or(message.updated_at);
+                let window = message.body.delivery_window();
                 if pending_ingress.iter().any(|(frame, _)| {
-                    let last_sent_at = message.last_sent_at.unwrap_or(message.updated_at);
                     frame.source == message.kind
-                        && (last_sent_at..last_sent_at + message.body.delivery_window())
-                            .contains(&frame.ts)
+                        && (last_sent_at..last_sent_at + window).contains(&frame.ts)
                 }) {
-                    message.retry_after = Some(now + message.body.delivery_window());
+                    message.retry_after = Some(now + window);
                     message.last_error = Some(
                         "delivery held: hook drain is lagging behind the acknowledgement window"
                             .to_owned(),
                     );
                     report.held_on_ingress += 1;
+                    return MessageUpdate::SilentRewrite;
+                }
+                if message.body.resends_unconfirmed()
+                    && agents.iter().any(|agent| {
+                        message.same_agent_card(agent)
+                            && agent.resumed_at.is_some_and(|resumed_at| {
+                                last_sent_at >= resumed_at
+                                    && now < resumed_at + window * PROVIDER_START_HOLD_WINDOWS
+                            })
+                    })
+                {
+                    message.retry_after = Some(now + window);
                     return MessageUpdate::SilentRewrite;
                 }
                 if !message.body.resends_unconfirmed() {
