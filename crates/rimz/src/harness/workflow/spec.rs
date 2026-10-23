@@ -1,9 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+
+use crate::harness::schedule::when::WhenExpr;
 
 pub use crate::store::workflow::ScopeKind;
 
@@ -15,6 +17,27 @@ pub struct WorkflowSpec {
     pub checks: BTreeMap<String, Check>,
     #[serde(default)]
     pub steps: BTreeMap<String, Step>,
+}
+
+impl WorkflowSpec {
+    /// `Some(empty)` demands checkout facts; `None` means no case reads the forge.
+    pub(crate) fn forge_branches(&self) -> Result<Option<BTreeSet<String>>, SpecErr> {
+        let mut branches = None;
+        for check in self.checks.values() {
+            if !matches!(check.kind(), Some(CheckKind::Condition)) {
+                continue;
+            }
+            for case in &check.cases {
+                let expression = WhenExpr::parse(&case.when)?;
+                if expression.reads_forge() {
+                    branches
+                        .get_or_insert_with(BTreeSet::new)
+                        .extend(expression.forge_branches().map(str::to_owned));
+                }
+            }
+        }
+        Ok(branches)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
