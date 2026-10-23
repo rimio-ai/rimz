@@ -635,6 +635,15 @@ impl crate::agents::capabilities::ContextCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for QwenAdapter {
+    fn has_quota_surface(&self, sub_provider: &str) -> bool {
+        [
+            selection::AlibabaRegion::International,
+            selection::AlibabaRegion::China,
+        ]
+        .into_iter()
+        .any(|region| region.label() == sub_provider)
+    }
+
     fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         account::probe(login_env)
     }

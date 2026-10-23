@@ -255,7 +255,13 @@ upward-dependencies = ["address"]
 # AgentState::fast_mode shares live-over-launch truth with the CLI and sidebar projection (+1).
 # expects_usage_reading and its re-export share per-login quota expectations with the CLI (+2).
 # BirthLoginErr::repair shares structured account repair text with the overview (+1).
-surface-budget = 1127
+# AccountCapability::has_quota_surface lets adapters own sub-provider quota expectations (+1).
+surface-budget = 1128
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::AccountCapability::has_quota_surface"
+reason = "Adapters own whether their backing sub-providers expose readable quotas."
 
 [[verdict]]
 kind = "item"

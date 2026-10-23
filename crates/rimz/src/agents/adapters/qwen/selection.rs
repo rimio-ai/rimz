@@ -35,7 +35,7 @@ impl AlibabaRegion {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::International => "Alibaba Coding Plan (International)",
             Self::China => "Alibaba Coding Plan (China)",

@@ -117,7 +117,7 @@ Probes are pull-only enrichment, run by `run_json_diagnostic` in `probes.rs` wit
 
 Spend discovery needs both halves: `spending_sources` returns sources only when the manifest has `[transcripts]` and a spend probe, while `transcript_files` lists glob matches from `[transcripts]` alone. A glob starting `~/` expands from `HOME`, an absolute glob stands as written, and a relative glob resolves from the bundle directory.
 
-Declaring an account probe sets `direct_account_usage` without running the probe; the probe runs only when a consumer asks for the account.
+Declaring an account probe sets `direct_account_usage` without running the probe; the probe runs only when a consumer asks for the account. The account wire does not supply `sub_provider`, so `AccountCapability::has_quota_surface` keeps its `false` default.
 
 ## Invalid manifests at each entry point
 
