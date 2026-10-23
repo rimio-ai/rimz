@@ -389,6 +389,14 @@ pub struct FittedPane {
     pub cols: Option<u16>,
 }
 
+/// One view's outcome in an ordered hidden-view fit.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ViewFit {
+    Fitted(std::collections::HashMap<PaneId, FittedPane>),
+    Skipped,
+    Failed,
+}
+
 /// Hidden views that lag the attached session's current view, most recent first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaggingViews {
@@ -1039,14 +1047,14 @@ pub trait MuxBackend: Send + Sync {
         Ok(None)
     }
 
-    /// Fit one view and its sidebar, preserving autosize policy. `None` means skipped.
-    fn fit_view(
+    /// Fit views and their sidebars in order, preserving autosize policy.
+    fn fit_views(
         &self,
-        _view: &crate::ids::ViewId,
+        views: &[crate::ids::ViewId],
         _target: ViewSize,
         _sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
-        Ok(None)
+    ) -> Result<Vec<ViewFit>> {
+        Ok(views.iter().map(|_| ViewFit::Skipped).collect())
     }
 
     fn name(&self) -> MuxName;

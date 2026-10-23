@@ -213,34 +213,78 @@ impl TmuxBackend {
         )
     }
 
-    pub(super) fn fit_hidden_view(
+    pub(super) fn fit_hidden_views(
         &self,
+        views: &[crate::ids::ViewId],
+        target: crate::mux::ViewSize,
+        sidebar_cols: std::num::NonZeroU16,
+    ) -> Result<Vec<crate::mux::ViewFit>> {
+        let reads = views
+            .iter()
+            .map(|view| {
+                let window = view.as_str();
+                vec![
+                    ["show-options", "-wqv", "-t", window, "window-size"]
+                        .map(str::to_owned)
+                        .into(),
+                    [
+                        "list-panes",
+                        "-t",
+                        window,
+                        "-F",
+                        "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let before = self.run_script(&reads)?;
+        let fits = before
+            .lines
+            .iter()
+            .zip(views)
+            .map(|(line, view)| {
+                if !line.completed {
+                    return Vec::new();
+                }
+                match Self::fit_hidden_view(view, target, sidebar_cols, &line.stdout) {
+                    Ok(command) => vec![command],
+                    Err(err) => {
+                        tracing::debug!(%view, error = %err, "hidden-view fit read failed");
+                        Vec::new()
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let output = self.run_script(&fits)?;
+        Ok(output
+            .lines
+            .iter()
+            .map(|line| {
+                if !line.completed {
+                    return crate::mux::ViewFit::Failed;
+                }
+                match parse_fitted_panes(&line.stdout) {
+                    Ok(Some(panes)) => crate::mux::ViewFit::Fitted(panes),
+                    Ok(None) => crate::mux::ViewFit::Skipped,
+                    Err(_) => crate::mux::ViewFit::Failed,
+                }
+            })
+            .collect())
+    }
+
+    fn fit_hidden_view(
         view: &crate::ids::ViewId,
         target: crate::mux::ViewSize,
         sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
+        before: &str,
+    ) -> Result<Vec<String>> {
         let window = view.as_str();
         window
             .strip_prefix('@')
             .and_then(|id| id.parse::<u32>().ok())
             .ok_or_else(geometry_error)?;
-        let before = self
-            .batch_spec(&[
-                ["show-options", "-wqv", "-t", window, "window-size"]
-                    .map(str::to_owned)
-                    .into(),
-                [
-                    "list-panes",
-                    "-t",
-                    window,
-                    "-F",
-                    "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
-                ]
-                .map(str::to_owned)
-                .into(),
-            ])
-            .run()?;
-        let before = String::from_utf8_lossy(&before.stdout);
         let mut lines = before.lines().peekable();
         let local = match lines.peek().copied() {
             Some("latest" | "largest" | "smallest" | "manual") => lines.next().unwrap_or_default(),
@@ -278,29 +322,30 @@ impl TmuxBackend {
             }
             _ => return Err(geometry_error()),
         };
-        // Selection may change while a paced queue is pending. Recheck in
-        // tmux at the mutation, without another read subprocess per step.
+        // Selection, sizing clients, and geometry may change after the read.
+        // Recheck at the mutation; equal-size resizes would unzoom the window.
+        let differs = format!(
+            "#{{||:#{{!=:#{{window_width}},{}}},#{{!=:#{{window_height}},{}}}}}",
+            target.cols, target.rows
+        );
         let guard = format!(
-            "#{{&&:#{{&&:#{{==:#{{window_active}},0}},#{{!=:#{{window-size}},manual}}}},{SIZING_CLIENT}}}"
+            "#{{&&:#{{&&:#{{==:#{{window_active}},0}},#{{!=:#{{window-size}},manual}}}},#{{&&:{SIZING_CLIENT},{differs}}}}}"
         );
         let commands = format!(
             "resize-window -t {window} -x {} -y {} ; {sidebar_resize}{restore} ; list-panes -t {window} -F '#{{pane_id}} #{{pane_height}}'",
             target.cols, target.rows
         );
-        let output = self
-            .batch_spec(&[[
-                "if-shell",
-                "-F",
-                "-t",
-                window,
-                &guard,
-                &commands,
-                "display-message -p skipped",
-            ]
-            .map(str::to_owned)
-            .into()])
-            .run()?;
-        parse_fitted_panes(&String::from_utf8_lossy(&output.stdout))
+        Ok([
+            "if-shell",
+            "-F",
+            "-t",
+            window,
+            &guard,
+            &commands,
+            "display-message -p skipped",
+        ]
+        .map(str::to_owned)
+        .into())
     }
 
     fn pane_rectangles(
@@ -1561,6 +1606,9 @@ fn parse_fitted_panes(
                 cols: None,
             },
         );
+    }
+    if panes.is_empty() {
+        return Err(geometry_error());
     }
     if let Some((pane, cols)) = sidebar {
         panes.get_mut(&pane).ok_or_else(geometry_error)?.cols = Some(cols);

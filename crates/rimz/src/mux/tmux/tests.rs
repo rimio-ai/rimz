@@ -1,6 +1,105 @@
 use super::*;
 
 #[cfg(unix)]
+#[test]
+fn fit_views_isolates_read_and_fit_failures_in_input_order() {
+    use crate::ids::ViewId;
+    use crate::mux::{FittedPane, ViewFit, ViewSize};
+
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\ndir=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$dir/argv\"\nif [ -f \"$dir/read-stdin\" ]; then\ncat > \"$dir/fit-stdin\"\ncat \"$dir/fit\"\nelse\ncat > \"$dir/read-stdin\"\ncat \"$dir/read\"\nfi\nexit 1\n",
+    );
+    let mut before = String::new();
+    for index in 0..6 {
+        before.push_str(&format!("__rimz_script_begin_{index}__\n%1 1\n%2 0\n"));
+        if index != 2 {
+            before.push_str(&format!("__rimz_script_end_{index}__\n"));
+        }
+    }
+    std::fs::write(temp.path().join("read"), before).unwrap();
+    std::fs::write(
+        temp.path().join("fit"),
+        "__rimz_script_begin_0__\n%1 65\n%2 65\n__rimz_script_end_0__\n\
+         __rimz_script_begin_1__\nskipped\n__rimz_script_end_1__\n\
+         __rimz_script_begin_2__\n__rimz_script_end_2__\n\
+         __rimz_script_begin_3__\n%3 65\n\
+         __rimz_script_begin_4__\nbad rows\n__rimz_script_end_4__\n\
+         __rimz_script_begin_5__\n__rimz_script_end_5__\n",
+    )
+    .unwrap();
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    let views = ["@3", "@1", "@8", "@2", "@4", "@7"].map(ViewId::new_unchecked);
+    let outcomes = backend
+        .fit_views(
+            &views,
+            ViewSize {
+                cols: 240,
+                rows: 65,
+            },
+            std::num::NonZeroU16::new(60).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        outcomes,
+        [
+            ViewFit::Fitted(
+                ["%1", "%2"]
+                    .map(|pane| (
+                        crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, pane),
+                        FittedPane {
+                            rows: 65,
+                            cols: None
+                        },
+                    ))
+                    .into()
+            ),
+            ViewFit::Skipped,
+            ViewFit::Failed,
+            ViewFit::Failed,
+            ViewFit::Failed,
+            ViewFit::Failed,
+        ],
+        "a failed sidebar reassertion still supplies rows; other failures stay per-view"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("argv")).unwrap(),
+        "-S /test/socket -u source-file -\n".repeat(2),
+        "all reads and all fits each share one client invocation"
+    );
+    let script = std::fs::read_to_string(temp.path().join("fit-stdin")).unwrap();
+    let lines: Vec<_> = script.lines().collect();
+    for index in [0, 1, 3, 4, 5] {
+        assert!(lines[index].contains(&format!("'-t' '{}'", views[index].as_str())));
+    }
+    assert!(!lines[2].contains("resize-window"));
+}
+
+#[cfg(unix)]
+#[test]
+fn fit_views_reports_transport_failure_instead_of_skipping() {
+    let (_temp, backend) = script_shim("-:2: unknown command: broken\n", "");
+    let result = backend.fit_views(
+        &[crate::ids::ViewId::new_unchecked("@1")],
+        crate::mux::ViewSize {
+            cols: 240,
+            rows: 65,
+        },
+        std::num::NonZeroU16::new(60).unwrap(),
+    );
+    assert!(
+        result.is_err(),
+        "a script that never ran must fail: {result:?}"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown command: broken")
+    );
+}
+
+#[cfg(unix)]
 fn script_shim(stdout: &str, stderr: &str) -> (tempfile::TempDir, TmuxBackend) {
     let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
         "#!/bin/sh\ndir=$(dirname \"$0\")\nprintf '%s\\n' \"$*\" >> \"$dir/argv\"\ncat > \"$dir/stdin\"\ncat \"$dir/stdout\"\ncat \"$dir/stderr\" >&2\nexit 1\n",

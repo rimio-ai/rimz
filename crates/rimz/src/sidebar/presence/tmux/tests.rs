@@ -13,6 +13,13 @@ fn hidden_view_fit_trigger_ignores_hidden_layouts_and_tracks_the_current_window(
     assert!(state.should_fit_hidden(&layout("@1", 100, &[])));
     assert!(!state.should_fit_hidden(&layout("@2", 100, &[])));
     assert!(state.should_fit_hidden(&ControlLine::WindowAdded));
+    let attached = ControlLine::ClientSessionChanged {
+        session: "main".to_owned(),
+    };
+    assert!(state.should_fit_hidden(&attached));
+    let (transitions, diagnostic) = state.apply(attached, false);
+    assert!(transitions.is_empty());
+    assert!(diagnostic.is_none());
     assert!(!state.should_fit_hidden(&ControlLine::Nudge));
     state.apply(swin("$1", "@2"), false);
     assert!(!state.should_fit_hidden(&layout("@1", 100, &[])));

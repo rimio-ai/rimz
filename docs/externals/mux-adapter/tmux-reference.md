@@ -246,6 +246,8 @@ Index: `break-pane`, `join-pane`, `move-pane`, `swap-pane`, `rotate-window`, `li
 
 **`resize-window [-aADLRU] [-x width] [-y height] [-t window] [adjustment]`** sets a window's size and, as a side effect, sets that window's `window-size` option to `manual` ([cmd-resize-window.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-resize-window.c)). Unset the option (`set-option -wu -t @win window-size`) to return the window to client-driven sizing. `-a` and `-A` size the window to the smallest or largest session containing it.
 
+`resize-window` unzooms even when the requested size equals the current size ([resize.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/resize.c), `resize_window`). A caller preserving zoom must skip an equal-size resize.
+
 **`select-layout [-Enop] [-t pane] [layout-name]`** applies a preset or a layout string. The seven presets are `even-horizontal`, `even-vertical`, `main-horizontal`, `main-horizontal-mirrored`, `main-vertical`, `main-vertical-mirrored`, and `tiled` ([layout-set.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/layout-set.c)). A layout string is the format `window_layout` prints ([layout strings](#layout-strings)). Tmux accepts JSON layouts and legacy checksummed layouts, and rejects invalid geometry or syntax ([layout-custom.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/layout-custom.c), `layout_parse`). `-E` spreads the target pane and its neighbours evenly, `-n`/`-p` step through presets, and `-o` restores the previous layout.
 
 Sizing options that interact with these commands: `window-size` (`largest`, `smallest`, `manual`, `latest`. Default `latest`), `aggressive-resize`, `default-size`, and the `ignore-size` client flag.
@@ -432,7 +434,7 @@ Hooks run tmux commands on triggers. They are array options stored globally or p
 | `client-focus-in` / `client-focus-out` | a client's terminal gains / loses focus | session |
 | `client-light-theme` / `client-dark-theme` | a client's terminal reports a theme change (3.6) | session |
 | `client-resized` | a client is resized | session |
-| `client-session-changed` | a client switches session | session |
+| `client-session-changed` | a client attaches or switches session | session |
 | `command-error` | a command fails (3.5) | session |
 | `session-created` / `session-closed` / `session-renamed` | session lifecycle | session |
 | `session-window-changed` | a session's current window changes | session |
@@ -557,7 +559,7 @@ Notifications from a batched command list arrive in command order (probed on 3.7
 | `%window-pane-changed` | `%window-pane-changed @id %id` | a window's active pane changes |
 | `%session-window-changed` | `%session-window-changed $id @id` | a session's current window changes |
 | `%session-changed` | `%session-changed $id name` | this client switches session |
-| `%client-session-changed` | `%client-session-changed <client> $id name` | another client switches session |
+| `%client-session-changed` | `%client-session-changed <client> $id name` | another client attaches or switches session; delivered to every control client on the server, regardless of its watched session (probed on 3.5, 3.7c, and 3.8) |
 | `%session-renamed` | `%session-renamed $id name` | a session is renamed, the man page documents the name alone, so parse the id first |
 | `%sessions-changed` | `%sessions-changed` | a session is created or destroyed |
 | `%client-detached` | `%client-detached <client>` | a client detaches (3.2) |

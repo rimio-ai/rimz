@@ -1276,7 +1276,8 @@ path = "crates/rimz/src/mux"
 # MuxBackend::close_pane_on_exit lets the sidebar pin only its own pane's lifetime (+1).
 # PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
 # MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
-surface-budget = 296
+# ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
+surface-budget = 297
 
 [[verdict]]
 kind = "item"
@@ -1315,6 +1316,11 @@ reason = "Only a fit that reasserted legit sidebar columns can bypass the destin
 
 [[verdict]]
 kind = "item"
+key = "mux::ViewFit"
+reason = "Sweep and jump consume ordered per-view outcomes while transport failures remain whole-call errors."
+
+[[verdict]]
+kind = "item"
 key = "mux::LaggingViews"
 reason = "The host consumes one backend-owned MRU snapshot per settled sweep."
 
@@ -1335,8 +1341,8 @@ reason = "The focus decision needs fresh target geometry rather than a watch hin
 
 [[verdict]]
 kind = "item"
-key = "mux::MuxBackend::fit_view"
-reason = "Both paced sweep and immediate jump fitting preserve backend-local sizing policy."
+key = "mux::MuxBackend::fit_views"
+reason = "Both settled sweep and immediate jump fitting preserve backend-local sizing policy in one ordered call."
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
