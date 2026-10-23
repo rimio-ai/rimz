@@ -4,7 +4,7 @@
 
 ## The shape of the problem
 
-A room holds one store and one sidebar pane per tab. One room host per mux session paints every one of those panes, several times a second, so each session's data plane has exactly one owner ([room admission](../multiplexers.md#choosing-a-backend)).
+A room holds one store and one sidebar pane per tab. One room host per mux session paints every one of those panes, several times a second, so each session's data plane has exactly one owner ([room admission](../multiplexers.md#room-admission)).
 
 Half the inputs are cheap. The store rollup is `cache/snapshots/latest.json` when its recorded log offset equals the live log's length and its `SNAPSHOT_VERSION` matches (`crates/rimz/src/store/snapshot/assemble.rs::read_fresh_latest`, [store.md → truth and cache](../store.md#truth-and-cache)), and otherwise an incremental fold of the log through the host's warm rollup cursor (`crates/rimz/src/sidebar/consumer.rs::rollup_snapshot`). The runtime sidecars and lane caches are small JSON files behind stat gates.
 
@@ -324,7 +324,7 @@ Provider panels are keyed by `LoginKey`, with `SidebarProviderPanel.account` tel
 | --- | --- |
 | `ceiling_secs` | The provider's prompt-cache TTL, on every agent row whose kind has one. |
 | `last_request_at` | The age pin's un-held anchor when later than the agent's own activity, so a keepalive ping refreshes the clock without counting as activity. |
-| `warm_until`, `held_since` | Set when `lanes/keep-warm.json` names a horizon for the agent and `cache_keepalive::holds` says keep-warm is holding it at snapshot time. `held_since` is `turn_ended_at` ([loops.md](../harness/loops.md#prompt-cache-keepalive)). |
+| `warm_until`, `held_since` | Set when `lanes/keep-warm.json` names a horizon for the agent and `cache_keepalive::holds` says keep-warm is holding it at snapshot time. `held_since` is `turn_ended_at` ([messaging.md](../harness/messaging.md#prompt-cache-keepalive)). |
 | `rewarm_cost_usd` | The card's current context priced as a cache write through the memoized price book, using `context.model_id` before the carried `model`, and the 1h bucket for TTLs of at least an hour. Missing tokens or an unpriced model leave it absent. |
 
 The card's age pin and context meter both read it through `crates/rimz/src/sidebar_pane/render/sections/agent_card/gauge.rs::cache_age`. An unknown TTL keeps the age pin's hour fallback but never expires the meter.
@@ -615,7 +615,7 @@ The surviving overlays then apply in precedence order:
 
 ## Focus intent
 
-Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The two phases are:
+Every RimZ-initiated focus action, a user jump or an automatic repair, is a two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)), a rename-atomic runtime record written without fsync. The one bare jump, after a Zellij focus-taking directional split, is in [multiplexers.md → jumping to a pane](../multiplexers.md#jumping-to-a-pane). The two phases are:
 
 - `Requested` is written and broadcast with `FocusIntent` before the one-way mux focus command.
 - `Applied` records that the mux accepted the command, without reseeding presentation. Native confirmation and fencing read this phase.
