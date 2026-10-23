@@ -334,6 +334,8 @@ impl LoopState {
         };
     }
 
+    /// Routes like production: a hidden, unresolved pane borrows Scratch and drops its shared
+    /// view's paint mapping, so a test that needs that view's id reads it before hiding the pane.
     #[cfg(test)]
     fn with_view_for_test<T>(
         &mut self,
@@ -2738,7 +2740,7 @@ impl PaneState {
                 Some(FocusMarker::Dwelling(until)) => now >= until,
                 None => false,
             };
-        // The notice is pane chrome over the borrowed view's gate, which another pane may have moved.
+        // The notice is pane chrome over the view's gate, which another pane may have moved.
         self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
         let user_input = user_input || v.state.scroll_ease.in_flight();
         let interactions = std::mem::take(&mut self.ui.interactions);
@@ -3120,10 +3122,9 @@ impl PaneState {
         now: Instant,
     ) -> Option<FocusPresentation> {
         let anchor = self.focus_anchor(v, prepared, now);
-        let events = v.events.clone();
         let (presentation, retirement) =
             v.context
-                .pending_focus_intent(anchor.as_ref(), &events, now_ms);
+                .pending_focus_intent(anchor.as_ref(), &v.events, now_ms);
         if let (Some(anchor), Some(outcome)) = (anchor, retirement) {
             self.fold_effects
                 .retirements
@@ -3181,7 +3182,7 @@ impl PaneState {
                 v.context.last_pulled_rows,
                 common.pulled_panes_produced_at_ms,
             ),
-            &v.events.clone(),
+            &v.events,
             v.context.gate.reject_streak,
             v.context.health.failure_streak,
             now_ms,
