@@ -9753,7 +9753,7 @@ fn ctrl_c_ends_a_manual_fire_held_after_its_check_passed() {
     std::thread::sleep(Duration::from_millis(1_500));
     std::fs::remove_file(queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)))
         .expect("release the turn");
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     while runner.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             let _ = runner.kill();
