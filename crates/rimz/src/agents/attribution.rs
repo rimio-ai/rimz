@@ -22,7 +22,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 9;
+const ATTRIBUTION_SCHEMA: u8 = 10;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 /// Estimated active seconds by provider session.
@@ -182,6 +182,7 @@ pub struct MessageCounts {
 pub struct SubagentStat {
     pub task: Option<String>,
     pub count: u32,
+    pub fast: bool,
     pub cost_usd: Option<f64>,
     pub active_secs: Option<u64>,
 }
@@ -610,7 +611,7 @@ fn member(
         messages,
         tokens: total.tokens,
         cost_usd: total.cost_usd,
-        fast: total.fast,
+        fast: effort.own_fast,
         subagents,
         models: model_stats(models.clone()),
     };
@@ -733,25 +734,28 @@ fn subagent_stats(
         let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
             task,
             count: 0,
+            fast: false,
             cost_usd: None,
             active_secs: None,
         });
         stat.count = stat.count.saturating_add(1);
-        stat.cost_usd = spending::sum_optional_cost(
-            stat.cost_usd,
-            spend.get(&child_id).and_then(|effort| effort.cost_usd),
-        );
+        if let Some(effort) = spend.get(&child_id) {
+            stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.cost_usd);
+            stat.fast |= effort.fast;
+        }
     }
     for (child, effort, active_secs) in launched {
         let task = subagent_type(child.profile.as_deref());
         let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
             task,
             count: 0,
+            fast: false,
             cost_usd: None,
             active_secs: None,
         });
         stat.count = stat.count.saturating_add(1);
         stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.total.cost_usd);
+        stat.fast |= effort.total.fast;
         stat.active_secs = match (stat.active_secs, *active_secs) {
             (Some(total), Some(value)) => Some(total.saturating_add(value)),
             (Some(total), None) => Some(total),

@@ -248,11 +248,18 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
                 let mut lines = vec![vec![render::cell(header)]];
                 for stat in &member.subagents {
                     let name = subagent_name(stat);
-                    lines.push(vec![render::cell(format!(
+                    let mut row = render::cell(format!(
                         "{name}{}{}",
                         " ".repeat(width - name.width() + 2),
                         subagent_row_label(stat)
-                    ))]);
+                    ));
+                    if stat.fast {
+                        row = row.suffix(
+                            format!("{} fast", glyph(rimz::config::GlyphRole::CardFast)),
+                            render::palette::electric(),
+                        );
+                    }
+                    lines.push(vec![row]);
                 }
                 details.push_lines("subagents", lines);
             }
@@ -326,9 +333,10 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
                 for stat in &member.subagents {
                     writeln!(
                         w,
-                        "    - {}: {}",
+                        "    - {}: {}{}",
                         markdown_escape(subagent_name(stat)),
-                        markdown_escape(&subagent_row_label(stat))
+                        markdown_escape(&subagent_row_label(stat)),
+                        if stat.fast { " ⚡ fast" } else { "" },
                     )?;
                 }
             }

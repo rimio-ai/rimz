@@ -674,6 +674,7 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
             active_secs: Some(50),
             task: Some("explorer".to_owned()),
             count: 1,
+            fast: false,
             cost_usd: Some(2.0),
         }]
     );
@@ -841,6 +842,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
             active_secs: Some(20),
             task: Some("explorer".to_owned()),
             count: 1,
+            fast: false,
             cost_usd: Some(2.0),
         }]
     );
@@ -915,6 +917,7 @@ fn subagents_with_one_label_merge_across_origins() {
             active_secs: Some(20),
             task: Some("explorer".to_owned()),
             count: 2,
+            fast: false,
             cost_usd: Some(5.0),
         }]
     );
@@ -923,12 +926,12 @@ fn subagents_with_one_label_merge_across_origins() {
 }
 
 #[test]
-fn schema_nine_serializes_one_cost_and_task_grouped_subagents() {
+fn schema_ten_serializes_one_cost_and_task_grouped_subagents() {
     let report = serde_json::to_value(mixed_origin_report(None)).expect("serialize attribution");
     let member = &report["groups"][0]["members"][0];
     let subagent = &member["subagents"][0];
 
-    assert_eq!(report["schema"], 9);
+    assert_eq!(report["schema"], 10);
     assert_eq!(member["fast"], false);
     assert_eq!(report["scope"].get("since"), Some(&serde_json::Value::Null));
     assert_eq!(member["cost_usd"], 6.0);
@@ -978,6 +981,7 @@ fn schema_nine_serializes_one_cost_and_task_grouped_subagents() {
         &json!({
             "task": "explorer",
             "count": 2,
+            "fast": false,
             "cost_usd": 5.0,
             "active_secs": 20,
         })
@@ -989,16 +993,28 @@ fn schema_nine_serializes_one_cost_and_task_grouped_subagents() {
 }
 
 #[test]
-fn member_fast_tracks_any_counted_origin_without_launch_fallback() {
+fn member_fast_tracks_only_own_counted_turns_without_launch_fallback() {
+    let baseline = mixed_origin_report(None);
     let flags = [Some("parent"), Some("native"), Some("launched"), None].map(|source| {
         let report = mixed_origin_report(source);
         let member = &report.groups[0].members[0];
+        assert_eq!(report.totals, baseline.totals);
+        assert_eq!(report.models, baseline.models);
         assert_eq!(member.cost_usd, Some(6.0));
-        assert_eq!(member.tokens.input, 60);
-        assert_eq!(member.tokens.output, 6);
-        member.fast
+        assert_eq!(member.tokens, baseline.groups[0].members[0].tokens);
+        assert_eq!(member.models, baseline.models);
+        assert_eq!(member.subagents.len(), 1);
+        let child = &member.subagents[0];
+        assert_eq!(child.task.as_deref(), Some("explorer"));
+        assert_eq!(child.count, 2);
+        assert_eq!(child.cost_usd, Some(5.0));
+        assert_eq!(child.active_secs, Some(20));
+        (member.fast, child.fast)
     });
-    assert_eq!(flags, [true, true, true, false]);
+    assert_eq!(
+        flags,
+        [(true, false), (false, true), (false, true), (false, false)]
+    );
 }
 
 #[test]
@@ -1734,12 +1750,14 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
                 active_secs: None,
                 task: Some("explore".to_owned()),
                 count: 2,
+                fast: false,
                 cost_usd: Some(3.25),
             },
             SubagentStat {
                 active_secs: None,
                 task: None,
                 count: 2,
+                fast: false,
                 cost_usd: Some(0.5),
             },
         ]

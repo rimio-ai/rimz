@@ -40,12 +40,14 @@ fn member(handle: &str, role: Option<&str>, provider: &str, model: &str) -> Attr
                 active_secs: Some(1_500),
                 task: Some("explorer".to_owned()),
                 count: 4,
+                fast: false,
                 cost_usd: Some(0.90),
             },
             SubagentStat {
                 active_secs: None,
                 task: None,
                 count: 1,
+                fast: false,
                 cost_usd: None,
             },
         ],
@@ -101,7 +103,7 @@ fn report() -> Attribution {
     let team_members = vec![team_member];
     let other_members = vec![stray];
     Attribution {
-        schema: 9,
+        schema: 10,
         generated_at: jiff::Timestamp::UNIX_EPOCH,
         rimz_version: "test".to_owned(),
         scope: AttributionScope::default(),
@@ -158,6 +160,7 @@ fn subagent_block_handles_one_unpriced_run_and_a_priced_share_without_member_cos
 #[test]
 fn panel_groups_team_and_stray_members() {
     let mut report = report();
+    report.groups[0].members[0].subagents[0].fast = true;
     report.groups[1].members[0].fast = true;
     let mut output = anstream::StripStream::new(Vec::new());
     render_panel(&mut output, &report).expect("render panel");
@@ -167,7 +170,7 @@ fn panel_groups_team_and_stray_members() {
       @planner (plan|ner) · Claude · fable`2@high
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
-                     explorer  4 × · 25m active · $0.90
+                     explorer  4 × · 25m active · $0.90 ϟ fast
                      other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
           messages:  2 from you · 5 from teammates · 4 to teammates
@@ -273,6 +276,7 @@ fn panel_omits_total_that_repeats_the_only_caption() {
 #[test]
 fn markdown_escapes_values_and_renders_grouped_bullets() {
     let mut report = report();
+    report.groups[0].members[0].subagents[0].fast = true;
     report.groups[1].members[0].fast = true;
     let mut output = Vec::new();
     render_markdown(&mut output, &report).expect("render markdown");
@@ -289,7 +293,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
     - **`plan|ner`** — Claude ``fable`2@high``
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
-        - explorer: 4 × · 25m active · $0.90
+        - explorer: 4 × · 25m active · $0.90 ⚡ fast
         - other: 1 ×
       - activity: 2 asks · 7 tool calls · 1 compaction
       - messages: 2 from you · 5 from teammates · 4 to teammates
