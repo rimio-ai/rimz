@@ -592,8 +592,99 @@ impl FileMark {
     }
 }
 
+fn shell_command_preview(command: &str) -> std::borrow::Cow<'_, str> {
+    if command.chars().count() <= 120 {
+        return std::borrow::Cow::Borrowed(command);
+    }
+    let Some(start) = redirect_clause(command) else {
+        return crate::theme::fmt::command_preview(command);
+    };
+    let prefix = command[..start].trim_end();
+    let suffix = &command[start..];
+    let budget = 120_usize.saturating_sub(suffix.chars().count() + 1).max(3);
+    let count = prefix.chars().count();
+    if count <= budget {
+        return std::borrow::Cow::Borrowed(command);
+    }
+    let head = 60.min(count.saturating_sub(3));
+    let tail = budget.saturating_sub(head + 1);
+    let head = prefix.chars().take(head).collect::<String>();
+    let tail = prefix.chars().skip(count - tail).collect::<String>();
+    std::borrow::Cow::Owned(format!("{head}…{tail} {suffix}"))
+}
+
+fn redirect_clause(command: &str) -> Option<usize> {
+    let mut operators = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut word_start = 0;
+    let mut redirect_amp = None;
+    let mut chars = command.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '#' if index == word_start => return None,
+            '>' => {
+                let start = if let Some(amp) = redirect_amp.take().filter(|amp| *amp + 1 == index) {
+                    amp
+                } else if &command[word_start..index] == "2" {
+                    word_start
+                } else {
+                    index
+                };
+                let rest = &command[index..];
+                let (length, target) = if rest.starts_with(">&1") {
+                    (3, false)
+                } else if rest.starts_with(">>") {
+                    (2, true)
+                } else {
+                    (1, true)
+                };
+                let end = index + length;
+                operators.push((start, end, target));
+                while chars.next_if(|(next, _)| *next < end).is_some() {}
+                word_start = end;
+            }
+            '&' if chars.peek().is_some_and(|(_, next)| *next == '>') => {
+                redirect_amp = Some(index);
+            }
+            ';' | '|' | '&' | '<' | '(' | ')' | '\n' => {
+                operators.clear();
+                word_start = index + ch.len_utf8();
+            }
+            ch if ch.is_whitespace() => word_start = index + ch.len_utf8(),
+            _ => {}
+        }
+    }
+    let mut end = command.len();
+    let mut start = None;
+    for (operator, after, target) in operators.into_iter().rev() {
+        let words = shlex::split(&command[after..end])?;
+        if words.len() != usize::from(target) {
+            break;
+        }
+        start = Some(operator);
+        end = operator;
+    }
+    start
+}
+
 impl WatchSpec {
-    /// The `TYPE` word of `rimz wait list`.
+    /// The watch kind in wait JSON and trigger descriptions.
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Command(_) => "watch",
@@ -603,13 +694,13 @@ impl WatchSpec {
         }
     }
 
-    /// The trigger text without its kind prefix, as `rimz wait list` shows it.
+    /// The trigger subject shared by wait lines, receipts, and messages.
     pub fn subject(&self) -> String {
         match self {
-            Self::Command(command) => crate::theme::fmt::command_preview(command).into_owned(),
+            Self::Command(command) => shell_command_preview(command).into_owned(),
             Self::Pid { pid } => pid.to_string(),
             Self::Check { check, every, on } => {
-                let mut text = crate::theme::fmt::command_preview(check).into_owned();
+                let mut text = shell_command_preview(check).into_owned();
                 if every != "1s" {
                     text.push_str(&format!(" every {every}"));
                 }
@@ -642,15 +733,11 @@ impl WatchSpec {
     /// The first line of the delivered wait message.
     pub(crate) fn headline(&self) -> String {
         match self {
-            Self::Command(command) => format!(
-                "waited on `{}`",
-                crate::theme::fmt::command_preview(command)
-            ),
+            Self::Command(command) => format!("waited on `{}`", shell_command_preview(command)),
             Self::Pid { pid } => format!("waited on pid {pid}"),
-            Self::Check { check, .. } => format!(
-                "waited on check `{}`",
-                crate::theme::fmt::command_preview(check)
-            ),
+            Self::Check { check, .. } => {
+                format!("waited on check `{}`", shell_command_preview(check))
+            }
             Self::File { file, grep, .. } => match grep {
                 Some(grep) => format!(
                     "waited on file {} for `{}`",

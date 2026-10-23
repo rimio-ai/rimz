@@ -170,7 +170,7 @@ Another check-in: rimz wait --in 30m
 | `still not met after <ELAPSED>` | A PID, check, or file check-in. |
 | `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
 
-A silent command reads `· no output` after its verdict and names no file. A `--pid` wait captures no output of its process, so it shows no segment at all unless the watcher itself wrote an error. The token count is an estimate from OpenAI's public `o200k_base` tokenizer (`<1k`, `~1.2k`, `~22k`, `~1.2M`); Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB the count is scaled from that sample. A command longer than 120 characters is shortened in the middle in the message, receipt, and list; the stored command and the logs keep it whole.
+A silent command reads `· no output` after its verdict and names no file. A `--pid` wait captures no output of its process, so it shows no segment at all unless the watcher itself wrote an error. The token count is an estimate from OpenAI's public `o200k_base` tokenizer (`<1k`, `~1.2k`, `~22k`, `~1.2M`); Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB the count is scaled from that sample. A command longer than 120 characters is shortened in the middle in the message, receipt, and list. A trailing shell output redirect, including its path and `2>&1`, stays whole even when that makes the preview longer than 120 characters; quoted or escaped `>` is not a redirect. If the redirect leaves no room for a command tail, the command prefix ends at the ellipsis. The stored command and the logs keep it whole.
 
 ### The output file
 
