@@ -41,7 +41,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v20: profile-attributed agent tallies alongside subagents.
 // v21: team-role tallies split from solo agent profiles, with active-time and message
 // effort windows.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 21;
+// v22: bounded daily and weekly model-dollar chart cells.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 22;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -88,6 +89,9 @@ pub struct ProviderSpendingCache {
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
     pub days: BTreeMap<i64, DaySpend>,
+    /// Stored model dollars for 30 local days and 52 seven-day blocks ending today.
+    #[serde(default)]
+    pub chart: super::ChartSpend,
     /// Account-global model buckets by trailing window, published so
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
@@ -108,6 +112,7 @@ impl ProviderSpendingCache {
             day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,
             days: result.days.clone(),
+            chart: result.chart.clone(),
             timezone: result.timezone.clone(),
             models: result.models.clone(),
             roles: result.roles.clone(),

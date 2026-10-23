@@ -499,7 +499,8 @@ path = "crates/rimz/src/agents/spending"
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
 # EffortWindow::merge sums effort for the stats rows that fold several roles (+1).
-surface-budget = 106
+# ChartSpend carries bounded model dollars across the publication/stats seam (+1).
+surface-budget = 107
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -847,6 +848,11 @@ reason = "Stats consumes released active milliseconds and the three attribution-
 kind = "item"
 key = "agents::spending::ModelTally"
 reason = "Published model spend carries the producing agent kind for stats identity colours."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::ChartSpend"
+reason = "Published 30-day and 52-block model dollars let stats draw charts without walking transcripts."
 
 [[verdict]]
 kind = "item"
