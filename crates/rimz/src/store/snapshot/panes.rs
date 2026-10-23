@@ -114,8 +114,8 @@ impl<'a> PaneBindingIndex<'a> {
             })
     }
 
-    /// The newest RimZ-launched root stamped on this live pane. Unlike
-    /// [`Self::stamped_agent`], this deliberately ignores the adapter's
+    /// The newest RimZ launch, root or launched child, stamped on this live pane.
+    /// Unlike [`Self::stamped_agent`], this deliberately ignores the adapter's
     /// same-pane primary policy: a later launch is the pane-incarnation clock
     /// even while an older session remains retained in the rollup.
     pub(super) fn latest_launch_agent(
@@ -128,7 +128,7 @@ impl<'a> PaneBindingIndex<'a> {
             .iter()
             .filter_map(|index| self.agents.get(*index))
             .filter(|agent| {
-                agent.parent_agent_id.is_none()
+                (agent.parent_agent_id.is_none() || agent.is_launched_child())
                     && agent.kind == *kind
                     && (agent.launch_id.is_some() || agent.agent_id.is_provisional())
             })
