@@ -5,6 +5,67 @@ use jiff::civil::date;
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 #[test]
+fn delivery_owners_follow_provenance_and_precedence() {
+    let meta = crate::config::WaitMeta {
+        armed_at: Timestamp::UNIX_EPOCH,
+        delay: Some("5m".into()),
+        reader: Some("planner".into()),
+    };
+    for (team, resident, self_wait, expected) in [
+        (None, None, true, "self"),
+        (None, None, false, "loop:deployment"),
+        (None, Some("sweep"), false, "loop:sweep"),
+        (Some("forge#lane"), None, false, "team:forge#lane"),
+        (None, Some("sweep"), true, "loop:sweep"),
+        (Some("forge#lane"), Some("sweep"), true, "team:forge#lane"),
+    ] {
+        let entry = TaskEntry {
+            wait: Some(wait_target()),
+            team: team.map(|team| team.parse().unwrap()),
+            loop_task: resident.map(str::to_owned),
+            wait_meta: self_wait.then(|| meta.clone()),
+            ..TaskEntry::default()
+        };
+        let task = catalog::LoadedTask::new("deployment", entry, catalog::TaskSource::Instance);
+        assert_eq!(
+            delivery_owner("deployment", task.entry()).to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn lost_watch_uses_host_grace_and_live_lock() {
+    let armed_at = Timestamp::UNIX_EPOCH;
+    let mut entry = TaskEntry {
+        watch: Some(WatchSpec::Command("false".into())),
+        wait_meta: Some(crate::config::WaitMeta {
+            armed_at,
+            delay: None,
+            reader: None,
+        }),
+        ..TaskEntry::default()
+    };
+    for (seconds, live, lost) in [
+        (0, false, false),
+        (30, false, false),
+        (31, false, true),
+        (60, true, false),
+    ] {
+        let now = armed_at + SignedDuration::from_secs(seconds);
+        assert_eq!(
+            watch_lost(&entry, live, now),
+            lost,
+            "{seconds}s live={live}"
+        );
+    }
+    entry.wait_meta = None;
+    assert!(watch_lost(&entry, false, armed_at));
+    entry.watch = None;
+    assert!(!watch_lost(&entry, false, armed_at));
+}
+
+#[test]
 fn lifecycle_kind_follows_the_stored_row() {
     let recurring = TaskEntry {
         every: Some("5m".into()),

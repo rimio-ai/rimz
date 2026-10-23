@@ -122,7 +122,13 @@ fn row(
                 .map_err(anyhow::Error::msg)?;
             (
                 spec.kind(),
-                if pid.is_some() { "watching" } else { "lost" },
+                if pid.is_some() {
+                    "watching"
+                } else if rimz::harness::schedule::watch_lost(entry, false, now) {
+                    "lost"
+                } else {
+                    "starting"
+                },
                 timeout.map(|timeout| (duration_label(timeout), timeout.as_secs())),
                 pid,
             )

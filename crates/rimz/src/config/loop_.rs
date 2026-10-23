@@ -530,7 +530,8 @@ pub struct WaitMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
-    /// Handle of the arming agent, whose `out/` directory receives the output.
+    /// Name of the arming agent (a launched child's petname), whose `out/` directory
+    /// receives the output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader: Option<String>,
 }
