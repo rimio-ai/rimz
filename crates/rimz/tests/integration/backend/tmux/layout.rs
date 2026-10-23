@@ -129,15 +129,14 @@ fn tab_injects_env_into_every_column_and_row() {
 }
 
 #[test]
-fn companion_grid_preserves_processes_sidebar_and_focus() {
+fn companion_stack_preserves_processes_sidebar_and_focus_until_full() {
     require_tmux!();
     let server = TmuxServer::new();
-    let session = "rimz-companion-grid";
-    ensure_rimz_session(&server, session, Some((290, 90)));
-    // Hook-born sidebars must be recognized from their spawn command, before
-    // their process publishes the title used by the other chrome signals.
+    let session = "rimz-companion-stack";
+    ensure_rimz_session(&server, session, Some((200, 45)));
+    // Recognize hook-born chrome before it publishes its sidebar title.
     let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
-    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(290));
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(200));
     server
         .backend
         .open_sidebar(&sidebar, None)
@@ -168,10 +167,8 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
         .iter()
         .find(|pane| pane.left > 0)
         .expect("work pane");
-    let anchor_id = PaneId::from_parts(MuxName::Tmux, &anchor.id);
-    let child_focus = server.display(&tab, "#{pane_id}");
     let mut pids = BTreeMap::new();
-    for count in 1_usize..=8 {
+    for count in 1_usize..=64 {
         let panes = server.wait_for_panes(&tab, count + 1);
         assert_eq!(panes.len(), count + 1);
         let live_sidebar = panes
@@ -179,38 +176,29 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
             .find(|pane| pane.id == sidebar.id)
             .expect("sidebar survives");
         assert_eq!(
-            (
-                live_sidebar.left,
-                live_sidebar.top,
-                live_sidebar.width,
-                live_sidebar.height
-            ),
-            (sidebar.left, sidebar.top, sidebar.width, sidebar.height),
+            (live_sidebar.left, live_sidebar.width),
+            (sidebar.left, sidebar.width),
         );
-        let work = panes
+        // Stack border-status shifts content down a row, including chrome.
+        assert_eq!(live_sidebar.top, sidebar.top + u64::from(count > 1));
+        assert_eq!(live_sidebar.height, sidebar.height - u64::from(count > 1));
+        let mut work = panes
             .iter()
             .filter(|pane| pane.id != sidebar.id)
             .collect::<Vec<_>>();
-        let mut bands = BTreeMap::<u64, Vec<&PaneGeom>>::new();
-        for pane in &work {
-            assert!(pane.left > sidebar.width);
-            bands.entry(pane.left).or_default().push(pane);
+        work.sort_by_key(|pane| pane.top);
+        assert!(
+            work.iter()
+                .all(|pane| (pane.left, pane.width) == (anchor.left, anchor.width)),
+            "one stack column: {work:?}"
+        );
+        if count > 1 {
+            assert_stack(
+                &server,
+                &work.iter().map(|pane| pane.id.clone()).collect::<Vec<_>>(),
+                &anchor.id,
+            );
         }
-        assert_eq!(bands.len(), count.min(2));
-        assert!(bands.values().all(|band| band.len() <= count.div_ceil(2)));
-        let spread = |sizes: Vec<u64>| {
-            sizes.iter().max().expect("max size") - sizes.iter().min().expect("min size")
-        };
-        assert!(
-            spread(bands.values().map(|band| band[0].width).collect()) <= 1,
-            "equal column widths at {count} panes: {work:?}"
-        );
-        assert!(
-            bands
-                .values()
-                .all(|band| spread(band.iter().map(|pane| pane.height).collect()) <= 1),
-            "equal heights within each column at {count} panes: {work:?}"
-        );
         for pane in &panes {
             let pid = server.display(&pane.id, "#{pane_pid}");
             if let Some(previous) = pids.insert(pane.id.clone(), pid.clone()) {
@@ -222,7 +210,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
             server.display(session, "#{window_id}:#{pane_id}"),
             original_focus
         );
-        assert_eq!(server.display(&tab, "#{pane_id}"), child_focus);
+        assert_eq!(server.display(&tab, "#{pane_id}"), anchor.id);
         if count == 6 {
             let held = work
                 .iter()
@@ -242,41 +230,53 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
             .append_companion_pane(SplitPaneOptions {
                 target: SplitTarget::SessionPane {
                     session_name: session.to_owned(),
-                    pane_id: anchor_id.clone(),
+                    pane_id: PaneId::from_parts(MuxName::Tmux, &sidebar.id),
                 },
                 cwd: Some(std::env::temp_dir().display().to_string()),
                 command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
                 title: Some(format!("child-{}", count + 1)),
                 close_on_exit: true,
                 env: Default::default(),
-                placement: SplitPlacement::Stacked,
+                placement: SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
                 focus: true,
             })
             .expect("append companion");
+        if outcome == rimz::mux::CompanionPaneAppend::Full {
+            assert!(count > 8, "no fixed eight-pane cap");
+            assert_eq!(
+                server.wait_for_panes(&tab, count + 1).len(),
+                count + 1,
+                "Full does not spawn"
+            );
+            let open_rows: u64 = server
+                .display(&anchor.id, "#{pane_height}")
+                .parse()
+                .unwrap();
+            assert!(open_rows >= 10);
+            println!(
+                "companion stack: {count} children before Full, {open_rows} open content rows"
+            );
+            return;
+        }
+        assert_eq!(outcome, rimz::mux::CompanionPaneAppend::Opened);
+        let after = server.wait_for_panes(&tab, count + 2);
+        let newest = after
+            .iter()
+            .filter(|pane| !pids.contains_key(&pane.id))
+            .collect::<Vec<_>>();
+        assert_eq!(newest.len(), 1);
         assert_eq!(
-            outcome,
-            if count == 8 {
-                rimz::mux::CompanionPaneAppend::Full
-            } else {
-                rimz::mux::CompanionPaneAppend::Opened
-            },
-            "append at {count} work panes: {panes:?}; tmux: {}; anchor: {}; metadata: {:?}",
-            server.stdout(&["-V"]),
-            anchor.id,
-            server.stdout(&[
-                "list-panes",
-                "-t",
-                &anchor.id,
-                "-F",
-                "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{pane_start_command}",
-            ])
+            after
+                .iter()
+                .filter(|pane| pane.id != sidebar.id)
+                .max_by_key(|pane| pane.top)
+                .unwrap()
+                .id,
+            newest[0].id,
+            "new child is the last member"
         );
     }
-    assert_eq!(
-        server.wait_for_panes(&tab, 9).len(),
-        9,
-        "Full does not spawn"
-    );
+    panic!("a short companion window must fill");
 }
 
 fn held_managed_pane(marker: &[&str]) -> rimz::mux::HostPane {
@@ -1882,7 +1882,45 @@ fn explicit_border_off_wins_over_stack_defaults() {
 }
 
 #[test]
-fn stack_hooks_preserve_user_global_hooks_and_companion_grid_refuses_stacks() {
+fn collapsed_stack_member_counted_capture_keeps_earlier_output() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (_, members) = stack_fixture(&server);
+    let printed = &members[0];
+    server.tmux(&["select-pane", "-t", printed]);
+    server.tmux(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        printed,
+        "printf 'earlier-stack-output\\nsecond-line\\n'; exec sleep 600",
+    ]);
+    let pane = PaneId::from_parts(MuxName::Tmux, printed);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server
+        .backend
+        .capture_pane(&pane, "stacks", Some(60), false)
+        .unwrap()
+        .raw_text
+        .contains("earlier-stack-output")
+    {
+        assert!(Instant::now() < deadline, "output before collapse");
+        thread::sleep(Duration::from_millis(10));
+    }
+    server.tmux(&["select-pane", "-t", &members[1]]);
+    assert_eq!(server.display(printed, "#{pane_height}"), "1");
+    let capture = server
+        .backend
+        .capture_pane(&pane, "stacks", Some(60), false)
+        .unwrap();
+    assert!(
+        capture.raw_text.contains("earlier-stack-output"),
+        "{capture:?}"
+    );
+}
+
+#[test]
+fn stack_hooks_preserve_user_global_hooks() {
     require_tmux!();
     let server = TmuxServer::new();
     server.ensure_with_shell("stacks");
@@ -1896,6 +1934,62 @@ fn stack_hooks_preserve_user_global_hooks_and_companion_grid_refuses_stacks() {
     server.tmux(&["select-pane", "-t", &members[0]]);
     assert_stack(&server, &members, &members[0]);
     assert_eq!(server.stdout(&["show-options", "-gv", "@probe"]), "1");
+}
+
+#[test]
+fn companion_append_accepts_existing_stack() {
+    require_tmux!();
+    assert_companion_stack_append("intact");
+}
+
+#[test]
+fn companion_append_accepts_stack_without_open_member() {
+    require_tmux!();
+    assert_companion_stack_append("no-open");
+}
+
+#[test]
+fn companion_append_accepts_lone_stack_survivor() {
+    require_tmux!();
+    assert_companion_stack_append("lone");
+}
+
+#[test]
+fn companion_append_marks_newcomer_when_a_member_exits_during_split() {
+    require_tmux!();
+    assert_companion_stack_append("member-exit");
+}
+
+fn assert_companion_stack_append(state: &str) {
+    let server = TmuxServer::new();
+    let (caller, mut members) = stack_fixture(&server);
+    server.tmux(&["select-pane", "-t", &caller, "-T", "rimz-sidebar"]);
+    match state {
+        "no-open" => {
+            server.tmux(&["kill-pane", "-t", &members.pop().unwrap()]);
+            assert!(
+                members
+                    .iter()
+                    .all(|pane| server.display(pane, "#{@rimz_stack_open}").is_empty())
+            );
+        }
+        "lone" => {
+            for pane in members.drain(..2) {
+                server.tmux(&["kill-pane", "-t", &pane]);
+            }
+        }
+        "member-exit" => {
+            let exiting = members.remove(1);
+            server.tmux(&[
+                "set-hook",
+                "-g",
+                "after-split-window",
+                &format!("set-hook -gu -t {caller} after-split-window ; kill-pane -t {exiting}"),
+            ]);
+        }
+        "intact" => {}
+        _ => panic!("unknown stack state"),
+    }
     let result = server
         .backend
         .append_companion_pane(SplitPaneOptions {
@@ -1912,7 +2006,52 @@ fn stack_hooks_preserve_user_global_hooks_and_companion_grid_refuses_stacks() {
             focus: false,
         })
         .unwrap();
-    assert_eq!(result, rimz::mux::CompanionPaneAppend::Full);
+    assert_eq!(result, rimz::mux::CompanionPaneAppend::Opened);
+    let panes = server.wait_for_panes(&caller, members.len() + 2);
+    let new = panes
+        .iter()
+        .find(|pane| pane.id != caller && !members.contains(&pane.id))
+        .expect("new member");
+    members.push(new.id.clone());
+    assert_stack(&server, &members, &new.id);
+}
+
+#[test]
+fn companion_append_refuses_pre_upgrade_grid_without_spawning() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, "grid", Some((160, 45)));
+    let sidebar = server.display("grid", "#{pane_id}");
+    server.tmux(&["select-pane", "-t", &sidebar, "-T", "rimz-sidebar"]);
+    let first = stack_split(
+        &server,
+        &sidebar,
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    stack_split(
+        &server,
+        first.raw(),
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Down),
+    );
+    let before = server.stdout(&["list-panes", "-t", &sidebar, "-F", "#{pane_id}"]);
+    assert_eq!(
+        server
+            .backend
+            .append_companion_pane(SplitPaneOptions {
+                target: SplitTarget::SessionPane {
+                    session_name: "grid".to_owned(),
+                    pane_id: first
+                },
+                command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+                ..Default::default()
+            })
+            .unwrap(),
+        rimz::mux::CompanionPaneAppend::Full
+    );
+    assert_eq!(
+        server.stdout(&["list-panes", "-t", &sidebar, "-F", "#{pane_id}"]),
+        before
+    );
 }
 
 #[test]

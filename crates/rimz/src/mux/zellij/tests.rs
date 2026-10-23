@@ -1792,130 +1792,162 @@ fn split_pane_defaults_to_command_title_and_prefixes_environment() {
 }
 
 #[cfg(unix)]
-fn assert_companion_boundary_resizes(stacked: bool, whole_boundary: bool) {
-    let pane = |id, x, y, cols, rows| {
-        serde_json::json!({"id": id, "tab_id": 42, "pane_x": x, "pane_y": y,
-            "pane_columns": cols, "pane_rows": rows})
-    };
-    let (before, opened, resized) = if stacked {
-        (
-            vec![pane(7, 30, 0, 120, 40), pane(9, 30, 40, 120, 40)],
-            vec![
-                pane(7, 30, 0, 80, 40),
-                pane(9, 30, 40, 80, 40),
-                pane(8, 110, 0, 40, 80),
-            ],
-            vec![
-                pane(7, 30, 0, 60, 40),
-                pane(9, 30, 40, if whole_boundary { 60 } else { 80 }, 40),
-                pane(8, 90, 0, 60, 80),
-            ],
-        )
-    } else {
-        (
-            vec![pane(7, 30, 0, 120, 80)],
-            vec![pane(7, 30, 0, 65, 80), pane(8, 95, 0, 55, 80)],
-            vec![pane(7, 30, 0, 50, 80), pane(8, 80, 0, 70, 80)],
-        )
-    };
-    let balanced = vec![
-        pane(7, 30, 0, 60, 40),
-        pane(9, 30, 40, 60, 40),
-        pane(8, 90, 0, 60, 80),
-    ];
+#[test]
+fn companion_append_stacks_on_bottom_member_not_sidebar_or_tallest() {
+    let panes = serde_json::json!([
+        {"id": 8, "tab_id": 42, "pane_x": 30, "pane_y": 29, "pane_columns": 120, "pane_rows": 1},
+        {"id": 1, "tab_id": 42, "pane_x": 0, "pane_y": 0, "pane_columns": 30,
+            "pane_rows": 30, "title": "rimz-sidebar"},
+        {"id": 7, "tab_id": 42, "pane_x": 30, "pane_y": 0, "pane_columns": 120, "pane_rows": 29}
+    ]);
+    let log = assert_companion_stack_append(panes, 1, crate::mux::CompanionPaneAppend::Opened);
+    let spawn = log.lines().find(|line| line.contains("new-pane")).unwrap();
+    assert!(spawn.contains("--stacked --no-focus"), "{log}");
+    assert!(
+        spawn.contains("--name child --cwd /tmp -- env KEY=value sleep 600"),
+        "{log}"
+    );
+    assert!(spawn.ends_with("pane=8"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_resolves_view_from_floating_anchor() {
+    assert_companion_stack_append(
+        serde_json::json!([
+            {"id": 7, "tab_id": 42, "pane_x": 30, "pane_y": 0,
+                "pane_columns": 120, "pane_rows": 30},
+            {"id": 8, "tab_id": 42, "is_floating": true}
+        ]),
+        8,
+        crate::mux::CompanionPaneAppend::Opened,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_room_floor_uses_content_rows_with_outer_fallback() {
+    for (outer, content, expected) in [
+        (13, None, true),
+        (12, None, false),
+        (13, Some(11), true),
+        (13, Some(10), false),
+    ] {
+        let mut pane = serde_json::json!({
+            "id": 7, "tab_id": 42, "pane_x": 30, "pane_y": 0,
+            "pane_columns": 120, "pane_rows": outer
+        });
+        if let Some(content) = content {
+            pane["pane_content_rows"] = serde_json::json!(content);
+        }
+        assert_companion_stack_append(
+            serde_json::json!([pane]),
+            7,
+            if expected {
+                crate::mux::CompanionPaneAppend::Opened
+            } else {
+                crate::mux::CompanionPaneAppend::Full
+            },
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_rejects_two_columns_and_two_expanded_members() {
+    for (x, y, rows) in [(90, 0, 30), (30, 30, 30)] {
+        assert_companion_stack_append(
+            serde_json::json!([
+                {"id": 7, "tab_id": 42, "pane_x": 30, "pane_y": 0,
+                    "pane_columns": 60, "pane_rows": 30},
+                {"id": 8, "tab_id": 42, "pane_x": x, "pane_y": y,
+                    "pane_columns": 60, "pane_rows": rows}
+            ]),
+            7,
+            crate::mux::CompanionPaneAppend::Full,
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_ignores_floating_panes_but_refuses_fullscreen_and_suppressed() {
+    let pane = serde_json::json!({
+        "id": 7, "tab_id": 42, "pane_x": 30, "pane_y": 0,
+        "pane_columns": 120, "pane_rows": 30
+    });
+    assert_companion_stack_append(
+        serde_json::json!([pane.clone(), {"id": 8, "tab_id": 42, "is_floating": true}]),
+        7,
+        crate::mux::CompanionPaneAppend::Opened,
+    );
+    for flag in ["is_fullscreen", "is_suppressed"] {
+        let mut blocked = pane.clone();
+        blocked[flag] = serde_json::json!(true);
+        assert_companion_stack_append(
+            serde_json::json!([blocked]),
+            7,
+            crate::mux::CompanionPaneAppend::Full,
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_companion_stack_append(
+    panes: serde_json::Value,
+    anchor: u64,
+    expected: crate::mux::CompanionPaneAppend,
+) -> String {
     let (temp, shim) = zellij_shim(&format!(
         r#"#!/bin/sh
 dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
 if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
 case " $* " in
-  *" new-pane "*) touch "$dir/opened" ;;
-  *" resize "*)
-    if [ -f "$dir/resized" ]; then touch "$dir/balanced"; fi
-    touch "$dir/resized" ;;
-  *" list-panes "*)
-    if [ -f "$dir/balanced" ]; then printf '%s\n' '{balanced}';
-    elif [ -f "$dir/resized" ]; then printf '%s\n' '{resized}';
-    elif [ -f "$dir/opened" ]; then printf '%s\n' '{opened}';
-    else printf '%s\n' '{before}'; fi ;;
+  *" list-panes "*) printf '%s\n' '{panes}' ;;
+  *" new-pane "*) printf 'terminal_99\n' ;;
 esac
-"#,
-        before = serde_json::to_string(&before).unwrap(),
-        opened = serde_json::to_string(&opened).unwrap(),
-        resized = serde_json::to_string(&resized).unwrap(),
-        balanced = serde_json::to_string(&balanced).unwrap(),
+"#
     ));
     let result = ZellijBackend::with_program_for_test(&shim)
         .append_companion_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
                 session_name: "rimz-test".to_owned(),
-                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, format!("terminal_{anchor}")),
             },
+            title: Some("child".to_owned()),
+            cwd: Some("/tmp".to_owned()),
+            command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+            env: [("KEY".to_owned(), "value".to_owned())].into(),
+            focus: true,
             ..Default::default()
         })
-        .expect("companion append");
-    assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
+        .expect("append decision");
+    assert_eq!(result, expected, "{panes}");
     let log = shim_log(&temp);
-    let actions = log
-        .lines()
-        .filter(|line| line.contains("action resize") || line.contains("action list-panes"))
-        .collect::<Vec<_>>();
-    let list = "--session rimz-test action list-panes --all --json";
-    let decrease = "--session rimz-test action resize decrease right --pane-id terminal_7";
-    let expected = if !stacked {
-        vec![
-            list,
-            list,
-            decrease,
-            list,
-            "--session rimz-test action resize increase right --pane-id terminal_7",
-        ]
-    } else if whole_boundary {
-        vec![list, list, decrease, list, list]
-    } else {
-        vec![
-            list,
-            list,
-            decrease,
-            list,
-            "--session rimz-test action resize decrease right --pane-id terminal_9",
-            list,
-        ]
-    };
-    assert_eq!(actions, expected, "{log}");
-    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
-}
-
-#[cfg(unix)]
-#[test]
-fn companion_balance_undoes_overshoot_on_the_same_pane_and_stops() {
-    // fec66d600: preserve the closer grid when a native resize overshoots.
-    assert_companion_boundary_resizes(false, false);
-}
-
-#[cfg(unix)]
-#[test]
-fn companion_balance_walks_both_boundary_segments_after_rereading() {
-    // fec66d600: each independently resizable segment needs its own native step.
-    assert_companion_boundary_resizes(true, false);
-}
-
-#[cfg(unix)]
-#[test]
-fn companion_balance_skips_a_boundary_segment_already_moved() {
-    // fec66d600: do not resize twice when the native step moved the whole boundary.
-    assert_companion_boundary_resizes(true, true);
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        command_count(&log, "action new-pane"),
+        usize::from(expected == crate::mux::CompanionPaneAppend::Opened),
+        "{log}"
+    );
+    assert!(!log.contains("action resize"), "{log}");
+    log
 }
 
 #[cfg(unix)]
 #[test]
 fn companion_append_counts_held_terminals_before_spawning() {
-    let panes = (0..8)
+    let panes = (0..9)
         .map(|id| {
             serde_json::json!({
                 "id": id, "tab_id": 42, "is_held": true, "exited": true,
-                "pane_x": (id / 4) * 60, "pane_y": (id % 4) * 20,
-                "pane_columns": 60, "pane_rows": 20,
+                "pane_x": 30, "pane_y": if id == 0 { 0 } else { 20 + id },
+                "pane_columns": 120, "pane_rows": if id == 0 { 21 } else { 1 },
             })
         })
         .collect::<Vec<_>>();
@@ -1936,9 +1968,9 @@ printf '%s\n' '{}'
             },
             ..Default::default()
         })
-        .expect("full held grid");
-    assert_eq!(result, crate::mux::CompanionPaneAppend::Full);
-    assert!(!shim_log(&temp).contains("new-pane"));
+        .expect("held stack");
+    assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
+    assert_eq!(command_count(&shim_log(&temp), "action new-pane"), 1);
 }
 
 #[cfg(unix)]
@@ -1958,55 +1990,6 @@ fn companion_append_returns_full_below_zellij_045() {
     let log = shim_log(&temp);
     assert_eq!(log.trim(), "--version");
     assert!(!log.contains("new-pane"), "{log}");
-}
-
-#[cfg(unix)]
-#[test]
-fn companion_balance_resizes_toward_equal_columns() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
-case " $* " in
-  *" new-pane "*) touch "$dir/opened" ;;
-  *" action list-panes --all --json "*)
-    if [ -f "$dir/opened" ]; then
-      printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":80,"pane_rows":80},{"id":8,"tab_id":42,"pane_x":110,"pane_y":0,"pane_columns":40,"pane_rows":80}]\n'
-    else
-      printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":120,"pane_rows":80}]\n'
-    fi ;;
-esac
-exit 0
-"#,
-    );
-    let result = ZellijBackend::with_program_for_test(&shim)
-        .append_companion_pane(SplitPaneOptions {
-            target: SplitTarget::SessionPane {
-                session_name: "rimz-test".to_owned(),
-                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
-            },
-            command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
-            ..Default::default()
-        })
-        .expect("opened and balanced companion");
-    assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
-    let log = shim_log(&temp);
-    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
-    assert_eq!(
-        command_count(&log, "action list-panes --all --json"),
-        3,
-        "{log}"
-    );
-    let resizes = log
-        .lines()
-        .filter(|line| line.contains("action resize"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        resizes,
-        ["--session rimz-test action resize decrease right --pane-id terminal_7"],
-        "{log}"
-    );
 }
 
 #[cfg(unix)]
@@ -2049,7 +2032,7 @@ exit 0
     assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
     assert_eq!(
         command_count(&log, "action list-panes --all --json"),
-        4,
+        2,
         "{log}"
     );
 }
@@ -2112,7 +2095,7 @@ esac
             command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
             ..Default::default()
         })
-        .expect("opened despite balancing failure");
+        .expect("opened without a post-spawn geometry read");
     assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
     let log = shim_log(&temp);
     let spawns = log
@@ -2120,9 +2103,14 @@ esac
         .filter(|line| line.contains("new-pane"))
         .collect::<Vec<_>>();
     assert_eq!(spawns.len(), 1);
-    assert!(spawns[0].contains("--direction right --no-focus"), "{log}");
+    assert!(spawns[0].contains("--stacked --no-focus"), "{log}");
     assert!(spawns[0].ends_with("pane=7"), "{log}");
     assert!(!spawns[0].contains("--tab-id"), "{log}");
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        1,
+        "{log}"
+    );
 }
 
 #[cfg(unix)]

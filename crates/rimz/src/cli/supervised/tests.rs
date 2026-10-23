@@ -197,7 +197,7 @@ fn subagent_zone_strategy_shares_companion_across_team() {
 
     assert_eq!(
         select_subagent_zone_strategy(&agents, &live, &planner, "room", &theme, "design subagents"),
-        Some(SubagentZoneStrategy::CompanionGrid {
+        Some(SubagentZoneStrategy::CompanionStack {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%3"))],
             title: "design subagents 2".to_owned(),
         })
@@ -285,7 +285,7 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &theme,
             "design subagents",
         ),
-        Some(SubagentZoneStrategy::CompanionGrid {
+        Some(SubagentZoneStrategy::CompanionStack {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%2"))],
             title: "design subagents 2".to_owned(),
         })
@@ -299,7 +299,7 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &theme,
             "design subagents",
         ),
-        Some(SubagentZoneStrategy::CompanionGrid {
+        Some(SubagentZoneStrategy::CompanionStack {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%3"))],
             title: "design subagents 2".to_owned(),
         })
@@ -307,16 +307,15 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
 }
 
 #[test]
-fn subagent_zone_strategy_caps_physical_companions_and_reuses_overflow() {
+fn subagent_zone_strategy_keeps_large_companions_and_reuses_overflow() {
     use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
 
     let theme = rimz::config::ThemeConfig::default();
     let mut parent = agent_state("codex", "parent", AgentStatus::Running);
     parent.team = Some("forge".to_owned());
     parent.pane = Some(pane_ref("%1", "design"));
-    // None of these children has bound a durable agent row yet. Physical
-    // occupancy, not registration or completion status, owns the tab cap.
-    let mut live = (2..=9)
+    // The backend, not the family selector, decides whether a stack has room.
+    let mut live = (2..=11)
         .map(|id| pane_ref(&format!("%{id}"), "design subagents"))
         .collect::<Vec<_>>();
     let mut sidebar = pane_ref("%14", "design subagents");
@@ -334,7 +333,8 @@ fn subagent_zone_strategy_caps_physical_companions_and_reuses_overflow() {
     };
     assert_eq!(
         choose(&live),
-        Some(SubagentZoneStrategy::CompanionTab {
+        Some(SubagentZoneStrategy::CompanionStack {
+            anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%2"))],
             title: "design subagents 2".to_owned(),
         })
     );
@@ -343,15 +343,18 @@ fn subagent_zone_strategy_caps_physical_companions_and_reuses_overflow() {
     live.push(pane_ref("%16", "run codex"));
     assert_eq!(
         choose(&live),
-        Some(SubagentZoneStrategy::CompanionGrid {
-            anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%15"))],
+        Some(SubagentZoneStrategy::CompanionStack {
+            anchors: vec![
+                ("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%2")),
+                ("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%15")),
+            ],
             title: "design subagents 3".to_owned(),
         })
     );
     live.remove(0);
     assert_eq!(
         choose(&live),
-        Some(SubagentZoneStrategy::CompanionGrid {
+        Some(SubagentZoneStrategy::CompanionStack {
             anchors: vec![
                 ("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%3")),
                 ("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%15")),
@@ -452,6 +455,90 @@ fn subagent_zone_ambiguous_split_never_opens_a_second_pane() {
             zone_backend::open(&fixture, &backend),
             super::pane::SubagentZoneOpen::Failed(_)
         ));
+        assert!(backend.tabs.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn subagent_zone_companion_append_uses_numbered_overflow_and_definitive_errors() {
+    use rimz::mux::{CompanionPaneAppend, MuxErr};
+
+    for (outcomes, attempts, overflow) in [
+        (vec![Ok(CompanionPaneAppend::Opened)], 1, false),
+        (
+            vec![Ok(CompanionPaneAppend::Full), Ok(CompanionPaneAppend::Full)],
+            2,
+            true,
+        ),
+        (
+            vec![
+                Err(MuxErr::Command {
+                    program: "fake".into(),
+                    args: "append".into(),
+                    stderr: "no room".into(),
+                }),
+                Ok(CompanionPaneAppend::Opened),
+            ],
+            2,
+            false,
+        ),
+    ] {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let parent = zone_backend::register_caller(&fixture);
+        let backend = zone_backend::Backend {
+            listed: Some(vec![
+                parent,
+                pane_ref("%20", "#ch subagents"),
+                pane_ref("%21", "#ch subagents 2"),
+            ]),
+            append_outcomes: std::sync::Mutex::new(outcomes.into()),
+            ..Default::default()
+        };
+        let result = zone_backend::open(&fixture, &backend);
+        assert!(
+            matches!(result, super::pane::SubagentZoneOpen::Opened),
+            "{result:?}"
+        );
+        assert_eq!(backend.appends.lock().unwrap().len(), attempts);
+        let tabs = backend.tabs.lock().unwrap();
+        assert_eq!(tabs.len(), usize::from(overflow));
+        if overflow {
+            assert_eq!(tabs[0].title, "#ch subagents 3");
+        }
+    }
+}
+
+#[test]
+fn subagent_zone_ambiguous_append_never_opens_a_second_pane() {
+    for error in [
+        rimz::mux::MuxErr::Timeout {
+            program: "fake".into(),
+            args: "append".into(),
+            seconds: 1,
+        },
+        rimz::mux::MuxErr::Output {
+            program: "fake".into(),
+            reason: "unconfirmed pane".into(),
+        },
+    ] {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let parent = zone_backend::register_caller(&fixture);
+        let backend = zone_backend::Backend {
+            listed: Some(vec![
+                parent,
+                pane_ref("%20", "#ch subagents"),
+                pane_ref("%21", "#ch subagents 2"),
+            ]),
+            append_outcomes: std::sync::Mutex::new(
+                [Err(error), Ok(rimz::mux::CompanionPaneAppend::Opened)].into(),
+            ),
+            ..Default::default()
+        };
+        assert!(matches!(
+            zone_backend::open(&fixture, &backend),
+            super::pane::SubagentZoneOpen::Failed(_)
+        ));
+        assert_eq!(backend.appends.lock().unwrap().len(), 1);
         assert!(backend.tabs.lock().unwrap().is_empty());
     }
 }
@@ -565,7 +652,7 @@ fn subagent_zone_strategy_uses_channel_family_instead_of_parent_view() {
             &theme,
             "#ch subagents"
         ),
-        Some(SubagentZoneStrategy::CompanionGrid {
+        Some(SubagentZoneStrategy::CompanionStack {
             anchors: vec![("room".to_owned(), PaneId::parse("tmux:%2").unwrap())],
             title: "#ch subagents 2".to_owned(),
         })
@@ -583,6 +670,9 @@ mod zone_backend {
         pub(super) listed: Option<Vec<PaneRef>>,
         pub(super) split_error: Mutex<Option<m::MuxErr>>,
         pub(super) tab_error: Mutex<Option<m::MuxErr>>,
+        pub(super) appends: Mutex<Vec<m::SplitPaneOptions>>,
+        pub(super) append_outcomes:
+            Mutex<std::collections::VecDeque<m::Result<m::CompanionPaneAppend>>>,
     }
 
     impl m::MuxBackend for Backend {
@@ -675,9 +765,14 @@ mod zone_backend {
         }
         fn append_companion_pane(
             &self,
-            _opts: m::SplitPaneOptions,
+            opts: m::SplitPaneOptions,
         ) -> m::Result<m::CompanionPaneAppend> {
-            panic!("unexpected append_companion_pane")
+            self.appends.lock().unwrap().push(opts);
+            self.append_outcomes
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted append")
         }
         fn focus_pane(&self, _pane: &PaneId, _session: Option<&str>) -> m::Result<()> {
             panic!("unexpected focus_pane")

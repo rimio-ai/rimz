@@ -1246,8 +1246,7 @@ reason = "Lifecycle checkpoints and resumed wrappers trigger the same card's FIF
 
 [[module]]
 path = "crates/rimz/src/mux"
-# Companion append adds one deep operation, its outcome, and the shared tab cap.
-# Geometry planning and native balancing remain private to mux.
+# Companion append adds one deep operation and its outcome; native stack checks stay private.
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Tab naming shares pane-label policy and one intent-driven operation across launch and projection.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
@@ -1281,7 +1280,7 @@ reason = "The CLI retries early client loss only when the backend reports an aff
 [[verdict]]
 kind = "item"
 key = "mux::PaneRect"
-reason = "One outer rectangle vocabulary serves companion tiling and the backend-neutral daemon shape judge."
+reason = "One outer rectangle vocabulary serves companion stack admission and the backend-neutral daemon shape judge."
 
 [[verdict]]
 kind = "item"
@@ -3368,11 +3367,6 @@ reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the 
 kind = "pass-through"
 key = "mux::zellij::backend::close_pane"
 reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
-
-[[verdict]]
-kind = "shape"
-key = "SplitPlacement::Directional+companion_geometry+plan_append+split_pane"
-reason = "Pass 10: companion_layout already shares the policy; backend-native remainders differ in gap width, the 0.45 no-focus gate, target kind and native convergence (one origin bce9d5d75)."
 
 [[verdict]]
 kind = "item"
@@ -7113,11 +7107,6 @@ reason = "cli/doctor/runtime.rs:252-264 consumes the pub scan's result in the bi
 kind = "item"
 key = "mux::binaries::ServerBinary"
 reason = "cli/doctor/runtime.rs:252-264 reads the scanned server binaries in the binary crate (pass 24c)."
-
-[[verdict]]
-kind = "item"
-key = "mux::companion_layout::GridSplit"
-reason = "Signature floor on the mux-internal plan_append (companion_layout.rs:68); pub(super) is already its narrowest (pass 24c)."
 
 [[verdict]]
 kind = "item"
