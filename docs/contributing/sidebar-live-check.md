@@ -542,7 +542,7 @@ A held room's provider has no folder-trust decision for its worktree, so the fir
 
 Session-death recovery needs the same feed for every agent. The stub agents hold provisional session ids, which the producer leaves out of `records/live-roster.json`, so an unprimed room publishes an empty roster while its agents are alive and the next `rimz start` has nothing to recover. Feed one SessionStart per agent and wait for the roster to name them before ending the session.
 
-The feed exits 0 with no output, and it runs once per room: later `a` calls reuse the registered session. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries.
+The feed exits 0 with no output, and it runs once per room: later `a` calls reuse the registered session. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries. A fed hook lands asynchronously: before the step that reads it, poll `rz agents show '@coder#probe'` until its status reflects the hook.
 
 On both backends, both `wait` calls must resolve the caller to `@coder#probe`. The arming lines read like this, `--as` first and `--as-ancestor` second (wait names are random):
 
