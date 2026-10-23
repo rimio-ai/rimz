@@ -26,7 +26,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | Page | What it owns |
 | --- | --- |
 | [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the vocabulary, one launch end to end, the layout IR, the exec wrapper, the address grammar, resume and rebirth, and pane reclamation. |
-| [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record and exit codes, the completion fold, the wake socket and deadlines, verification and retry, the output projections, background joins, and run-pane reclamation. |
+| [scripting.md](./harness/scripting.md) | Supervised -p runs: the durable run record and exit codes, the completion fold, parked runs and the owed-wake check, the wake socket and deadlines, verification and retry, the output projections, background joins, and run-pane reclamation. |
 | [subagents.md](./harness/subagents.md) | Agent-launched children: the agent-only doorway, what a launch desugars to, fanout, where a child's pane and checkout land, direct-parent stamps, the no-redelegation rule, and the boundary with provider-native subagents. |
 | [loops.md](./harness/loops.md) | Loop scheduling: the task and where tasks live, triggers and schedule shapes, host firing, one fire, run history, signals, watched commands, waits, and the assist log. |
 | [workflow.md](./harness/workflow.md) | Workflow definitions, sealed runs, script-check routing, bounds, context, durable history, and signal wakes. |
