@@ -48,5 +48,5 @@ pub(super) fn run(
     if !names.is_empty() {
         writeln!(out, "canceled {}", names.join(", "))?;
     }
-    list::write_rows(&mut out, &ctx, Some(agent), &snapshot.agents, pending)
+    list::write_rows(&mut out, &ctx, Some(agent), &snapshot, pending)
 }

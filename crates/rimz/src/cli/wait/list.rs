@@ -27,7 +27,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     if json {
         return ui::json(&rows);
     }
-    write_rows(&mut ui::out(), &ctx, agent, &snapshot.agents, rows)
+    write_rows(&mut ui::out(), &ctx, agent, &snapshot, rows)
 }
 
 pub(super) fn pending_rows(
@@ -94,12 +94,19 @@ pub(super) fn write_rows(
     out: &mut impl Write,
     ctx: &Ctx,
     agent: Option<&AgentState>,
-    agents: &[AgentState],
+    snapshot: &SidebarSnapshot,
     rows: Vec<WakeRow>,
 ) -> Result<()> {
     let now = jiff::Timestamp::now();
     if let Some(agent) = agent {
-        return wake_view::write_self(out, agent, agents, &rows, &ctx.workspace.worktree_root, now);
+        return wake_view::write_self(
+            out,
+            agent,
+            snapshot,
+            &rows,
+            &ctx.workspace.worktree_root,
+            now,
+        );
     }
     writeln!(
         out,

@@ -132,7 +132,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         "armed {name}: {description} → {}{timeout}",
         target.handle
     )?;
-    list::write_rows(&mut out, &ctx, Some(agent), &snapshot.agents, pending)
+    list::write_rows(&mut out, &ctx, Some(agent), &snapshot, pending)
 }
 
 fn watch_trigger(
