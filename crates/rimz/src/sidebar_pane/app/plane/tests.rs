@@ -74,7 +74,13 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
             .display_name,
         "seed"
     );
-    assert!(subscription.results.take().snapshot.is_none());
+    assert!(
+        lock(&plane.views)
+            .latest
+            .since(subscription.revision)
+            .is_empty()
+    );
+    assert!(!subscription.completion.load(Ordering::Relaxed));
     assert!(Arc::ptr_eq(
         &subscription
             .seed
@@ -89,7 +95,17 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
     let mut newer = remembered;
     newer.display_name = "correction".into();
     plane.publish_snapshot(&config.instance_id, newer);
-    let update = subscription.results.take().snapshot.unwrap();
+    let update = lock(&plane.views)
+        .latest
+        .since(subscription.revision)
+        .pop()
+        .unwrap();
+    let update = super::super::views::Cursor::default().replay(
+        update,
+        |fold| super::super::loop_state::LoopState::project_fold(fold, None, None),
+        false,
+    );
+    assert!(subscription.completion.load(Ordering::Relaxed));
     let FetchUpdate::Snapshot { snapshot, .. } = update else {
         panic!("expected a later snapshot")
     };

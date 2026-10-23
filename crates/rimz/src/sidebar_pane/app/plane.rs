@@ -3,6 +3,9 @@
 //! Each pane subscribes for its own projection of the shared fold.
 //! Client views are lent to their painting attachment under one memory-only lock.
 
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -15,8 +18,8 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, HostData, ResultReceiver, Stand, Subscriber, Subscribers, WorkspaceFold,
-    result_channel, spawn_fetch_worker,
+    Covered, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
+    spawn_fetch_worker,
 };
 use super::input::Wakeup;
 use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
@@ -160,7 +163,7 @@ impl DataPlane {
                     lock(&subscribers)
                         .values()
                         .next()
-                        .map(|pane| Stand::of(Some(pane), &template))
+                        .map(|eldest| data_tick(Some(eldest), &template))
                 },
             );
             // tmux fast path: record control-mode events once and fan out in memory. Panes ask
@@ -226,13 +229,16 @@ impl DataPlane {
         config: &ServeConfig,
         wake: SyncSender<Wakeup>,
     ) -> Subscription {
-        let (tx, results) = result_channel();
+        let completion = Arc::new(AtomicBool::new(false));
+        let (seed, revision) = {
+            let views = lock(&self.views);
+            (views.fold.clone(), views.revision)
+        };
         let subscriber = Subscriber {
             instance_id: config.instance_id.clone(),
             own_pane: config.own_pane.clone(),
             tick_seconds: config.tick_seconds,
-            refresh_override: config.refresh_ms_override,
-            tx,
+            completion: completion.clone(),
             wake,
         };
         let membership = Membership {
@@ -249,9 +255,10 @@ impl DataPlane {
         Subscription {
             requests: self.request_tx.clone(),
             covered: self.covered.clone(),
-            results,
+            completion,
             observe: self.observe_tx.clone(),
-            seed: lock(&self.host_data).last_fold.clone(),
+            seed,
+            revision,
             _membership: membership,
         }
     }
@@ -259,17 +266,11 @@ impl DataPlane {
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
         let fold = Arc::new(fold);
-        lock(&self.host_data).last_fold = Some(fold.clone());
-        lock(&self.views).publish(
-            Some(fold.clone()),
-            FetchUpdate::Fold {
-                fold,
-                own_pane: None,
-                refresh_override: None,
-                phase: super::fetch::FetchPhase::Interim,
-                source: super::fetch::SnapshotSource::Cached,
-            },
-        );
+        lock(&self.views).publish(FetchUpdate::Fold {
+            fold,
+            phase: super::fetch::FetchPhase::Interim,
+            source: super::fetch::SnapshotSource::Cached,
+        });
     }
 
     #[cfg(test)]
@@ -295,15 +296,46 @@ impl DataPlane {
         instance_id: &SidebarInstanceId,
         snapshot: crate::store::snapshot::SidebarSnapshot,
     ) {
-        if let Some(subscriber) = lock(&self.subscribers).get(instance_id.as_str()) {
-            subscriber
-                .tx
-                .send(FetchUpdate::Snapshot {
-                    snapshot: Box::new(snapshot),
+        let subscriber = lock(&self.subscribers).get(instance_id.as_str()).cloned();
+        if let Some(subscriber) = subscriber {
+            {
+                let mut views = lock(&self.views);
+                let frame = views.fold.as_ref().and_then(|fold| fold.frame.clone());
+                let fold = match frame {
+                    None => {
+                        super::fixtures::fold(snapshot, subscriber.own_pane.as_ref(), Vec::new())
+                    }
+                    Some(frame) => WorkspaceFold {
+                        workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+                        frame: Some(frame),
+                    },
+                };
+                views.publish(FetchUpdate::Fold {
+                    fold: Arc::new(fold),
                     phase: super::fetch::FetchPhase::Final,
                     source: super::fetch::SnapshotSource::Produced,
-                })
-                .unwrap();
+                });
+                subscriber.completion.store(true, Ordering::Relaxed);
+            }
+            let _ = subscriber.wake.try_send(Wakeup::Snapshot);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn publish_fold(&self, fold: WorkspaceFold) {
+        let cycle: Vec<_> = lock(&self.subscribers).values().cloned().collect();
+        {
+            let mut views = lock(&self.views);
+            views.publish(FetchUpdate::Fold {
+                fold: Arc::new(fold),
+                phase: super::fetch::FetchPhase::Final,
+                source: super::fetch::SnapshotSource::Produced,
+            });
+            for subscriber in &cycle {
+                subscriber.completion.store(true, Ordering::Relaxed);
+            }
+        }
+        for subscriber in cycle {
             let _ = subscriber.wake.try_send(Wakeup::Snapshot);
         }
     }
@@ -313,7 +345,8 @@ impl DataPlane {
 pub(in crate::sidebar_pane) struct Subscription {
     pub(super) requests: Sender<FetchRequest>,
     pub(super) covered: Covered,
-    pub(super) results: ResultReceiver,
+    pub(super) completion: Arc<AtomicBool>,
+    pub(super) revision: u64,
     pub(super) observe: SyncSender<ObserveMsg>,
     pub(super) seed: Option<Arc<WorkspaceFold>>,
     _membership: Membership,

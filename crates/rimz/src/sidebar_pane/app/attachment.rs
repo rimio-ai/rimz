@@ -163,7 +163,7 @@ impl Attachment {
             runtime.clone(),
             host_wake_path.clone(),
             diag.clone(),
-            subscription.results,
+            subscription.completion,
             initial_width,
             subscription.observe,
             pet_render_caps,
@@ -174,7 +174,7 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
         state.room_events = Some(plane.room_events(&runtime));
-        state.share_views(plane.views.clone());
+        state.share_views(plane.views.clone(), subscription.revision);
         state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
         state.wake = Some(wake);
         state.request_reload = request_reload;

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -18,10 +19,7 @@ use crate::sidebar_pane::render::SectionLabel;
 use crate::{RuntimePaths, SidebarInstanceId};
 
 use super::clock::LoopClock;
-use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, ResultSender, SnapshotSource,
-    result_channel,
-};
+use super::fetch::{FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
 use super::inbox::WakeupInbox;
 use super::input::{KeyAction, Wakeup};
 use super::loop_state::LoopState;
@@ -153,7 +151,6 @@ struct Column {
     clock: LoopClock,
     state: LoopState,
     terminal: Terminal<PaneBackend>,
-    results: ResultSender,
     requests: Receiver<FetchRequest>,
     fetch: FetchDispatcher,
     inbox: WakeupInbox,
@@ -222,7 +219,6 @@ impl Column {
         let runtime = RuntimePaths::under(snapshot.workspace_id.clone(), &dir.0)
             .map_err(super::SidebarAppErr::from)?;
         let clock = LoopClock::play(snapshot.now);
-        let (results, receiver) = result_channel();
         let (tx, requests) = mpsc::channel();
         let height = height.unwrap_or(scenario.height);
         let config = ServeConfig {
@@ -247,7 +243,7 @@ impl Column {
             runtime.clone(),
             runtime.sidebar_host_wake_socket_path(crate::MuxName::Zellij, "scenario"),
             crate::diag::DiagSink::disabled(),
-            receiver,
+            Default::default(),
             Some(scenario.width),
             mpsc::sync_channel(64).0,
             caps,
@@ -265,7 +261,6 @@ impl Column {
             clock,
             state,
             terminal,
-            results,
             requests,
             fetch: FetchDispatcher::new(tx),
             inbox: WakeupInbox::new(mpsc::channel().1),
@@ -288,13 +283,17 @@ impl Column {
             snapshot.theme.display.pixel = crate::config::PixelMode::Off;
         }
         reconcile_snapshot(&self.runtime, &mut snapshot);
-        self.results
-            .send(FetchUpdate::Snapshot {
-                snapshot: Box::new(snapshot),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Produced,
-            })
-            .map_err(|_| PlayError::Invalid("scenario mailbox closed".into()))?;
+        let mut views = self
+            .state
+            .views
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        views.publish(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        });
+        self.state.completion.store(true, Ordering::Relaxed);
         Ok(())
     }
 

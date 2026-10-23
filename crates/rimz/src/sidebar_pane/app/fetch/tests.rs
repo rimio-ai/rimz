@@ -1,5 +1,6 @@
 use super::*;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::sidebar::enrich::project_local;
 use crate::sidebar::notify::{LinkAlert, Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -30,17 +31,14 @@ fn room_reminder_delivery_fans_out_once_with_the_room_count() {
         shlex::try_quote(log.to_str().unwrap()).unwrap(),
     ));
     worker.clock = super::super::clock::LoopClock::play(snapshot.now);
-    let (tx, _rx) = result_channel();
     let (wake, events) = wake_channel();
-    let mut sink = ResultSink::new(tx, wake, None);
+    let (mut sink, _reader) = single_sink(fixture.host_data.clone(), wake);
     let publish = |worker: &mut FetchWorker, sink: &mut ResultSink| {
-        worker.publish_snapshot(
+        worker.publish_fold(
             &fixture.state,
-            SnapshotPublication {
-                snapshot: snapshot.clone(),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Cached,
-            },
+            frameless(snapshot.clone()),
+            FetchPhase::Final,
+            SnapshotSource::Cached,
             sink,
         );
     };
@@ -109,17 +107,14 @@ fn agent_delivery_pushes_the_room_reminder_out_by_an_interval() {
     worker.config.notification_prefs.remind_secs = 2;
     worker.config.notification_prefs.coalesce_ms = 0;
     worker.clock = super::super::clock::LoopClock::play(snapshot.now);
-    let (tx, _rx) = result_channel();
     let (wake, events) = wake_channel();
-    let mut sink = ResultSink::new(tx, wake, None);
+    let (mut sink, _reader) = single_sink(fixture.host_data.clone(), wake);
     let mut publish = |worker: &mut FetchWorker, snapshot: &SidebarSnapshot| {
-        worker.publish_snapshot(
+        worker.publish_fold(
             &fixture.state,
-            SnapshotPublication {
-                snapshot: snapshot.clone(),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Cached,
-            },
+            frameless(snapshot.clone()),
+            FetchPhase::Final,
+            SnapshotSource::Cached,
             &mut sink,
         );
         events
@@ -308,7 +303,7 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
 }
 
 #[test]
-fn fetch_window_records_consumed_deliveries_once_per_window() {
+fn fetch_window_records_reductions_once_per_window() {
     let fixture = FetchFixture::new();
     let diag = crate::diag::DiagSink::under(
         fixture.state.root.clone(),
@@ -329,32 +324,42 @@ fn fetch_window_records_consumed_deliveries_once_per_window() {
     .unwrap();
     let mut cycles =
         IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 2);
+    cycles.renderers = consumers(&mut cycles);
     cycles.worker.diag = diag.clone();
-    assert_eq!(cycles.run_cycle(), 0);
-    assert_eq!(cycles.run_cycle(), 2);
+    cycles.run_cycle();
+    let subscriber = &cycles.sink.cycle[0];
+    let reader = Replay::new(&cycles.sink.host_data, subscriber);
+    let mut config = cycles.worker.config.clone();
+    config.own_pane = subscriber.own_pane.clone();
+    let (mut co_viewer, mut dispatcher) = consumer(config, fixture.runtime.clone(), reader);
+    co_viewer.on_snapshot(&mut dispatcher);
+    let views = cycles.sink.host_data.lock().unwrap().views.clone();
+    assert_eq!(views.lock().unwrap().reductions.content, 2);
+    assert_eq!(views.lock().unwrap().reductions.unchanged, 0);
+    cycles.run_cycle();
     assert!(
         !diag.log_path().unwrap().exists(),
         "ordinary ticks write no record"
     );
     cycles.worker.window.started -= Duration::from_secs(60);
-    assert_eq!(cycles.run_cycle(), 2);
+    cycles.run_cycle();
     assert!(
         diag.log_path().unwrap().exists(),
-        "the worker must emit its elapsed delivery window"
+        "the worker must emit its elapsed reduction window"
     );
     let records = diagnostic_events(&diag);
     assert_eq!(records.len(), 1);
     assert!(
         matches!(
             records[0],
-            crate::diag::record::DiagEvent::FetchDeliveryStats {
+            crate::diag::record::DiagEvent::FetchReductionStats {
                 cycles: 3,
-                content_deliveries: 2,
-                unchanged_deliveries: 2,
+                content_reductions: 2,
+                unchanged_reductions: 2,
                 ..
             }
         ),
-        "counts describe consumed deliveries, not sends still waiting in mailboxes"
+        "counts describe successful reductions, not unread publications"
     );
     cycles.run_cycle();
     assert_eq!(diagnostic_events(&diag).len(), 1);
@@ -405,7 +410,10 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
             .host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .clone()
             .unwrap();
         assert!(
@@ -453,42 +461,46 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
 fn consumer(
     config: ServeConfig,
     runtime: RuntimePaths,
-    rx: ResultReceiver,
+    reader: Replay,
 ) -> (LoopState, FetchDispatcher) {
-    (
-        LoopState::new(
-            crate::sidebar_pane::app::clock::LoopClock::wall(),
-            config,
-            None,
-            runtime,
-            PathBuf::new(),
-            crate::diag::DiagSink::disabled(),
-            rx,
-            None,
-            std::sync::mpsc::sync_channel(1).0,
-            Default::default(),
-            None,
-        ),
-        FetchDispatcher::new(std::sync::mpsc::channel().0),
-    )
+    if let Some(own) = &config.own_pane {
+        let mut views = reader.views.lock().unwrap();
+        if views.peek(own).is_none() {
+            let (_, entry) = views.presentation(own, Instant::now(), false);
+            // These fixtures start independent consumers, not carried client views.
+            entry.cursor = Default::default();
+        }
+    }
+    let mut state = LoopState::new(
+        crate::sidebar_pane::app::clock::LoopClock::wall(),
+        config,
+        None,
+        runtime,
+        PathBuf::new(),
+        crate::diag::DiagSink::disabled(),
+        reader.completion,
+        None,
+        std::sync::mpsc::sync_channel(1).0,
+        Default::default(),
+        None,
+    );
+    state.share_views(reader.views, reader.cursor.lock().unwrap().revision);
+    (state, FetchDispatcher::new(std::sync::mpsc::channel().0))
 }
 
 fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchDispatcher)> {
     cycles.sink.begin_cycle();
+    cycles.cursors.clear();
     cycles
-        .receivers
-        .drain(..)
-        .map(|rx| {
-            let subscriber = cycles
-                .sink
-                .cycle
-                .iter()
-                .find(|subscriber| subscriber.tx.0.ptr_eq(&Arc::downgrade(&rx.0)))
-                .unwrap();
+        .sink
+        .cycle
+        .iter()
+        .map(|subscriber| {
             let mut config = cycles.worker.config.clone();
             config.instance_id = subscriber.instance_id.clone();
             config.own_pane = subscriber.own_pane.clone();
-            consumer(config, cycles.worker.runtime.clone(), rx)
+            let reader = Replay::new(&cycles.sink.host_data, subscriber);
+            consumer(config, cycles.worker.runtime.clone(), reader)
         })
         .collect()
 }
@@ -530,7 +542,8 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
         }
     }
 
-    let (new_subscriber, rx) = subscriber("99", "sidebar_new", 1, wake_channel().0);
+    let (new_subscriber, mut rx) = subscriber(&fixture, "99", "sidebar_new", 1, wake_channel().0);
+    rx.views = cycles.sink.host_data.lock().unwrap().views.clone();
     let mut config = cycles.worker.config.clone();
     config.instance_id = new_subscriber.instance_id.clone();
     config.own_pane = new_subscriber.own_pane.clone();
@@ -646,15 +659,12 @@ fn clock_thresholds_reach_every_consumer_as_content() {
                 snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
                 snapshot = snapshot.with_live_panes(vec![live_pane.clone()], None);
             }
-            let projected = cycles.worker.project_fold(
-                WorkspaceFold {
-                    workspace: WorkspaceSnapshot(snapshot),
-                    frame: Some(frame.clone()),
-                },
-                &mut cycles.sink,
-            );
-            cycles.sink.publish(FetchUpdate::Snapshot {
-                snapshot: Box::new(projected),
+            let projected = WorkspaceFold {
+                workspace: WorkspaceSnapshot(snapshot),
+                frame: Some(frame.clone()),
+            };
+            cycles.sink.publish(FetchUpdate::Fold {
+                fold: Arc::new(projected),
                 phase: FetchPhase::Final,
                 source: SnapshotSource::Cached,
             });
@@ -771,6 +781,7 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
         let mut receivers = Vec::new();
         for index in 0..count {
             let (sub, rx) = subscriber(
+                &fixture,
                 &format!("{index:02}"),
                 &format!("sidebar_{index}"),
                 2,
@@ -779,23 +790,19 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
             subscribe(&subscribers, sub);
             receivers.push(rx);
         }
-        let mut worker = fixture.worker();
         let mut sink =
             ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
 
-        let projected = worker.project_fold(
-            WorkspaceFold {
-                workspace: WorkspaceSnapshot(shared),
-                frame: Some(Arc::new(crate::sidebar::frame::assemble_frame(
-                    Vec::new(),
-                    1,
-                    "rimz-test",
-                ))),
-            },
-            &mut sink,
-        );
-        sink.publish(FetchUpdate::Snapshot {
-            snapshot: Box::new(projected),
+        let projected = WorkspaceFold {
+            workspace: WorkspaceSnapshot(shared),
+            frame: Some(Arc::new(crate::sidebar::frame::assemble_frame(
+                Vec::new(),
+                1,
+                "rimz-test",
+            ))),
+        };
+        sink.publish(FetchUpdate::Fold {
+            fold: Arc::new(projected),
             phase: FetchPhase::Final,
             source: SnapshotSource::Cached,
         });
@@ -840,8 +847,8 @@ fn unchanged_pane_overlays_keep_group_vector_shared() {
 fn unread_write_back_copies_only_the_changed_group() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (elder, elder_rx) = subscriber("01", "sidebar_1", 2, wake_channel().0);
-    let (younger, younger_rx) = subscriber("02", "sidebar_2", 2, wake_channel().0);
+    let (elder, elder_rx) = subscriber(&fixture, "01", "sidebar_1", 2, wake_channel().0);
+    let (younger, younger_rx) = subscriber(&fixture, "02", "sidebar_2", 2, wake_channel().0);
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
@@ -860,24 +867,13 @@ fn unread_write_back_copies_only_the_changed_group() {
     Arc::make_mut(&mut shared.worktree_groups).push(unchanged);
     let retained = shared.clone();
     let mut worker = fixture.worker();
-    let mut projected = worker.project_fold(
-        WorkspaceFold {
-            workspace: WorkspaceSnapshot(shared),
-            frame: None,
-        },
-        &mut sink,
-    );
-    for row in Arc::make_mut(&mut Arc::make_mut(&mut projected.worktree_groups)[0].rows) {
-        row.unread = false;
-    }
+    let projected = frameless(shared);
 
-    worker.publish_snapshot(
+    worker.publish_fold(
         &fixture.state,
-        SnapshotPublication {
-            snapshot: projected,
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Cached,
-        },
+        projected,
+        FetchPhase::Final,
+        SnapshotSource::Cached,
         &mut sink,
     );
     for rx in [elder_rx, younger_rx] {
@@ -908,6 +904,92 @@ fn unread_write_back_copies_only_the_changed_group() {
     );
 }
 
+struct Replay {
+    views: Arc<Mutex<super::super::views::Views>>,
+    cursor: Mutex<super::super::views::Cursor>,
+    completion: Arc<AtomicBool>,
+    own_pane: Option<PaneId>,
+}
+
+impl Replay {
+    fn new(host_data: &Mutex<HostData>, subscriber: &Subscriber) -> Self {
+        Self {
+            views: host_data.lock().unwrap().views.clone(),
+            cursor: Mutex::default(),
+            completion: subscriber.completion.clone(),
+            own_pane: subscriber.own_pane.clone(),
+        }
+    }
+
+    fn take(&self) -> Vec<FetchUpdate> {
+        let views = self.views.lock().unwrap();
+        let mut cursor = self.cursor.lock().unwrap();
+        let updates = views
+            .latest
+            .since(cursor.revision)
+            .into_iter()
+            .map(|update| {
+                cursor.replay(
+                    update,
+                    |fold| LoopState::project_fold(fold, self.own_pane.as_ref(), None),
+                    true,
+                )
+            })
+            .collect();
+        cursor.revision = views.revision;
+        updates
+    }
+
+    fn try_iter(&self) -> std::vec::IntoIter<FetchUpdate> {
+        self.take().into_iter()
+    }
+
+    fn try_recv(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
+        self.try_iter()
+            .next()
+            .ok_or(std::sync::mpsc::TryRecvError::Empty)
+    }
+
+    fn recv(&self) -> Result<FetchUpdate, std::sync::mpsc::RecvError> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(update) = self.try_recv() {
+                return Ok(update);
+            }
+            if Instant::now() >= deadline {
+                return Err(std::sync::mpsc::RecvError);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+fn single_sink(host_data: Arc<Mutex<HostData>>, wake: SyncSender<Wakeup>) -> (ResultSink, Replay) {
+    let subscriber = Subscriber {
+        instance_id: SidebarInstanceId::new(),
+        own_pane: None,
+        tick_seconds: 1,
+        completion: Arc::default(),
+        wake,
+    };
+    let reader = Replay::new(&host_data, &subscriber);
+    let subscribers = Arc::new(Mutex::new(BTreeMap::from([(
+        subscriber.instance_id.as_str().to_owned(),
+        subscriber,
+    )])));
+    (
+        ResultSink::shared(subscribers, Covered::default(), host_data),
+        reader,
+    )
+}
+
+fn frameless(snapshot: SidebarSnapshot) -> WorkspaceFold {
+    WorkspaceFold {
+        workspace: WorkspaceSnapshot(snapshot),
+        frame: None,
+    }
+}
+
 fn wake_channel() -> (SyncSender<Wakeup>, std::sync::mpsc::Receiver<Wakeup>) {
     std::sync::mpsc::sync_channel(64)
 }
@@ -925,12 +1007,13 @@ fn run_cycle(
     request: FetchRequest,
     host_data: Arc<Mutex<HostData>>,
 ) -> Vec<FetchUpdate> {
-    let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, wake_channel().0, None);
-    sink.host_data = host_data;
+    let (mut sink, reader) = single_sink(host_data, wake_channel().0);
+    reader.cursor.lock().unwrap().revision = reader.views.lock().unwrap().revision;
     worker.run_cycle(state, request, &mut sink);
-    drop(sink);
-    rx.try_iter().map(|update| update.into_parts().0).collect()
+    reader
+        .try_iter()
+        .map(|update| update.into_parts().0)
+        .collect()
 }
 
 fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
@@ -981,26 +1064,54 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
 
 #[test]
 fn refresh_override_stamps_folded_snapshot() {
-    let workspace_id = workspace();
+    let fixture = FetchFixture::new();
     let mut folded = SidebarSnapshot::build_with_agents(
-        workspace_id.clone(),
+        fixture.workspace_id.clone(),
         Vec::new(),
         jiff::Timestamp::UNIX_EPOCH,
     );
     folded.theme.display.refresh_ms = 250;
-    let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, wake_channel().0, Some(50));
-
-    sink.publish(FetchUpdate::Snapshot {
-        snapshot: Box::new(folded),
+    let subscribers = Subscribers::default();
+    let mut readers = Vec::new();
+    for id in ["01", "02"] {
+        let (subscriber, reader) =
+            subscriber(&fixture, id, &format!("sidebar_{id}"), 1, wake_channel().0);
+        subscribe(&subscribers, subscriber);
+        readers.push(reader);
+    }
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    sink.publish(FetchUpdate::Fold {
+        fold: Arc::new(frameless(folded)),
         phase: FetchPhase::Final,
         source: SnapshotSource::Cached,
     });
-
-    let update = rx.recv().expect("published snapshot");
-    let snapshot = snapshot(&update);
-    assert_eq!(snapshot.theme.display.refresh_ms, 50);
-    assert_eq!(snapshot.theme.display.resolved_refresh_ms(), 50);
+    for reader in readers {
+        let mut config = fixture.worker().config;
+        config.own_pane = reader.own_pane.clone();
+        config.refresh_ms_override = Some(50);
+        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), reader);
+        renderer.on_snapshot(&mut dispatcher);
+        assert_eq!(renderer.current.theme.display.refresh_ms, 50);
+        assert_eq!(renderer.current.theme.display.resolved_refresh_ms(), 50);
+    }
+    assert_eq!(
+        fixture
+            .host_data
+            .lock()
+            .unwrap()
+            .views
+            .lock()
+            .unwrap()
+            .fold
+            .as_ref()
+            .unwrap()
+            .workspace
+            .snapshot()
+            .theme
+            .display
+            .refresh_ms,
+        250
+    );
 }
 
 #[test]
@@ -1035,9 +1146,9 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     worker.runtime = runtime.clone();
     worker.config.notification_prefs.coalesce_ms = 0;
     let subscribers = Subscribers::default();
-    let (elder, elder_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
+    let (elder, elder_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
     let (wake, notices) = wake_channel();
-    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, wake);
+    let (younger, younger_rx) = subscriber(&fixture, "02", "terminal_8", 2, wake);
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
@@ -1060,20 +1171,15 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     ));
-    let projected = worker.project_fold(
-        WorkspaceFold {
-            workspace: WorkspaceSnapshot(shared),
-            frame: Some(frame),
-        },
-        &mut sink,
-    );
-    worker.publish_snapshot(
+    let projected = WorkspaceFold {
+        workspace: WorkspaceSnapshot(shared),
+        frame: Some(frame),
+    };
+    worker.publish_fold(
         &fixture.state,
-        SnapshotPublication {
-            snapshot: projected,
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Cached,
-        },
+        projected,
+        FetchPhase::Final,
+        SnapshotSource::Cached,
         &mut sink,
     );
 
@@ -1091,7 +1197,10 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
         sink.host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .as_ref()
             .unwrap()
             .workspace
@@ -1099,6 +1208,20 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
             .rows()
             .any(|row| row.unread),
         "a new attachment gets the post-notification unread fold too"
+    );
+    let mut plane = super::super::plane::DataPlane::detached();
+    plane.views = fixture.host_data.lock().unwrap().views.clone();
+    let mut config = worker.config.clone();
+    config.instance_id = SidebarInstanceId::new();
+    let subscription = plane.subscribe(&config, wake_channel().0);
+    assert!(
+        subscription
+            .seed
+            .unwrap()
+            .workspace
+            .snapshot()
+            .rows()
+            .any(|row| row.unread)
     );
     assert_eq!(
         notices.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -1133,7 +1256,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
     let mut receivers = Vec::new();
     for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
         let (wake, inbox) = wake_channel();
-        let (sub, rx) = subscriber(id, own, 2, wake);
+        let (sub, rx) = subscriber(&fixture, id, own, 2, wake);
         receivers.push((inbox, rx));
         subscribe(&subscribers, sub);
     }
@@ -1152,20 +1275,15 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     ));
-    let projected = worker.project_fold(
-        WorkspaceFold {
-            workspace: WorkspaceSnapshot(shared),
-            frame: Some(frame),
-        },
-        &mut sink,
-    );
-    worker.publish_snapshot(
+    let projected = WorkspaceFold {
+        workspace: WorkspaceSnapshot(shared),
+        frame: Some(frame),
+    };
+    worker.publish_fold(
         &fixture.state,
-        SnapshotPublication {
-            snapshot: projected,
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Cached,
-        },
+        projected,
+        FetchPhase::Final,
+        SnapshotSource::Cached,
         &mut sink,
     );
     for (inbox, rx) in receivers {
@@ -1516,7 +1634,7 @@ struct FetchFixture {
 #[test]
 fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     thread_local! {
-        static UPDATES: std::cell::RefCell<Option<ResultReceiver>> =
+        static UPDATES: std::cell::RefCell<Option<Replay>> =
             const { std::cell::RefCell::new(None) };
         static SENT_BEFORE_PROBE: std::cell::Cell<Option<bool>> =
             const { std::cell::Cell::new(None) };
@@ -1525,35 +1643,34 @@ fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
     let mut worker = fixture.worker();
     let lost = [(AgentKind::new_unchecked("claude"), "lost".into())].into();
     crate::store::live_roster::publish(&fixture.state.live_roster, lost).unwrap();
-    let (tx, rx) = result_channel();
-    UPDATES.set(Some(rx));
-    let mut sink = ResultSink::new(tx, wake_channel().0, None);
-    sink.host_data = fixture.host_data.clone();
-    // The listing can take its whole timeout on a wedged server.
+    let (mut sink, reader) = single_sink(fixture.host_data.clone(), wake_channel().0);
+    UPDATES.set(Some(reader));
     worker.session_listed = |_, _| {
         let sent = UPDATES.with_borrow(|updates| {
-            matches!(
-                updates.as_ref().unwrap().try_recv(),
-                Ok(FetchUpdate::Snapshot { .. })
-            )
+            let reader = updates.as_ref().unwrap();
+            let views = reader.views.lock().unwrap();
+            views.revision == 1
+                && reader.completion.load(Ordering::Relaxed)
+                && views
+                    .latest
+                    .since(0)
+                    .first()
+                    .is_some_and(|update| update.is_final() && update.is_success())
         });
         SENT_BEFORE_PROBE.set(Some(sent));
         false
     };
-    worker.publish_snapshot(
+    worker.publish_fold(
         &fixture.state,
-        SnapshotPublication {
-            snapshot: SidebarSnapshot::build(
-                fixture.workspace_id.clone(),
-                Vec::new(),
-                jiff::Timestamp::UNIX_EPOCH,
-            ),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        },
+        frameless(SidebarSnapshot::build(
+            fixture.workspace_id.clone(),
+            Vec::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        )),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
         &mut sink,
     );
-
     assert_eq!(SENT_BEFORE_PROBE.get(), Some(true));
 }
 
@@ -1591,28 +1708,40 @@ fn roster_narrowing_needs_a_listed_session() {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(fixture.workspace_id.clone(), agents, now);
         snapshot.panes_produced_at_ms = Some(1);
-        SnapshotPublication {
-            snapshot: snapshot.with_live_panes(panes, None),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        }
+        frameless(snapshot.with_live_panes(panes, None))
     };
     let on_disk = || {
         crate::store::live_roster::read(&fixture.state.live_roster)
             .unwrap()
             .agents
     };
-    let (tx, _rx) = result_channel();
-    let mut sink = ResultSink::new(tx, wake_channel().0, None);
-    sink.host_data = fixture.host_data.clone();
+    let (mut sink, _rx) = single_sink(fixture.host_data.clone(), wake_channel().0);
     crate::store::live_roster::publish(&fixture.state.live_roster, roster(&["a", "b"])).unwrap();
     let before = std::fs::read(&fixture.state.live_roster).unwrap();
 
     // A producer that outlived its session sees no agents, every cycle.
     worker.session_listed = |_, _| false;
-    worker.publish_snapshot(&fixture.state, produced(&[]), &mut sink);
-    worker.publish_snapshot(&fixture.state, produced(&["a"]), &mut sink);
-    worker.publish_snapshot(&fixture.state, produced(&[]), &mut sink);
+    worker.publish_fold(
+        &fixture.state,
+        produced(&[]),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
+        &mut sink,
+    );
+    worker.publish_fold(
+        &fixture.state,
+        produced(&["a"]),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
+        &mut sink,
+    );
+    worker.publish_fold(
+        &fixture.state,
+        produced(&[]),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
+        &mut sink,
+    );
     assert_eq!(std::fs::read(&fixture.state.live_roster).unwrap(), before);
     assert_eq!(on_disk(), roster(&["a", "b"]), "a birth still parks both");
     assert_eq!(
@@ -1630,12 +1759,24 @@ fn roster_narrowing_needs_a_listed_session() {
 
     // Nothing removed: written without asking the mux.
     worker.session_listed = |_, _| panic!("an additive publication must not probe");
-    worker.publish_snapshot(&fixture.state, produced(&["a", "b", "c"]), &mut sink);
+    worker.publish_fold(
+        &fixture.state,
+        produced(&["a", "b", "c"]),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
+        &mut sink,
+    );
     assert_eq!(on_disk(), roster(&["a", "b", "c"]));
 
     // An agent that exits in a living room leaves the roster.
     worker.session_listed = |_, _| true;
-    worker.publish_snapshot(&fixture.state, produced(&["a"]), &mut sink);
+    worker.publish_fold(
+        &fixture.state,
+        produced(&["a"]),
+        FetchPhase::Final,
+        SnapshotSource::Produced,
+        &mut sink,
+    );
     assert_eq!(on_disk(), roster(&["a"]));
 }
 
@@ -1762,7 +1903,10 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
             .host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .as_ref()
             .unwrap()
             .frame
@@ -1773,38 +1917,38 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
 
 #[test]
 fn a_delivered_fold_is_already_the_hosts_latest_fold() {
-    let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, wake_channel().0, None);
-    let host_data = sink.host_data.clone();
-    sink.on_delivery = Some(Box::new(move || {
-        let update = rx.take().snapshot.expect("the delivered snapshot");
-        let FetchUpdate::Snapshot { snapshot, .. } = update else {
-            panic!("snapshot delivery")
-        };
-        let data = host_data.lock().unwrap();
-        assert_eq!(
-            data.last_fold
-                .as_ref()
-                .map(|fold| fold.workspace.snapshot().display_name.as_str()),
-            Some(snapshot.display_name.as_str()),
-            "a woken painter must read the fold that woke it, not its predecessor"
-        );
-    }));
-    for name in ["first", "second"] {
+    let fixture = FetchFixture::new();
+    let (wake, wakes) = wake_channel();
+    let (mut sink, reader) = single_sink(fixture.host_data.clone(), wake);
+    for (index, name) in ["first", "second"].into_iter().enumerate() {
         let mut snapshot = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
         snapshot.display_name = name.into();
-        sink.staged = Some((
-            WorkspaceFold {
-                workspace: WorkspaceSnapshot(snapshot.clone()),
-                frame: None,
-            },
-            None,
-        ));
-        sink.publish(FetchUpdate::Snapshot {
-            snapshot: Box::new(snapshot),
+        sink.publish(FetchUpdate::Fold {
+            fold: Arc::new(frameless(snapshot)),
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         });
+        assert_eq!(
+            wakes.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Wakeup::Snapshot
+        );
+        let views = reader.views.lock().unwrap();
+        assert_eq!(views.revision, index as u64 + 1);
+        let latest = views
+            .latest
+            .since(index as u64)
+            .pop()
+            .unwrap()
+            .into_parts()
+            .0;
+        let FetchUpdate::Fold { fold, .. } = latest else {
+            panic!("room fold")
+        };
+        assert_eq!(fold.workspace.snapshot().display_name, name);
+        assert!(
+            Arc::ptr_eq(views.fold.as_ref().unwrap(), &fold),
+            "a woken painter must read the fold that woke it, not its predecessor"
+        );
     }
 }
 
@@ -1828,9 +1972,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     )
     .unwrap();
     let mut worker = fixture.worker();
-    let (tx, rx) = result_channel();
-    let mut sink = ResultSink::new(tx, wake_channel().0, None);
-    sink.host_data = fixture.host_data.clone();
+    let (mut sink, rx) = single_sink(fixture.host_data.clone(), wake_channel().0);
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert!(matches!(
         rx.recv().unwrap().into_parts().0,
@@ -1841,7 +1983,10 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
         sink.host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .as_ref()
             .unwrap()
             .workspace
@@ -1865,7 +2010,10 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
         sink.host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .as_ref()
             .unwrap()
             .workspace
@@ -1876,23 +2024,21 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     sink.publish(FetchUpdate::Failed {
         error: "no fold".into(),
     });
-    sink.publish(FetchUpdate::Snapshot {
-        snapshot: Box::new(rollup),
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Cached,
-    });
     assert_eq!(
         sink.host_data
             .lock()
             .unwrap()
-            .last_fold
+            .views
+            .lock()
+            .unwrap()
+            .fold
             .as_ref()
             .unwrap()
             .workspace
             .snapshot()
             .display_name,
         "second-and-longer",
-        "outcomes and test snapshots without a staged fold preserve the seed"
+        "a failure preserves the last successful seed"
     );
 }
 
@@ -2060,57 +2206,6 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
 }
 
 #[test]
-fn one_cycle_projects_only_the_eldest_on_the_worker() {
-    let fixture = FetchFixture::new();
-    let panes = ["terminal_7", "terminal_8", "terminal_9"];
-    let frame = crate::sidebar::frame::assemble_frame(
-        panes.iter().map(|raw| pane(raw, "tab_1", false)).collect(),
-        crate::utils::time::unix_now_ms(),
-        "rimz-test",
-    );
-    fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
-
-    // Two panes of one host, eldest first; each excludes only itself.
-    let subscribers = Subscribers::default();
-    let mut updates = Vec::new();
-    for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
-        let (tx, rx) = result_channel();
-        let instance_id = SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap();
-        subscribers.lock().unwrap().insert(
-            instance_id.as_str().to_owned(),
-            Subscriber {
-                instance_id,
-                own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
-                tick_seconds: 2,
-                refresh_override: None,
-                tx,
-                wake: wake_channel().0,
-            },
-        );
-        updates.push((own, rx));
-    }
-    let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
-
-    for (index, (own, rx)) in updates.into_iter().enumerate() {
-        let mut pending = rx.0.pending.lock().unwrap();
-        let update = pending.snapshot.as_mut().expect("one publication per pane");
-        assert_eq!(
-            update.snapshot_mut().is_some(),
-            index == 0,
-            "only the eldest gets a worker-built projection"
-        );
-        drop(pending);
-        let mut config = worker.config.clone();
-        config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
-        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
-        renderer.on_snapshot(&mut dispatcher);
-        assert_eq!(renderer.projections, u64::from(index != 0));
-    }
-}
-
-#[test]
 fn one_cycle_projects_each_pane_excluding_only_itself() {
     let fixture = FetchFixture::new();
     let panes = ["terminal_7", "terminal_8", "terminal_9"];
@@ -2124,7 +2219,7 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
     let subscribers = Subscribers::default();
     let mut updates = Vec::new();
     for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
-        let (subscriber, rx) = subscriber(id, own, 2, wake_channel().0);
+        let (subscriber, rx) = subscriber(&fixture, id, own, 2, wake_channel().0);
         subscribe(&subscribers, subscriber);
         updates.push((own, rx));
     }
@@ -2160,15 +2255,8 @@ fn a_failed_final_is_not_replaced_by_its_projected_interim() {
     cycles.enable_renderer_apply();
     let snapshot = crate::sidebar_pane::app::fixtures::snapshot(&fixture.workspace_id);
     cycles.sink.context = Some(Arc::new(FoldShared::default()));
-    cycles.sink.staged = Some((
-        WorkspaceFold {
-            workspace: WorkspaceSnapshot(snapshot.clone()),
-            frame: None,
-        },
-        None,
-    ));
-    cycles.sink.publish(FetchUpdate::Snapshot {
-        snapshot: Box::new(snapshot),
+    cycles.sink.publish(FetchUpdate::Fold {
+        fold: Arc::new(frameless(snapshot)),
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
     });
@@ -2217,7 +2305,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     }
     panes.extend(sidebars);
     let mut frame = crate::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, "rimz-test");
-    frame.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_0")];
+    frame.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")];
     let mut cycles =
         IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 3);
     cycles.enable_renderer_apply();
@@ -2227,26 +2315,27 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         .iter()
         .enumerate()
         .find_map(|(index, (r, _))| {
-            (cycles.sink.cycle[0].own_pane
-                != Some(PaneId::from_parts(
-                    MuxName::Zellij,
-                    format!("sidebar_{index}"),
-                ))
-                && r.current.own_view.as_ref().is_some_and(|view| {
+            r.current
+                .own_view
+                .as_ref()
+                .is_some_and(|view| {
                     !view
                         .working_pane_ids
                         .iter()
                         .any(|pane| r.current.viewed_panes.contains(pane))
-                }))
-            .then_some(index)
+                })
+                .then_some(index)
         })
         .expect("a hidden pane");
+    assert_eq!(hidden, 0, "the eldest pane is hidden too");
     assert_eq!(
         cycles.renderers[hidden].0.projections, 1,
-        "a younger hidden pane projects at its first take"
+        "a hidden pane projects on its first reduction"
     );
+    let views = cycles.sink.host_data.lock().unwrap().views.clone();
     let before = {
-        let counts = cycles.sink.deliveries.lock().unwrap();
+        let guard = views.lock().unwrap();
+        let counts = &guard.reductions;
         (counts.content, counts.unchanged)
     };
     for _ in 0..3 {
@@ -2256,13 +2345,14 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         cycles.renderers[hidden].0.projections, 1,
         "hidden equal folds never project"
     );
-    let counts = cycles.sink.deliveries.lock().unwrap();
+    let guard = views.lock().unwrap();
+    let counts = &guard.reductions;
     assert_eq!(
         (counts.content - before.0) + (counts.unchanged - before.1),
         3,
         "only the watched renderer consumes each cycle"
     );
-    drop(counts);
+    drop(guard);
     let own = cycles.renderers[hidden]
         .0
         .current
@@ -2278,7 +2368,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     cycles.run_cycle();
     assert_eq!(
         cycles.renderers[hidden].0.projections, 2,
-        "reveal reduces the projected mailbox without projecting the same fold again"
+        "reveal projects the unread fold once"
     );
     assert!(
         cycles.renderers[hidden]
@@ -2286,41 +2376,6 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
             .current
             .viewed_panes
             .contains(&own)
-    );
-}
-
-#[test]
-fn equal_content_is_compared_at_take_not_send_and_invalidation_reconciles() {
-    let (tx, rx) = result_channel();
-    let update = FetchUpdate::Snapshot {
-        snapshot: Box::new(crate::sidebar_pane::app::fixtures::snapshot(&workspace())),
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Produced,
-    };
-    tx.send(update.clone()).unwrap();
-    rx.acknowledge(rx.take().pop().unwrap(), true);
-    tx.send(update.clone()).unwrap();
-    assert!(
-        !rx.0
-            .pending
-            .lock()
-            .unwrap()
-            .snapshot
-            .as_ref()
-            .unwrap()
-            .is_unchanged(),
-        "send retains content until the consumer decides"
-    );
-    assert!(
-        rx.take().pop().unwrap().is_unchanged(),
-        "equal take applies clocks"
-    );
-    rx.allow_unchanged(true);
-    tx.send(update).unwrap();
-    rx.invalidate();
-    assert!(
-        !rx.take().pop().unwrap().is_unchanged(),
-        "local changes demand content"
     );
 }
 
@@ -2350,8 +2405,8 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     fixture.host_data.lock().unwrap().inputs =
         HostInputs::seeded(&producer, "rimz-test", Some(projection));
     let subscribers = Subscribers::default();
-    let (first, first_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
-    let (second, second_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
+    let (first, first_rx) = subscriber(&fixture, "01", "terminal_7", 60, wake_channel().0);
+    let (second, second_rx) = subscriber(&fixture, "02", "terminal_8", 60, wake_channel().0);
     subscribe(&subscribers, first);
     subscribe(&subscribers, second);
     let mut worker = fixture.worker();
@@ -2360,7 +2415,8 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     let first = first_rx.try_recv().unwrap();
     let second = second_rx.try_recv().unwrap();
     let host = fixture.host_data.lock().unwrap();
-    let remembered = host.last_fold.as_ref().unwrap().workspace.snapshot();
+    let views = host.views.lock().unwrap();
+    let remembered = views.fold.as_ref().unwrap().workspace.snapshot();
     assert!(remembered.rows().any(|row| row.is_agent()));
     for projected in [snapshot(&first), snapshot(&second)] {
         assert!(Arc::ptr_eq(&projected.agents, &remembered.agents));
@@ -2386,8 +2442,8 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
 fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (stalled, stalled_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
-    let (advancing, advancing_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
+    let (stalled, stalled_rx) = subscriber(&fixture, "01", "terminal_7", 60, wake_channel().0);
+    let (advancing, advancing_rx) = subscriber(&fixture, "02", "terminal_8", 60, wake_channel().0);
     subscribe(&subscribers, stalled);
     subscribe(&subscribers, advancing);
     let mut worker = fixture.worker();
@@ -2412,6 +2468,16 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
         assert_eq!(shown_panes(&update), ["terminal_7", &newest]);
         assert!(advancing_rx.try_recv().is_err());
     }
+    assert_eq!(
+        stalled_rx
+            .views
+            .lock()
+            .unwrap()
+            .latest
+            .since(stalled_rx.cursor.lock().unwrap().revision)
+            .len(),
+        1
+    );
     let updates: Vec<_> = stalled_rx.try_iter().collect();
     assert_eq!(
         updates.len(),
@@ -2447,6 +2513,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     let mut receivers = Vec::new();
     for n in 0..40 {
         let (sub, rx) = subscriber(
+            &fixture,
             &format!("{n:02}"),
             &format!("terminal_{n}"),
             2,
@@ -2489,7 +2556,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             fixture.runtime.clone(),
             PathBuf::from("missing.sock"),
             crate::diag::DiagSink::disabled(),
-            result_channel().1,
+            Arc::default(),
             None,
             tx.clone(),
             crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -2541,6 +2608,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     let mut panes = Vec::new();
     for n in 0..40 {
         let (sub, rx) = subscriber(
+            &fixture,
             &format!("{n:02}"),
             &format!("terminal_{n}"),
             2,
@@ -2560,7 +2628,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
                 runtime,
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),
-                result_channel().1,
+                Arc::default(),
                 None,
                 std::sync::mpsc::sync_channel(64).0,
                 crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -2599,21 +2667,21 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
 }
 
 fn subscriber(
+    fixture: &FetchFixture,
     id: &str,
     own: &str,
     tick_seconds: u64,
     wake: SyncSender<Wakeup>,
-) -> (Subscriber, ResultReceiver) {
-    let (tx, rx) = result_channel();
+) -> (Subscriber, Replay) {
     let subscriber = Subscriber {
         instance_id: SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
         own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
         tick_seconds,
-        refresh_override: None,
-        tx,
+        completion: Arc::default(),
         wake,
     };
-    (subscriber, rx)
+    let reader = Replay::new(&fixture.host_data, &subscriber);
+    (subscriber, reader)
 }
 
 fn subscribe(subscribers: &Subscribers, subscriber: Subscriber) {
@@ -2829,7 +2897,13 @@ fn staggered_requests(idle: bool) {
     let subscribers = Subscribers::default();
     let mut receivers = Vec::new();
     for (index, own) in panes.iter().enumerate() {
-        let (subscriber, rx) = subscriber(&(index + 1).to_string(), own, 60, wake_channel().0);
+        let (subscriber, rx) = subscriber(
+            &fixture,
+            &(index + 1).to_string(),
+            own,
+            60,
+            wake_channel().0,
+        );
         subscribe(&subscribers, subscriber);
         receivers.push(rx);
     }
@@ -2860,16 +2934,8 @@ fn staggered_requests(idle: bool) {
                 }
             }
             2 => {
-                *captured.lock().unwrap() = draining
-                    .iter()
-                    .map(|rx| {
-                        let update = rx.try_recv().unwrap();
-                        if idle {
-                            rx.acknowledge(update.clone(), true);
-                        }
-                        update
-                    })
-                    .collect();
+                *captured.lock().unwrap() =
+                    draining.iter().map(|rx| rx.try_recv().unwrap()).collect();
                 for _ in 0..PANES {
                     sender
                         .as_ref()
@@ -2945,6 +3011,7 @@ fn requests_beyond_finished_fold(idle: bool) {
     delivery.sink.covered = covered.clone();
     tx.send(FetchRequest::default()).unwrap();
     let mut sender = Some(tx);
+    let reader = Replay::new(&delivery.sink.host_data, &delivery.sink.cycle[0]);
     let mut cycles = Vec::new();
     let mut mid_first = None;
     drive(&rx, &covered, Duration::ZERO, |cycle| {
@@ -2952,18 +3019,17 @@ fn requests_beyond_finished_fold(idle: bool) {
         if idle {
             delivery.sink.begin_cycle();
             delivery.sink.answering = Some(cycle);
-            delivery.sink.publish(FetchUpdate::Snapshot {
-                snapshot: Box::new(SidebarSnapshot::build_with_agents(
+            delivery.sink.publish(FetchUpdate::Fold {
+                fold: Arc::new(frameless(SidebarSnapshot::build_with_agents(
                     fixture.workspace_id.clone(),
                     Vec::new(),
                     jiff::Timestamp::now(),
-                )),
+                ))),
                 phase: FetchPhase::Final,
                 source: SnapshotSource::Cached,
             });
-            let update = delivery.receivers[0].take().pop().unwrap();
+            let update = reader.take().pop().unwrap();
             assert_eq!(update.is_unchanged(), cycles.len() > 1);
-            delivery.receivers[0].acknowledge(update, true);
         } else {
             covered.record(cycle);
         }
@@ -3070,8 +3136,10 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     );
     fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     let subscribers = Subscribers::default();
-    let (eldest, eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
-    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, wake_channel().0);
+    let (elder_wake, elder_wakes) = wake_channel();
+    let (eldest, eldest_rx) = subscriber(&fixture, "01", "terminal_7", 2, elder_wake);
+    let (younger_wake, younger_wakes) = wake_channel();
+    let (younger, younger_rx) = subscriber(&fixture, "02", "terminal_8", 2, younger_wake);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let mut worker = fixture.worker();
@@ -3090,14 +3158,15 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     )
     .unwrap();
     let frame = Some(inputs.frame);
-    let folded = worker.project_fold(WorkspaceFold { workspace, frame }, &mut sink);
+    let folded = WorkspaceFold { workspace, frame };
 
     // The eldest leaves and a new pane arrives between fold and publication.
     unsubscribe(&subscribers, "01");
-    let (newcomer, newcomer_rx) = subscriber("03", "terminal_9", 2, wake_channel().0);
+    let (new_wake, new_wakes) = wake_channel();
+    let (newcomer, newcomer_rx) = subscriber(&fixture, "03", "terminal_9", 2, new_wake);
     subscribe(&subscribers, newcomer);
-    sink.publish(FetchUpdate::Snapshot {
-        snapshot: Box::new(folded),
+    sink.publish(FetchUpdate::Fold {
+        fold: Arc::new(folded),
         phase: FetchPhase::Final,
         source: SnapshotSource::Cached,
     });
@@ -3111,9 +3180,15 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     );
     let eldest: Vec<_> = eldest_rx.try_iter().collect();
     assert_eq!(shown_panes(&eldest[0]), ["terminal_8", "terminal_9"]);
-    assert!(
-        newcomer_rx.try_iter().next().is_none(),
-        "a pane that attached mid-cycle waits for its own first fetch"
+    assert!(eldest_rx.completion.load(Ordering::Relaxed));
+    assert!(younger_rx.completion.load(Ordering::Relaxed));
+    assert!(!newcomer_rx.completion.load(Ordering::Relaxed));
+    assert_eq!(elder_wakes.try_recv().unwrap(), Wakeup::Snapshot);
+    assert_eq!(younger_wakes.try_recv().unwrap(), Wakeup::Snapshot);
+    assert!(new_wakes.try_recv().is_err());
+    assert_eq!(
+        shown_panes(&newcomer_rx.recv().unwrap()),
+        ["terminal_7", "terminal_8"]
     );
 }
 
@@ -3121,8 +3196,8 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
 fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 60, wake_channel().0);
-    let (younger, _younger_rx) = subscriber("02", "terminal_8", 1, wake_channel().0);
+    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 60, wake_channel().0);
+    let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 1, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
@@ -3132,11 +3207,14 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
         fixture.host_data.clone(),
     );
 
-    assert_eq!(worker.stand(&sink).tick, Duration::from_secs(60));
+    assert_eq!(
+        data_tick(sink.cycle.first(), &worker.config),
+        Duration::from_secs(60)
+    );
     unsubscribe(&subscribers, "01");
     sink.begin_cycle();
     assert_eq!(
-        worker.stand(&sink).tick,
+        data_tick(sink.cycle.first(), &worker.config),
         Duration::from_secs(1),
         "the next eldest's tick takes over"
     );
@@ -3145,13 +3223,13 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
 #[test]
 fn the_worker_tick_follows_age_not_magnitude() {
     fn tick(worker: &FetchWorker, sink: &ResultSink) -> Duration {
-        worker.stand(sink).tick
+        data_tick(sink.cycle.first(), &worker.config)
     }
 
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 1, wake_channel().0);
-    let (younger, _younger_rx) = subscriber("02", "terminal_8", 60, wake_channel().0);
+    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 1, wake_channel().0);
+    let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 60, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
@@ -3173,13 +3251,13 @@ fn the_worker_tick_follows_age_not_magnitude() {
 #[test]
 fn the_worker_witness_is_its_eldest_renderers_pane() {
     fn witness(worker: &FetchWorker, sink: &ResultSink) -> Option<PaneId> {
-        worker.stand(sink).own_pane
+        sink.witness(&worker.config)
     }
 
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (mut eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
-    let (younger, _younger_rx) = subscriber("02", "terminal_8", 2, wake_channel().0);
+    let (mut eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
+    let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 2, wake_channel().0);
     subscribe(&subscribers, eldest.clone());
     subscribe(&subscribers, younger);
     let mut worker = fixture.worker();
@@ -3207,16 +3285,17 @@ fn the_worker_witness_is_its_eldest_renderers_pane() {
 
 #[test]
 fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
+    let fixture = FetchFixture::new();
     let (full, _stalled) = std::sync::mpsc::sync_channel(1);
     full.send(Wakeup::Tick).unwrap();
     let subscribers = Subscribers::default();
-    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, wake_channel().0);
-    let (stalled, _stalled_rx) = subscriber("02", "terminal_8", 2, full);
-    let (other, other_rx) = subscriber("03", "terminal_9", 2, wake_channel().0);
+    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
+    let (stalled, _stalled_rx) = subscriber(&fixture, "02", "terminal_8", 2, full);
+    let (other, other_rx) = subscriber(&fixture, "03", "terminal_9", 2, wake_channel().0);
     for subscriber in [eldest, stalled, other] {
         subscribe(&subscribers, subscriber);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), Arc::default());
+    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         sink.publish(FetchUpdate::Failed {
@@ -3228,8 +3307,16 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
     done_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("the publication returns with one inbox full");
+    assert!(other_rx.completion.load(Ordering::Relaxed));
     assert!(matches!(
-        other_rx.try_recv(),
-        Ok(FetchUpdate::Failed { .. })
+        other_rx
+            .views
+            .lock()
+            .unwrap()
+            .latest
+            .since(0)
+            .pop()
+            .unwrap(),
+        FetchUpdate::Failed { .. }
     ));
 }

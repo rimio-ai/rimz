@@ -488,11 +488,11 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         spawns_by_step: BTreeMap<String, u64>,
     },
-    FetchDeliveryStats {
+    FetchReductionStats {
         interval_ms: u64,
         cycles: u64,
-        content_deliveries: u64,
-        unchanged_deliveries: u64,
+        content_reductions: u64,
+        unchanged_reductions: u64,
         fold_ms: u64,
     },
     ToolLoopEscalated {
@@ -763,7 +763,7 @@ impl DiagEvent {
             | Self::SidebarWidthNudge { .. }
             | Self::SidebarWidthSettle { .. }
             | Self::WorkPaneBoundaryMoved { .. }
-            | Self::FetchDeliveryStats { .. }
+            | Self::FetchReductionStats { .. }
             | Self::PaneCarryRefuted { .. }
             | Self::GateRelease { .. }
             | Self::HostedCarryDropped {
@@ -830,7 +830,7 @@ impl DiagEvent {
             Self::SidebarWidthSettle { .. } => "sidebar_width_settle",
             Self::WorkPaneBoundaryMoved { .. } => "work_pane_boundary_moved",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
-            Self::FetchDeliveryStats { .. } => "fetch_delivery_stats",
+            Self::FetchReductionStats { .. } => "fetch_reduction_stats",
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
             Self::LiveRosterHeld { .. } => "live_roster_held",
             Self::RowConflict { .. } => "row_conflict",
@@ -988,7 +988,7 @@ impl DiagEvent {
                 };
                 format!("{}:{tick_loop:?}:{phase}:{since_ms}", self.kind_name())
             }
-            Self::FetchDeliveryStats { .. } => self.kind_name().to_owned(),
+            Self::FetchReductionStats { .. } => self.kind_name().to_owned(),
             Self::ToolLoopEscalated {
                 agent_kind,
                 agent_id,
@@ -1645,14 +1645,14 @@ impl DiagEvent {
                     "{trigger:?}: {fitted} hidden views fitted to {target_cols}x{target_rows}, {failed} failed, {skipped} skipped"
                 )
             }
-            Self::FetchDeliveryStats {
+            Self::FetchReductionStats {
                 interval_ms,
                 cycles,
-                content_deliveries,
-                unchanged_deliveries,
+                content_reductions,
+                unchanged_reductions,
                 fold_ms,
             } => format!(
-                "fetch over {interval_ms}ms: {cycles} cycles, {content_deliveries} content / {unchanged_deliveries} unchanged deliveries, {fold_ms}ms folding"
+                "fetch over {interval_ms}ms: {cycles} cycles, {content_reductions} content / {unchanged_reductions} unchanged reductions, {fold_ms}ms folding"
             ),
             Self::ToolLoopEscalated {
                 agent_kind,

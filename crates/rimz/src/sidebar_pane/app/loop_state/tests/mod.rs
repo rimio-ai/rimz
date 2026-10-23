@@ -98,7 +98,6 @@ struct Rig {
     ws: WorkspaceId,
     runtime: RuntimePaths,
     state: LoopState,
-    result_tx: super::super::fetch::ResultSender,
     fetch: FetchDispatcher,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
@@ -144,7 +143,8 @@ impl Drop for RigView<'_> {
 impl Rig {
     fn share_views(&mut self, views: Arc<Mutex<super::super::views::Views>>) {
         self.views = views.clone();
-        self.state.share_views(views);
+        let revision = views.lock().unwrap().revision;
+        self.state.share_views(views, revision);
     }
 
     /// Access portable fields without advancing, projecting, or painting the view.
@@ -230,7 +230,6 @@ impl Rig {
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
-        let (result_tx, result_rx) = super::super::fetch::result_channel();
         let views = Arc::new(Mutex::new(super::super::views::Views::default()));
         let mut rig = Self {
             state: LoopState::new(
@@ -240,13 +239,12 @@ impl Rig {
                 runtime.clone(),
                 socket_path,
                 crate::diag::DiagSink::disabled(),
-                result_rx,
+                Arc::default(),
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
                 Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
-            result_tx,
             fetch: FetchDispatcher::new(request_tx),
             requests,
             terminal: terminal_with_width(80),
@@ -259,7 +257,7 @@ impl Rig {
             _dir: dir,
         };
         rig.share_views(views);
-        rig.state.with_shared_view(false, false, |_| {});
+        rig.state.with_projected_view(false, false, |_| {});
         if carried {
             rig.state
                 .draw_frame(&mut rig.terminal, rig.state.clock.now(), false)
@@ -317,16 +315,13 @@ impl Rig {
         });
     }
 
-    /// Drive `on_snapshot` over a channel carrying exactly `update`.
+    /// Publish one room update and drive its consumer.
     fn deliver(&mut self, update: FetchUpdate) {
-        self.send(update).expect("send fetch outcome");
+        self.send(update);
         self.state.on_snapshot(&mut self.fetch);
     }
 
-    fn send(
-        &mut self,
-        mut update: FetchUpdate,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
+    fn send(&mut self, mut update: FetchUpdate) {
         let local = match &mut update {
             FetchUpdate::Shared { update, .. } => update.as_mut(),
             update => update,
@@ -346,104 +341,50 @@ impl Rig {
                         own_view_is_daemon: false,
                     });
                 }
-                let frame = snapshot.own_view.as_ref().map(|view| {
-                    let mut panes: Vec<_> =
-                        snapshot.rows().filter_map(|row| row.pane.clone()).collect();
-                    let tab = panes
-                        .iter()
-                        .find(|pane| view.working_pane_ids.contains(&pane.pane_id))
-                        .and_then(|pane| pane.view_id.clone())
-                        .unwrap_or_else(|| "tab_sidebar".into());
-                    // The own view names the sidebar's tab; fixture rows default every pane onto
-                    // one tab, so move the rest off it.
-                    for other in panes
-                        .iter_mut()
-                        .filter(|pane| !view.working_pane_ids.contains(&pane.pane_id))
-                        .filter(|pane| pane.view_id.as_deref() == Some(tab.as_str()))
-                    {
-                        other.view_id = Some(format!("{tab}_other"));
-                    }
-                    for id in &view.working_pane_ids {
-                        if !panes.iter().any(|pane| pane.pane_id == *id) {
-                            let mut working = pane(id.raw(), &tab, false);
-                            working.pane_id = id.clone();
-                            panes.push(working);
-                        }
-                    }
-                    // The plane samples one room frame: it keeps every other attached sidebar
-                    // where the last fold placed it.
-                    let views = self.views.lock().unwrap();
-                    let previous = views.fold.as_ref().and_then(|fold| fold.frame.clone());
-                    let sidebars = previous.iter().flat_map(|frame| {
-                        frame.tabs.iter().flat_map(|tab| {
-                            tab.panes
-                                .iter()
-                                .filter(|pane| views.peek(&pane.pane_id).is_some())
-                                .map(|pane| (pane.pane_id.clone(), tab.view_id.to_string()))
-                        })
-                    });
-                    let own = self.state.config.own_pane.clone();
-                    let own = own.into_iter().map(|own| (own, tab.clone()));
-                    for (id, tab) in own.chain(sidebars) {
-                        if !panes.iter().any(|pane| pane.pane_id == id) {
-                            let mut sidebar = pane(id.raw(), &tab, false);
-                            sidebar.pane_id = id;
-                            sidebar.command = Some("rimz-sidebar".into());
-                            panes.push(sidebar);
-                        }
-                    }
-                    drop(views);
-                    let mut frame = crate::sidebar::frame::assemble_frame(
-                        panes,
-                        snapshot.panes_observed_at_ms.unwrap_or(1),
-                        "rimz-test",
-                    );
-                    frame.client_views = snapshot.client_views.clone();
-                    Arc::new(frame)
-                });
+                let views = self.views.lock().unwrap();
+                let sidebars = views
+                    .fold
+                    .iter()
+                    .filter_map(|fold| fold.frame.as_ref())
+                    .flat_map(|frame| &frame.tabs)
+                    .flat_map(|tab| {
+                        tab.panes
+                            .iter()
+                            .filter(|pane| views.peek(&pane.pane_id).is_some())
+                            .map(|pane| (pane.pane_id.clone(), tab.view_id.to_string()))
+                    })
+                    .collect();
+                drop(views);
                 let mut workspace = *snapshot.clone();
                 // A fixture that names no own view leaves visibility unknown, which reads as
                 // watched; the plane observes that through the sidebar's own pane being viewed.
                 if synthesized && let Some(own) = self.state.config.own_pane.clone() {
                     workspace.viewed_panes.push(own);
                 }
-                Some(Arc::new(WorkspaceFold {
-                    workspace: crate::sidebar::enrich::WorkspaceSnapshot(workspace),
-                    frame,
-                }))
+                Some(Arc::new(super::super::fixtures::fold(
+                    workspace,
+                    self.state.config.own_pane.as_ref(),
+                    sidebars,
+                )))
             }
             _ => None,
         };
+        if let (FetchUpdate::Snapshot { phase, source, .. }, Some(fold)) = (&*local, fold) {
+            *local = FetchUpdate::Fold {
+                fold,
+                phase: *phase,
+                source: *source,
+            };
+        }
+        let completed = update.is_final();
         let mut views = self.views.lock().unwrap();
-        let own = self.state.config.own_pane.as_ref();
-        let attached =
-            fold.as_ref()
-                .and_then(|fold| fold.frame.as_ref())
-                .is_some_and(|frame| {
-                    frame.tabs.iter().flat_map(|tab| &tab.panes).any(|pane| {
-                        Some(&pane.pane_id) != own && views.peek(&pane.pane_id).is_some()
-                    })
-                });
-        // Beside another attachment the plane retains the unprojected fold, as production does,
-        // so each projects its own view. A lone rig retains what it delivers.
-        let retained = match (&update, &fold) {
-            (FetchUpdate::Snapshot { phase, source, .. }, Some(fold)) if attached => {
-                FetchUpdate::Fold {
-                    fold: fold.clone(),
-                    own_pane: None,
-                    refresh_override: None,
-                    phase: *phase,
-                    source: *source,
-                }
-            }
-            _ => update.clone(),
-        };
-        views.publish(fold, retained);
-        drop(views);
-        self.result_tx.send(update)
+        views.publish(update);
+        if completed {
+            self.state.completion.store(true, Ordering::Relaxed);
+        }
     }
 
-    /// A maintenance sweep over an idle result channel. The heartbeat and
+    /// A maintenance sweep over an idle fetch stream. The heartbeat and
     /// self-close stamps start fresh; a test wanting an expired watchdog
     /// backdates `last_self_close_check` before calling.
     fn maintenance(&mut self) {
@@ -452,7 +393,7 @@ impl Rig {
 
     fn maintenance_draining(&mut self, update: Option<FetchUpdate>) {
         if let Some(update) = update {
-            self.send(update).expect("send fetch outcome");
+            self.send(update);
         }
         self.state.last_heartbeat.get_or_insert_with(Instant::now);
         self.state

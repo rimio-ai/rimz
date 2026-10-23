@@ -917,11 +917,11 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             model::DoctorImpact::Warn,
         ),
         (
-            DiagEvent::FetchDeliveryStats {
+            DiagEvent::FetchReductionStats {
                 interval_ms: 30_000,
                 cycles: 1,
-                content_deliveries: 0,
-                unchanged_deliveries: 1,
+                content_reductions: 0,
+                unchanged_reductions: 1,
                 fold_ms: 0,
             },
             model::DoctorState::Expected,

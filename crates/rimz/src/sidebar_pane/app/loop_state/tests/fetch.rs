@@ -16,8 +16,7 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
             snapshot: Box::new(snapshot.clone()),
             phase,
             source: SnapshotSource::Produced,
-        })
-        .unwrap();
+        });
     }
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(rig.view().current.now, snapshot.now);
@@ -62,6 +61,8 @@ fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::classify(
         sample, 200, 100,
     ));
+    snapshot.now =
+        Timestamp::from_millisecond((snapshot.sidebar.afk_after_ms() + 100) as i64).unwrap();
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     assert_eq!(rig.view().current.presence, snapshot.presence);
     assert_eq!(rig.state.content_applications, 4);
@@ -218,8 +219,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
         snapshot: Box::new(snapshot),
         phase: FetchPhase::Final,
         source: SnapshotSource::Produced,
-    })
-    .unwrap();
+    });
 
     rig.event(SidebarEvent::CommandChanged {
         pane_id: pane_id.clone(),
@@ -511,8 +511,6 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     // The worker's cached fold carries the same pre-tab frame, which has no own pane yet.
     rig.deliver(FetchUpdate::Fold {
         fold: pre_tab,
-        own_pane: rig.state.config.own_pane.clone(),
-        refresh_override: rig.state.config.refresh_ms_override,
         phase: FetchPhase::Final,
         source: SnapshotSource::Cached,
     });
@@ -939,12 +937,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
             }),
             ..Default::default()
         }),
-    })
-    .unwrap();
+    });
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
-    })
-    .unwrap();
+    });
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
         rig.view()
@@ -988,8 +984,7 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
             snapshot: Box::new(snapshot),
             phase,
             source: SnapshotSource::Cached,
-        })
-        .unwrap();
+        });
     }
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
@@ -1012,14 +1007,12 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
     rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
-    })
-    .unwrap();
+    });
     rig.send(FetchUpdate::Snapshot {
         snapshot: Box::new(agent_snapshot(&rig.ws)),
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
-    })
-    .unwrap();
+    });
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
         rig.view().health.failure_streak,

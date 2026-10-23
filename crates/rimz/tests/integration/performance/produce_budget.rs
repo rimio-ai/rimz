@@ -62,7 +62,6 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
             &state,
             &runtime,
             Some(&inputs),
-            None,
             &mut refresh_state,
         )
         .unwrap();
@@ -83,7 +82,6 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
             &state,
             &runtime,
             Some(&inputs),
-            None,
             &mut refresh_state,
         )
         .unwrap();
