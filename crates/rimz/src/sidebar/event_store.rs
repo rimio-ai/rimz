@@ -284,6 +284,64 @@ mod tests {
     }
 
     #[test]
+    fn a_retained_clone_survives_append_prune_and_expiry() {
+        let mut store = EventStore::default();
+        let focus = |id| SidebarEvent::FocusChanged {
+            focused: vec![pane(id)],
+            unfocused: vec![],
+        };
+        store.append(focus("terminal_1"), 10, 100);
+        store.append(
+            SidebarEvent::PaneClosed {
+                pane_id: pane("terminal_1"),
+            },
+            11,
+            101,
+        );
+        let retained = store.clone();
+        let original = retained.active(101).cloned().collect::<Vec<_>>();
+        store.append(focus("terminal_2"), 12, 102);
+        store.append(
+            SidebarEvent::PaneOpened {
+                pane_id: pane("terminal_3"),
+                command: Some("zsh".into()),
+            },
+            13,
+            103,
+        );
+        assert_eq!(store.active(103).count(), 3);
+        assert_eq!(store.active(103).next().unwrap().event, focus("terminal_2"));
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        let ttl = EVENT_STORE_TTL.as_millis() as u64;
+        store.prune(102 + ttl);
+        assert_eq!(store.events.len(), 2);
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        for index in 0..=MAX_EVENTS {
+            let stamp = 103 + ttl + index as u64;
+            store.append(
+                SidebarEvent::PaneClosed {
+                    pane_id: pane(&format!("terminal_cap_{index}")),
+                },
+                stamp,
+                stamp,
+            );
+        }
+        assert_eq!(
+            store
+                .active(103 + ttl + MAX_EVENTS as u64)
+                .map(|event| event.event.clone())
+                .collect::<Vec<_>>(),
+            (1..=MAX_EVENTS)
+                .map(|index| SidebarEvent::PaneClosed {
+                    pane_id: pane(&format!("terminal_cap_{index}")),
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        assert_eq!(retained.active(102 + ttl).count(), 0);
+    }
+
+    #[test]
     fn cap_drops_oldest_received_events() {
         let mut store = EventStore::default();
         for idx in 0..(MAX_EVENTS + 1) {

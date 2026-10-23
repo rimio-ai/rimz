@@ -59,6 +59,55 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
 }
 
 #[test]
+fn frozen_parked_timing_reads_live_overlays_outside_a_borrow() {
+    let own = PaneId::from_parts(MuxName::Tmux, "%99");
+    let clock = LoopClock::play(Timestamp::now());
+    let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock.clone());
+    settle_width(&mut rig);
+    rig.state.dirty = false;
+    rig.views.lock().unwrap().reconcile(
+        &[crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
+            pane_id: own.clone(),
+        }],
+        true,
+        clock.now(),
+        Duration::from_secs(60),
+    );
+    let now = clock.now_ms();
+    // Attribute the live overlay as the room recorder does, without pulling or folding it.
+    rig.views
+        .lock()
+        .unwrap()
+        .note_focus_event(std::slice::from_ref(&own), &[], now);
+    {
+        let mut view = rig.view();
+        let state = &mut *view;
+        state.ui.theme(&state.view.current.theme);
+        layout_freeze::arm_freeze(&mut state.ui, now as i64 - 6_000);
+    }
+    rig.state.events().append(
+        SidebarEvent::FocusChanged {
+            focused: vec![own.clone()],
+            unfocused: vec![],
+        },
+        now,
+        now,
+    );
+    assert!(rig.state.frame_timing().1 > FRAME_MIN_TIMEOUT);
+    clock.advance(Duration::from_millis(1));
+    rig.state.events().append(
+        SidebarEvent::FocusChanged {
+            focused: vec![],
+            unfocused: vec![own],
+        },
+        now + 1,
+        now + 1,
+    );
+    assert_eq!(rig.state.frame_timing().1, FRAME_MIN_TIMEOUT);
+}
+
+#[test]
 fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
     let (mut snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
     snapshot.viewed_panes = vec![own.clone()];

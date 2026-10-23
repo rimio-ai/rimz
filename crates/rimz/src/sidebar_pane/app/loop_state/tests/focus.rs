@@ -1473,6 +1473,54 @@ fn requested_focus_anchor(
 }
 
 #[test]
+fn a_shared_fold_retires_its_anchor_in_that_view() {
+    let own = zellij("sidebar_0");
+    let mut rig = Rig::with_own_pane(own.clone());
+    {
+        let mut view = rig.view();
+        view.current.own_view = Some(SidebarOwnView {
+            working_pane_ids: vec![zellij("terminal_2")],
+            ..own_view()
+        });
+        view.current.viewed_panes = vec![zellij("terminal_2")];
+    }
+    rig.views.lock().unwrap().reconcile(
+        &[crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(0),
+            pane_id: own,
+        }],
+        true,
+        rig.state.clock.now(),
+        Duration::from_secs(60),
+    );
+    let now_ms = rig.state.clock.now_ms();
+    let anchor = requested_focus_anchor(zellij("terminal_2"), 0, now_ms - 60_000, None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.state.fold_transition(|state| {
+        assert!(
+            state
+                .pending_focus_intent(now_ms, state.clock.now())
+                .is_none()
+        );
+    });
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+    assert_eq!(
+        rig.state
+            .inspect_view(|_, view| view.retired_anchor.map(|(_, stamp)| stamp)),
+        Some(anchor.issued_at_ms)
+    );
+    rig.view().current.viewed_panes.clear();
+    rig.state.with_projected_view(false, false, |_| {});
+    rig.views
+        .lock()
+        .unwrap()
+        .reconcile(&[], true, rig.state.clock.now(), Duration::from_secs(60));
+    rig.state.optimistic_watch_until = None;
+    rig.state.with_projected_view(false, false, |_| {});
+    assert_eq!(rig.state.inspect_view(|_, view| view.retired_anchor), None);
+}
+
+#[test]
 fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
     let mut rig = Rig::new();
     {
