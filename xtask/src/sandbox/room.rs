@@ -1,5 +1,6 @@
 //! Bring up a disposable staged room, print its navigation card, and hold it.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -375,17 +376,14 @@ impl Room<'_> {
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            if let Some(pid) = client_pid(pane_pid, session) {
-                let attached = output(
-                    "client list",
-                    self.command("zellij")
-                        .args(["--session", session, "action", "list-clients"]),
-                )
-                .is_ok_and(|clients| client_count(&clients) > 0);
-                // Reject a bootstrap row or a client that Zellij dropped during the query.
-                if attached && client_pid(pane_pid, session) == Some(pid) {
-                    return Ok(());
-                }
+            // An id listed for the whole window is an attached client, not a bootstrap or action
+            // row, and the same own attach process alive on both sides of it makes that client
+            // ours.
+            if let Some(pid) = client_pid(pane_pid, session)
+                && self.client_stays_listed(session)
+                && client_pid(pane_pid, session) == Some(pid)
+            {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 bail!(
@@ -394,6 +392,30 @@ impl Room<'_> {
             }
             std::thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// Whether one client id stays listed across `CLIENT_CONFIRM_WINDOW`, the proof
+    /// `ZellijBackend::confirm_attached_client` asks of an attached client.
+    fn client_stays_listed(&self, session: &str) -> bool {
+        let list = || {
+            output(
+                "client list",
+                self.command("zellij")
+                    .args(["--session", session, "action", "list-clients"]),
+            )
+            .map(|clients| client_ids(&clients))
+            .unwrap_or_default()
+        };
+        let mut replies = vec![list()];
+        let deadline = Instant::now() + CLIENT_CONFIRM_WINDOW;
+        while one_client_in_every(&replies) {
+            if Instant::now() >= deadline {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            replies.push(list());
+        }
+        false
     }
 
     fn wait_for_team(&self) -> Result<()> {
@@ -544,12 +566,24 @@ fn is_client_argv(cmdline: &[u8], session: &str) -> bool {
         && !argv.contains(&b"--create-background".as_slice())
 }
 
-fn client_count(clients: &[u8]) -> usize {
+/// Zellij keeps a background-create bootstrap client and a one-shot action client listed for
+/// less than this, so only an id listed across it is an attached client.
+const CLIENT_CONFIRM_WINDOW: Duration = Duration::from_millis(750);
+
+fn client_ids(clients: &[u8]) -> BTreeSet<u32> {
     String::from_utf8_lossy(clients)
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .skip(1)
-        .count()
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect()
+}
+
+fn one_client_in_every(replies: &[BTreeSet<u32>]) -> bool {
+    let Some((first, rest)) = replies.split_first() else {
+        return false;
+    };
+    first
+        .iter()
+        .any(|id| rest.iter().all(|reply| reply.contains(id)))
 }
 
 fn missing_team_members(panes: &Panes, team: &TeamInstance) -> Vec<String> {
@@ -820,22 +854,36 @@ mod tests {
     }
 
     #[test]
-    fn client_count_ignores_header_and_blank_lines() {
-        assert_eq!(client_count(b""), 0);
+    fn client_confirmation_needs_one_listed_id_in_every_reply() {
+        assert!(client_ids(b"").is_empty());
+        assert!(client_ids(b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\n  \n").is_empty());
+        let reply = |ids: &[u32]| ids.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(
-            client_count(b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\n  \n"),
-            0
-        );
-        assert_eq!(
-            client_count(b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_1 /bin/sh\n"),
-            1
-        );
-        assert_eq!(
-            client_count(
+            client_ids(
                 b"\nCLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\n1 terminal_1 /bin/sh\n2 terminal_2 vim\n\n"
             ),
-            2
+            reply(&[1, 2])
         );
+
+        assert!(!one_client_in_every(&[]));
+        assert!(!one_client_in_every(&[reply(&[])]));
+        assert!(one_client_in_every(&[reply(&[1])]));
+        // A bootstrap row that drains, replaced by a client under another id, is not one client.
+        assert!(!one_client_in_every(&[
+            reply(&[1]),
+            reply(&[1]),
+            reply(&[2])
+        ]));
+        assert!(!one_client_in_every(&[
+            reply(&[1]),
+            reply(&[]),
+            reply(&[1])
+        ]));
+        assert!(one_client_in_every(&[
+            reply(&[1, 2]),
+            reply(&[2]),
+            reply(&[2, 3])
+        ]));
     }
 
     #[test]
