@@ -338,7 +338,7 @@ fn observation_from_header(
     stamp: ProviderPathStamp,
     workspaces: &HashSet<&Path>,
 ) -> Option<LocalSessionObservation> {
-    if header.is_subagent {
+    if header.is_non_root {
         return None;
     }
     let workspace = *workspaces.get(header.cwd.as_deref()?)?;
@@ -772,6 +772,54 @@ mod tests {
             discover_under(temp.path(), &[workspace]).len(),
             MAX_EXAMINED_FILES
         );
+    }
+
+    #[test]
+    fn excludes_internal_threads_but_keeps_roots_and_user_forks() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = Path::new("/workspace/project");
+        let active = date_path(temp.path(), false, 0);
+        let root = "11111111-1111-4111-8111-111111111111";
+        let fork = "22222222-2222-4222-8222-222222222222";
+        let fixtures = [
+            (root, r#","source":"cli","thread_source":"user""#.to_owned()),
+            (fork, format!(r#","forked_from_id":"{root}""#)),
+            (
+                "33333333-3333-4333-8333-333333333333",
+                r#","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review""#
+                    .to_owned(),
+            ),
+            (
+                "44444444-4444-4444-8444-444444444444",
+                r#","source":{"subagent":"review"},"thread_source":"user""#.to_owned(),
+            ),
+            (
+                "55555555-5555-4555-8555-555555555555",
+                r#","source":{"internal":"memory_consolidation"},"thread_source":"user""#
+                    .to_owned(),
+            ),
+            (
+                "66666666-6666-4666-8666-666666666666",
+                format!(r#","source":{{"future":{{"x":1}}}},"parent_thread_id":"{root}""#),
+            ),
+        ];
+        let now = Timestamp::now();
+        for (index, (id, extra)) in fixtures.into_iter().enumerate() {
+            write_rollout_with_extra(
+                &active,
+                id,
+                "/workspace/project",
+                &now.to_string(),
+                now.as_second() as u64 + index as u64,
+                &extra,
+            );
+        }
+
+        let ids = discover_under(temp.path(), &[workspace])
+            .into_iter()
+            .map(|observation| observation.session_id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [fork, root]);
     }
 
     #[test]

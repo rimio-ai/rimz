@@ -1978,7 +1978,7 @@ fn build_codex_observation(
     let header = transcript
         .header
         .as_ref()
-        .filter(|header| header.is_subagent);
+        .filter(|header| header.is_non_root);
     let usage = transcript.usage;
     let usage_effort = usage.effort.clone();
     let is_subagent = parent_agent_id.is_some();

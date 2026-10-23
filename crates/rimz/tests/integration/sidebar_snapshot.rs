@@ -663,6 +663,87 @@ fn codex_identity_enrichment_preserves_hook_owned_question() {
 }
 
 #[test]
+fn codex_guardian_rollout_cannot_displace_the_root_on_its_pane() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let root = "11111111-1111-4111-8111-111111111111";
+    let guardian = "22222222-2222-4222-8222-222222222222";
+    let now = std::time::SystemTime::now();
+    let date = jiff::Timestamp::try_from(now)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
+    let sessions = env.home_root.join(format!(
+        ".codex/sessions/{:04}/{:02}/{:02}",
+        date.year(),
+        date.month(),
+        date.day()
+    ));
+    std::fs::create_dir_all(&sessions).unwrap();
+    for (id, age, source, thread_source, parent) in [
+        (root, 20, serde_json::json!("cli"), "user", None),
+        (
+            guardian,
+            10,
+            serde_json::json!({ "subagent": { "other": "guardian" } }),
+            "guardian_review",
+            Some(root),
+        ),
+    ] {
+        let created_at = now - std::time::Duration::from_secs(age);
+        let rollout = sessions.join(format!(
+            "rollout-{:04}-{:02}-{:02}T00-00-00-{id}.jsonl",
+            date.year(),
+            date.month(),
+            date.day()
+        ));
+        std::fs::write(
+            &rollout,
+            serde_json::json!({
+                "timestamp": jiff::Timestamp::try_from(created_at).unwrap().to_string(),
+                "type": "session_meta",
+                "payload": {
+                    "id": id,
+                    "cwd": env.project_root,
+                    "source": source,
+                    "thread_source": thread_source,
+                    "parent_thread_id": parent,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&rollout)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(created_at))
+            .unwrap();
+    }
+
+    let mut pane = tmux_pane("%7", "codex", &env.project_root);
+    pane.pane_process_start =
+        Some(jiff::Timestamp::try_from(now - std::time::Duration::from_secs(30)).unwrap());
+    let snapshot = env.snapshot_json_with_panes(&[pane]);
+    let agents = snapshot["agents"].as_array().expect("agents");
+    let ids = agents
+        .iter()
+        .map(|agent| agent["agent_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [root]);
+    assert_eq!(agents[0]["pane"]["pane_id"], "tmux:%7");
+    let rows = snapshot["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .collect::<Vec<_>>();
+    assert!(rows.iter().all(|row| row["id"] != guardian));
+    let root_row = rows.iter().find(|row| row["id"] == root).expect("root row");
+    assert_eq!(root_row["pane"]["pane_id"], "tmux:%7");
+}
+
+#[test]
 fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -73,6 +73,8 @@ The async decoder accepts the hook's JSON-string response only when it reports `
 
 Guardian reviews in Auto also fire `PermissionRequest` before the automatic reviewer runs. RimZ therefore briefly shows permission waiting until the next activity hook; the hook payload does not identify the reviewer, and Guardian needs no `rimz answer`. Rule-allowed routine commands skip both the hook and Guardian.
 
+Guardian, `/review` and memory-consolidation threads never appear as agents, while their spend still counts.
+
 ### Install
 
 [`install.rs`](../../../crates/rimz/src/agents/adapters/codex/install.rs) rewrites Codex's `config.toml` in place. `codex_config_path` resolves the file the way Codex does: `RIMZ_CODEX_CONFIG` (a test and tooling override), then `$CODEX_HOME/config.toml`, then `~/.codex/config.toml`. It reads those keys from the login env its caller passes, so a named account's `CODEX_HOME` applies without touching the process env. Hook install, hook trust, and the [directory trust preflight](#directory-trust-preflight) all share it.
@@ -200,7 +202,7 @@ Every same-instance root carries the [launch identity](./instances.md#launch-ide
 | Scan cap | 512 files |
 | Rescan | cold start, topology change, UTC date rollover, or the 30 second backstop; unchanged stamps reuse the cached header |
 | Admission | header `cwd` exactly equals an admitted workspace |
-| Excluded | `thread_source = "subagent"` or `source.subagent.thread_spawn`; `forked_from_id` alone does not exclude |
+| Excluded | Codex's `is_non_root_agent` (`source` object with any `subagent` or `internal` key), a non-empty `parent_thread_id`, or trimmed, case-insensitive `thread_source = "subagent"`; `forked_from_id` alone does not exclude |
 | Session id | header `id`, else the filename UUID |
 | Clocks | created at the header timestamp; last activity at the file mtime |
 | Projection | `IdentityOnly` |
@@ -209,9 +211,9 @@ The cache never reads the store, so a cwd match alone is not identity proof: the
 
 ## Subagents
 
-A child hook needs a non-empty `agent_id` that differs from the root `session_id`; `resolve_subagent_identity` quarantines a malformed `SubagentStart` or `SubagentStop` instead of folding it onto the parent. Codex also puts the child's `agent_id` on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact`, so those signals update the child row and its heartbeat ([model.md](./model.md#subagents)). The hook-reported root stays `parent_agent_id` for every descendant; the rollout `parent_thread_id` is metadata only.
+A child hook needs a non-empty `agent_id` that differs from the root `session_id`; `resolve_subagent_identity` quarantines a malformed `SubagentStart` or `SubagentStop` instead of folding it onto the parent. Codex also puts the child's `agent_id` on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact`, so those signals update the child row and its heartbeat ([model.md](./model.md#subagents)). The hook-reported root stays `parent_agent_id` for every descendant; the rollout `parent_thread_id` supplies immediate-parent metadata and excludes the thread from root discovery.
 
-Child hooks never merge into the root's context or spawn the app-server refresh, so the root session id and rollout cannot contaminate the child. The child's rollout is `agent_transcript_path`, else `transcript_path` when its header id matches the child, else a search by the child's `agent_id`, never by the root id. When the header marks a subagent, it supplies display metadata:
+Child hooks never merge into the root's context or spawn the app-server refresh, so the root session id and rollout cannot contaminate the child. The child's rollout is `agent_transcript_path`, else `transcript_path` when its header id matches the child, else a search by the child's `agent_id`, never by the root id. When the header marks a non-root thread, it supplies display metadata:
 
 | Card field | Source | Fallback |
 | --- | --- | --- |

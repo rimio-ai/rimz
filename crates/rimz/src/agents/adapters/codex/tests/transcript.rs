@@ -1651,7 +1651,7 @@ fn rollout_header_normalizes_v2_and_structured_child_metadata() {
     )
     .unwrap();
     let header = read_rollout_header(&v2).unwrap();
-    assert!(header.is_subagent);
+    assert!(header.is_non_root);
     assert_eq!(header.session_id.as_deref(), Some("child-v2"));
     assert_eq!(header.parent_thread_id.as_deref(), Some("root"));
     assert_eq!(header.agent_nickname.as_deref(), Some("Atlas"));
@@ -1666,7 +1666,7 @@ fn rollout_header_normalizes_v2_and_structured_child_metadata() {
     )
     .unwrap();
     let header = read_rollout_header(&structured).unwrap();
-    assert!(header.is_subagent);
+    assert!(header.is_non_root);
     assert_eq!(header.parent_thread_id.as_deref(), Some("nested-parent"));
     assert_eq!(header.depth, Some(2));
     assert_eq!(header.agent_path.as_deref(), Some("research/worker"));
@@ -1678,4 +1678,127 @@ fn rollout_header_normalizes_v2_and_structured_child_metadata() {
     )
     .unwrap();
     assert_eq!(read_rollout_header(&root_only).unwrap().agent_path, None);
+}
+
+fn rollout_header_with_extra(extra: serde_json::Value) -> CodexRolloutHeader {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let mut payload = json!({
+        "id": "session",
+        "cwd": "/workspace/project",
+        "thread_source": "user",
+    });
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    std::fs::write(
+        &path,
+        json!({ "type": "session_meta", "payload": payload }).to_string(),
+    )
+    .unwrap();
+    let header = read_rollout_header(&path).expect("session_meta still decodes");
+    assert_eq!(header.session_id.as_deref(), Some("session"));
+    assert_eq!(header.cwd.as_deref(), Some(Path::new("/workspace/project")));
+    header
+}
+
+#[test]
+fn rollout_header_excludes_review_source_without_other_child_signals() {
+    let header = rollout_header_with_extra(json!({ "source": { "subagent": "review" } }));
+    assert!(header.is_non_root);
+}
+
+#[test]
+fn rollout_header_excludes_guardian_source_without_other_child_signals() {
+    let header = rollout_header_with_extra(json!({
+        "source": { "subagent": { "other": "guardian" } },
+        "thread_source": "guardian_review",
+    }));
+    assert!(header.is_non_root);
+}
+
+#[test]
+fn rollout_header_excludes_internal_source_without_other_child_signals() {
+    let header = rollout_header_with_extra(json!({
+        "source": { "internal": "memory_consolidation" },
+    }));
+    assert!(header.is_non_root);
+}
+
+#[test]
+fn rollout_header_excludes_parent_link_with_unrecognized_source() {
+    let header = rollout_header_with_extra(json!({
+        "source": { "future": { "x": 1 } },
+        "parent_thread_id": "parent",
+    }));
+    assert!(header.is_non_root);
+    assert_eq!(header.parent_thread_id.as_deref(), Some("parent"));
+}
+
+#[test]
+fn rollout_header_excludes_the_observed_guardian_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("guardian.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"timestamp":"2026-10-23T07:34:12.905Z","type":"session_meta","payload":{"id":"01a167ae-849a-78b1-817c-64c998a0e63b","session_id":"01a1649e-674c-7ba2-8376-d21b94e75b54","parent_thread_id":"01a1649e-674c-7ba2-8376-d21b94e75b54","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review","cli_version":"0.164.0"}}"#,
+    )
+    .unwrap();
+
+    let header = read_rollout_header(&path).unwrap();
+    assert!(header.is_non_root);
+    assert_eq!(
+        header.session_id.as_deref(),
+        Some("01a167ae-849a-78b1-817c-64c998a0e63b")
+    );
+    assert_eq!(
+        header.parent_thread_id.as_deref(),
+        Some("01a1649e-674c-7ba2-8376-d21b94e75b54")
+    );
+}
+
+#[test]
+fn rollout_header_non_root_source_keys_accept_any_value() {
+    for key in ["subagent", "internal"] {
+        for value in [
+            json!(null),
+            json!(false),
+            json!(42),
+            json!(1.5),
+            json!("future"),
+            json!([1, "future"]),
+            json!({ "thread_spawn": { "depth": "future" } }),
+        ] {
+            let header = rollout_header_with_extra(json!({ "source": { (key): value } }));
+            assert!(header.is_non_root, "{key}: {value}");
+        }
+    }
+}
+
+#[test]
+fn rollout_header_keeps_roots_and_user_forks_with_any_source_shape() {
+    for extra in [
+        json!({}),
+        json!({ "source": "cli" }),
+        json!({ "source": { "custom": "s" } }),
+        json!({ "forked_from_id": "parent" }),
+        json!({ "source": { "future": { "x": 1 } } }),
+        json!({ "source": null }),
+        json!({ "source": false }),
+        json!({ "source": 42 }),
+        json!({ "source": 1.5 }),
+        json!({ "source": [1, "future"] }),
+        json!({ "parent_thread_id": "  " }),
+        json!({ "thread_source": "guardian_review" }),
+    ] {
+        let header = rollout_header_with_extra(extra.clone());
+        assert!(!header.is_non_root, "{extra}");
+    }
+}
+
+#[test]
+fn rollout_header_keeps_the_normalized_subagent_label_as_a_non_root_signal() {
+    let header = rollout_header_with_extra(json!({ "thread_source": "  SuBaGeNt  " }));
+    assert!(header.is_non_root);
 }

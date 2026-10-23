@@ -557,11 +557,11 @@ The header is the first line. Its `id` identifies the thread, while `session_id`
 | `subagent_history_start_ordinal` | First ordinal belonging to the child's own projected history. |
 | `forked_from_id` | Source thread of a user fork (`/fork`, `codex fork`). An ephemeral `/side` or `/btw` thread writes no rollout. Absent on a fresh root such as `/new` or `/clear`. |
 | `forked_from_ordinal_exclusive` | Ordinal in the source where the copy stops. New since 0.150.1. |
-| `thread_source` | `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature string (`protocol.rs`). `subagent` identifies a child. `forked_from_id` alone does not. |
+| `thread_source` | Open analytics label: `user`, `subagent`, `guardian_review`, `memory_consolidation`, or any feature string ([`protocol.rs`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/protocol/src/protocol.rs)). Not authority for root status. |
 | `parent_thread_id` | Immediate parent of a child. |
 | `agent_nickname`, `agent_path`, `agent_role` | Child display name, root-relative task path such as `/root/research/explore_hooks`, and role. `agent_role` also accepts `agent_type`. |
 | `multi_agent_version` | `disabled`, `v1`, or `v2`. |
-| `source.subagent.thread_spawn` | Older structured child source `{ parent_thread_id, depth, agent_path, agent_nickname, agent_role }` (`protocol.rs`), still found in copied headers. |
+| `source` | `"cli"`, `"vscode"`, `"exec"`, `"mcp"`, `"unknown"`, `{"custom":s}`, `{"internal":"guardian"}` or `{"internal":"memory_consolidation"}`, `{"subagent":"review"}`, `{"subagent":"compact"}`, `{"subagent":"memory_consolidation"}`, `{"subagent":{"other":s}}`, or `{"subagent":{"thread_spawn":{parent_thread_id,depth,agent_path,agent_nickname,agent_role}}}`. `SessionSource::is_non_root_agent` is `Internal` or `SubAgent` ([`protocol.rs`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/protocol/src/protocol.rs)). A saved Guardian thread records `{"subagent":{"other":"guardian"}}` ([`thread_manager.rs`](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/thread_manager.rs)). |
 
 ```jsonc
 { "type": "session_meta", "payload": {
