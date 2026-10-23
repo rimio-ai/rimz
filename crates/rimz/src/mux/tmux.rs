@@ -32,6 +32,56 @@ use parse::parse_terminal_features;
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
 use crate::config::TmuxConfig;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ScriptLine {
+    completed: bool,
+    stdout: String,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ScriptOutput {
+    lines: Vec<ScriptLine>,
+    stderr: String,
+}
+
+fn parse_script_output(
+    stdout: &str,
+    stderr: &str,
+    line_count: usize,
+) -> std::result::Result<ScriptOutput, String> {
+    if !stdout.lines().any(|line| line == "__rimz_script_begin_0__") {
+        let reason = if stderr.is_empty() { stdout } else { stderr };
+        return Err(reason.to_owned());
+    }
+    let mut output = ScriptOutput {
+        lines: (0..line_count).map(|_| ScriptLine::default()).collect(),
+        stderr: stderr.to_owned(),
+    };
+    let mut current = None;
+    for raw in stdout.split_inclusive('\n') {
+        let line = raw.trim_end_matches('\n');
+        if let Some(index) = line
+            .strip_prefix("__rimz_script_begin_")
+            .and_then(|index| index.strip_suffix("__"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < line_count)
+        {
+            current = Some(index);
+        } else if let Some(index) = line
+            .strip_prefix("__rimz_script_end_")
+            .and_then(|index| index.strip_suffix("__"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| Some(*index) == current)
+        {
+            output.lines[index].completed = true;
+            current = None;
+        } else if let Some(index) = current {
+            output.lines[index].stdout.push_str(raw);
+        }
+    }
+    Ok(output)
+}
+
 /// Minimum tmux version that supports the room options RimZ applies across all
 /// supported hosts: `extended-keys-format` (3.5) and `allow-passthrough` (3.3).
 pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 5, 0);
@@ -389,6 +439,56 @@ impl TmuxBackend {
         self.batch_spec(commands).run().map(|_| ())
     }
 
+    /// Run independent command groups over stdin. Markers retain each line's
+    /// output and completion even when another line fails. Err means no line
+    /// began, or validation, spawn, transport, or the command deadline failed.
+    fn run_script(&self, lines: &[Vec<Vec<String>>]) -> Result<ScriptOutput> {
+        if lines.is_empty() {
+            return Ok(ScriptOutput::default());
+        }
+        let mut script = String::new();
+        for (index, commands) in lines.iter().enumerate() {
+            script.push_str(&format!(
+                "'display-message' '-p' '__rimz_script_begin_{index}__' ; "
+            ));
+            for command in commands {
+                for (word_index, word) in command.iter().enumerate() {
+                    if word.contains(['\n', '\r']) {
+                        return Err(MuxErr::Output {
+                            program: "tmux".into(),
+                            reason: "script word contains a line break".into(),
+                        });
+                    }
+                    if word_index > 0 {
+                        script.push(' ');
+                    }
+                    script.push('\'');
+                    script.push_str(&word.replace('\'', "'\\''"));
+                    script.push('\'');
+                }
+                script.push_str(" ; ");
+            }
+            script.push_str(&format!(
+                "'display-message' '-p' '__rimz_script_end_{index}__'\n"
+            ));
+        }
+        let spec = self
+            .cmd()
+            .args(["source-file", "-"])
+            .stdin_bytes(script.into_bytes());
+        let output = spec.output_raw_with_timeout(super::command::COMMAND_TIMEOUT)?;
+        let output = parse_script_output(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            lines.len(),
+        )
+        .map_err(|reason| spec.command_error(reason))?;
+        if !output.stderr.is_empty() {
+            tracing::debug!(stderr = %output.stderr, "tmux script reported per-line errors");
+        }
+        Ok(output)
+    }
+
     pub(super) fn batch_spec(&self, commands: &[Vec<String>]) -> CommandSpec {
         let mut spec = self.cmd();
         for (index, command) in commands.iter().enumerate() {
@@ -459,43 +559,138 @@ impl TmuxBackend {
         self.apply_window_options(session, config)
     }
 
-    /// Assert every owned window key on every window of the session, each window
-    /// in its own batch.
-    ///
-    /// tmux scopes a window option to the target's *current* window, so the keys
-    /// have to be written per window id. It also aborts a batch at the first
-    /// failing command, and a window can close between the listing and the
-    /// writes, so one batch over every window would let a vanished window fail
-    /// the room open. A per-window batch costs that window its own keys instead;
-    /// the same keys go to every window, so a genuinely bad write fails them all
-    /// and still surfaces.
+    /// Compare window-scoped options in two reads, then script only differing
+    /// keys, one independent line per window. A vanished window costs its line;
+    /// room open fails only when windows were listed and none matched or applied.
     fn apply_window_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
-        let windows = self
-            .cmd()
-            .args([
-                "list-windows",
-                "-t",
-                session,
-                "-F",
-                "#{window_id}|#{P:#{?#{@rimz_stack},1,}}",
-            ])
-            .run()?;
-        let windows = String::from_utf8_lossy(&windows.stdout);
-        let mut last_failure = None;
-        let mut applied = 0usize;
-        for window in windows.lines() {
-            let (window_id, members) = window.split_once('|').unwrap_or((window, ""));
-            let commands: Vec<Vec<String>> = stack_window_options(config, !members.is_empty())
-                .iter()
-                .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(window_id)))
-                .collect();
-            match self.batch(&commands) {
-                Ok(()) => applied += 1,
-                Err(err) => last_failure = Some(err),
+        let mut options = stack_window_options(config, false);
+        // Keep the free-form format last in the script's option values.
+        options.sort_by_key(|(key, _)| *key == "pane-border-format");
+        // Formats resolve pane-capable options through the active pane first.
+        let (pane_keys, window_keys): (Vec<_>, Vec<_>) =
+            options.iter().map(|(key, _)| *key).partition(|key| {
+                matches!(
+                    *key,
+                    "allow-passthrough"
+                        | "pane-border-status"
+                        | "pane-border-lines"
+                        | "pane-border-format"
+                )
+            });
+        let inherited_keys: Vec<_> = options
+            .iter()
+            .filter(|(key, value)| value.is_none() && *key != "@rimz_stack_borders_owned")
+            .map(|(key, _)| *key)
+            .collect();
+        let mut commands: Vec<Vec<String>> = inherited_keys
+            .iter()
+            .map(|key| vec!["show-options".into(), "-gwv".into(), (*key).into()])
+            .collect();
+        let mut format = "#{window_id}|#{P:#{?#{@rimz_stack},1,}}".to_owned();
+        for key in &window_keys {
+            format.push('|');
+            if *key == "aggressive-resize" {
+                format.push_str("#{?aggressive-resize,on,off}");
+            } else {
+                format.push_str(&format!("#{{{key}}}"));
             }
         }
-        match last_failure {
-            Some(err) if applied == 0 => Err(err),
+        commands.push(vec![
+            "list-windows".into(),
+            "-t".into(),
+            session.into(),
+            "-F".into(),
+            format,
+        ]);
+        let output = self.batch_spec(&commands).run()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut rows = stdout.lines();
+        let inherited: std::collections::BTreeMap<_, _> = inherited_keys
+            .into_iter()
+            .map(|key| (key, rows.next().unwrap_or_default()))
+            .collect();
+        let windows: Vec<_> = rows
+            .map(|row| row.splitn(window_keys.len() + 2, '|').collect::<Vec<_>>())
+            .collect();
+        if windows
+            .iter()
+            .any(|fields| fields.len() != window_keys.len() + 2 || !fields[0].starts_with('@'))
+        {
+            return Err(MuxErr::Output {
+                program: "tmux".into(),
+                reason: "invalid window options listing".into(),
+            });
+        }
+        let read_script: Vec<_> = windows
+            .iter()
+            .map(|fields| {
+                pane_keys
+                    .iter()
+                    .map(|key| {
+                        vec![
+                            "show-options".into(),
+                            "-wAv".into(),
+                            "-t".into(),
+                            fields[0].into(),
+                            (*key).into(),
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        let read = self.run_script(&read_script)?;
+        let mut script = Vec::new();
+        let mut applied = 0usize;
+        for (fields, line) in windows.iter().zip(&read.lines) {
+            if !line.completed {
+                continue;
+            }
+            let current: std::collections::BTreeMap<_, _> = window_keys
+                .iter()
+                .copied()
+                .zip(fields[2..].iter().copied())
+                .chain(
+                    pane_keys.iter().copied().zip(
+                        line.stdout
+                            .strip_suffix('\n')
+                            .unwrap_or(&line.stdout)
+                            .splitn(pane_keys.len(), '\n'),
+                    ),
+                )
+                .collect();
+            if current.len() != options.len() {
+                continue;
+            }
+            let mut desired = stack_window_options(config, !fields[1].is_empty());
+            desired.sort_by_key(|(key, _)| *key == "pane-border-format");
+            let commands: Vec<_> = desired
+                .iter()
+                .filter(|(key, value)| {
+                    value
+                        .as_deref()
+                        .unwrap_or_else(|| inherited.get(key).copied().unwrap_or_default())
+                        != current.get(key).copied().unwrap_or_default()
+                })
+                .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(fields[0])))
+                .collect();
+            if commands.is_empty() {
+                applied += 1;
+            } else {
+                script.push(commands);
+            }
+        }
+        match self.run_script(&script) {
+            Ok(output)
+                if !windows.is_empty()
+                    && applied == 0
+                    && !output.lines.iter().any(|line| line.completed) =>
+            {
+                Err(MuxErr::Output {
+                    program: "tmux".into(),
+                    reason: format!("{}{}", read.stderr, output.stderr),
+                })
+            }
+            Err(err) if applied == 0 => Err(err),
             _ => Ok(()),
         }
     }

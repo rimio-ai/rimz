@@ -10,7 +10,7 @@ use crate::mux::{PaneRect, ViewGeometry};
 use super::TmuxBackend;
 use super::options::{
     RIMZ_TAB_BASE_OPTION, RIMZ_TAB_FOUNDERS_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
-    spawn_command_is_sidebar_serve,
+    spawn_command_is_sidebar_serve, window_option_argv,
 };
 use super::parse::parse_new_window_ids;
 
@@ -777,51 +777,82 @@ impl TmuxBackend {
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
     }
 
-    /// Align a detached session's geometry with the attaching terminal: set
-    /// the session default-size, resize every window to it, and unpin the
-    /// `window-size manual` that resize-window sets so windows resume tracking
-    /// clients on attach. Best-effort; reconcile's width convergence follows it.
+    /// Align only the detached session's default-size and non-manual current
+    /// window with the attaching terminal, minus its status rows. Write only
+    /// differences, preserve the local window-size, and leave hidden windows
+    /// to the sweep. Best-effort; reconcile's width convergence follows it.
     pub(super) fn normalize_detached_geometry(&self, session: &str, cols: u16, rows: u16) {
         let output = match self
-            .cmd()
-            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .batch_spec(&[
+                vec![
+                    "display-message".into(),
+                    "-p".into(),
+                    "-t".into(),
+                    session.into(),
+                    concat!(
+                        "#{default-size}|#{status}|#{window_id}|",
+                        "#{window_width}|#{window_height}|#{window-size}",
+                    )
+                    .into(),
+                ],
+                vec![
+                    "show-options".into(),
+                    "-wqv".into(),
+                    "-t".into(),
+                    session.into(),
+                    "window-size".into(),
+                ],
+            ])
             .run()
         {
             Ok(output) => output,
             Err(err) => {
                 tracing::warn!(
                     session,
-                    tags.operation = "tmux.reconcile.list_windows",
+                    tags.operation = "tmux.reconcile.read_geometry",
                     error = &err as &dyn std::error::Error,
-                    "sidebar reconcile: listing windows for detached geometry normalization failed",
+                    "sidebar reconcile: reading detached geometry for normalization failed",
                 );
                 return;
             }
         };
-        let mut commands = vec![vec![
-            "set-option".to_owned(),
-            "-t".to_owned(),
-            session.to_owned(),
-            "default-size".to_owned(),
-            format!("{cols}x{rows}"),
-        ]];
-        for window_id in String::from_utf8_lossy(&output.stdout).lines() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let Some(geometry) = parse_detached_geometry(&stdout) else {
+            tracing::warn!(
+                session,
+                tags.operation = "tmux.reconcile.read_geometry",
+                error = "invalid detached geometry",
+                "sidebar reconcile: reading detached geometry for normalization failed",
+            );
+            return;
+        };
+        let default_size = format!("{cols}x{rows}");
+        let mut commands = Vec::new();
+        if geometry.default_size != default_size {
             commands.push(vec![
-                "resize-window".to_owned(),
-                "-x".to_owned(),
+                "set-option".into(),
+                "-t".into(),
+                session.into(),
+                "default-size".into(),
+                default_size,
+            ]);
+        }
+        let window_rows = rows.saturating_sub(geometry.status_lines).max(1);
+        if geometry.policy != "manual" && geometry.size != (cols, window_rows) {
+            commands.push(vec![
+                "resize-window".into(),
+                "-t".into(),
+                geometry.window.into(),
+                "-x".into(),
                 cols.to_string(),
-                "-y".to_owned(),
-                rows.to_string(),
-                "-t".to_owned(),
-                window_id.to_owned(),
+                "-y".into(),
+                window_rows.to_string(),
             ]);
-            commands.push(vec![
-                "set-window-option".to_owned(),
-                "-u".to_owned(),
-                "-t".to_owned(),
-                window_id.to_owned(),
-                "window-size".to_owned(),
-            ]);
+            commands.push(window_option_argv(
+                "window-size",
+                geometry.local_policy,
+                Some(geometry.window),
+            ));
         }
         if let Err(err) = self.batch(&commands) {
             tracing::warn!(
@@ -1428,6 +1459,37 @@ fn geometry_error() -> MuxErr {
         program: "tmux".to_owned(),
         reason: "invalid hidden-window geometry".to_owned(),
     }
+}
+
+struct DetachedGeometry<'a> {
+    default_size: &'a str,
+    status_lines: u16,
+    window: &'a str,
+    size: (u16, u16),
+    policy: &'a str,
+    local_policy: Option<&'a str>,
+}
+
+fn parse_detached_geometry(output: &str) -> Option<DetachedGeometry<'_>> {
+    let mut lines = output.lines();
+    let fields: Vec<_> = lines.next()?.split('|').collect();
+    let [default_size, status, window, cols, rows, policy] = fields.as_slice() else {
+        return None;
+    };
+    let status_lines = match *status {
+        "off" => 0,
+        "on" => 1,
+        value => value.parse().ok().filter(|lines| (2..=5).contains(lines))?,
+    };
+    window.strip_prefix('@')?.parse::<u32>().ok()?;
+    Some(DetachedGeometry {
+        default_size,
+        status_lines,
+        window,
+        size: (cols.parse().ok()?, rows.parse().ok()?),
+        policy,
+        local_policy: lines.next().filter(|policy| !policy.is_empty()),
+    })
 }
 
 fn parse_window_geometry(line: &str) -> Option<WindowGeometry> {

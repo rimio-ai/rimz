@@ -411,7 +411,7 @@ fn ensure_session_reapplies_options_to_every_open_window() {
     for window in [&first, &second] {
         for (key, expected) in [("pane-border-status", "top"), ("allow-passthrough", "off")] {
             assert_eq!(
-                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                server.stdout(&["show-options", "-wvA", "-t", window, key]),
                 expected,
                 "{key} on window {window}",
             );
@@ -420,6 +420,126 @@ fn ensure_session_reapplies_options_to_every_open_window() {
     eprintln!(
         "live tmux: both open windows report pane-border-status top and allow-passthrough off"
     );
+}
+
+#[test]
+fn ensure_session_diffs_window_options_at_250_windows() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let session = "rimz-many-window-options";
+    server.output(&["new-session", "-d", "-s", session, "sleep", "120"]);
+    for _ in 1..250 {
+        server.output(&["new-window", "-d", "-t", session, "sleep", "120"]);
+    }
+    let mut opts = session_opts(
+        session,
+        WorkspaceId::from_project_root(cwd.path()),
+        cwd.path(),
+        cwd.path(),
+        None,
+    );
+    opts.config.tmux = toml::from_str(
+        "pane_border_status = 'top'\npane_border_lines = 'double'\nallow_passthrough = true\naggressive_resize = true",
+    ).expect("room options");
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("apply to 250 windows");
+    let windows = server.stdout(&[
+        "list-windows",
+        "-t",
+        session,
+        "-F",
+        concat!(
+            "#{window_id}|#{allow-passthrough}|#{aggressive-resize}|#{pane-border-status}|",
+            "#{pane-border-lines}|#{@rimz_stack_borders_owned}|#{pane-border-format}",
+        ),
+    ]);
+    assert_eq!(windows.lines().count(), 250);
+    for window in windows.lines() {
+        let (_, values) = window.split_once('|').unwrap();
+        assert!(values.starts_with("on|1|top|double||"), "{window}");
+        assert!(
+            values.ends_with(concat!(
+                "#{?#{==:#{pane_title},rimz-sidebar},#{p999: }, ",
+                "#{pane_index} #{pane_current_command} }",
+            )),
+            "{window}",
+        );
+    }
+    let before = rimz::testkit::spawn_count();
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("unchanged ensure before pane overrides");
+    let read_only_spawns = rimz::testkit::spawn_count() - before;
+    for window in windows.lines().step_by(50) {
+        let window = window.split_once('|').unwrap().0;
+        let pane = server.display(window, "#{pane_id}");
+        server.output(&["set-option", "-p", "-t", &pane, "allow-passthrough", "all"]);
+        server.output(&[
+            "set-option",
+            "-p",
+            "-t",
+            &pane,
+            "pane-border-format",
+            "pane|format",
+        ]);
+    }
+    let before = rimz::testkit::spawn_count();
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("unchanged ensure with pane-local overrides");
+    let unchanged_spawns = rimz::testkit::spawn_count() - before;
+    assert_eq!(
+        unchanged_spawns, read_only_spawns,
+        "active pane overrides must not add a window-option write script"
+    );
+    let window = windows.lines().last().unwrap().split_once('|').unwrap().0;
+    server.output(&[
+        "set-window-option",
+        "-t",
+        window,
+        "aggressive-resize",
+        "off",
+    ]);
+    let before = rimz::testkit::spawn_count();
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("repair one key");
+    let repair_spawns = rimz::testkit::spawn_count() - before;
+    assert_eq!(
+        repair_spawns,
+        unchanged_spawns + 1,
+        "one changed window adds exactly one script invocation"
+    );
+    assert_eq!(server.display(window, "#{aggressive-resize}"), "1");
+    let window = windows.lines().next().unwrap().split_once('|').unwrap().0;
+    server.output(&[
+        "set-window-option",
+        "-t",
+        window,
+        "allow-passthrough",
+        "all",
+    ]);
+    let before = rimz::testkit::spawn_count();
+    server
+        .backend
+        .ensure_session(&opts)
+        .expect("repair window-level all without changing the pane override");
+    assert_eq!(
+        rimz::testkit::spawn_count() - before,
+        unchanged_spawns + 1,
+        "window-level all differs from on even when the pane also has all"
+    );
+    assert_eq!(
+        server.stdout(&["show-options", "-wAv", "-t", window, "allow-passthrough"]),
+        "on"
+    );
+    assert_eq!(server.display(window, "#{allow-passthrough}"), "all");
 }
 
 #[test]
