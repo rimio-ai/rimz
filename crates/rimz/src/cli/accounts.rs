@@ -248,11 +248,6 @@ fn redeem(
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
     let login = catalog.select(kind, &name)?;
     let ambient = rimz::agents::ambient_env();
-    let ambient = if login.is_default() {
-        catalog.native_ambient(kind, &ambient)
-    } else {
-        ambient
-    };
     login.preflight(&ambient)?;
     if rimz::utils::env::flag_enabled("RIMZ_OAUTH_USAGE_OFFLINE") {
         bail!(

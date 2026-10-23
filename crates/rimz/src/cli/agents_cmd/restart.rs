@@ -98,7 +98,7 @@ pub(in crate::cli) fn restart_resolved(
     let provider_login =
         rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?;
     crate::cli::folder_trust::preflight_hooks(
-        provider_login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env())),
+        provider_login.health(&rimz::agents::ambient_env()),
         hook_unattended,
         || {
             rimz::config::definitions::hook_trust_fix(

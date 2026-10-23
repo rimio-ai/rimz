@@ -993,7 +993,7 @@ fn plan_recovery(
                 .login(kind, &machine.accounts)
                 .and_then(|login| {
                     login
-                        .health(&catalog.native_ambient(kind, ambient))
+                        .health(ambient)
                         .map_err(|error| crate::agents::RoomLoginErr::Birth(Box::new(error)))
                 })
                 .err()

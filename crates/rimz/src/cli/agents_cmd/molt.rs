@@ -95,7 +95,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let provider_login = rimz::agents::session_login(&kind, login.as_ref(), &machine.accounts)?;
     crate::cli::folder_trust::preflight_hooks(
-        provider_login.health(&catalog.native_ambient(&kind, &rimz::agents::ambient_env())),
+        provider_login.health(&rimz::agents::ambient_env()),
         || Some(crate::cli::folder_trust::Unattended::Agent),
         || {
             rimz::config::definitions::hook_trust_fix(

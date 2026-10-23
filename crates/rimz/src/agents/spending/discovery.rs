@@ -52,12 +52,7 @@ pub(super) fn pool_bases(
         .filter(|login| !login.shares_history())
         .filter_map(|login| {
             crate::agents::find_definition(login.kind().as_str())
-                // `default` resolves as the reconciler resolves it: a pane on
-                // an account exports that account's home, not the provider's own.
-                .map(|adapter| {
-                    let native = catalog.native_ambient(login.kind(), ambient);
-                    (login.clone(), adapter, login.env(&native))
-                })
+                .map(|adapter| (login.clone(), adapter, login.env(ambient)))
         })
         .collect()
 }

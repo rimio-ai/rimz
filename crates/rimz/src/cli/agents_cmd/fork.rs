@@ -143,7 +143,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;
     crate::cli::folder_trust::preflight_hooks(
-        login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env())),
+        login.health(&rimz::agents::ambient_env()),
         || {
             caller
                 .as_ref()

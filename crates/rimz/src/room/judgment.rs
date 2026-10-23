@@ -122,7 +122,7 @@ pub(super) fn judge(
     for (setting, message) in machine.accounts.label_warnings() {
         warn(setting, message);
     }
-    let (catalog, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
+    let (_, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
     let mut account_warnings = BTreeMap::new();
     for (kind, error) in &declarations {
         warn(format!("accounts.{kind}"), error.to_string());
@@ -146,7 +146,7 @@ pub(super) fn judge(
         }
         match logins.login(kind, &machine.accounts) {
             Ok(login) => {
-                if let Err(error) = login.preflight(&catalog.native_ambient(kind, &ambient)) {
+                if let Err(error) = login.preflight(&ambient) {
                     let setting = format!("accounts.{kind}.{}", login.name());
                     warn(setting.clone(), error.to_string());
                     account_warnings.insert(kind.clone(), setting);
