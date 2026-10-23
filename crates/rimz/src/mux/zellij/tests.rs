@@ -3102,7 +3102,9 @@ if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
 case " $* " in
   *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 work\n'; exit 0 ;;
   *" action new-pane --tab-id 2 "*) exit 1 ;;
-  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
+  *" action new-pane "*)
+    if [ "$ZELLIJ_PANE_ID" = 17 ]; then exit 1; fi
+    touch "$dir/spawned"; printf 'terminal_9\n'; exit 0 ;;
   *" action close-pane --pane-id terminal_8 "*) touch "$dir/closed"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_9 "*) touch "$dir/resized"; exit 0 ;;
   *" action list-panes --all --json "*)
@@ -3766,6 +3768,293 @@ dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"; exit 0
     assert!(
         !log.contains("list-panes") && !log.contains("list-clients"),
         "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_plain_add_anchors_only_a_lone_live_work_pane_and_converges() {
+    for (other_state, anchored) in [
+        ("absent", true),
+        ("live", false),
+        ("is_held", true),
+        ("exited", true),
+        ("is_suppressed", true),
+        ("is_floating", true),
+        ("is_plugin", true),
+    ] {
+        let room = TestRoom::new();
+        let panes = |work_x, work_cols, sidebar: Option<(u64, u64)>| {
+            let mut panes = vec![serde_json::json!({
+                "id": 7, "tab_id": 1, "tab_position": 1, "title": "work",
+                "pane_x": work_x, "pane_columns": work_cols,
+            })];
+            if other_state != "absent" {
+                let mut other = panes[0].clone();
+                other["id"] = serde_json::json!(17);
+                if other_state != "live" {
+                    other[other_state] = serde_json::json!(true);
+                }
+                panes.push(other);
+            }
+            if let Some((x, cols)) = sidebar {
+                panes.push(serde_json::json!({
+                    "id": 9, "tab_id": 1, "tab_position": 1, "title": "rimz-sidebar",
+                    "pane_x": x, "pane_columns": cols,
+                }));
+            }
+            serde_json::to_string(&panes).unwrap()
+        };
+        let (temp, shim) = zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0"); printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action new-pane "*) touch "$dir/spawned"; printf 'terminal_9\n' ;;
+  *" action move-pane left --pane-id terminal_9 "*) touch "$dir/moved" ;;
+  *" action resize decrease right --pane-id terminal_9 "*) touch "$dir/resized" ;;
+  *" action list-panes --all --json "*)
+    if [ -f "$dir/resized" ]; then printf '%s\n' '{resized}';
+    elif [ -f "$dir/moved" ]; then printf '%s\n' '{moved}';
+    elif [ -f "$dir/spawned" ]; then printf '%s\n' '{mounted}';
+    else printf '%s\n' '{before}'; fi ;;
+esac
+exit 0
+"#,
+            before = panes(0, 180, None),
+            mounted = panes(0, 90, Some((90, 90))),
+            moved = panes(90, 90, Some((0, 90))),
+            resized = panes(45, 135, Some((0, 45))),
+        ));
+        let result = room
+            .backend(&shim)
+            .add_sidebar_to_tab(&room.sidebar_options(180), 1, &[], &HashSet::from([1]))
+            .expect("plain add");
+        let log = shim_log(&temp);
+        let adds: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("action new-pane "))
+            .collect();
+        assert_eq!(adds.len(), 1, "{other_state}: {log}");
+        let add = adds[0];
+        if anchored {
+            assert!(
+                add.contains("pane=7 ")
+                    && add.contains("--direction right --no-focus")
+                    && !add.contains("--tab-id"),
+                "{other_state}: {log}"
+            );
+        } else {
+            assert!(
+                add.contains("new-pane --tab-id 1")
+                    && !add.contains("--direction")
+                    && !add.contains("--no-focus"),
+                "{log}"
+            );
+        }
+        assert!(
+            add.contains("--name rimz-sidebar --borderless true --close-on-exit --cwd"),
+            "{log}"
+        );
+        assert_eq!(
+            result.pane,
+            PaneId::from_parts(crate::MuxName::Zellij, "terminal_9")
+        );
+        assert_eq!(
+            result.dock,
+            sidebar::DockOutcome::Docked,
+            "{other_state}: {log}"
+        );
+        let move_command = "action move-pane left --pane-id terminal_9";
+        let resize_command = "action resize decrease right --pane-id terminal_9";
+        assert_eq!(command_count(&log, move_command), 1, "{log}");
+        assert_eq!(command_count(&log, resize_command), 1, "{log}");
+        assert!(
+            log.find(move_command).unwrap() < log.find(resize_command).unwrap(),
+            "{log}"
+        );
+        assert!(!log.contains("close-pane"), "{log}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_lone_anchored_miss_falls_back_to_a_plain_split() {
+    for (anchored, plain) in [
+        ("unmounted", "mounted"),
+        ("failed", "mounted"),
+        ("unmounted", "unmounted"),
+        ("unmounted", "failed"),
+    ] {
+        let room = TestRoom::new();
+        let (temp, shim) = zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0"); state="$dir/add-count"
+printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action new-pane "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); count=$((count + 1))
+    printf '%s\n' "$count" > "$state"
+    if [ "$count" = 1 ] && [ '{anchored}' = failed ]; then
+      printf 'anchored spawn failed\n' >&2; exit 1
+    fi
+    if [ "$count" = 2 ] && [ '{plain}' = failed ]; then
+      printf 'plain spawn failed\n' >&2; exit 1
+    fi
+    printf 'terminal_%s\n' "$((count + 8))" ;;
+  *" action list-panes --all --json "*)
+    if [ '{plain}' = mounted ] && [ -f "$state" ] && [ "$(cat "$state")" = 2 ]; then
+      printf '[{{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":45,"pane_columns":135}},{{"id":10,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":45}}]\n'
+    else
+      printf '[{{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":0,"pane_columns":180}}]\n'
+    fi ;;
+esac
+exit 0
+"#,
+        ));
+        let result = room.backend(&shim).add_sidebar_to_tab(
+            &room.sidebar_options(180),
+            1,
+            &[],
+            &HashSet::from([1]),
+        );
+        let log = shim_log(&temp);
+        let adds: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("action new-pane "))
+            .collect();
+        assert_eq!(adds.len(), 2, "{anchored}, {plain}: {result:?}: {log}");
+        assert!(
+            adds[0].contains("pane=7 ")
+                && adds[0].contains("--direction right --no-focus")
+                && !adds[0].contains("--tab-id"),
+            "{log}"
+        );
+        assert!(
+            adds[1].starts_with("pane= args=")
+                && adds[1].contains("new-pane --tab-id 1")
+                && !adds[1].contains("--direction")
+                && !adds[1].contains("--no-focus"),
+            "{log}"
+        );
+        if plain == "mounted" {
+            let added = result.expect("the plain fallback must mount");
+            assert_eq!(
+                added.pane,
+                PaneId::from_parts(crate::MuxName::Zellij, "terminal_10")
+            );
+            assert_eq!(added.dock, sidebar::DockOutcome::Docked);
+        } else {
+            let error = result.expect_err("both attempts missed").to_string();
+            let expected = if plain == "failed" {
+                "plain spawn failed"
+            } else {
+                "new-pane never mounted a sidebar pane in tab 1"
+            };
+            assert!(error.contains(expected), "{error}: {log}");
+        }
+        assert!(
+            !log.contains("close-pane"),
+            "unlisted hints must not close: {log}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_anchored_replacement_miss_preserves_the_spawn_error() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action new-pane "*) printf 'replacement spawn failed\n' >&2; exit 1 ;;
+  *" action list-panes --all --json "*)
+    printf '[{"id":8,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":60},{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":60,"pane_columns":180}]\n' ;;
+esac
+exit 0
+"#,
+    );
+    let error = room
+        .backend(&shim)
+        .add_sidebar_to_tab(
+            &room.sidebar_options(240),
+            1,
+            &[PaneId::from_parts(crate::MuxName::Zellij, "terminal_8")],
+            &HashSet::from([1]),
+        )
+        .expect_err("a failed anchored replacement must not fall back")
+        .to_string();
+    let log = shim_log(&temp);
+    assert!(error.contains("replacement spawn failed"), "{error}: {log}");
+    assert!(!error.contains("floating panes"), "{error}");
+    let adds: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("action new-pane "))
+        .collect();
+    assert_eq!(adds.len(), 1, "{log}");
+    assert!(
+        adds[0].contains("pane=8 ") && adds[0].contains("--direction right --no-focus"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("close-pane"),
+        "the old sidebar must stay open: {log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_lone_anchored_retry_miss_keeps_the_earlier_misdocked_mount() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); state="$dir/add-count"
+printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$dir/zellij.log"
+if [ "$1" = --version ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action new-pane "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); count=$((count + 1))
+    printf '%s\n' "$count" > "$state"; printf 'terminal_%s\n' "$((count + 8))" ;;
+  *" action list-panes --all --json "*)
+    if [ -f "$state" ]; then
+      printf '[{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":0,"pane_columns":90},{"id":9,"tab_id":1,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":90}]\n'
+    else
+      printf '[{"id":7,"tab_id":1,"tab_position":1,"title":"work","pane_x":0,"pane_columns":180}]\n'
+    fi ;;
+esac
+exit 0
+"#,
+    );
+    let result = room.backend(&shim).add_sidebar_to_tab(
+        &room.sidebar_options(180),
+        1,
+        &[],
+        &HashSet::from([1]),
+    );
+    let log = shim_log(&temp);
+    let added = result.expect("the first working sidebar must survive the retry miss");
+    assert_eq!(
+        added.pane,
+        PaneId::from_parts(crate::MuxName::Zellij, "terminal_9")
+    );
+    assert_eq!(added.dock, sidebar::DockOutcome::Misdocked);
+    let adds: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("action new-pane "))
+        .collect();
+    assert_eq!(adds.len(), 2, "{log}");
+    assert!(
+        adds.iter().all(|line| line.contains("pane=7 ")
+            && line.contains("--direction right --no-focus")
+            && !line.contains("--tab-id")),
+        "{log}"
+    );
+    assert!(
+        !log.contains("close-pane"),
+        "neither the existing mount nor an unlisted hint may close: {log}"
     );
 }
 
