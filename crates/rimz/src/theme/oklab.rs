@@ -199,6 +199,18 @@ fn srgb_to_linear(value: u8) -> f32 {
     }
 }
 
+/// WCAG 2.x contrast between emitted sRGB colors, from their relative luminance.
+pub(super) fn contrast_ratio(left: Rgb, right: Rgb) -> f32 {
+    let luminance = |(red, green, blue)| {
+        0.2126 * srgb_to_linear(red)
+            + 0.7152 * srgb_to_linear(green)
+            + 0.0722 * srgb_to_linear(blue)
+    };
+    let left = luminance(left);
+    let right = luminance(right);
+    (left.max(right) + 0.05) / (left.min(right) + 0.05)
+}
+
 fn linear_to_srgb(value: f32) -> u8 {
     let value = value.clamp(0.0, 1.0);
     let value = if value <= 0.003_130_8 {
@@ -212,6 +224,14 @@ fn linear_to_srgb(value: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contrast_ratio_matches_wcag_reference_values() {
+        assert!((contrast_ratio((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 0.001);
+        assert!((contrast_ratio((255, 255, 255), (0, 0, 0)) - 21.0).abs() < 0.001);
+        assert!((contrast_ratio((119, 119, 119), (255, 255, 255)) - 4.478).abs() < 0.001);
+        assert_eq!(contrast_ratio((32, 64, 96), (32, 64, 96)), 1.0);
+    }
 
     #[test]
     fn lift_lightness_preserves_oklab_hue_axes() {
