@@ -316,7 +316,7 @@ The `ports` field is optional so both skew directions keep working: a remote tha
 
 ### Measurement
 
-`ProbeWindow` keeps the latest 30 settled outcomes (`LINK_WINDOW`). A pending probe expires into a miss after the two-second timeout, and a late ack for an already-missed probe is ignored, so loss is the miss percentage over settled probes.
+`ProbeWindow` keeps the latest 30 probes sent (`LINK_WINDOW`), unanswered ones included, and ignores an ack whose probe has already left the window. A pending probe expires into a miss after the two-second timeout, and a late ack for an already-missed probe is ignored, so loss is the miss percentage over settled probes.
 
 RTT is an EWMA whose smoothing factor adapts. A sample within 8% of the current value uses `alpha = 0.15`, and the factor ramps to `0.60` as the relative deviation approaches 50%, so a real path change moves the number quickly while jitter does not. The displayed value holds until the smoothed value moves at least 8ms, which keeps the badge steady. Each new probe stream discards its first ack sample, because the stream execs a fresh remote `ingest` whose spawn cost would read as latency; the displayed value stays put until real samples arrive.
 

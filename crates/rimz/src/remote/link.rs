@@ -442,7 +442,9 @@ enum ProbeOutcome {
 }
 
 /// Rolling probe accounting: late acks are ignored, pending probes expire into
-/// misses, and settled outcomes are capped to the latest [`LINK_WINDOW`].
+/// misses, and the window holds the latest [`LINK_WINDOW`] probes sent,
+/// unanswered ones included. An ack for a probe that has left the window is
+/// ignored.
 #[derive(Clone, Debug)]
 struct ProbeWindow {
     outcomes: VecDeque<ProbeOutcome>,
