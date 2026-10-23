@@ -217,7 +217,7 @@ The report prints a line per non-zero count:
 rimz sidebar repair
 ```
 
-`sidebar repair` fixes the sidebar panes themselves, in every live room: it adds a missing sidebar, closes duplicate or unresponsive ones, and restores a sidebar's docking and width. A replacement pane must start and report on the current build before the old one closes. It publishes no build; use [`reload`](#reload-running-sidebars) for that.
+`sidebar repair` fixes the sidebar panes themselves, in every live room: it adds a missing sidebar, closes duplicate or unresponsive ones, and restores a sidebar's docking and width. A replacement pane must start and report on the current build before the old one closes. Each view with a successfully added or closed pane leaves a [`sidebar_view_repaired` diagnostic](../../internals/diagnostics.md#event-taxonomy) naming those panes; `rimz doctor` shows it as recovered information. It publishes no build; use [`reload`](#reload-running-sidebars) for that.
 
 | Line | Meaning |
 | --- | --- |
