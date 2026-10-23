@@ -405,7 +405,7 @@ impl ApplyHarness {
             PixelRenderCaps::default(),
             Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
         );
-        state.current = snapshot(ws);
+        state.views.scratch_for_test().1.current = snapshot(ws);
         let views = std::sync::Arc::default();
         state.share_views(std::sync::Arc::clone(&views), 0);
         Self { state, views, own }
@@ -441,6 +441,7 @@ impl ApplyHarness {
             let mut views = self.views.lock().unwrap();
             views.publish(outcome.clone());
             self.state
+                .pane
                 .completion
                 .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
         }
@@ -461,7 +462,7 @@ impl ApplyHarness {
         let (_, entry) = views.presentation(&self.own, now, false);
         let context = entry
             .context
-            .get_or_insert_with(|| ViewContext::new(self.state.view.current.clone(), now));
+            .get_or_insert_with(|| ViewContext::new(self.state.views.mirror().clone(), now));
         access(&mut entry.state, context)
     }
 }
@@ -678,24 +679,46 @@ fn accepted_final_then_failed_final_keeps_rendered_facts() {
     append_agent_row(&mut accepted, "sess-2", "%2", AgentStatus::Running, false);
 
     h.apply(accepted);
-    let rows = row_ids(&h.current);
-    let unread = h.current.rows().map(|row| row.unread).collect::<Vec<_>>();
-    let statuses = h.current.rows().map(|row| row.status()).collect::<Vec<_>>();
-    let gate_notice = h.ui.gate_notice.clone();
+    let rows = row_ids(h.state.views.mirror());
+    let unread = h
+        .state
+        .views
+        .mirror()
+        .rows()
+        .map(|row| row.unread)
+        .collect::<Vec<_>>();
+    let statuses = h
+        .state
+        .views
+        .mirror()
+        .rows()
+        .map(|row| row.status())
+        .collect::<Vec<_>>();
+    let gate_notice = h.pane.ui.gate_notice.clone();
 
     h.fail("store not found");
 
-    assert_eq!(row_ids(&h.current), rows);
+    assert_eq!(row_ids(h.state.views.mirror()), rows);
     assert_eq!(
-        h.current.rows().map(|row| row.unread).collect::<Vec<_>>(),
+        h.state
+            .views
+            .mirror()
+            .rows()
+            .map(|row| row.unread)
+            .collect::<Vec<_>>(),
         unread
     );
     assert_eq!(
-        h.current.rows().map(|row| row.status()).collect::<Vec<_>>(),
+        h.state
+            .views
+            .mirror()
+            .rows()
+            .map(|row| row.status())
+            .collect::<Vec<_>>(),
         statuses
     );
     assert_eq!(h.inspect_view(|_, view| view.health.failure_streak), 1);
-    assert_eq!(h.ui.gate_notice, gate_notice);
+    assert_eq!(h.pane.ui.gate_notice, gate_notice);
 }
 
 #[test]
@@ -743,7 +766,7 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
         phase: FetchPhase::Final,
         source: SnapshotSource::Produced,
     });
-    assert!(!row_unread(&h.current));
+    assert!(!row_unread(h.state.views.mirror()));
     assert_eq!(
         notification_trace_events(dir.path())
             .iter()
@@ -757,7 +780,7 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
 
     h.fail("store not found");
 
-    assert!(!row_unread(&h.current));
+    assert!(!row_unread(h.state.views.mirror()));
     assert_eq!(
         notification_trace_events(dir.path())
             .iter()
@@ -800,7 +823,7 @@ fn focus_writes_read_receipt_and_clears_current_unread_row() {
         runtime.read_marks_path().exists(),
         "a focused unread row writes a read receipt"
     );
-    assert!(!row_unread(&a.current));
+    assert!(!row_unread(a.state.views.mirror()));
 }
 
 #[test]
@@ -825,7 +848,7 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
     snapshot.focused_pane = Some(child.clone());
     snapshot.viewed_panes = vec![child];
     harness.apply(snapshot);
-    assert!(row_unread(&harness.current));
+    assert!(row_unread(harness.state.views.mirror()));
     assert!(!runtime.read_marks_path().exists());
 }
 
@@ -847,7 +870,7 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     a.apply(painted);
 
     a.apply(background);
-    assert_eq!(row_ids(&a.current), vec!["sess-2", "sess-1"]);
+    assert_eq!(row_ids(a.state.views.mirror()), vec!["sess-2", "sess-1"]);
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first.clone());
     set_row_status(&mut viewed, "sess-1", AgentStatus::Success);
@@ -858,11 +881,11 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     a.apply(viewed.clone());
 
     assert_eq!(
-        row_ids(&a.current),
+        row_ids(a.state.views.mirror()),
         vec!["sess-2", "sess-1"],
         "clearing unread keeps the focused row in live time/status rank"
     );
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
     assert_eq!(
         a.inspect_view(|ui, _| ui.selected_index),
         Some(1),
@@ -882,7 +905,7 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     a.apply(settled);
 
     assert_eq!(
-        row_ids(&a.current),
+        row_ids(a.state.views.mirror()),
         vec!["sess-2", "sess-1"],
         "after the hold expires the live rank stays unchanged"
     );
@@ -910,7 +933,7 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
         runtime.read_marks_path().exists(),
         "viewing a sticky unread row writes a read receipt even after status recovery"
     );
-    assert!(!row_unread(&a.current));
+    assert!(!row_unread(a.state.views.mirror()));
 }
 
 #[test]
@@ -930,7 +953,7 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
 
     a.apply(background);
 
-    assert!(row_unread(&a.current));
+    assert!(row_unread(a.state.views.mirror()));
     assert!(
         !read_marks.exists(),
         "a background register pane must not write a focus receipt until viewed"
@@ -946,7 +969,7 @@ fn background_register_pane_does_not_focus_clear_until_viewed() {
         read_marks.exists(),
         "viewing the register pane writes the normal focus receipt"
     );
-    assert!(!row_unread(&a.current));
+    assert!(!row_unread(a.state.views.mirror()));
 }
 
 #[test]
@@ -965,8 +988,8 @@ fn tab_switch_in_arms_sibling_read_dwell() {
 
     a.apply(background);
 
-    assert!(row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_all_rows_unread(&mut viewed);
@@ -977,11 +1000,11 @@ fn tab_switch_in_arms_sibling_read_dwell() {
         "switching into the tab arms the sibling dwell"
     );
     assert!(
-        !row_unread_by_id(&a.current, "sess-1"),
+        !row_unread_by_id(a.state.views.mirror(), "sess-1"),
         "the focused row reads immediately"
     );
     assert!(
-        row_unread_by_id(&a.current, "sess-2"),
+        row_unread_by_id(a.state.views.mirror(), "sess-2"),
         "the sibling waits for dwell"
     );
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
@@ -999,8 +1022,8 @@ fn first_tab_reveal_arms_sibling_read_dwell() {
     set_all_rows_unread(&mut background);
     set_viewed(&mut background, false);
     a.apply(background);
-    assert!(row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
 
     let (mut viewed, _, _) = two_pane_snapshot(&ws, first);
     set_all_rows_unread(&mut viewed);
@@ -1010,8 +1033,8 @@ fn first_tab_reveal_arms_sibling_read_dwell() {
         a.inspect_view(|_, view| view.tab_read_dwell_until.is_some()),
         "first reveal arms the sibling dwell"
     );
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
@@ -1037,8 +1060,8 @@ fn tab_dwell_elapsed_while_viewing_sweeps_siblings() {
     a.apply(viewed);
 
     assert_eq!(a.inspect_view(|_, view| view.tab_read_dwell_until), None);
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(!row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_some());
@@ -1067,12 +1090,12 @@ fn tab_switch_clear_keeps_live_rank_when_siblings_become_read() {
     a.apply(viewed);
 
     assert_eq!(
-        row_ids(&a.current),
+        row_ids(a.state.views.mirror()),
         vec!["sess-3", "sess-1", "sess-2"],
         "tab-view read clears do not let unread siblings pin above a waiting row"
     );
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(!row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-2"));
 }
 
 #[test]
@@ -1095,13 +1118,13 @@ fn tab_switch_out_before_dwell_leaves_siblings_unread() {
     a.apply(viewed);
     assert!(a.inspect_view(|_, view| view.tab_read_dwell_until.is_some()));
 
-    let mut left = a.current.clone();
+    let mut left = a.state.views.mirror().clone();
     set_viewed(&mut left, false);
     a.apply(left);
 
     assert_eq!(a.routed_view(|_, view| view.tab_read_dwell_until), None);
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
@@ -1131,8 +1154,8 @@ fn staying_on_tab_does_not_sweep_new_unread() {
     .last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);
 
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
 }
 
 #[test]
@@ -1174,11 +1197,11 @@ fn new_ranked_first_unread_appends_during_freeze() {
     a.apply(with_new_unread.clone());
 
     assert_eq!(
-        row_ids(&a.current),
+        row_ids(a.state.views.mirror()),
         vec!["sess-1", "sess-2", "sess-new"],
         "fresh unread rows append within their frozen group"
     );
-    assert!(row_unread_by_id(&a.current, "sess-new"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-new"));
     // The switch in has painted, which ends its arrival hold, and the freeze has run out.
     a.routed_view(|ui, _| {
         ui.arrival_pending = false;
@@ -1187,7 +1210,10 @@ fn new_ranked_first_unread_appends_during_freeze() {
     });
     a.apply(with_new_unread);
     assert!(a.inspect_view(|ui, _| ui.freeze.is_none()));
-    assert_eq!(row_ids(&a.current), vec!["sess-new", "sess-1", "sess-2"]);
+    assert_eq!(
+        row_ids(a.state.views.mirror()),
+        vec!["sess-new", "sess-1", "sess-2"]
+    );
 }
 
 #[test]
@@ -1202,8 +1228,8 @@ fn attach_to_viewed_tab_keeps_unread_siblings() {
 
     assert_eq!(a.inspect_view(|ui, _| ui.viewing_own_tab), Some(true));
     assert_eq!(a.inspect_view(|_, view| view.tab_read_dwell_until), None);
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
     let marks = crate::sidebar::read_marks::ReadMarks::load(&runtime);
     assert!(marks.cleared_at_ms("sess-1").is_some());
     assert!(marks.cleared_at_ms("sess-2").is_none());
@@ -1222,7 +1248,7 @@ fn frameless_fold_does_not_blip_switch_in() {
     set_all_rows_unread(&mut viewed);
     a.apply(viewed);
 
-    let mut frameless = a.current.clone();
+    let mut frameless = a.state.views.mirror().clone();
     frameless.own_view = None;
     a.apply_outcome(FetchUpdate::Snapshot {
         snapshot: Box::new(frameless),
@@ -1242,8 +1268,8 @@ fn frameless_fold_does_not_blip_switch_in() {
     .last_activity = fixed_time(1_700_000_200);
     a.apply(still_viewed);
 
-    assert!(!row_unread_by_id(&a.current, "sess-1"));
-    assert!(row_unread_by_id(&a.current, "sess-2"));
+    assert!(!row_unread_by_id(a.state.views.mirror(), "sess-1"));
+    assert!(row_unread_by_id(a.state.views.mirror(), "sess-2"));
 }
 
 #[test]
@@ -1264,7 +1290,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
 
     a.apply(still_focused);
 
-    assert!(row_unread(&a.current));
+    assert!(row_unread(a.state.views.mirror()));
     assert_eq!(
         a.inspect_view(|ui, _| ui.unread_guard.clone()).as_deref(),
         Some("sess-1")
@@ -1282,7 +1308,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
     .unread = true;
     a.apply(focus_left);
 
-    assert!(row_unread(&a.current));
+    assert!(row_unread(a.state.views.mirror()));
     assert_eq!(a.inspect_view(|ui, _| ui.unread_guard.clone()), None);
     assert!(
         !read_marks.exists(),
@@ -1300,7 +1326,7 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
         read_marks.exists(),
         "revisiting the row writes the normal focused read receipt"
     );
-    assert!(!row_unread(&a.current));
+    assert!(!row_unread(a.state.views.mirror()));
 }
 
 #[test]
@@ -1315,7 +1341,7 @@ fn published_fast_success_keeps_refresh_alert_active() {
         source: SnapshotSource::Cached,
     });
 
-    assert!(!h.should_exit);
+    assert!(!h.pane.should_exit);
     assert!(!rejected);
     let health = h.inspect_view(|_, view| view.health.clone());
     assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
@@ -1329,23 +1355,28 @@ fn published_fast_success_keeps_refresh_alert_active() {
 fn gate_hold_notice_arms_and_clears_with_gate_state() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
-    h.current = row_snapshot(&ws, AgentStatus::Running, false);
-    h.current.panes_produced_at_ms = Some(10);
+    h.state.views.scratch_for_test().1.current = row_snapshot(&ws, AgentStatus::Running, false);
+    h.state
+        .views
+        .scratch_for_test()
+        .1
+        .current
+        .panes_produced_at_ms = Some(10);
     let mut empty = snapshot(&ws);
     empty.panes_produced_at_ms = Some(11);
 
     assert!(h.apply(empty), "the gate holds an empty stamped frame");
     assert!(matches!(
-        h.ui.gate_notice,
+        h.pane.ui.gate_notice,
         Some(GateNotice {
             rule: GateRule::EmptyStampedFrame,
         })
     ));
 
-    let mut recovered = h.current.clone();
+    let mut recovered = h.state.views.mirror().clone();
     recovered.panes_produced_at_ms = Some(12);
     assert!(!h.apply(recovered));
-    assert!(h.ui.gate_notice.is_none());
+    assert!(h.pane.ui.gate_notice.is_none());
 }
 
 #[test]

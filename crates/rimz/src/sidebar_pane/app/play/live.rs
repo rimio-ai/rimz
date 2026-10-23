@@ -233,8 +233,9 @@ fn paint(
                 entry
                     .column
                     .state
+                    .pane
                     .ui
-                    .theme(&entry.column.state.view.current.theme)
+                    .theme(&entry.column.state.views.mirror().theme)
                     .alarm(ratatui::style::Modifier::empty()),
             );
         }
@@ -391,10 +392,10 @@ mod tests {
             pass: 0,
         };
         live.advance(Duration::from_secs(1), 34).unwrap();
-        live.column.state.presentation.help_visible = true;
+        live.column.state.views.scratch_for_test().0.help_visible = true;
         live.advance(Duration::from_secs(5), 34).unwrap();
         assert!(
-            !live.column.state.presentation.help_visible,
+            !live.column.state.inspect_view(|ui, _| ui.help_visible),
             "wraps reset UI even when local time increases"
         );
         assert_eq!(live.column.at, Duration::from_secs(2));

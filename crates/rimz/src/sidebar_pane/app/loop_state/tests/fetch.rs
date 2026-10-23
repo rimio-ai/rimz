@@ -19,9 +19,9 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
         });
     }
     rig.state.on_snapshot(&mut rig.fetch);
-    assert_eq!(rig.view().current.now, snapshot.now);
+    assert_eq!(rig.view().ctx().current.now, snapshot.now);
     assert_eq!(
-        rig.state.content_applications, 1,
+        rig.state.pane.content_applications, 1,
         "coalescing must retain clock-only delivery"
     );
     rig.fetch.request(FetchRequest::default(), false);
@@ -39,15 +39,15 @@ fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
     snapshot.now += jiff::SignedDuration::from_secs(1);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
     assert_eq!(
-        rig.state.content_applications, 1,
+        rig.state.pane.content_applications, 1,
         "idle delivery skips content"
     );
-    assert_eq!(rig.view().current.now, snapshot.now);
+    assert_eq!(rig.view().ctx().current.now, snapshot.now);
 
     snapshot.display_name = "renamed room".into();
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    assert_eq!(rig.view().current.display_name, "renamed room");
-    assert_eq!(rig.state.content_applications, 2);
+    assert_eq!(rig.view().ctx().current.display_name, "renamed room");
+    assert_eq!(rig.state.pane.content_applications, 2);
 
     let sample = crate::store::snapshot::PresenceSample {
         human_clients: 1,
@@ -64,35 +64,37 @@ fn idle_delivery_skips_content_but_changes_reach_the_renderer() {
     snapshot.now =
         Timestamp::from_millisecond((snapshot.sidebar.afk_after_ms() + 100) as i64).unwrap();
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    assert_eq!(rig.view().current.presence, snapshot.presence);
-    assert_eq!(rig.state.content_applications, 4);
+    assert_eq!(rig.view().ctx().current.presence, snapshot.presence);
+    assert_eq!(rig.state.pane.content_applications, 4);
 }
 
 #[test]
 fn renderer_local_reconciliation_state_forces_full_content() {
-    type Hold = fn(&mut LoopState);
+    type Hold = fn(&mut PaneState, &mut ViewState, &mut ViewContext);
     let blockers: [(&str, Hold); 8] = [
-        ("should_exit", |state| state.should_exit = true),
-        ("overlay_baseline", |state| {
-            state.overlay_baseline = Some(state.current.clone());
+        ("should_exit", |state, _, _| state.should_exit = true),
+        ("overlay_baseline", |_, _, view| {
+            view.overlay_baseline = Some(view.current.clone());
         }),
-        ("gate", |state| state.gate.reject_streak = 1),
-        ("failure_streak", |state| state.health.failure_streak = 1),
-        ("freeze", |state| {
-            state.presentation.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
+        ("gate", |_, _, view| view.gate.reject_streak = 1),
+        ("failure_streak", |_, _, view| {
+            view.health.failure_streak = 1
+        }),
+        ("freeze", |_, ui, _| {
+            ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
                 frozen: crate::sidebar_pane::render::FrozenOrder::default(),
                 armed_ms: jiff::Timestamp::now().as_millisecond(),
             });
         }),
-        ("tab_read_dwell", |state| {
-            state.tab_read_dwell_until = Some(Instant::now() + Duration::from_secs(60));
+        ("tab_read_dwell", |_, _, view| {
+            view.tab_read_dwell_until = Some(Instant::now() + Duration::from_secs(60));
         }),
-        ("self_close", |state| {
+        ("self_close", |state, _, _| {
             // The rig's own view has shown a sibling, which would close at once instead.
             state.self_close = Default::default();
             state.self_close.should_close(Some(0), Instant::now());
         }),
-        ("focus_repair", |state| {
+        ("focus_repair", |state, _, _| {
             state.pending_focus_repair = Some(PendingFocusRepair {
                 pane_id: pane("terminal_9", "tab_0", false).pane_id,
                 generation: 1,
@@ -107,11 +109,19 @@ fn renderer_local_reconciliation_state_forces_full_content() {
             let mut rig = Rig::new();
             let mut snapshot = agent_snapshot(&rig.ws);
             rig.fold(snapshot.clone(), SnapshotSource::Produced);
-            hold(&mut rig.view());
+            {
+                let pane = &mut rig.state.pane;
+                let mut guard = rig
+                    .state
+                    .views
+                    .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+                let (ui, view) = guard.pair();
+                hold(pane, ui, view);
+            }
             // A view decides clock-only at take, so the first equal fold under the hold is full.
             snapshot.now += jiff::SignedDuration::from_secs(1);
             rig.fold(snapshot.clone(), SnapshotSource::Produced);
-            (rig.state.content_applications != 2).then_some(name)
+            (rig.state.pane.content_applications != 2).then_some(name)
         })
         .collect();
     assert!(
@@ -152,6 +162,7 @@ fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
         .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
     assert_eq!(
         rig.view()
+            .ctx()
             .current
             .row_owning_pane(&pane_id)
             .unwrap()
@@ -170,11 +181,11 @@ fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
 fn a_body_filter_save_reaches_origin_and_peer_in_memory_only_with_effects() {
     let mut rig = Rig::new();
     let plane = super::super::super::plane::DataPlane::detached();
-    let mut peer = rig.state.config.clone();
+    let mut peer = rig.state.pane.config.clone();
     peer.instance_id = crate::SidebarInstanceId::new();
     let (origin_tx, origin_rx) = std::sync::mpsc::sync_channel(64);
     let (peer_tx, peer_rx) = std::sync::mpsc::sync_channel(64);
-    let _origin = plane.subscribe(&rig.state.config, origin_tx);
+    let _origin = plane.subscribe(&rig.state.pane.config, origin_tx);
     let _peer = plane.subscribe(&peer, peer_tx);
     rig.state.room_events = Some(plane.room_events(&rig.runtime));
     let filter = BodyLens {
@@ -195,7 +206,7 @@ fn a_body_filter_save_reaches_origin_and_peer_in_memory_only_with_effects() {
         assert!(inbox.try_recv().is_err());
     }
 
-    rig.state.clock = LoopClock::play(Timestamp::now());
+    rig.state.pane.clock = LoopClock::play(Timestamp::now());
     rig.state.persist_body_filter(BodyLens::default());
     assert_eq!(
         crate::sidebar::body_filter::load(&rig.runtime),
@@ -214,7 +225,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
     let pane_id = process.pane_id.clone();
     let snapshot = snapshot_with_panes(&rig.ws, vec![process]);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    assert!(rig.view().overlay_baseline.is_none());
+    assert!(rig.view().ctx().overlay_baseline.is_none());
     rig.send(FetchUpdate::Snapshot {
         snapshot: Box::new(snapshot),
         phase: FetchPhase::Final,
@@ -229,12 +240,13 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
     // The event's own fold catches the view up to the queued equal content and fuses it, so the
     // take that follows has nothing left to apply.
     assert_eq!(
-        rig.state.content_applications, 1,
+        rig.state.pane.content_applications, 1,
         "a local event requires queued content to reconcile through fusion"
     );
-    assert!(rig.view().overlay_baseline.is_some());
+    assert!(rig.view().ctx().overlay_baseline.is_some());
     assert_eq!(
         rig.view()
+            .ctx()
             .current
             .row_owning_pane(&pane_id)
             .unwrap()
@@ -248,9 +260,10 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
 
     *rig.state.events() = EventStore::default();
     rig.state.fold_fused_now();
-    assert!(rig.view().overlay_baseline.is_none());
+    assert!(rig.view().ctx().overlay_baseline.is_none());
     assert_eq!(
         rig.view()
+            .ctx()
             .current
             .row_owning_pane(&pane_id)
             .unwrap()
@@ -273,11 +286,11 @@ fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
 }
 
 fn enable_focus_trace(rig: &mut Rig) {
-    rig.state.diag = crate::diag::DiagSink::under(
+    rig.state.pane.diag = crate::diag::DiagSink::under(
         rig._dir.path().to_owned(),
         rig.ws.clone(),
         "rimz-test",
-        Some(rig.state.config.instance_id.clone()),
+        Some(rig.state.pane.config.instance_id.clone()),
     );
 }
 
@@ -311,7 +324,7 @@ fn carried_baseline_fold(case: &str) {
         Some(selected.clone()),
     );
     assert_eq!(
-        rig.view().presentation.baseline_pane,
+        rig.view().ui().baseline_pane,
         Some(selected.clone()),
         "the carried identity is seated before any fold"
     );
@@ -356,13 +369,13 @@ fn carried_baseline_fold(case: &str) {
         "other" => Some(other),
         _ => Some(selected),
     };
-    assert_eq!(rig.view().presentation.baseline_pane, expected);
-    assert_eq!(rig.view().presentation.selected_pane, expected);
+    assert_eq!(rig.view().ui().baseline_pane, expected);
+    assert_eq!(rig.view().ui().selected_pane, expected);
     if case == "frameless" {
-        assert_eq!(rig.view().presentation.selected_index, None);
+        assert_eq!(rig.view().ui().selected_index, None);
         return;
     }
-    rig.state.next_frame = Instant::now();
+    rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
     let mut parser = vt100::Parser::new(24, 54, 0);
     parser.process(&output.0.lock().unwrap());
@@ -412,10 +425,14 @@ fn pre_tab_fold_seeds_without_selection() {
     );
     assert!(records[0].get("baseline").is_none());
     assert!(records[0].get("selected_after").is_none());
-    assert_eq!(rig.view().current.rows().count(), 1, "the cards seeded");
-    assert_eq!(rig.view().presentation.selected_pane, None);
-    assert_eq!(rig.view().presentation.selected_index, None);
-    assert!(rig.view().current.own_view.is_none());
+    assert_eq!(
+        rig.view().ctx().current.rows().count(),
+        1,
+        "the cards seeded"
+    );
+    assert_eq!(rig.view().ui().selected_pane, None);
+    assert_eq!(rig.view().ui().selected_index, None);
+    assert!(rig.view().ctx().current.own_view.is_none());
 }
 
 #[test]
@@ -470,11 +487,11 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
     assert!(traced_seed[0].get("baseline").is_none());
     assert!(traced_seed[0].get("selected_after").is_none());
     assert_eq!(
-        rig.view().current.rows().count(),
+        rig.view().ctx().current.rows().count(),
         1,
         "the published card seeded"
     );
-    rig.state.next_frame = Instant::now();
+    rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
     let mut parser = vt100::Parser::new(24, 54, 0);
     parser.process(&output.0.lock().unwrap());
@@ -489,9 +506,9 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
             "seed has no selection glyph {glyph}:\n{seeded}"
         );
     }
-    let seeded_focus = rig.view().current.focused_pane.clone();
-    assert_eq!(rig.view().presentation.selected_pane, None);
-    assert_eq!(rig.view().presentation.selected_index, None);
+    let seeded_focus = rig.view().ctx().current.focused_pane.clone();
+    assert_eq!(rig.view().ui().selected_pane, None);
+    assert_eq!(rig.view().ui().selected_index, None);
     assert!(!seeded.contains('┄'), "seed has no header seal:\n{seeded}");
     let agent_line = seeded
         .lines()
@@ -519,9 +536,9 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         traced_seed,
         "the identical cached fold writes nothing"
     );
-    assert_eq!(rig.view().presentation.selected_pane, None);
-    assert_eq!(rig.view().presentation.selected_index, None);
-    rig.state.next_frame = Instant::now();
+    assert_eq!(rig.view().ui().selected_pane, None);
+    assert_eq!(rig.view().ui().selected_index, None);
+    rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
     parser.process(&output.0.lock().unwrap());
     assert_eq!(
@@ -530,9 +547,9 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         "the cached worker fold holds the resting frame"
     );
     assert_eq!(seeded_focus, published_focus);
-    assert_eq!(rig.view().current.focused_pane, published_focus);
+    assert_eq!(rig.view().ctx().current.focused_pane, published_focus);
 
-    let mut correction = rig.state.current.clone();
+    let mut correction = rig.state.views.mirror().clone();
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut correction.worktree_groups)[0].rows,
     )
@@ -573,9 +590,9 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         serde_json::to_value(&shell.pane_id).unwrap()
     );
     assert!(records[1].get("selected_before").is_none());
-    assert_eq!(rig.view().presentation.selected_pane, Some(shell.pane_id));
-    assert_eq!(rig.view().presentation.selected_index, Some(1));
-    rig.state.next_frame = Instant::now();
+    assert_eq!(rig.view().ui().selected_pane, Some(shell.pane_id));
+    assert_eq!(rig.view().ui().selected_index, Some(1));
+    rig.state.pane.next_frame = Instant::now();
     rig.paint(true);
     parser.process(&output.0.lock().unwrap());
     let corrected = parser.screen().contents();
@@ -632,10 +649,7 @@ fn new_shell_row_moves_past_cap_selection_without_a_rowless_fold() {
     let mut prior = snapshot_with_panes(&rig.ws, panes.clone());
     prior.focused_pane = Some(prior_focus.clone());
     rig.fold(prior, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.selected_pane,
-        Some(prior_focus.clone())
-    );
+    assert_eq!(rig.view().ui().selected_pane, Some(prior_focus.clone()));
 
     let shell = pane("terminal_11", "tab_1", true);
     panes.push(shell.clone());
@@ -705,7 +719,7 @@ fn fused_focus_trace_names_the_event_applied_at_the_paint_decision() {
 fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     let own = pane("terminal_10", "tab_0", false);
     let mut rig = Rig::with_own_pane(own.pane_id.clone());
-    rig.state.config.refresh_ms_override = Some(37);
+    rig.state.pane.config.refresh_ms_override = Some(37);
     rig.runtime.ensure_dirs().unwrap();
     let mut seed = agent_snapshot(&rig.ws);
     seed.now = Timestamp::now();
@@ -742,46 +756,56 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     rig.fetch.request(FetchRequest::force_fold(), false);
     assert!(rig.next_request().unwrap().forces_fold());
     rig.fetch.request(FetchRequest::fresh_panes(), true);
-    rig.state.dirty = false;
+    rig.state.pane.dirty = false;
     rig.state.seed(&fold);
 
     assert_eq!(
-        rig.view().current.rows().count(),
+        rig.view().ctx().current.rows().count(),
         1,
         "the seed is projected for this pane before any delivery"
     );
-    assert_eq!(rig.view().current.rows().next().unwrap().name, "seed-card");
-    assert_eq!(rig.view().current.focused_pane, Some(agent_pane.clone()));
+    assert_eq!(
+        rig.view().ctx().current.rows().next().unwrap().name,
+        "seed-card"
+    );
+    assert_eq!(
+        rig.view().ctx().current.focused_pane,
+        Some(agent_pane.clone())
+    );
     assert!(
-        rig.view().current.rows().next().unwrap().unread,
+        rig.view().ctx().current.rows().next().unwrap().unread,
         "the projection's stale focus must not read the seeded card"
     );
     assert_eq!(
         crate::sidebar::read_marks::ReadMarks::load(&rig.runtime).cleared_at_ms("agent-1"),
         None
     );
-    assert_eq!(rig.view().current.theme.display.refresh_ms, 37);
-    assert!(rig.state.dirty, "the seed is paint-pending");
+    assert_eq!(rig.view().ctx().current.theme.display.refresh_ms, 37);
+    assert!(rig.state.pane.dirty, "the seed is paint-pending");
     assert_eq!(
-        rig.view().current.presence,
+        rig.view().ctx().current.presence,
         Some(crate::store::snapshot::SidebarPresence::Active)
     );
-    assert!(rig.view().current.own_view.is_none());
-    assert!(!rig.state.self_close.seen_sibling);
-    assert!(!rig.state.should_exit);
+    assert!(rig.view().ctx().current.own_view.is_none());
+    assert!(!rig.state.pane.self_close.seen_sibling);
+    assert!(!rig.state.pane.should_exit);
     assert_eq!(
-        rig.view().last_focus_observation.panes_observed_at_ms,
+        rig.view().ctx().last_focus_observation.panes_observed_at_ms,
         Some(42)
     );
     assert_eq!(
         rig.view()
+            .ctx()
             .last_focus_observation
             .pane_session_name
             .as_deref(),
         Some("rimz-test")
     );
-    assert_eq!(rig.view().last_focus_observation.pane_ids, vec![agent_pane]);
-    assert!(rig.view().last_focus_observation.presence_known);
+    assert_eq!(
+        rig.view().ctx().last_focus_observation.pane_ids,
+        vec![agent_pane]
+    );
+    assert!(rig.view().ctx().last_focus_observation.presence_known);
     assert!(
         rig.next_request().is_none(),
         "a seed does not complete the in-flight fetch"
@@ -816,21 +840,18 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     rig.fold(correction, SnapshotSource::Produced);
 
     assert_eq!(
-        rig.view().current.rows().next().unwrap().name,
+        rig.view().ctx().current.rows().next().unwrap().name,
         "corrected-card"
     );
-    assert_eq!(
-        rig.view().presentation.selected_pane,
-        Some(corrected_pane.pane_id)
-    );
-    assert!(!rig.view().current.rows().next().unwrap().unread);
+    assert_eq!(rig.view().ui().selected_pane, Some(corrected_pane.pane_id));
+    assert!(!rig.view().ctx().current.rows().next().unwrap().unread);
     assert!(
         crate::sidebar::read_marks::ReadMarks::load(&rig.runtime)
             .cleared_at_ms("agent-1")
             .is_some()
     );
     assert_eq!(
-        rig.view().gate.reject_streak,
+        rig.view().ctx().gate.reject_streak,
         0,
         "the changed pane set commits"
     );
@@ -862,10 +883,10 @@ fn seed_listing_the_own_pane_seats_its_focus_at_once() {
         frame: Some(Arc::new(frame)),
     });
 
-    assert!(rig.view().current.own_view.is_some());
-    assert_eq!(rig.view().presentation.selected_pane, Some(agent.pane_id));
-    assert_eq!(rig.view().presentation.selected_index, Some(0));
-    assert!(rig.state.self_close.seen_sibling);
+    assert!(rig.view().ctx().current.own_view.is_some());
+    assert_eq!(rig.view().ui().selected_pane, Some(agent.pane_id));
+    assert_eq!(rig.view().ui().selected_index, Some(0));
+    assert!(rig.state.pane.self_close.seen_sibling);
 }
 
 #[test]
@@ -887,7 +908,7 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
     rig.state
         .on_input(press.clone(), &mut rig.terminal, &mut rig.fetch)
         .unwrap();
-    assert_eq!(rig.view().presentation.selected_index, None);
+    assert_eq!(rig.view().ui().selected_index, None);
 
     let mut rebound = snapshot;
     rebound.sidebar.keys.down = "v".to_owned();
@@ -895,9 +916,9 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
     rig.state
         .on_input(press, &mut rig.terminal, &mut rig.fetch)
         .unwrap();
-    assert_eq!(rig.view().presentation.selected_index, Some(0));
+    assert_eq!(rig.view().ui().selected_index, Some(0));
     assert_eq!(
-        rig.view().presentation.selected_pane,
+        rig.view().ui().selected_pane,
         Some(pane("terminal_1", "tab_0", false).pane_id)
     );
     rig.input(KeyAction::Top);
@@ -912,7 +933,7 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
         )
         .unwrap();
     assert_eq!(
-        rig.view().presentation.selected_index,
+        rig.view().ui().selected_index,
         Some(0),
         "the old binding is gone"
     );
@@ -950,6 +971,7 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
         rig.view()
+            .ctx()
             .current
             .rows()
             .next()
@@ -958,11 +980,11 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         "a terminal outcome must not erase the unread snapshot"
     );
     assert_eq!(
-        rig.view().presentation.make_up_filter,
+        rig.view().ui().make_up_filter,
         filter,
         "snapshot context is applied with its snapshot"
     );
-    assert_eq!(rig.view().health.failure_streak, 1);
+    assert_eq!(rig.view().ctx().health.failure_streak, 1);
     assert!(
         rig.next_request()
             .expect("final outcome releases the queued request")
@@ -994,7 +1016,7 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
     }
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
-        rig.view().current.rows().next().unwrap().name,
+        rig.view().ctx().current.rows().next().unwrap().name,
         "final-snapshot",
         "an interim must not displace the pending final snapshot"
     );
@@ -1021,11 +1043,11 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
     });
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
-        rig.view().health.failure_streak,
+        rig.view().ctx().health.failure_streak,
         1,
         "an interim must not erase a pending failure"
     );
-    assert_eq!(rig.view().current.rows().count(), 1);
+    assert_eq!(rig.view().ctx().current.rows().count(), 1);
     assert!(
         rig.next_request()
             .expect("failed final releases the request")
@@ -1112,9 +1134,9 @@ fn only_watched_metrics_and_presence_publications_fold_immediately() {
         }
 
         let mut folded = process_snapshot(&rig.ws, crate::utils::time::unix_now_ms());
-        folded.own_view = rig.view().current.own_view.clone();
-        folded.viewed_panes = rig.view().current.viewed_panes.clone();
-        rig.view().current = folded.clone();
+        folded.own_view = rig.view().ctx().current.own_view.clone();
+        folded.viewed_panes = rig.view().ctx().current.viewed_panes.clone();
+        rig.view().ctx().current = folded.clone();
         rig.set_pulled(&folded);
         let crate::store::snapshot::RowCard::Process(card) = &mut std::sync::Arc::make_mut(
             &mut std::sync::Arc::make_mut(&mut folded.worktree_groups)[0].rows,
@@ -1129,13 +1151,13 @@ fn only_watched_metrics_and_presence_publications_fold_immediately() {
 
         assert_eq!(
             matches!(
-                &rig.state.current.worktree_groups[0].rows[0].card,
+                &rig.state.views.mirror().worktree_groups[0].rows[0].card,
                 crate::store::snapshot::RowCard::Process(card) if card.cpu_pct == Some(73)
             ),
             watched
         );
         assert_eq!(
-            rig.view().current.presence,
+            rig.view().ctx().current.presence,
             watched.then_some(crate::store::snapshot::SidebarPresence::Detached)
         );
     }
@@ -1170,7 +1192,7 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
         Instant::now() + Duration::from_secs(1),
     );
 
-    rig.state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
+    rig.state.pane.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
     rig.maintenance();
 
     assert!(
@@ -1222,7 +1244,7 @@ fn width_target_event_reloads_the_target_without_a_producer_fetch() {
     rig.event(SidebarEvent::WidthTargetChanged);
 
     assert_eq!(
-        rig.state.width_control.max_legit_cols(),
+        rig.state.pane.width_control.max_legit_cols(),
         72,
         "the share stays unresolved until backend view geometry arrives",
     );
@@ -1237,7 +1259,7 @@ fn birth_seeds_the_shared_body_filter() {
     let mut rig = Rig::with_filter(BodyLens::from(BodyFilter::Unread));
 
     assert_eq!(
-        rig.view().presentation.make_up_filter,
+        rig.view().ui().make_up_filter,
         BodyLens::from(BodyFilter::Unread)
     );
 }
@@ -1245,8 +1267,8 @@ fn birth_seeds_the_shared_body_filter() {
 #[test]
 fn body_filter_event_adopts_the_shared_file_and_repaints() {
     let mut rig = Rig::new();
-    rig.view().current = agent_snapshot(&rig.ws);
-    rig.state.dirty = false;
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    rig.state.pane.dirty = false;
     let filter = BodyLens {
         filter: Some(BodyFilter::Status(crate::agents::AgentStatus::Idle)),
         query: Some("auth".to_owned()),
@@ -1255,8 +1277,8 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 
     rig.event(SidebarEvent::BodyFilterChanged);
 
-    assert_eq!(rig.view().presentation.make_up_filter, filter);
-    assert!(rig.state.dirty);
+    assert_eq!(rig.view().ui().make_up_filter, filter);
+    assert!(rig.state.pane.dirty);
     assert!(
         rig.next_request().is_none(),
         "filter propagation stays out of the producer path"
@@ -1267,9 +1289,9 @@ fn body_filter_event_adopts_the_shared_file_and_repaints() {
 fn search_commit_writes_and_dispatches_the_lens() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let mut rig = Rig::new();
-    rig.view().current = agent_snapshot(&rig.ws);
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
     let plane = super::super::super::plane::DataPlane::detached();
-    let mut peer = rig.state.config.clone();
+    let mut peer = rig.state.pane.config.clone();
     peer.instance_id = crate::SidebarInstanceId::new();
     let (wake, inbox) = std::sync::mpsc::sync_channel(64);
     let _peer = plane.subscribe(&peer, wake);
@@ -1301,7 +1323,7 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let own = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own.clone());
-    rig.view().current = agent_snapshot(&rig.ws);
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
     rig.state
         .on_input(
             Wakeup::Press {
@@ -1312,30 +1334,24 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
             &mut rig.fetch,
         )
         .unwrap();
-    assert_eq!(rig.view().presentation.search_draft.as_deref(), Some(""));
-    rig.view().presentation.search_draft = Some("draft".to_owned());
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
+    rig.view().ui().search_draft = Some("draft".to_owned());
     let committed = BodyLens {
         query: Some("cla".to_owned()),
         ..Default::default()
     };
     crate::sidebar::body_filter::write(&rig.runtime, &committed).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    assert_eq!(
-        rig.view().presentation.search_draft.as_deref(),
-        Some("draft")
-    );
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("draft"));
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.search_draft.as_deref(),
-        Some("draft")
-    );
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("draft"));
     rig.event(SidebarEvent::FocusChanged {
         focused: Vec::new(),
         unfocused: vec![own],
     });
-    assert_eq!(rig.view().presentation.search_draft, None);
-    assert_eq!(rig.view().presentation.make_up_filter, committed);
+    assert_eq!(rig.view().ui().search_draft, None);
+    assert_eq!(rig.view().ui().make_up_filter, committed);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
 }
 
@@ -1351,7 +1367,7 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
     let mut snapshot = agent_snapshot(&rig.ws);
     snapshot.focused_pane = committed_pane.clone();
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.view().presentation.selected_pane, committed_pane);
+    assert_eq!(rig.view().ui().selected_pane, committed_pane);
     for ch in ['/', '!'] {
         rig.state
             .on_input(
@@ -1364,33 +1380,23 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
             )
             .unwrap();
     }
-    assert_eq!(
-        rig.view().presentation.search_draft.as_deref(),
-        Some("cla!")
-    );
-    assert_eq!(
-        rig.view().presentation.selected_pane,
-        None,
-        "draft has no matches"
-    );
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cla!"));
+    assert_eq!(rig.view().ui().selected_pane, None, "draft has no matches");
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
     });
     assert!(!rig.state.alert_active());
-    assert_eq!(
-        rig.view().presentation.search_draft.as_deref(),
-        Some("cla!")
-    );
-    rig.state.dirty = false;
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cla!"));
+    rig.state.pane.dirty = false;
     rig.deliver(FetchUpdate::Failed {
         error: "snapshot failed".to_owned(),
     });
-    assert_eq!(rig.view().presentation.search_draft, None);
-    assert_eq!(rig.view().presentation.make_up_filter, committed);
+    assert_eq!(rig.view().ui().search_draft, None);
+    assert_eq!(rig.view().ui().make_up_filter, committed);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), committed);
     assert!(rig.state.alert_active());
-    assert!(rig.state.dirty);
-    assert_eq!(rig.view().presentation.selected_pane, committed_pane);
+    assert!(rig.state.pane.dirty);
+    assert_eq!(rig.view().ui().selected_pane, committed_pane);
     rig.state
         .on_input(
             Wakeup::Press {
@@ -1401,7 +1407,7 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
             &mut rig.fetch,
         )
         .unwrap();
-    assert_eq!(rig.view().presentation.search_draft, None);
+    assert_eq!(rig.view().ui().search_draft, None);
 }
 
 #[test]
@@ -1431,11 +1437,12 @@ fn sustained_failures_keep_the_frame_and_alert_until_completed_production() {
     });
     rig.state.fold_fused_now();
     assert!(
-        !rig.state.should_exit,
+        !rig.state.pane.should_exit,
         "degradation must not detach the pane"
     );
     assert_eq!(
         rig.view()
+            .ctx()
             .current
             .rows()
             .map(|row| row.name.clone())
@@ -1455,10 +1462,11 @@ fn sustained_failures_keep_the_frame_and_alert_until_completed_production() {
         "cached content cannot recover health"
     );
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert!(!rig.state.should_exit);
+    assert!(!rig.state.pane.should_exit);
     assert!(!rig.state.alert_active());
     assert!(
         rig.view()
+            .ctx()
             .health
             .alert
             .as_ref()
@@ -1477,7 +1485,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     crate::sidebar::body_filter::write(&rig.runtime, &filter).unwrap();
     rig.event(SidebarEvent::BodyFilterChanged);
-    assert_eq!(rig.view().presentation.make_up_filter, filter);
+    assert_eq!(rig.view().ui().make_up_filter, filter);
 
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -1491,7 +1499,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_body_filter() {
         }),
     });
     assert_eq!(
-        rig.view().presentation.make_up_filter,
+        rig.view().ui().make_up_filter,
         filter,
         "an older shared cut must not undo the already consumed filter event"
     );
@@ -1510,7 +1518,7 @@ fn successful_fetch_converges_a_missed_body_filter_event() {
     let snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot, SnapshotSource::Produced);
 
-    assert_eq!(rig.view().presentation.make_up_filter, filter);
+    assert_eq!(rig.view().ui().make_up_filter, filter);
 }
 
 #[test]
@@ -1530,10 +1538,10 @@ fn shared_fold_adopts_query_in_the_visible_roster() {
     );
     {
         let mut guard = rig.view();
-        let state = &mut *guard;
-        assert_eq!(state.presentation.visible_roster(&state.current).len(), 0);
+        let (ui, context) = guard.pair();
+        assert_eq!(ui.visible_roster(&context.current).len(), 0);
     }
-    assert_eq!(rig.view().presentation.make_up_filter, lens);
+    assert_eq!(rig.view().ui().make_up_filter, lens);
 }
 
 #[test]
@@ -1546,7 +1554,7 @@ fn newer_shared_cut_converges_a_missed_filter_clear() {
     rig.event(SidebarEvent::BodyFilterChanged);
     crate::sidebar::body_filter::write(&rig.runtime, &BodyLens::default()).unwrap();
     rig.shared_fold(snapshot, Arc::default());
-    assert_eq!(rig.view().presentation.make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
 }
 
 #[test]
@@ -1557,12 +1565,12 @@ fn failed_or_rowless_birth_fold_does_not_publish_a_filter_clear() {
     rig.deliver(FetchUpdate::Failed {
         error: "not ready".to_owned(),
     });
-    assert_eq!(rig.view().presentation.make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 
     let rowless = snapshot(&rig.ws);
     rig.fold(rowless, SnapshotSource::Produced);
-    assert_eq!(rig.view().presentation.make_up_filter, BodyLens::default());
+    assert_eq!(rig.view().ui().make_up_filter, BodyLens::default());
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), filter);
 }
 
@@ -1582,7 +1590,7 @@ fn empty_body_filter_auto_clear_updates_the_shared_file() {
         query: Some("auth".to_owned()),
         ..Default::default()
     };
-    assert_eq!(rig.view().presentation.make_up_filter, expected);
+    assert_eq!(rig.view().ui().make_up_filter, expected);
     assert_eq!(crate::sidebar::body_filter::load(&rig.runtime), expected);
 }
 
@@ -1592,15 +1600,15 @@ fn focus_out_closes_help_popup() {
     let mut rig = Rig::with_own_pane(own_pane.clone());
     let snapshot = snapshot_with_focused_pane(&rig.ws, own_pane.clone());
     rig.set_pulled(&snapshot);
-    rig.view().current = snapshot;
-    rig.view().presentation.help_visible = true;
-    rig.state.optimistic_watch_until = Some(Instant::now() + Duration::from_secs(1));
+    rig.view().ctx().current = snapshot;
+    rig.view().ui().help_visible = true;
+    rig.state.pane.optimistic_watch_until = Some(Instant::now() + Duration::from_secs(1));
 
     rig.event(SidebarEvent::FocusChanged {
         focused: Vec::new(),
         unfocused: vec![own_pane],
     });
 
-    assert!(!rig.view().presentation.help_visible);
-    assert!(rig.state.optimistic_watch_until.is_none());
+    assert!(!rig.view().ui().help_visible);
+    assert!(rig.state.pane.optimistic_watch_until.is_none());
 }

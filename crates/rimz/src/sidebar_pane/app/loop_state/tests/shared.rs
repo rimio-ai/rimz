@@ -8,7 +8,7 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     let own = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
     let mut rig = Rig::with_own_pane(own.clone());
     let mut snapshot = agent_snapshot(&rig.ws);
-    snapshot.pane_session_name = Some(rig.state.config.session_name.clone());
+    snapshot.pane_session_name = Some(rig.state.pane.config.session_name.clone());
     let first = snapshot.worktree_groups[0].rows[0].clone();
     Arc::make_mut(&mut snapshot.worktree_groups)[0].rows = (0..rows)
         .map(|slot| {
@@ -40,9 +40,9 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     snapshot.viewed_panes = vec![own];
     rig.share_views(views);
     rig.fold(snapshot, SnapshotSource::Produced);
-    rig.state.with_projected_view(false, false, |state| {
-        let group = state.current.worktree_groups[0].key.clone();
-        state.presentation.expanded_groups.insert(group);
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        let group = v.context.current.worktree_groups[0].key.clone();
+        v.state.expanded_groups.insert(group);
     });
     rig
 }
@@ -68,7 +68,7 @@ fn publish(rig: &mut Rig, update: FetchUpdate) {
     let completed = update.is_final();
     views.publish(update);
     if completed {
-        rig.state.completion.store(true, Ordering::Relaxed);
+        rig.state.pane.completion.store(true, Ordering::Relaxed);
     }
 }
 
@@ -76,14 +76,14 @@ fn publish(rig: &mut Rig, update: FetchUpdate) {
 fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
     let own = PaneId::from_parts(MuxName::Zellij, "sidebar_0");
     let mut rig = Rig::with_own_pane(own.clone());
-    rig.view().current.own_view = Some(own_view());
-    rig.view().current.viewed_panes.clear();
-    rig.state.optimistic_watch_until = None;
-    let dwell = rig.state.clock.now() + Duration::from_secs(60);
-    rig.state.with_projected_view(false, false, |state| {
-        state.presentation.scroll_offset = 17;
-        state.presentation.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
-        state.view.tab_read_dwell_until = Some(dwell);
+    rig.view().ctx().current.own_view = Some(own_view());
+    rig.view().ctx().current.viewed_panes.clear();
+    rig.state.pane.optimistic_watch_until = None;
+    let dwell = rig.state.pane.clock.now() + Duration::from_secs(60);
+    rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.state.scroll_offset = 17;
+        v.state.selected_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"));
+        v.context.tab_read_dwell_until = Some(dwell);
     });
     rig.views.lock().unwrap().reconcile(
         &[ClientPaneView {
@@ -91,19 +91,21 @@ fn a_shared_borrow_resets_scratch_presentation_and_mirrors_current() {
             pane_id: own,
         }],
         true,
-        rig.state.clock.now(),
+        rig.state.pane.clock.now(),
         Duration::from_secs(60),
     );
-    let current = rig.state.with_projected_view(false, false, |state| {
-        state.view.current.display_name = "shared current".into();
-        state.view.current.now += Duration::from_secs(1);
-        state.view.current.clone()
+    let current = rig.state.with_view_for_test(Route::READ, |_, v| {
+        v.context.current.display_name = "shared current".into();
+        v.context.current.now += Duration::from_secs(1);
+        v.context.current.clone()
     });
-    rig.views
-        .lock()
-        .unwrap()
-        .reconcile(&[], true, rig.state.clock.now(), Duration::from_secs(60));
-    rig.state.with_projected_view(false, false, |_| {});
+    rig.views.lock().unwrap().reconcile(
+        &[],
+        true,
+        rig.state.pane.clock.now(),
+        Duration::from_secs(60),
+    );
+    rig.state.with_view_for_test(Route::READ, |_, _| {});
     rig.state.inspect_view(|ui, view| {
         assert_eq!(ui.scroll_offset, 0);
         assert_eq!(ui.selected_pane, None);
@@ -120,23 +122,27 @@ fn outside_decisions_read_the_routed_view_not_scratch() {
     let clock = LoopClock::play(Timestamp::now());
     let mut rig = Rig::with_clock(Some(own.clone()), BodyLens::default(), None, clock.clone());
     rig.share_views(views.clone());
-    rig.state.with_projected_view(false, false, |_| {});
+    rig.state.with_view_for_test(Route::READ, |_, _| {});
     let mut other = Rig::with_own_pane(other_pane.clone());
     other.share_views(views.clone());
-    other.state.with_projected_view(false, false, |_| {});
+    other.state.with_view_for_test(Route::READ, |_, _| {});
     settle_width(&mut rig);
-    rig.state.dirty = false;
+    rig.state.pane.dirty = false;
     let dwell = clock.now() + Duration::from_millis(200);
     {
-        let mut view = rig.view();
-        let state = &mut *view;
-        state.current.own_view = Some(own_view());
-        state.ui.theme(&state.view.current.theme);
-        layout_freeze::arm_freeze(&mut state.presentation, clock.now_ms() as i64);
-        state.health.failure_streak = 1;
-        state.tab_read_dwell_until = Some(dwell);
+        let pane = &mut rig.state.pane;
+        let mut view = rig
+            .state
+            .views
+            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let (ui, context) = view.pair();
+        context.current.own_view = Some(own_view());
+        pane.ui.theme(&context.current.theme);
+        layout_freeze::arm_freeze(ui, clock.now_ms() as i64);
+        context.health.failure_streak = 1;
+        context.tab_read_dwell_until = Some(dwell);
     }
-    rig.state.with_projected_view(false, false, |_| {});
+    rig.state.with_view_for_test(Route::READ, |_, _| {});
     assert_eq!(
         rig.state.inspect_view(|ui, view| (
             ui.freeze.is_some(),
@@ -182,7 +188,7 @@ fn lagging_view_keeps_success_before_failure() {
     for newborn in [false, true] {
         let views = views();
         let mut rig = shared_rig(views.clone(), 0, 2);
-        let mut changed = rig.state.current.clone();
+        let mut changed = rig.state.views.mirror().clone();
         changed.display_name = "successful content".into();
         let success = rig.lazy_update(changed, SnapshotSource::Produced);
         publish(&mut rig, success);
@@ -193,7 +199,7 @@ fn lagging_view_keeps_success_before_failure() {
             },
         );
         if newborn {
-            let own = rig.state.config.own_pane.clone().unwrap();
+            let own = rig.state.pane.config.own_pane.clone().unwrap();
             rig = Rig::with_own_pane(own);
             rig.share_views(views);
         }
@@ -231,7 +237,7 @@ fn lagging_view_keeps_success_before_failure() {
 #[test]
 fn lagging_view_keeps_pending_final_over_interim() {
     let mut rig = shared_rig(views(), 0, 2);
-    let mut changed = rig.state.current.clone();
+    let mut changed = rig.state.views.mirror().clone();
     changed.display_name = "completed content".into();
     let final_update = rig.lazy_update(changed.clone(), SnapshotSource::Produced);
     publish(&mut rig, final_update);
@@ -256,22 +262,22 @@ fn composition_uses_the_arriving_views_gate_notice() {
     let views = views();
     let mut rig = shared_rig(views.clone(), 0, 2);
     let mut other = shared_rig(views.clone(), 1, 2);
-    let mut healthy = rig.state.current.clone();
-    healthy.panes_produced_at_ms = Some(rig.state.clock.now_ms());
+    let mut healthy = rig.state.views.mirror().clone();
+    healthy.panes_produced_at_ms = Some(rig.state.pane.clock.now_ms());
     rig.fold(healthy, SnapshotSource::Produced);
-    let mut regressed = rig.state.current.clone();
+    let mut regressed = rig.state.views.mirror().clone();
     regressed.panes_produced_at_ms = None;
     // Equal content would apply clock-only and never reach the gate.
     regressed.display_name = "frameless content".into();
     rig.fold(regressed, SnapshotSource::Produced);
-    assert!(rig.state.ui.gate_notice.is_some());
+    assert!(rig.state.pane.ui.gate_notice.is_some());
     other
         .state
         .draw_frame(&mut other.terminal, Instant::now(), false)
         .unwrap();
     // Every view folds the same frameless update; the arriving one has since released its hold.
     assert!(other.state.inspect_view(|_, view| view.gate.rule.is_some()));
-    other.view().gate = GateState::default();
+    other.view().ctx().gate = GateState::default();
     views.lock().unwrap().reconcile(
         &[
             ClientPaneView {
@@ -284,7 +290,7 @@ fn composition_uses_the_arriving_views_gate_notice() {
             },
         ],
         true,
-        rig.state.clock.now(),
+        rig.state.pane.clock.now(),
         Duration::from_secs(60),
     );
     rig.state
@@ -292,7 +298,7 @@ fn composition_uses_the_arriving_views_gate_notice() {
         .unwrap();
     assert!(rig.state.inspect_view(|_, view| view.gate.rule.is_none()));
     assert!(
-        rig.state.ui.gate_notice.is_none(),
+        rig.state.pane.ui.gate_notice.is_none(),
         "a healthy arriving view must not paint the prior view's notice"
     );
 }
@@ -308,11 +314,11 @@ fn painting_an_up_to_date_view_does_not_prepare_a_fold() {
     rig.state
         .draw_frame(&mut rig.terminal, Instant::now(), false)
         .unwrap();
-    let preparations = rig.state.fold_preparations;
+    let preparations = rig.state.pane.fold_preparations;
     rig.state
         .draw_frame(&mut rig.terminal, Instant::now(), false)
         .unwrap();
-    assert_eq!(rig.state.fold_preparations, preparations);
+    assert_eq!(rig.state.pane.fold_preparations, preparations);
 }
 
 impl Write for BlockedOutput {
@@ -400,16 +406,11 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
     std::thread::scope(|scope| {
         let heavy = scope.spawn(move || {
             let mut rig = shared_rig(views, 0, 200);
-            rig.state.fold_transition(|state| {
+            rig.state.fold_transition(|state, v, _| {
                 entered.send(()).unwrap();
                 blocked.recv_timeout(Duration::from_secs(10)).unwrap();
                 state
-                    .compose_frame(
-                        &mut rig.terminal,
-                        Instant::now(),
-                        false,
-                        &EventStore::default(),
-                    )
+                    .compose_frame(v, &mut rig.terminal, Instant::now(), false)
                     .0
                     .unwrap();
             });
@@ -418,11 +419,11 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
         let clicked = Instant::now();
         let anchor = crate::mux::focus_anchor::FocusAnchor {
             nonce: FocusNonce::new(),
-            session_name: target.state.config.session_name.clone(),
+            session_name: target.state.pane.config.session_name.clone(),
             pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1_0"),
             origin: FocusOrigin::User,
             repair_generation: None,
-            issued_at_ms: target.state.clock.now_ms(),
+            issued_at_ms: target.state.pane.clock.now_ms(),
             applied_at_ms: None,
             state: crate::mux::focus_anchor::FocusIntentState::Requested,
             pre_action: Vec::new(),
@@ -446,7 +447,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
             "contended landing took {elapsed:?}"
         );
         assert!(
-            target.state.pending_focus_push.is_none(),
+            target.state.pane.pending_focus_push.is_none(),
             "the landing must acknowledge its paint: {:?}, {:?}",
             target.state.inspect_view(|ui, view| (
                 view.current.focused_pane.clone(),
@@ -456,6 +457,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
             )),
             target
                 .state
+                .pane
                 .pending_focus_push
                 .as_ref()
                 .map(|push| &push.peer)
@@ -479,9 +481,8 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
     let views = views();
     let mut other = shared_rig(views.clone(), 0, 2);
     let target = shared_rig(views, 1, 2);
-    other.state.with_projected_view(false, false, |state| {
-        state.presentation.baseline_pane =
-            Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"));
+    other.state.with_view_for_test(Route::READ, |_, v| {
+        v.state.baseline_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_0_0"));
     });
     other.event(SidebarEvent::FocusChanged {
         focused: vec![PaneId::from_parts(MuxName::Zellij, "terminal_1_0")],
@@ -494,11 +495,11 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
     );
     let anchor = crate::mux::focus_anchor::FocusAnchor {
         nonce: FocusNonce::new(),
-        session_name: target.state.config.session_name.clone(),
+        session_name: target.state.pane.config.session_name.clone(),
         pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1_0"),
         origin: FocusOrigin::User,
         repair_generation: None,
-        issued_at_ms: target.state.clock.now_ms(),
+        issued_at_ms: target.state.pane.clock.now_ms(),
         applied_at_ms: None,
         state: crate::mux::focus_anchor::FocusIntentState::Requested,
         pre_action: Vec::new(),

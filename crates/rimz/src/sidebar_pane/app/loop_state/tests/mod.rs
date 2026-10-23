@@ -23,19 +23,19 @@ fn focus_push(
     anchor: crate::mux::focus_anchor::FocusAnchor,
 ) -> (FocusPush, Receiver<PushPeer>) {
     let (tx, _rx) = std::sync::mpsc::sync_channel(64);
-    let _subscription = rig.focus_plane.subscribe(&rig.state.config, tx);
-    let clicked = rig.state.clock.now();
+    let _subscription = rig.focus_plane.subscribe(&rig.state.pane.config, tx);
+    let clicked = rig.state.pane.clock.now();
     let lease = rig
         .focus_plane
         .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled())
         .arm(anchor.pane_id.clone(), clicked);
     let (_, _, _, ack, _) = lease.push(&anchor, clicked, || clicked).unwrap();
     let peers = rig.focus_plane.focus_peers(
-        rig.state.config.instance_id.clone(),
+        rig.state.pane.config.instance_id.clone(),
         crate::diag::DiagSink::disabled(),
     );
     let push = peers.take_push().expect("priority slot delivers the push");
-    rig.state.focus_peers = Some(peers);
+    rig.state.pane.focus_peers = Some(peers);
     rig.focus_lease = Some(lease);
     (push, ack)
 }
@@ -48,9 +48,9 @@ fn assert_push_report(
 ) -> PushPeer {
     let report = ack
         .try_iter()
-        .find(|report| report.instance_id == rig.state.config.instance_id)
+        .find(|report| report.instance_id == rig.state.pane.config.instance_id)
         .expect("peer must report its verdict");
-    assert_eq!(report.instance_id, rig.state.config.instance_id);
+    assert_eq!(report.instance_id, rig.state.pane.config.instance_id);
     assert_eq!(report.delivery, PushDelivery::Sent);
     assert_eq!(report.verdict, Some(verdict));
     let received = report.received_ms.expect("arrival stamp");
@@ -107,35 +107,55 @@ struct Rig {
     synthetic_own: bool,
 }
 
-struct RigView<'a> {
-    state: &'a mut LoopState,
-    views: std::sync::MutexGuard<'a, super::super::views::Views>,
+pub(super) struct RigView<'a> {
+    views: MutexGuard<'a, super::super::views::Views>,
     pane: Option<PaneId>,
+    now: Instant,
+    state: &'a mut ViewState,
+    context: &'a mut ViewContext,
 }
 
-impl std::ops::Deref for RigView<'_> {
-    type Target = LoopState;
-
-    fn deref(&self) -> &LoopState {
-        self.state
+impl<'a> RigView<'a> {
+    pub(super) fn new(
+        views: MutexGuard<'a, super::super::views::Views>,
+        pane: Option<PaneId>,
+        now: Instant,
+        state: &'a mut ViewState,
+        context: &'a mut ViewContext,
+    ) -> Self {
+        Self {
+            views,
+            pane,
+            now,
+            state,
+            context,
+        }
     }
-}
 
-impl std::ops::DerefMut for RigView<'_> {
-    fn deref_mut(&mut self) -> &mut LoopState {
-        self.state
+    fn ui(&mut self) -> &mut ViewState {
+        self.pair().0
+    }
+
+    fn ctx(&mut self) -> &mut ViewContext {
+        self.pair().1
+    }
+
+    fn pair(&mut self) -> (&mut ViewState, &mut ViewContext) {
+        if let Some(pane) = &self.pane {
+            let (_, entry) = self.views.presentation(pane, self.now, false);
+            return (&mut entry.state, entry.context.as_mut().unwrap());
+        }
+        (self.state, self.context)
     }
 }
 
 impl Drop for RigView<'_> {
     fn drop(&mut self) {
         if let Some(pane) = &self.pane {
-            let (_, entry) = self.views.presentation(pane, self.state.clock.now(), false);
-            std::mem::swap(&mut self.state.presentation, &mut entry.state);
-            let context = entry.context.as_mut().unwrap();
-            std::mem::swap(&mut self.state.view, context);
-            self.state.view.current.clone_from(&context.current);
-            self.state.view_scope = None;
+            let (_, entry) = self.views.presentation(pane, self.now, false);
+            self.context
+                .current
+                .clone_from(&entry.context.as_ref().unwrap().current);
         }
     }
 }
@@ -149,30 +169,15 @@ impl Rig {
 
     /// Access portable fields without advancing, projecting, or painting the view.
     fn view(&mut self) -> RigView<'_> {
-        let mut views = self.views.lock().unwrap();
-        let pane = self
-            .state
-            .config
-            .own_pane
-            .clone()
-            .filter(|pane| views.peek(pane).is_some());
-        if let Some(pane) = &pane {
-            let (id, entry) = views.presentation(pane, self.state.clock.now(), false);
-            std::mem::swap(&mut self.state.presentation, &mut entry.state);
-            std::mem::swap(&mut self.state.view, entry.context.as_mut().unwrap());
-            self.state.view_scope = Some(ViewScope::Shared(id));
-        }
-        RigView {
-            state: &mut self.state,
-            views,
-            pane,
-        }
+        self.state.views.rig(
+            self.state.pane.config.own_pane.as_ref(),
+            self.state.pane.clock.now(),
+        )
     }
 
     fn observe_paint(&mut self, now: Instant) {
-        let events = self.state.events().clone();
         self.state
-            .paint_transition(|state| state.observe_paint(now, &events));
+            .paint_transition(|state, v| state.observe_paint(v, now));
     }
 
     fn new() -> Self {
@@ -181,7 +186,7 @@ impl Rig {
 
     fn without_own_pane() -> Self {
         let mut rig = Self::new();
-        rig.state.config.own_pane = None;
+        rig.state.pane.config.own_pane = None;
         rig.synthetic_own = false;
         settle_width(&mut rig);
         rig
@@ -257,10 +262,10 @@ impl Rig {
             _dir: dir,
         };
         rig.share_views(views);
-        rig.state.with_projected_view(false, false, |_| {});
+        rig.state.with_view_for_test(Route::READ, |_, _| {});
         if carried {
             rig.state
-                .draw_frame(&mut rig.terminal, rig.state.clock.now(), false)
+                .draw_frame(&mut rig.terminal, rig.state.pane.clock.now(), false)
                 .unwrap();
         }
         rig
@@ -270,10 +275,10 @@ impl Rig {
         super::super::plane::RoomEvents::new(
             &self.runtime,
             self.views.clone(),
-            self.state.events.clone(),
+            self.state.views.events.clone(),
             super::super::fetch::Subscribers::default(),
         )
-        .record(envelope, self.state.clock.now_ms());
+        .record(envelope, self.state.pane.clock.now_ms());
     }
 
     fn event(&mut self, event: SidebarEvent) {
@@ -358,12 +363,12 @@ impl Rig {
                 let mut workspace = *snapshot.clone();
                 // A fixture that names no own view leaves visibility unknown, which reads as
                 // watched; the plane observes that through the sidebar's own pane being viewed.
-                if synthesized && let Some(own) = self.state.config.own_pane.clone() {
+                if synthesized && let Some(own) = self.state.pane.config.own_pane.clone() {
                     workspace.viewed_panes.push(own);
                 }
                 Some(Arc::new(super::super::fixtures::fold(
                     workspace,
-                    self.state.config.own_pane.as_ref(),
+                    self.state.pane.config.own_pane.as_ref(),
                     sidebars,
                 )))
             }
@@ -380,7 +385,7 @@ impl Rig {
         let mut views = self.views.lock().unwrap();
         views.publish(update);
         if completed {
-            self.state.completion.store(true, Ordering::Relaxed);
+            self.state.pane.completion.store(true, Ordering::Relaxed);
         }
     }
 
@@ -395,7 +400,10 @@ impl Rig {
         if let Some(update) = update {
             self.send(update);
         }
-        self.state.last_heartbeat.get_or_insert_with(Instant::now);
+        self.state
+            .pane
+            .last_heartbeat
+            .get_or_insert_with(Instant::now);
         self.state
             .run_maintenance(&mut self.fetch, &mut self.terminal);
     }
@@ -424,23 +432,23 @@ impl Rig {
 
     /// Park the renderer off screen with animating content and no viewed pane.
     fn hide(&mut self) {
-        self.view().current = animating_agent_snapshot(&self.ws);
-        self.view().current.own_view = Some(own_view());
-        self.view().current.viewed_panes.clear();
-        let pulled = self.state.current.clone();
+        self.view().ctx().current = animating_agent_snapshot(&self.ws);
+        self.view().ctx().current.own_view = Some(own_view());
+        self.view().ctx().current.viewed_panes.clear();
+        let pulled = self.state.views.mirror().clone();
         self.set_pulled(&pulled);
         self.set_plane_viewed(false);
     }
 
     /// Bring the renderer back on screen by viewing a sibling pane.
     fn watch(&mut self) {
-        self.view().current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
+        self.view().ctx().current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
         self.set_plane_viewed(true);
     }
 
     /// Point the plane's latest fold at the sidebar's tab being viewed or not.
     fn set_plane_viewed(&mut self, viewed: bool) {
-        let own = self.state.config.own_pane.clone();
+        let own = self.state.pane.config.own_pane.clone();
         let mut views = self.views.lock().unwrap();
         let Some(fold) = views.fold.as_mut() else {
             return;
@@ -451,12 +459,12 @@ impl Rig {
     }
 
     fn set_pulled(&mut self, snapshot: &SidebarSnapshot) {
-        self.view().last_focus_observation = FocusObservation::from_snapshot(snapshot);
-        self.view().overlay_baseline = Some(snapshot.clone());
+        self.view().ctx().last_focus_observation = FocusObservation::from_snapshot(snapshot);
+        self.view().ctx().overlay_baseline = Some(snapshot.clone());
     }
 
     fn frame_active(&mut self) -> bool {
-        self.state.config.tick_seconds = 10;
+        self.state.pane.config.tick_seconds = 10;
         self.state.frame_timing().0
     }
 }
@@ -472,12 +480,12 @@ fn terminal_with_width(cols: u16) -> Terminal<PaneBackend> {
 
 fn settle_width(rig: &mut Rig) {
     // A test that starts after width admission, not at the initial probe every own pane arms.
-    rig.state.width_control = WidthController::new(
+    rig.state.pane.width_control = WidthController::new(
         rig.runtime.clone(),
-        rig.state.config.session_name.clone(),
+        rig.state.pane.config.session_name.clone(),
         None,
-        rig.state.config.mux,
-        crate::mux::SidebarWidth::from_config(&rig.state.current.theme),
+        rig.state.pane.config.mux,
+        crate::mux::SidebarWidth::from_config(&rig.state.views.mirror().theme),
     );
 }
 
@@ -593,36 +601,24 @@ fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
     high.today_spend_live_usd = Some(5.0);
     high.today_spend_epoch_secs = Some(10);
     rig.fold(high, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.spend_ratchet.display(Some(10), 5.0),
-        5.0
-    );
+    assert_eq!(rig.view().ui().spend_ratchet.display(Some(10), 5.0), 5.0);
 
     let mut lower = agent_snapshot(&rig.ws);
     lower.today_spend_live_usd = Some(3.0);
     lower.today_spend_epoch_secs = Some(10);
     rig.fold(lower, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.spend_ratchet.display(Some(10), 3.0),
-        5.0
-    );
+    assert_eq!(rig.view().ui().spend_ratchet.display(Some(10), 3.0), 5.0);
 
     let mut older = agent_snapshot(&rig.ws);
     older.today_spend_live_usd = Some(1.0);
     rig.fold(older, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.spend_ratchet.display(None, 1.0),
-        1.0
-    );
+    assert_eq!(rig.view().ui().spend_ratchet.display(None, 1.0), 1.0);
 
     let mut next = agent_snapshot(&rig.ws);
     next.today_spend_live_usd = Some(2.0);
     next.today_spend_epoch_secs = Some(11);
     rig.fold(next, SnapshotSource::Produced);
-    assert_eq!(
-        rig.view().presentation.spend_ratchet.display(Some(11), 2.0),
-        2.0
-    );
+    assert_eq!(rig.view().ui().spend_ratchet.display(Some(11), 2.0), 2.0);
 }
 
 #[test]
@@ -646,10 +642,8 @@ fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
     let lower = capped(&rig.ws, 3.0);
     rig.fold(lower, SnapshotSource::Produced);
 
-    let (usd, epoch) = render::cockpit_spend_target(&rig.state.current).expect("tripped spend");
+    let (usd, epoch) =
+        render::cockpit_spend_target(rig.state.views.mirror()).expect("tripped spend");
     assert_eq!((usd, epoch), (3.0, Some(20)));
-    assert_eq!(
-        rig.view().presentation.spend_ratchet.display(epoch, usd),
-        5.0
-    );
+    assert_eq!(rig.view().ui().spend_ratchet.display(epoch, usd), 5.0);
 }

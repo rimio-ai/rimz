@@ -286,6 +286,7 @@ impl Column {
         let mut views = self
             .state
             .views
+            .registry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         views.publish(FetchUpdate::Snapshot {
@@ -293,7 +294,7 @@ impl Column {
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         });
-        self.state.completion.store(true, Ordering::Relaxed);
+        self.state.pane.completion.store(true, Ordering::Relaxed);
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {
@@ -333,11 +334,13 @@ impl Column {
                 (next.as_millis() - self.at.as_millis()) as u64,
             ));
             self.at = next;
-            self.state.presentation.cosmetic_phase = (!self
-                .motion
-                .as_ref()
-                .is_some_and(|range| range.contains(&self.at)))
-            .then_some(0);
+            self.state.set_play_cosmetic_phase(
+                (!self
+                    .motion
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&self.at)))
+                .then_some(0),
+            );
             let mut changed = self.at == self.next_tick;
             if changed {
                 self.next_tick += Duration::from_secs(1);
@@ -395,7 +398,7 @@ impl Column {
 
     fn set_delegation(&mut self, row: String, open: bool) -> Result<bool> {
         let target = crate::sidebar_pane::render::HitTarget::ToggleDelegation { row, open };
-        let Some((column, row)) = self.state.ui.interactions.line_for_target(&target) else {
+        let Some((column, row)) = self.state.pane.ui.interactions.line_for_target(&target) else {
             return Ok(false);
         };
         self.input(Wakeup::MouseClick { column, row })?;
@@ -446,7 +449,7 @@ impl Column {
                     self.label = format!("{}: @{handle} not on screen", self.label);
                     return Ok(());
                 };
-                let line = self.state.ui.interactions.line_for_row(ordinal);
+                let line = self.state.pane.ui.interactions.line_for_row(ordinal);
                 let Some(line) = line else {
                     self.label = format!("{}: @{handle} not on screen", self.label);
                     return Ok(());
@@ -491,7 +494,12 @@ impl Column {
 
     fn capture(&self) -> Result<PaintedFrame> {
         let mut rows = Vec::new();
-        for row in self.state.ui.frame_rows(self.terminal.backend().buffer()) {
+        for row in self
+            .state
+            .pane
+            .ui
+            .frame_rows(self.terminal.backend().buffer())
+        {
             let mut ansi = Vec::new();
             row.write_ansi(&mut ansi)?;
             rows.push(PaintedRow {

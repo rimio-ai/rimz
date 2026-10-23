@@ -141,14 +141,12 @@ fn pilot_holds_then_reorders_at_the_loop_freeze_deadline() {
     let mut column = Column::new(&scenario, None, None).unwrap();
     let before_ask = text_at(&mut column, &scenario, 12_000);
     assert!(before(&before_ask, "@planner#main", "@coder#main"));
-    let freeze = column
-        .state
-        .presentation
-        .freeze
-        .as_ref()
-        .expect("selection arms the product freeze");
-    let deadline =
-        (freeze.deadline_ms(false) - scenario.at(Duration::ZERO).now.as_millisecond()) as u64;
+    let deadline = (column.state.inspect_view(|ui, _| {
+        ui.freeze
+            .as_ref()
+            .expect("selection arms the product freeze")
+            .deadline_ms(false)
+    }) - scenario.at(Duration::ZERO).now.as_millisecond()) as u64;
     assert!(
         deadline > 12_500 && deadline <= 17_000,
         "deadline {deadline}"
@@ -175,19 +173,20 @@ fn pilot_renders_nested_results_countdown_expansion_and_root_unread() {
     assert!(first.contains("wakes in 1m"), "{first}");
     assert!(second.contains("wakes now"), "{second}");
     text_at(&mut column, &scenario, 17_600);
-    let selected = column
-        .state
-        .presentation
-        .visible_roster(&column.state.current)
-        .row(column.state.presentation.selected_index.unwrap())
-        .unwrap()
-        .as_agent()
-        .unwrap();
+    let selected = column.state.inspect_view(|ui, view| {
+        ui.visible_roster(&view.current)
+            .row(ui.selected_index.unwrap())
+            .unwrap()
+            .as_agent()
+            .unwrap()
+            .clone()
+    });
     assert_eq!(selected.handle.as_deref(), Some("coder"));
     text_at(&mut column, &scenario, 21_100);
     let coder = column
         .state
-        .current
+        .views
+        .mirror()
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
