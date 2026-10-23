@@ -14,6 +14,254 @@ use rimz::store::message::{
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
+fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    let directory = env.home_root.join("long-directory-".repeat(9));
+    std::fs::create_dir(&directory).unwrap();
+    let clause = format!("> {} 2>&1", directory.join("gate.log").display());
+    let command = format!("exec sleep 600 {clause}");
+    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+        &env,
+        &["wait", "--run", &command, "--check-in", "90m", "--json"],
+    ))
+    .unwrap();
+    let live = receipt["name"].as_str().unwrap();
+    let past: serde_json::Value = serde_json::from_str(&wait_ok(
+        &env,
+        &["wait", "--check", "false", "--check-in", "30m", "--json"],
+    ))
+    .unwrap();
+    let past = past["name"].as_str().unwrap();
+    wait_until(&env, "watcher did not start", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), live)
+            .unwrap()
+            .is_some()
+            && rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), past)
+                .unwrap()
+                .is_some()
+    });
+    let mut tasks = wait_instances(&env);
+    tasks
+        .0
+        .get_mut(live)
+        .unwrap()
+        .wait_meta
+        .as_mut()
+        .unwrap()
+        .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(55);
+    tasks
+        .0
+        .get_mut(past)
+        .unwrap()
+        .wait_meta
+        .as_mut()
+        .unwrap()
+        .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(47);
+    let mut lost = tasks.0[live].clone();
+    lost.wait_meta.as_mut().unwrap().armed_at =
+        jiff::Timestamp::now() - jiff::SignedDuration::from_mins(41);
+    lost.label = Some("lost build".into());
+    tasks.0.insert("zz-lost".into(), lost);
+    std::fs::write(
+        loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+    let text = wait_ok(&env, &["wait", "list"]);
+    assert!(text.starts_with("@planner#main · 3 waits\n"), "{text}");
+    assert!(
+        text.find("zz-lost").unwrap() < text.find(past).unwrap(),
+        "{text}"
+    );
+    assert!(
+        text.find(past).unwrap() < text.find(live).unwrap(),
+        "{text}"
+    );
+    assert!(text.contains("lost · armed 41m ago"), "{text}");
+    assert!(
+        text.contains("watching 47m · past check-in at 30m"),
+        "{text}"
+    );
+    let line = text.lines().find(|line| line.contains(live)).unwrap();
+    assert!(line.contains("watching 55m · check-in in "), "{text}");
+    assert!(line.ends_with(&clause), "{text}");
+    assert!(line.chars().count() > 120, "{text}");
+    assert!(!line.contains(" · in project"), "{text}");
+    wait_ok(&env, &["wait", "cancel", "--all"]);
+}
+
+#[test]
+fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    wait_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "deployment",
+            "--wait",
+            "--signal",
+            "deploy.failed",
+        ],
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--check", "false", "--json"])).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    wait_until(&env, "watcher did not start", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
+            .unwrap()
+            .is_some()
+    });
+    let canceled: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "cancel", "--all", "--json"])).unwrap();
+    assert_eq!(canceled["canceled"], serde_json::json!([name]));
+    assert_eq!(canceled["pending"].as_array().unwrap().len(), 1);
+    assert_eq!(canceled["pending"][0]["owner"], "loop:deployment");
+    wait_until(&env, "cancel left the self watcher alive", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
+            .unwrap()
+            .is_none()
+    });
+    assert_eq!(
+        wait_ok(&env, &["wait", "cancel", "--all"]),
+        "@planner#main · no waits · also woken by deploy.failed (loop deployment)\n"
+    );
+    wait_ok(&env, &["wait", "cancel", "deployment"]);
+}
+
+#[test]
+fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
+    use rimz::config::{LoopConfig, Tasks};
+    use std::collections::BTreeMap;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    register_calling_agent(&env);
+    register_agent(
+        &env,
+        "child-session",
+        "child-launch",
+        "modern-notch",
+        LaunchParams {
+            profile: Some("gatekeeper".into()),
+            parent_agent_id: Some("launch-session".into()),
+            launch_depth: Some(1),
+            ..Default::default()
+        },
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--in", "5m", "--json"])).unwrap();
+    let root_name = receipt["name"].as_str().unwrap();
+    let mut tasks = wait_instances(&env);
+    let root = tasks.0[root_name].clone();
+    let mut child = root.clone();
+    child.wait.as_mut().unwrap().session = "child-session".into();
+    child.wait.as_mut().unwrap().handle = "@stale-child".into();
+    tasks.0.insert("child-wait".into(), child);
+    let mut orphan = root.clone();
+    orphan.wait.as_mut().unwrap().session = "missing".into();
+    orphan.wait.as_mut().unwrap().handle = "@stored".into();
+    tasks.0.insert("orphan-wait".into(), orphan);
+    let mut subscription = root.clone();
+    subscription.wait_meta = None;
+    subscription.at = None;
+    subscription.signal = Some("ci.failed".into());
+    subscription.team = Some("forge#main".parse().unwrap());
+    tasks.0.insert("team-wake".into(), subscription.clone());
+    subscription.team = None;
+    subscription.loop_task = Some("sweep".into());
+    tasks.0.insert("resident-wake".into(), subscription.clone());
+    std::fs::write(
+        loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+    for name in [root_name, "child-wait", "orphan-wait"] {
+        wait_ok(&env, &["loop", "disable", name]);
+    }
+    subscription.loop_task = None;
+    let machine = LoopConfig {
+        tasks: Tasks(BTreeMap::from([("handwritten".into(), subscription)])),
+        ..Default::default()
+    };
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        toml::to_string(&machine).unwrap(),
+    )
+    .unwrap();
+    let rows = env
+        .rimz()
+        .args(["wait", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        rows.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rows.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&rows.stdout).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 6);
+    for row in rows {
+        assert!(
+            row.get("owner").is_some() && row.get("parent").is_some(),
+            "{row}"
+        );
+        let name = row["name"].as_str().unwrap();
+        let owner = match name {
+            "team-wake" => "team:forge#main",
+            "resident-wake" => "loop:sweep",
+            "handwritten" => "loop:handwritten",
+            _ => "self",
+        };
+        assert_eq!(row["owner"], owner);
+        assert_eq!(
+            row["parent"],
+            if name == "child-wait" {
+                receipt["target"].clone()
+            } else {
+                serde_json::Value::Null
+            }
+        );
+    }
+    let shell_text = |args: &[&str]| {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let waits = shell_text(&["wait", "list"]);
+    assert!(
+        waits.starts_with("~/project · whole room · 3 waits · 3 subscriptions\n\n"),
+        "{waits}"
+    );
+    let body = waits.split_once("\n\n").unwrap().1;
+    let loops = shell_text(&["loop", "list", "--all"]);
+    let loop_body = loops
+        .split_once("WAKE-UPS  ")
+        .unwrap()
+        .1
+        .split_once('\n')
+        .unwrap()
+        .1;
+    assert_eq!(body, loop_body);
+    assert!(
+        body.contains("  @planner#main › @gatekeeper (@modern-notch)\n"),
+        "{body}"
+    );
+    assert!(body.contains("  @stored\n"), "{body}");
+    assert!(body.contains("loop handwritten · ci.failed"), "{body}");
+    assert!(!body.contains("@stale-child"), "{body}");
+}
+
+#[test]
 fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -288,7 +536,12 @@ fn wait_check_lists_elapsed_and_checkin_limit() {
     assert!(row.get("age").is_none());
     assert!(row.get("timeout").is_none());
     assert!(row.get("timeout_s").is_none());
-    assert!(wait_ok(&env, &["wait", "list"]).contains("CHECK-IN"));
+    let text = wait_ok(&env, &["wait", "list"]);
+    assert!(text.starts_with("@planner#main · 1 wait\n"), "{text}");
+    assert!(
+        text.contains("watching") && text.contains("check-in in "),
+        "{text}"
+    );
     wait_ok(&env, &["wait", "cancel", "--all"]);
 }
 
@@ -413,14 +666,14 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
             .unwrap()
             .split_whitespace()
             .collect::<Vec<_>>(),
-        [
-            "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "CHECK-IN", "TRIGGER"
-        ]
+        ["@planner#main", "·", "1", "wait"]
     );
     let rows: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
     assert_eq!(rows[0]["type"], "timer");
     assert_eq!(rows[0]["state"], "pending");
+    assert_eq!(rows[0]["owner"], "self");
+    assert_eq!(rows[0].get("parent"), Some(&serde_json::Value::Null));
     assert_eq!(rows[0]["check_in"], "5m");
     assert_eq!(rows[0]["check_in_s"], 300);
     assert!(rows[0]["elapsed_s"].is_u64());
@@ -576,10 +829,16 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     assert_eq!(rows[0]["name"], name);
     assert_eq!(rows[0]["type"], "signal");
     assert_eq!(rows[0]["state"], "waiting");
+    assert_eq!(rows[0]["owner"], "loop:deployment");
+    assert_eq!(rows[0].get("parent"), Some(&serde_json::Value::Null));
     for key in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
         assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
     }
     assert!(rows[0].get("dir").is_none());
+    assert_eq!(
+        wait_ok(&env, &["wait", "list"]),
+        "@planner#main · no waits · also woken by deploy.failed (loop deployment)\n"
+    );
 
     let canceled = agent_wait(&env)
         .args(["wait", "cancel", name])
@@ -592,7 +851,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     );
     assert_eq!(
         String::from_utf8_lossy(&canceled.stdout),
-        format!("canceled {name}\nno pending waits\n")
+        format!("canceled {name}\n@planner#main · no waits\n")
     );
 }
 
@@ -2270,7 +2529,10 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
     for name in names {
         assert!(canceled.contains(&name), "{canceled}");
     }
-    assert!(canceled.ends_with("no pending waits\n"), "{canceled}");
+    assert!(
+        canceled.ends_with("@planner#main · no waits\n"),
+        "{canceled}"
+    );
     wait_until(&env, "cancel left watched descendants alive", || {
         pids.iter()
             .all(|pid| !rimz::proc::process_is_live(*pid, None))

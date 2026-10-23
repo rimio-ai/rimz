@@ -301,6 +301,54 @@ fn peers(agents: &[AgentState]) -> Vec<&AgentState> {
         .collect()
 }
 
+pub(super) fn write_self(
+    out: &mut impl Write,
+    agent: &AgentState,
+    agents: &[AgentState],
+    rows: &[WakeRow],
+    current_root: &Path,
+    now: Timestamp,
+) -> Result<()> {
+    let mut waits = rows.iter().filter(|row| row.is_self()).collect::<Vec<_>>();
+    waits.sort_by_key(|row| row.priority());
+    let also = subscriptions(rows)
+        .into_iter()
+        .map(|(owner, members)| {
+            let worktrees = members
+                .iter()
+                .filter(|row| row.entry.dir.is_some() && row.entry.run_dir() != current_root)
+                .filter_map(|row| worktree_name(&row.entry))
+                .collect::<BTreeSet<_>>();
+            let suffix = if worktrees.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " in {}",
+                    worktrees.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            };
+            format!("{}{suffix} ({owner})", trigger_names(&members, now))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let header = format!(
+        "{} · {}",
+        rimz::address::agent_handle(agent, &peers(agents), true),
+        wait_count(waits.len())
+    );
+    if waits.is_empty() && !also.is_empty() {
+        writeln!(out, "{header} · also woken by {also}")?;
+        return Ok(());
+    }
+    writeln!(out, "{header}")?;
+    let zoned_now = now.to_zoned(rimz::config::MachineConfig::load_lenient().time_zone());
+    write_waits(out, &waits, current_root, &zoned_now, 2)?;
+    if !also.is_empty() {
+        writeln!(out, "  also woken by {also}")?;
+    }
+    Ok(())
+}
+
 pub(super) fn write_room(
     out: &mut impl Write,
     rows: &[WakeRow],
