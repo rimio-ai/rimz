@@ -334,37 +334,77 @@ impl Room<'_> {
         let Some(anchor) = anchor else {
             return Ok(());
         };
-        let argv = look_argv(
-            self.binary,
-            self.mux,
-            session,
-            tab_number(tab, index),
-            &anchor.pane_id,
-        );
-        let (program, args) = argv.split_first().context("look command is empty")?;
-        let mut command = self.command(program);
-        command.args(args);
-        // A fresh room issues focus requests of its own while it settles, and one of them can
-        // overtake this visit's `rimz pane focus` before dispatch. That is the room working,
-        // not a failure, so visit again rather than abort the room.
+        let mut pane_id = anchor.pane_id.clone();
         let mut attempt = 1;
         loop {
+            let argv = look_argv(
+                self.binary,
+                self.mux,
+                session,
+                tab_number(tab, index),
+                &pane_id,
+            );
+            let (program, args) = argv.split_first().context("look command is empty")?;
+            let mut command = self.command(program);
+            command.args(args);
             let result = command
                 .output()
                 .with_context(|| format!("visit tab: {command:?}"))?;
             if result.status.success() {
                 return Ok(());
             }
+            // A fresh room issues focus requests of its own while it settles, and one of them can
+            // overtake this visit's `rimz pane focus` before dispatch. That is the room working,
+            // not a failure, so visit again rather than abort the room.
             if let Some(delay) = look_retry_delay(self.mux, &result.stderr, attempt) {
                 attempt += 1;
                 std::thread::sleep(delay);
                 continue;
             }
-            bail!(
-                "visit tab: {command:?} exited with {}: {}",
-                result.status,
-                String::from_utf8_lossy(&result.stderr)
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let error = anyhow::anyhow!(
+                "visit tab: {command:?} exited with {}: {stderr}",
+                result.status
             );
+            // Any other failure may be a sidebar the room replaced after readiness. A fresh roster
+            // tells that from a real failure: only another sidebar in the same view is visited.
+            // A superseded focus is the room working, so it spends the budget without a re-read.
+            if !stderr.contains(FOCUS_SUPERSEDED) {
+                let panes =
+                    match self.json::<Panes>("visit pane list", &["pane", "list", "--json"]) {
+                        Ok(panes) => panes,
+                        Err(roster_error) => {
+                            return Err(error
+                                .context(format!("pane roster re-read failed: {roster_error:#}")));
+                        }
+                    };
+                let Some(view_id) = tab.view_id.as_deref() else {
+                    return Err(error.context("tab has no view_id; cannot retry the visit"));
+                };
+                let Some(current_tab) = panes
+                    .tabs
+                    .iter()
+                    .find(|listed| listed.view_id.as_deref() == Some(view_id))
+                else {
+                    return Err(error.context(format!("tab {view_id} is gone")));
+                };
+                let Some(sidebar) = current_tab.panes.iter().find(|pane| pane.kind == "sidebar")
+                else {
+                    return Err(error.context(format!("tab {view_id} lists no sidebar")));
+                };
+                if sidebar.pane_id == pane_id {
+                    return Err(
+                        error.context(format!("tab {view_id} still lists visited pane {pane_id}"))
+                    );
+                }
+                pane_id = sidebar.pane_id.clone();
+            }
+            if attempt >= LOOK_ATTEMPTS {
+                return Err(error.context(format!(
+                    "tab visit attempts exhausted after {LOOK_ATTEMPTS} visits"
+                )));
+            }
+            attempt += 1;
         }
     }
 
@@ -633,7 +673,7 @@ fn tab_number(tab: &Tab, index: usize) -> usize {
         + 1
 }
 
-/// How many times a tab visit runs when a newer focus request supersedes it.
+/// The visit budget shared by superseded focus requests and sidebar replacements.
 const LOOK_ATTEMPTS: usize = 3;
 
 /// The error text of `FocusActionError::Superseded` in `crates/rimz/src/mux/focus_anchor.rs`,
