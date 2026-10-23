@@ -252,10 +252,10 @@ Exit paths and the initial attach never drain terminal input, preserving type-ah
 
 | Network | Pacing |
 | --- | --- |
-| Up | `reachable_retry` (2s) until the outage is `flat_window` (3 minutes) old, then doubling once per minute to `backoff_cap` (30s). |
+| Up | `reachable_retry` (2s) until the current wait is `flat_window` (3 minutes) old, then doubling once per minute to `backoff_cap` (30s). |
 | Down | `1s, 2s, 3s, …, 10s`, then `20s`, then `30s` for every later attempt. |
 
-Two edges reset both ladders and schedule an immediate attempt: a down-to-up probe transition, and a change in the local route fingerprint. The fingerprint is the source address the kernel selects for a UDP route lookup toward `1.1.1.1:443`; the lookup sends no packet.
+`wait_for_master` in `cli/remote/supervisor.rs` builds a fresh pacer for each wait, the initial connect and every recovery, so both ladders and the flat window count from the start of the current wait and start over after every lost attach, however long the link has been flapping. Within a wait, two edges reset both ladders and schedule an immediate attempt: a down-to-up probe transition, and a change in the local route fingerprint. The fingerprint is the source address the kernel selects for a UDP route lookup toward `1.1.1.1:443`; the lookup sends no packet.
 
 Endpoint discovery runs once at supervisor startup. `ssh -G -- <destination>` reports the effective `hostname` and `port` after user config applies, and `parse_dial_plan` turns them into a `DialPlan`. A configured `ProxyJump` or `ProxyCommand` yields no plan, because a direct dial would not test the path SSH uses. A failed query or unparseable output also yields none and leaves only timed pacing. DNS resolution stays per-dial, so a network change can supply a fresh address.
 
@@ -267,7 +267,7 @@ These workers drive presentation and pacing and never decide truth. The backgrou
 | --- | --- | --- |
 | `gatetime` | `30s` | Lifetime that makes an unconfirmed session count as established. |
 | `reachable_retry` | `2s` | Flat retry delay while the network is up. |
-| `flat_window` | `3min` | Outage age at which flat pacing gives way to doubling. |
+| `flat_window` | `3min` | Age of the current wait at which flat pacing gives way to doubling. |
 | `backoff_cap` | `30s` | Ceiling for both ladders. |
 | `master_connect_timeout` | `5s` | Per-attempt TCP connect and SSH banner budget. |
 | `master_deadline` | `30s` | Total lifetime of one background master attempt. |
