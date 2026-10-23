@@ -736,7 +736,7 @@ fn display_word(word: &str) -> String {
 
 /// Reconnect tuning. A session must confirm its transport or live past the
 /// gatetime to count as established; retry pacing follows network state and
-/// outage age.
+/// the time since the current wait began.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectPolicy {
     /// How long a session must live to count as established when no probe ack
@@ -748,7 +748,8 @@ pub struct ReconnectPolicy {
     pub backoff_cap: Duration,
     /// Retry delay while the SSH endpoint remains reachable.
     pub reachable_retry: Duration,
-    /// Outage window that keeps reachable-endpoint retries flat and fast.
+    /// Window, from the start of the current wait, that keeps reachable-endpoint
+    /// retries flat and fast.
     pub flat_window: Duration,
     /// Maximum wait for one background master's TCP connect and SSH banner
     /// exchange. The visible attach retains its ten-second connect budget.
@@ -798,13 +799,13 @@ impl ReconnectPolicy {
         policy
     }
 
-    /// Pace SSH retries from outage age when direct TCP dials prove the
-    /// endpoint remains reachable.
-    fn reachable_delay(&self, outage_age: Duration) -> Duration {
-        if outage_age < self.flat_window {
+    /// Pace SSH retries from the time since the current wait began when direct
+    /// TCP dials prove the endpoint remains reachable.
+    fn reachable_delay(&self, wait_age: Duration) -> Duration {
+        if wait_age < self.flat_window {
             return self.reachable_retry.min(self.backoff_cap);
         }
-        let minutes_past_window = outage_age.saturating_sub(self.flat_window).as_secs() / 60;
+        let minutes_past_window = wait_age.saturating_sub(self.flat_window).as_secs() / 60;
         let exponent = u32::try_from(minutes_past_window)
             .unwrap_or(u32::MAX)
             .saturating_add(1);
