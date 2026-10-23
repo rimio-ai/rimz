@@ -2996,6 +2996,11 @@ fn reconcile_preserves_completed_counts_after_post_plan_read_failures() {
                 recovered: 1,
                 closed: 1,
                 failed: 1,
+                repairs: vec![crate::mux::SidebarViewRepair {
+                    view: "40".to_owned(),
+                    closed: vec![PaneId::from_parts(crate::MuxName::Zellij, "terminal_8")],
+                    added: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_9")),
+                }],
                 ..Default::default()
             },
             "failed reads: {failed_reads:?}"

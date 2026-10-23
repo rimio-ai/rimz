@@ -35,7 +35,7 @@ use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
 };
-pub use reconcile::{SidebarLiveness, SidebarLivenessSource, SidebarRecovery};
+pub use reconcile::{SidebarLiveness, SidebarLivenessSource, SidebarRecovery, SidebarViewRepair};
 pub(crate) use selection::LiveSessions;
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;

@@ -2180,7 +2180,8 @@ allowed-dependencies = [
     "mux",
 ]
 # SidebarLivenessSource and its sample method expose post-listing evidence (+2).
-surface-budget = 18
+# SidebarViewRepair exposes landed per-view effects (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
@@ -7016,6 +7017,11 @@ reason = "The two capture implementations share one pure scrollback tail rule at
 kind = "item"
 key = "mux::reconcile::SidebarRecovery"
 reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::SidebarViewRepair"
+reason = "SidebarRecovery exposes landed per-view effects for diagnostic emission and direct integration assertions."
 
 [[verdict]]
 kind = "item"

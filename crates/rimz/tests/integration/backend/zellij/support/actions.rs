@@ -130,9 +130,9 @@ pub(in crate::backend::zellij) fn reconcile_until_converged(
             .expect("reconcile_sidebars");
         let deferral_only = report.deferred > 0
             && SidebarRecovery {
-                deferred: 0,
-                ..report
-            } == SidebarRecovery::default();
+                deferred: report.deferred,
+                ..Default::default()
+            } == report;
         let transient = report == SidebarRecovery::default() || deferral_only;
         if !transient || Instant::now() >= deadline {
             return report;

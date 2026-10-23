@@ -1830,14 +1830,14 @@ impl MuxBackend for ZellijBackend {
                     });
                 }
                 if !replacing.is_empty() {
-                    replacements.push((tab_id, added.pane, replacing.to_vec()));
+                    replacements.push((tab_id, added.pane.clone(), replacing.to_vec()));
                     // The new pane cannot own the dock until its old neighbour
                     // closes. Account for its final geometry after execution.
-                    return Ok(ReconcileAddOutcome::Verified);
+                    return Ok(ReconcileAddOutcome::Verified(added.pane));
                 }
                 Ok(match added.dock {
-                    DockOutcome::Docked => ReconcileAddOutcome::Verified,
-                    DockOutcome::Misdocked => ReconcileAddOutcome::VerifiedMisdocked,
+                    DockOutcome::Docked => ReconcileAddOutcome::Verified(added.pane),
+                    DockOutcome::Misdocked => ReconcileAddOutcome::VerifiedMisdocked(added.pane),
                 })
             },
             |pane| self.close_pane(&opts.session_name, pane),

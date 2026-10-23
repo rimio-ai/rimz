@@ -1049,7 +1049,7 @@ impl MuxBackend for TmuxBackend {
                     let _ = self.kill_pane(&pane);
                 }) {
                     mounted.insert(pane.raw().to_owned());
-                    Ok(ReconcileAddOutcome::Verified)
+                    Ok(ReconcileAddOutcome::Verified(pane))
                 } else {
                     Err(MuxErr::SidebarMountUnproven {
                         pane: format!("pane `{pane}`"),
