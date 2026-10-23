@@ -28,18 +28,22 @@ pub(super) fn execute(
     let poll = || {
         // The host owns reaping; a non-reaping liveness check lets an exited
         // judge keep its verdict without releasing its PID before pipe drain.
-        if !terminated.get()
+        let judge_exited = !terminated.get()
             && group
                 .get()
-                .is_some_and(|pid| !crate::proc::process_is_live(pid, None))
-        {
-            return false;
-        }
+                .is_some_and(|pid| !crate::proc::process_is_live(pid, None));
         for _ in signals.borrow_mut().pending() {
-            terminated.set(true);
+            // A judge that exited first keeps its verdict, but a child of it
+            // still holding the output pipes gets the stop, so the drain ends.
+            if !judge_exited {
+                terminated.set(true);
+            }
             if let Some(pid) = group.get() {
                 let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
+        }
+        if judge_exited {
+            return false;
         }
         // The bounded driver kills on interruption. After SIGTERM, let the
         // check exit itself, bounded only by its original timeout.

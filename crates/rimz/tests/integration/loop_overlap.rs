@@ -279,6 +279,100 @@ while ! test -e allow-exit; do sleep 0.025; done
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_sigterm_after_judge_exit_reaches_a_child_holding_its_pipes() {
+    let env = fixture("skip", None);
+    env.write_config(&env.project_root, "[agents]\nisolation='host'\n");
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let bin = env.home_root.join("judge-bin");
+    // The background sleep inherits the judge's stdout and stderr and outlives
+    // the judge by far more than the bound below, but less than the 300 s
+    // check timeout, whose SIGKILL would otherwise end it.
+    write_path_shim(
+        &bin,
+        "codex",
+        r#"if [ "$1" = '--version' ]; then echo 'codex-cli 0.163.0'; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"pass":false,"reason":"Finished on my own."}' > "$1"; fi
+    shift
+done
+sleep 240 &
+echo $! > child-pid
+echo $$ > check-pid
+touch check-ready
+"#,
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.busy]\nroot={:?}\nagent='codex'\nprompt='work'\nevery='1h'\non='success'\n[tasks.busy.check]\nagent='codex'\nprompt='Any work?'\n",
+            env.project_root
+        ),
+    );
+    let mut runner = env
+        .rimz()
+        .env("PATH", path_with_front(&bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "judge-shell", &[]),
+        )
+        .args(["loop", "run", "busy"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_path(&env.project_root.join("check-ready"));
+    let read_pid = |name: &str| -> u32 {
+        std::fs::read_to_string(env.project_root.join(name))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    let child_pid = read_pid("child-pid");
+    wait_for_process_state(read_pid("check-pid"), "Z");
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(runner.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = runner.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = runner.kill();
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(child_pid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            panic!("the stop never reached the judge's child holding its pipes");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(status.code(), Some(0));
+    // The orphaned child is reaped by whichever subreaper adopted it, so a
+    // zombie counts as ended.
+    let child_live = std::fs::read_to_string(format!("/proc/{child_pid}/status"))
+        .is_ok_and(|status| !status.lines().any(|line| line.starts_with("State:\tZ")));
+    assert!(
+        !child_live,
+        "the judge's child must receive the forwarded SIGTERM"
+    );
+    let rows = read_loop_run_records(&env);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].result, LoopRunResult::CheckSkipped, "{rows:?}");
+    assert_eq!(rows[0].judge[0].verdict, Some(false), "{rows:?}");
+    assert_eq!(
+        rows[0].judge[0].reason.as_deref(),
+        Some("Finished on my own.")
+    );
+}
+
 #[test]
 fn stop_of_a_check_only_holder_skips_grace_after_its_definition_changes() {
     let mut durations = Vec::new();
