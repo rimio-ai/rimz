@@ -371,8 +371,10 @@ fn uninstall_removes_managed_hooks() {
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
     assert!(!unhooked.contains("rimz"), "{unhooked}");
     assert!(work_settings.is_symlink());
-    let target = fs::read_link(work_settings).unwrap();
-    assert_eq!(fs::read_to_string(target).unwrap(), unhooked);
+    assert_eq!(
+        fs::read_to_string(fixture.env.home_root.join(".claude/settings.json")).unwrap(),
+        unhooked
+    );
 }
 
 #[test]

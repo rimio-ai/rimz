@@ -592,7 +592,7 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
     // Spend over the cap, written through the second account's history link.
     assert_eq!(
         std::fs::read_link(two.join("projects")).unwrap(),
-        native.join("projects")
+        std::path::Path::new("../.claude/projects")
     );
     let now = rimz::agents::spending::unix_secs_now();
     let tod = now % 86_400;

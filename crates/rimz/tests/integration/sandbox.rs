@@ -2284,7 +2284,7 @@ fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolatio
             .assert_success_within_timeout("launch on a shared account");
         assert_eq!(
             std::fs::read_link(work.join("sessions")).unwrap(),
-            env.home_root.join(".codex/sessions"),
+            Path::new("../.codex/sessions"),
             "{isolation}"
         );
         assert_eq!(

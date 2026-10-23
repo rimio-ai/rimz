@@ -1803,7 +1803,10 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
     // `set` only declares the mode: the shared link stays until `accounts add`
     // reconciles the account's links.
     let link = claude_home.join("projects");
-    assert_eq!(std::fs::read_link(&link).unwrap(), native.join("projects"));
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        std::path::Path::new("../.claude/projects")
+    );
     rimz()
         .args([
             "config",
@@ -1813,7 +1816,10 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
         ])
         .assert()
         .success();
-    assert_eq!(std::fs::read_link(&link).unwrap(), native.join("projects"));
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        std::path::Path::new("../.claude/projects")
+    );
     rimz()
         .args(["accounts", "add", "claude", "work"])
         .assert()

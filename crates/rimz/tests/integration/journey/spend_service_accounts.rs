@@ -86,7 +86,7 @@ fn accounts_of_one_pool_share_the_held_spend_service() {
         ]));
         assert_eq!(
             std::fs::read_link(home.join("projects")).unwrap(),
-            base.join(".claude/projects")
+            Path::new("../.claude/projects")
         );
     }
 

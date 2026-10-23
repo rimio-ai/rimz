@@ -1,13 +1,15 @@
 use super::*;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::sync::Arc;
 
 fn names(path: &Path) -> Vec<String> {
     top_level(path).unwrap().into_iter().collect()
 }
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    temp: Arc<tempfile::TempDir>,
+    user: PathBuf,
     named: PathBuf,
     native: PathBuf,
     lock: PathBuf,
@@ -24,22 +26,32 @@ impl Fixture {
             native: temp.path().join("native"),
             lock: temp.path().join("account.lock"),
             account: format!("{kind}@work").parse().unwrap(),
-            _temp: temp,
+            user: temp.path().to_path_buf(),
+            temp: Arc::new(temp),
         }
     }
 
     /// A second account of the same kind, linking into the same default home.
     fn sibling(&self, name: &str) -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let named = temp.path().join("named");
+        let named = self.user.join(name);
         fs::create_dir(&named).unwrap();
         Self {
             named,
             native: self.native.clone(),
             lock: self.lock.clone(),
             account: LoginKey::new(self.account.kind.clone(), name.parse().unwrap()),
-            _temp: temp,
+            user: self.user.clone(),
+            temp: Arc::clone(&self.temp),
         }
+    }
+
+    fn stowed() -> Self {
+        let mut home = Self::new("codex");
+        fs::create_dir_all(home.user.join("dotfiles/.rimz/accounts/codex/work")).unwrap();
+        symlink("dotfiles/.rimz", home.user.join(".rimz")).unwrap();
+        home.named = home.user.join(".rimz/accounts/codex/work");
+        home.native = home.user.join(".codex");
+        home
     }
 
     fn run_with(&self, shared: bool, agents: Option<usize>) -> Result<ShareReport, ShareErr> {
@@ -60,6 +72,7 @@ impl Fixture {
                 account: &self.account,
                 named: &self.named,
                 default: &self.native,
+                user: Some(&self.user),
                 shared,
                 lock: &self.lock,
                 daemon_writes: &|| daemon,
@@ -87,7 +100,7 @@ fn a_fresh_shared_account_links_every_entry_that_is_not_private() {
     let home = Fixture::new("codex");
     fs::create_dir_all(home.native.join("sessions")).unwrap();
     fs::create_dir_all(home.native.join("packages")).unwrap();
-    for file in ["history.jsonl", "auth.json", "config.toml"] {
+    for file in ["history.jsonl", "auth.json", "config.toml", "AGENTS.md"] {
         fs::write(home.native.join(file), file).unwrap();
     }
     let report = home.run(true);
@@ -116,7 +129,11 @@ fn a_fresh_shared_account_links_every_entry_that_is_not_private() {
     for name in &report.linked {
         assert_eq!(
             fs::read_link(home.named.join(name)).unwrap(),
-            home.native.join(name)
+            Path::new("../native").join(name)
+        );
+        assert_eq!(
+            home.named.join(name).canonicalize().unwrap(),
+            home.native.join(name).canonicalize().unwrap()
         );
     }
     fs::write(home.named.join("sessions/rollout.jsonl"), "turn").unwrap();
@@ -149,7 +166,7 @@ fn an_entry_only_the_account_has_moves_to_the_default_home() {
     for name in ["history.jsonl", "projects"] {
         assert_eq!(
             fs::read_link(home.named.join(name)).unwrap(),
-            home.native.join(name)
+            Path::new("../native").join(name)
         );
         assert!(
             !fs::symlink_metadata(home.native.join(name))
@@ -199,7 +216,7 @@ fn a_conflict_is_set_aside_and_a_second_one_lands_beside_the_first() {
     // A relative link still names the entry beside the slot it left.
     assert_eq!(
         fs::read_link(aside.join("plugins")).unwrap(),
-        home.named.join("elsewhere")
+        home.named.canonicalize().unwrap().join("elsewhere")
     );
     assert_eq!(
         fs::read_to_string(home.named.join("history.jsonl")).unwrap(),
@@ -348,7 +365,7 @@ fn concurrent_reconciles_leave_one_consistent_home() {
     for name in ["history.jsonl", "projects"] {
         assert_eq!(
             fs::read_link(home.named.join(name)).unwrap(),
-            home.native.join(name)
+            Path::new("../native").join(name)
         );
     }
 }
@@ -401,6 +418,7 @@ fn a_file_conflict_never_asks_about_live_agents() {
             account: &home.account,
             named: &home.named,
             default: &home.native,
+            user: Some(&home.user),
             shared: true,
             lock: &home.lock,
             daemon_writes: &|| panic!("a file moves aside under any daemon"),
@@ -467,7 +485,10 @@ fn migration_removes_owned_skill_links_and_preserves_user_entries() {
         }
         fs::create_dir_all(home.native.join("skills")).unwrap();
         home.run(false);
-        assert_eq!(fs::read_link(&skills).unwrap(), home.native.join("skills"));
+        assert_eq!(
+            fs::read_link(&skills).unwrap(),
+            Path::new("../native/skills")
+        );
         let expected: &[&str] = if user_entry { &["user"] } else { &[] };
         assert_eq!(names(&home.aside().join("skills")), expected);
     }
@@ -494,7 +515,10 @@ fn a_standalone_account_shares_settings_alone_and_rerun_changes_nothing() {
         assert!(named.join("projects").is_dir());
         assert!(!named.join("sessions").exists());
         for name in files.iter().chain(dirs) {
-            assert_eq!(fs::read_link(named.join(name)).unwrap(), native.join(name));
+            assert_eq!(
+                fs::read_link(named.join(name)).unwrap(),
+                Path::new("../native").join(name)
+            );
             assert_eq!(native.join(name).is_dir(), dirs.contains(name));
             if files.contains(name) {
                 assert!(
@@ -533,6 +557,302 @@ fn relative_links_to_the_native_entries_are_current() {
 }
 
 #[test]
+fn relative_link_text_uses_the_ambient_home() {
+    let home = Fixture::new("codex");
+    let login = ProviderLogin::named(
+        home.account.kind.clone(),
+        home.account.name.clone(),
+        home.named.clone(),
+    )
+    .unwrap();
+    let ambient = BTreeMap::from([
+        ("HOME".to_owned(), home.user.display().to_string()),
+        ("CODEX_HOME".to_owned(), home.native.display().to_string()),
+    ]);
+    let report = reconcile(&login, &ambient, &|| Some(0)).unwrap().unwrap();
+    assert!(report.warnings().is_empty());
+    assert_eq!(
+        fs::read_link(home.named.join("rules")).unwrap(),
+        Path::new("../native/rules")
+    );
+    assert_eq!(
+        home.named.join("rules").canonicalize().unwrap(),
+        home.native.join("rules").canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn links_stay_absolute_without_a_usable_ambient_home() {
+    for user in [
+        None,
+        Some(String::new()),
+        Some("/missing-rimz-home".to_owned()),
+    ] {
+        let home = Fixture::new("codex");
+        let login = ProviderLogin::named(
+            home.account.kind.clone(),
+            home.account.name.clone(),
+            home.named.clone(),
+        )
+        .unwrap();
+        let mut ambient =
+            BTreeMap::from([("CODEX_HOME".to_owned(), home.native.display().to_string())]);
+        if let Some(user) = user {
+            ambient.insert("HOME".to_owned(), user);
+        }
+        reconcile(&login, &ambient, &|| Some(0)).unwrap().unwrap();
+        assert_eq!(
+            fs::read_link(home.named.join("rules")).unwrap(),
+            home.native.join("rules")
+        );
+    }
+}
+
+#[test]
+fn an_account_outside_home_keeps_absolute_links() {
+    let mut home = Fixture::new("codex");
+    home.user = home.temp.path().join("user");
+    home.native = home.user.join(".codex");
+    fs::create_dir(&home.user).unwrap();
+    home.run(false);
+    assert_eq!(
+        fs::read_link(home.named.join("rules")).unwrap(),
+        home.native.join("rules")
+    );
+}
+
+#[test]
+fn a_provider_home_outside_home_keeps_absolute_links() {
+    let mut home = Fixture::new("codex");
+    home.user = home.named.clone();
+    home.run(false);
+    assert_eq!(
+        fs::read_link(home.named.join("rules")).unwrap(),
+        home.native.join("rules")
+    );
+}
+
+#[test]
+fn a_stowed_account_climbs_from_its_real_home_and_reruns_current() {
+    let home = Fixture::stowed();
+    fs::create_dir_all(home.native.join("rules")).unwrap();
+    fs::write(home.native.join("rules/readme"), "shared").unwrap();
+    let report = home.run(true);
+    assert_eq!(
+        fs::read_link(home.named.join("rules")).unwrap(),
+        Path::new("../../../../../.codex/rules")
+    );
+    assert_eq!(
+        fs::read_to_string(home.named.join("rules/readme")).unwrap(),
+        "shared"
+    );
+    let again = home.run(true);
+    assert_eq!(again.current, report.linked);
+    assert_eq!(
+        again.to_string(),
+        format!("already linked to {}", home.native.display())
+    );
+    assert!(!home.named.join(ASIDE_DIR).exists());
+    assert_eq!(home.run(false).unlinked, ["archived_sessions", "sessions"]);
+}
+
+#[test]
+fn stowed_history_links_are_found_even_through_a_symlinked_user_home() {
+    for symlinked_user in [false, true] {
+        let mut home = Fixture::stowed();
+        if symlinked_user {
+            let alias = home.user.join("alias");
+            symlink(&home.user, &alias).unwrap();
+            home.user = alias;
+            home.named = home.user.join(".rimz/accounts/codex/work");
+            home.native = home.user.join(".codex");
+        }
+        fs::create_dir_all(home.native.join("sessions")).unwrap();
+        fs::write(home.native.join("history.jsonl"), "turn").unwrap();
+        for name in ["sessions", "history.jsonl"] {
+            symlink(
+                Path::new("../../../../../.codex").join(name),
+                home.named.join(name),
+            )
+            .unwrap();
+        }
+        let before = contents(&home.named);
+        let result = home.run_with(false, Some(2));
+        assert!(
+            matches!(result, Err(ShareErr::LiveAgentsUnlink { .. })),
+            "{result:?}"
+        );
+        assert_eq!(contents(&home.named), before);
+        let report = home.run(false);
+        assert_eq!(report.unlinked, ["history.jsonl", "sessions"]);
+        assert!(fs::symlink_metadata(home.named.join("sessions")).is_err());
+        assert_eq!(
+            fs::read_to_string(home.native.join("history.jsonl")).unwrap(),
+            "turn"
+        );
+    }
+}
+
+#[test]
+fn a_handmade_stowed_history_link_is_read_from_the_real_account_home() {
+    let home = Fixture::stowed();
+    fs::create_dir_all(home.native.join("older-sessions")).unwrap();
+    symlink(
+        "../../../../../.codex/older-sessions",
+        home.named.join("sessions"),
+    )
+    .unwrap();
+    let report = home.run(false);
+    assert_eq!(report.unlinked, ["sessions"]);
+    assert!(home.native.join("older-sessions").is_dir());
+}
+
+#[test]
+fn a_symlinked_provider_home_stays_in_the_link_text() {
+    let mut home = Fixture::new("codex");
+    fs::create_dir_all(home.user.join("dotfiles/codex/rules")).unwrap();
+    home.native = home.user.join(".codex");
+    symlink("dotfiles/codex", &home.native).unwrap();
+    home.run(false);
+    assert_eq!(
+        fs::read_link(home.named.join("rules")).unwrap(),
+        Path::new("../.codex/rules")
+    );
+    assert_eq!(
+        home.named.join("rules").canonicalize().unwrap(),
+        home.native.join("rules").canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn a_handmade_stowed_link_to_the_same_directory_is_replaced_under_live_writers() {
+    let home = Fixture::stowed();
+    fs::create_dir_all(home.native.join("sessions")).unwrap();
+    symlink(
+        "../../../../../.codex/./sessions",
+        home.named.join("sessions"),
+    )
+    .unwrap();
+    let result = home.run_under(true, Some(2), live(1));
+    assert!(
+        result.is_ok(),
+        "a same-target rewrite cannot move a writer's directory: {result:?}"
+    );
+    let report = result.unwrap();
+    assert!(report.linked.contains(&"sessions".to_owned()), "{report}");
+    assert_eq!(
+        fs::read_link(home.named.join("sessions")).unwrap(),
+        Path::new("../../../../../.codex/sessions")
+    );
+    assert!(report.warnings().is_empty(), "{report}");
+    assert!(!home.named.join(ASIDE_DIR).exists());
+}
+
+#[test]
+fn same_target_links_are_replaced_without_consulting_live_writers() {
+    for agents in [Some(2), None, Some(0)] {
+        let home = Fixture::new("codex");
+        fs::create_dir_all(home.native.join("sessions")).unwrap();
+        fs::write(home.native.join("config.toml"), "shared").unwrap();
+        for name in ["sessions", "config.toml"] {
+            symlink(home.native.join(name), home.named.join(name)).unwrap();
+        }
+        let report = home.run_under(true, agents, live(2)).unwrap();
+        for name in ["sessions", "config.toml"] {
+            assert!(report.linked.contains(&name.to_owned()), "{report}");
+            assert_eq!(
+                fs::read_link(home.named.join(name)).unwrap(),
+                Path::new("../native").join(name)
+            );
+            fs::remove_file(home.named.join(name)).unwrap();
+            symlink(format!("../native/./{name}"), home.named.join(name)).unwrap();
+        }
+        assert!(report.warnings().is_empty(), "{report}");
+        let report = run_unguarded(&home, true);
+        for name in ["sessions", "config.toml"] {
+            assert!(report.linked.contains(&name.to_owned()), "{report}");
+            assert_eq!(
+                fs::read_link(home.named.join(name)).unwrap(),
+                Path::new("../native").join(name)
+            );
+        }
+        assert!(report.warnings().is_empty(), "{report}");
+        assert!(!home.named.join(ASIDE_DIR).exists());
+        assert_eq!(
+            fs::read_to_string(home.named.join("config.toml")).unwrap(),
+            "shared"
+        );
+    }
+}
+
+#[test]
+fn links_to_another_hardlink_of_the_target_are_replaced_in_place() {
+    let home = Fixture::new("codex");
+    fs::create_dir(&home.native).unwrap();
+    fs::write(home.native.join("config.toml"), "shared").unwrap();
+    let alias = home.user.join("alias.toml");
+    fs::hard_link(home.native.join("config.toml"), &alias).unwrap();
+    symlink(&alias, home.named.join("config.toml")).unwrap();
+    let report = run_unguarded(&home, false);
+    assert!(report.set_aside.is_empty(), "{report}");
+    assert!(report.linked.contains(&"config.toml".to_owned()));
+    assert_eq!(
+        fs::read_link(home.named.join("config.toml")).unwrap(),
+        Path::new("../native/config.toml")
+    );
+    assert_eq!(fs::read_to_string(alias).unwrap(), "shared");
+    assert!(!home.named.join(ASIDE_DIR).exists());
+}
+
+#[test]
+fn dangling_links_with_other_text_are_set_aside_and_relinked() {
+    let home = Fixture::new("codex");
+    let slot = home.named.join("config.toml");
+    symlink(home.native.join("config.toml"), &slot).unwrap();
+    let report = run_unguarded(&home, false);
+    assert_eq!(report.set_aside.len(), 1, "{report}");
+    let aside = home.aside().join("config.toml");
+    assert_eq!(report.set_aside, [(slot.clone(), aside.clone())]);
+    assert_eq!(
+        fs::read_link(&slot).unwrap(),
+        Path::new("../native/config.toml")
+    );
+    assert_eq!(
+        fs::read_link(&aside).unwrap(),
+        home.native.join("config.toml")
+    );
+    assert_eq!(
+        report.warnings(),
+        [format!(
+            "codex@work account: moved {} aside to {}; the account now reads the copy in {}",
+            slot.display(),
+            aside.display(),
+            home.native.display()
+        )]
+    );
+}
+
+#[test]
+fn a_relative_link_set_aside_from_a_stowed_home_keeps_its_target() {
+    let home = Fixture::stowed();
+    fs::write(home.user.join("elsewhere"), "mine").unwrap();
+    fs::create_dir_all(&home.native).unwrap();
+    fs::write(home.native.join("config.toml"), "shared").unwrap();
+    let link = Path::new("../../../../../elsewhere");
+    symlink(link, home.named.join("config.toml")).unwrap();
+    let original = home.named.join("config.toml").canonicalize().unwrap();
+    let report = run_unguarded(&home, false);
+    let aside = home.aside().join("config.toml");
+    assert_eq!(report.set_aside.len(), 1);
+    assert_eq!(
+        fs::read_link(&aside).unwrap(),
+        home.named.canonicalize().unwrap().join(link)
+    );
+    assert_eq!(aside.canonicalize().unwrap(), original);
+    assert_eq!(fs::read_to_string(aside).unwrap(), "mine");
+}
+
+#[test]
 fn same_home_through_symlink_refuses_without_changes() {
     let temp = tempfile::tempdir().unwrap();
     let native = temp.path().join("native");
@@ -546,6 +866,7 @@ fn same_home_through_symlink_refuses_without_changes() {
             account: &account,
             named: &named,
             default: &native,
+            user: Some(temp.path()),
             shared: true,
             lock: &temp.path().join("account.lock"),
             daemon_writes: &|| DaemonSessions::Clear,
@@ -570,7 +891,7 @@ fn a_shared_account_links_history_neither_home_holds_yet() {
             assert!(report.linked.iter().any(|linked| linked == name), "{kind}");
             assert_eq!(
                 fs::read_link(home.named.join(name)).unwrap(),
-                home.native.join(name),
+                Path::new("../native").join(name),
                 "{kind}"
             );
             assert!(home.native.join(name).is_dir(), "{kind}");
@@ -607,7 +928,7 @@ fn unlinking_a_directory_under_live_agents_refuses_and_leaves_the_link() {
         assert_eq!(names(&home.named), before);
         assert_eq!(
             fs::read_link(home.named.join("sessions")).unwrap(),
-            home.native.join("sessions")
+            Path::new("../native/sessions")
         );
     }
     assert!(!home.run_with(false, Some(0)).unwrap().unlinked.is_empty());
@@ -697,6 +1018,7 @@ fn run_unguarded(home: &Fixture, shared: bool) -> ShareReport {
             account: &home.account,
             named: &home.named,
             default: &home.native,
+            user: Some(&home.user),
             shared,
             lock: &home.lock,
             daemon_writes: &|| panic!("an unshared name never waits on a daemon"),
@@ -760,7 +1082,7 @@ fn a_lock_or_temp_file_in_either_home_is_never_linked() {
     for name in ["thread-writer-locks", ".tmp"] {
         assert_eq!(
             fs::read_link(launch.named.join(name)).unwrap(),
-            launch.native.join(name)
+            Path::new("../native").join(name)
         );
     }
 
