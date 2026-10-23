@@ -31,8 +31,22 @@
 //! publishes the control socket marker before parking.
 //! `$RIMZ_TEST_SSH_MASTER_EXIT_PLAN` and `$RIMZ_TEST_SSH_MASTER_EXIT_MS`
 //! script established ControlMaster exits.
+//! `$RIMZ_TEST_SSH_MASTER_EXIT_GATE` holds the master after publishing its
+//! control marker until the named file exists, then exits from the master
+//! exit plan. It overrides `$RIMZ_TEST_SSH_MASTER_EXIT_MS`; without either,
+//! an established master parks forever.
 //! `$RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN` scripts remote `test -d` probes.
 //! `$RIMZ_TEST_SSH_WEB_PREP_PLAN` scripts web-prep exits, overriding `$RIMZ_TEST_SSH_WEB_PREP_STATUS`.
+//! `$RIMZ_TEST_SSH_TUNNEL_PLAN` scripts web tunnel/control-forward exits;
+//! without it a control-forward exits 0 at once.
+//! `$RIMZ_TEST_SSH_TUNNEL_READY_GATE` holds a control-forward scripted by
+//! `$RIMZ_TEST_SSH_TUNNEL_PLAN` until its named file exists, then exits from
+//! that plan.
+//! Both gates ignore file contents and wait without a deadline.
+//! `$RIMZ_TEST_SSH_TUNNEL_LISTEN` binds the direct tunnel's forwarded port.
+//! `$RIMZ_TEST_SSH_TUNNEL_HTTP_LOG` also binds it and logs HTTP requests,
+//! serving stub HTTP and WebSocket responses.
+//! `$RIMZ_TEST_SSH_TUNNEL_SLEEP_MS` delays the direct tunnel's planned exit.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -216,11 +230,6 @@ fn exit_web_prep() -> ! {
 }
 
 fn run_web_tunnel(argv: &[String]) -> ! {
-    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_READY_MS")
-        && let Ok(ms) = ms.parse::<u64>()
-    {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
-    }
     let mut listener = (env::var_os("RIMZ_TEST_SSH_TUNNEL_LISTEN").is_some()
         || env::var_os("RIMZ_TEST_SSH_TUNNEL_HTTP_LOG").is_some())
     .then(|| {
@@ -302,10 +311,8 @@ fn read_http_head(stream: &mut impl Read) -> Option<Vec<u8>> {
 }
 
 fn run_web_control_forward() -> ! {
-    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_READY_MS")
-        && let Ok(ms) = ms.parse::<u64>()
-    {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+    if let Some(path) = env::var_os("RIMZ_TEST_SSH_TUNNEL_READY_GATE") {
+        wait_for_gate(std::path::Path::new(&path));
     }
     exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
 }
@@ -363,6 +370,10 @@ fn run_control_master(argv: &[String]) -> ! {
     if publish_ready {
         publish_control_master_if_requested(argv);
     }
+    if let Some(path) = env::var_os("RIMZ_TEST_SSH_MASTER_EXIT_GATE") {
+        wait_for_gate(std::path::Path::new(&path));
+        exit_from_plan("RIMZ_TEST_SSH_MASTER_EXIT_PLAN");
+    }
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_MASTER_EXIT_MS")
         && let Ok(ms) = ms.parse::<u64>()
     {
@@ -371,6 +382,12 @@ fn run_control_master(argv: &[String]) -> ! {
     }
     loop {
         std::thread::park_timeout(std::time::Duration::from_secs(60));
+    }
+}
+
+fn wait_for_gate(path: &std::path::Path) {
+    while !path.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
