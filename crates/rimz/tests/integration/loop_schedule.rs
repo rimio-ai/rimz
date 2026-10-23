@@ -5630,7 +5630,9 @@ fn external_tick_spawns_an_agent_without_a_workspace_record() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    wait_for_path(&loop_runs_path(&env));
+    wait_for_loop_run_records(&env, "the cold-agent run's row", |records| {
+        records.iter().any(|record| record.task == "cold-agent")
+    });
     assert!(
         env.state_path_for(&env.project_root)
             .workspace_record
@@ -11490,12 +11492,16 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
         .collect()
 }
 
+/// A detached loop runner can birth a cold room before the effect a test waits for, which takes
+/// past 15 s under gate load, so this bound guards a hung runner rather than timing a slow one.
+const LOOP_RUNNER_DEADLINE: Duration = Duration::from_secs(60);
+
 fn wait_for_loop_run_records(
     env: &Env,
     description: &str,
     ready: impl Fn(&[LoopRunRecord]) -> bool,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
         let records = read_loop_run_records(env);
         if ready(&records) {
@@ -11613,7 +11619,7 @@ fn tick_without_runner_leaves_state_absent(env: &Env, root: &Path) -> bool {
 }
 
 fn wait_for_path(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     while !path.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -11728,7 +11734,7 @@ fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
 
 #[cfg(unix)]
 fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunLockInfo {
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
     loop {
         // The runner writes its pid under the lock; probing the lock could steal it.
         if let Ok(bytes) = std::fs::read(path)
