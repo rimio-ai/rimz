@@ -31,7 +31,7 @@ use crate::mux::{
     CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
     PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, ResumeTab,
     ResumeTabShape, ResumeTabUnconfirmed, SessionHealth, SessionLiveness, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
+    SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
     SplitPlacement, SplitTarget, TabOptions, WidthStep, confirm_resume_tab_shapes,
     ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
@@ -1759,7 +1759,7 @@ impl MuxBackend for ZellijBackend {
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
-        live: &SidebarLiveness,
+        live: &dyn SidebarLivenessSource,
     ) -> Result<SidebarRecovery> {
         let client_view = self
             .client_view(ClientFocusOptions {
@@ -1770,6 +1770,7 @@ impl MuxBackend for ZellijBackend {
         let mut panes = self
             .structural_geometry_listing(&opts.session_name, &opts.workspace_id, &HashSet::new())?
             .panes;
+        let live = live.sample();
         let viewed_tabs: HashSet<u64> = client_view
             .clients
             .iter()
@@ -1788,7 +1789,7 @@ impl MuxBackend for ZellijBackend {
         }
         let restoration = client_restoration_target(&panes, &client_view);
         let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
-        let plan = super::super::plan_reconcile(&views, live);
+        let plan = super::super::plan_reconcile(&views, &live);
         let planned_closes = plan.close_panes();
         let off_spec = off_spec_sidebars(&panes, &planned_closes, Some(opts.target));
         if plan.is_empty() && off_spec.is_empty() {

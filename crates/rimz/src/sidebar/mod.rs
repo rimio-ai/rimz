@@ -36,7 +36,9 @@ use tracing::debug;
 use crate::disk::paths::RuntimePaths;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId};
-use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
+use crate::mux::{
+    DaemonView, MuxBackend, SidebarLiveness, SidebarLivenessSource, SidebarPaneOptions,
+};
 use crate::wakeup::heartbeat::{
     SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, SidebarSize, fresh_sidebar_heartbeats,
 };
@@ -100,7 +102,7 @@ trait SidebarMux {
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
-        live: &SidebarLiveness,
+        live: &dyn SidebarLivenessSource,
     ) -> crate::mux::Result<crate::mux::SidebarRecovery>;
 }
 
@@ -134,7 +136,7 @@ impl<T: MuxBackend + ?Sized> SidebarMux for T {
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
-        live: &SidebarLiveness,
+        live: &dyn SidebarLivenessSource,
     ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
         MuxBackend::reconcile_sidebars(self, opts, live)
     }
@@ -192,10 +194,9 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
         .collect()
 }
 
-/// Grace for a just-spawned sidebar pane before reconcile may read "no
-/// heartbeat yet" as "wedged": two heartbeat windows, so a just-added sidebar
-/// is never closed before its first heartbeat lands — even by a reload run
-/// seconds after the one that added it.
+/// Two heartbeat windows of grace for a pane-attributed sidebar process before
+/// reconcile may read "no heartbeat yet" as "wedged". Liveness is sampled after
+/// the native listing so panes born during mux reads can receive this protection.
 pub(crate) const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
 
 /// The live sidebars for one mux session and executable generation: every pane
@@ -381,6 +382,27 @@ pub(crate) fn reconcile_session_sidebars(
     reconcile_session(backend, opts, wait)
 }
 
+struct SessionLiveness<'a> {
+    runtime: &'a RuntimePaths,
+    build: &'a str,
+    mux: MuxName,
+    workspace_id: &'a str,
+    session_name: &'a str,
+}
+
+impl SidebarLivenessSource for SessionLiveness<'_> {
+    fn sample(&self) -> SidebarLiveness {
+        let mut live = sidebar_liveness(self.runtime, self.build, self.mux, self.session_name);
+        live.young_panes = young_sidebar_panes(
+            self.mux,
+            self.workspace_id,
+            self.session_name,
+            jiff::Timestamp::now(),
+        );
+        live
+    }
+}
+
 fn reconcile_session<B: SidebarMux + ?Sized>(
     backend: &B,
     opts: &SidebarPaneOptions,
@@ -398,13 +420,13 @@ fn reconcile_session<B: SidebarMux + ?Sized>(
             path: opts.rimz_bin.clone(),
             source,
         })?;
-    let mut live = sidebar_liveness(runtime, &build, backend.name(), &opts.session_name);
-    live.young_panes = young_sidebar_panes(
-        backend.name(),
-        opts.workspace_id.as_str(),
-        &opts.session_name,
-        jiff::Timestamp::now(),
-    );
+    let live = SessionLiveness {
+        runtime,
+        build: &build,
+        mux: backend.name(),
+        workspace_id: opts.workspace_id.as_str(),
+        session_name: &opts.session_name,
+    };
     Ok(Some(backend.reconcile_sidebars(opts, &live)?))
 }
 

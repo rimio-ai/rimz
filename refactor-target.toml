@@ -2179,7 +2179,8 @@ allowed-dependencies = [
     "ids",
     "mux",
 ]
-surface-budget = 16
+# SidebarLivenessSource and its sample method expose post-listing evidence (+2).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
@@ -7000,6 +7001,11 @@ reason = "Ask, answer, channel and view readers share the same 30-day horizon."
 kind = "item"
 key = "mux::reconcile::SidebarLiveness"
 reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::SidebarLivenessSource"
+reason = "The public backend seam accepts fresh evidence after its listing and fixed liveness from direct integration callers."
 
 [[verdict]]
 kind = "item"

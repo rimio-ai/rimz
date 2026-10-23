@@ -23,10 +23,10 @@ use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
     CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing,
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, ResumeTab, ResumeTabShape,
-    ResumeTabUnconfirmed, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
-    WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version,
+    ResumeTabUnconfirmed, SessionOptions, SidebarLivenessSource, SidebarPaneOptions,
+    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    WidthStep, WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend,
+    execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -979,7 +979,7 @@ impl MuxBackend for TmuxBackend {
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
-        live: &SidebarLiveness,
+        live: &dyn SidebarLivenessSource,
     ) -> Result<SidebarRecovery> {
         let view_cols = match self.widest_client_size(&opts.session_name) {
             Some((cols, _)) => Some(cols),
@@ -1017,6 +1017,7 @@ impl MuxBackend for TmuxBackend {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
         })?;
+        let live = live.sample();
         let views = group_reconcile_panes(panes.panes.iter().filter_map(|pane| {
             if pane.session_name != opts.session_name {
                 return None;
@@ -1032,7 +1033,7 @@ impl MuxBackend for TmuxBackend {
                 role,
             })
         }));
-        let plan = super::super::plan_reconcile(&views, live);
+        let plan = super::super::plan_reconcile(&views, &live);
         let planned_closes = plan.close_panes();
         let mutated_views = plan.add_views();
         let mut report = SidebarRecovery::default();

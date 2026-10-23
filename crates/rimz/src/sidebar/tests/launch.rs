@@ -30,6 +30,7 @@ struct FakeSidebarMux {
     open_calls: Mutex<usize>,
     reconcile_calls: Mutex<usize>,
     fail_open: bool,
+    publish_before_sample: bool,
 }
 
 impl FakeSidebarMux {
@@ -72,12 +73,47 @@ impl SidebarMux for FakeSidebarMux {
 
     fn reconcile_sidebars(
         &self,
-        _opts: &SidebarPaneOptions,
-        _live: &SidebarLiveness,
+        opts: &SidebarPaneOptions,
+        live: &dyn SidebarLivenessSource,
     ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
         *self.reconcile_calls.lock().expect("reconcile calls") += 1;
+        if self.publish_before_sample {
+            let pane = PaneId::from_parts(MuxName::Tmux, "%42");
+            let mut heartbeat = SidebarHeartbeat::new(
+                opts.workspace_id.clone(),
+                SidebarInstanceId::new(),
+                MuxName::Tmux,
+                &opts.session_name,
+                opts.runtime.sock_dir.join("sidebar.sock"),
+                Some(pane.clone()),
+            );
+            heartbeat.build = Some(crate::build_id::of_file(&opts.rimz_bin).unwrap());
+            opts.runtime.ensure_dirs().unwrap();
+            std::fs::write(
+                opts.runtime.sidebar_heartbeat_path(&heartbeat.instance_id),
+                serde_json::to_vec(&heartbeat).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                live.sample().claimed_panes.contains(&pane),
+                "the source must see a heartbeat published after entering the backend"
+            );
+        }
         Ok(crate::mux::SidebarRecovery::default())
     }
+}
+
+#[test]
+fn reconcile_samples_heartbeat_claims_inside_the_backend() {
+    let h = Harness::new();
+    let backend = FakeSidebarMux {
+        publish_before_sample: true,
+        ..Default::default()
+    };
+    reconcile_session(&backend, &sidebar_opts(&h), Duration::ZERO)
+        .expect("reconcile")
+        .expect("session lock available");
+    assert_eq!(backend.reconcile_calls(), 1);
 }
 
 #[test]

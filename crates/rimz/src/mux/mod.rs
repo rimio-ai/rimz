@@ -35,7 +35,7 @@ use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
 };
-pub use reconcile::{SidebarLiveness, SidebarRecovery};
+pub use reconcile::{SidebarLiveness, SidebarLivenessSource, SidebarRecovery};
 pub(crate) use selection::LiveSessions;
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
@@ -1274,10 +1274,12 @@ pub trait MuxBackend: Send + Sync {
     /// Zellij keeps completed counts on post-execution read failures, adds one
     /// failure, and still attempts focus restoration before returning the report.
     /// Unlike [`Self::open_sidebar`], this never deletes or recreates the session.
+    /// Samples `live` exactly once after the native pane listing used by the
+    /// planner, before planning or any structural or geometry repair.
     fn reconcile_sidebars(
         &self,
         opts: &SidebarPaneOptions,
-        live: &SidebarLiveness,
+        live: &dyn SidebarLivenessSource,
     ) -> Result<SidebarRecovery>;
     /// Launch the daemon dashboard in one dedicated, named background view (tmux
     /// window / Zellij tab) of an existing session, born `sidebar | content |
