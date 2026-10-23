@@ -170,7 +170,6 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `mux/command` | holds; landed pass-24c | `e083557ba` | 30 | `CommandSpec` verbs public for integration and `cli`. |
 | `mux/selection` | holds; landed pass-24c | `e083557ba` | 30 | backend choice is the CLI's. |
 | `mux/domain` | holds; landed pass-24c | `e083557ba` | 30 | driven by the integration proc suite. |
-| `mux/companion_layout` | holds; landed pass-24c | `e083557ba` | 30 | the layout's vocabulary. |
 | `mux/binaries` | holds; landed pass-24c | `e083557ba` | 30 | read by `cli/doctor`. |
 | `mux/width_target` | holds; landed pass-24c | `e083557ba` | 30 | the room's width intent. |
 | `mux/tab_name` | holds; landed pass-24c | `e083557ba` | 30 | already crate-internal. |
