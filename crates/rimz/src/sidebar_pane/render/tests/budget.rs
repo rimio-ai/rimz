@@ -29,6 +29,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         name: "Explore".to_owned(),
         petname: None,
         provider_native: true,
+        fast: false,
         stalled: false,
         status: crate::agents::AgentStatus::Running,
         phase: crate::agents::TurnPhase::Acting,

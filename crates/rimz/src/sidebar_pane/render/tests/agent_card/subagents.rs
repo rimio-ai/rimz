@@ -1,6 +1,155 @@
 use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
+use crate::sidebar_pane::render::theme::Component;
+
+fn fast_children_mut(
+    snapshot: &mut SidebarSnapshot,
+) -> &mut Vec<crate::store::snapshot::SidebarSubAgent> {
+    &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .as_agent_mut()
+    .unwrap()
+    .sub_agents
+}
+
+fn fast_child_snapshot(status: AgentStatus, stalled: bool) -> SidebarSnapshot {
+    let mut parent = agent("parent", "claude", AgentStatus::Idle, None, None, None);
+    parent.prompt = Some("Delegate the work".to_owned());
+    let mut child = agent("child", "claude", status, None, None, Some("worker"));
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.model = Some("Haiku".to_owned());
+    child.usage.fresh_input_tokens = Some(12_000);
+    child.registered_at = Some(fixed_now() - Duration::from_secs(120));
+    let mut snapshot = snapshot_with(vec![parent, child]);
+    let child = &mut fast_children_mut(&mut snapshot)[0];
+    child.fast = true;
+    child.status = status;
+    child.stalled = stalled;
+    snapshot
+}
+
+#[test]
+fn fast_child_bolt_is_bold_and_still_in_every_status_and_absent_without_a_model() {
+    for no_color in [false, true] {
+        let theme = Theme::fixed(no_color);
+        for (status, stalled) in [
+            (AgentStatus::Running, false),
+            (AgentStatus::Idle, false),
+            (AgentStatus::Success, false),
+            (AgentStatus::Failed, false),
+            (AgentStatus::Failed, true),
+        ] {
+            let snapshot = fast_child_snapshot(status, stalled);
+            for phase in 0..128 {
+                let cost_rolls = CostRolls::default();
+                let ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
+                let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+                let metadata = block
+                    .lines
+                    .iter()
+                    .find(|line| line.to_string().contains("Haiku"))
+                    .unwrap();
+                assert!(
+                    metadata.to_string().contains("Haiku ϟ"),
+                    "{status:?}, {stalled}, {phase}: {metadata}"
+                );
+                let bolt = metadata
+                    .spans
+                    .iter()
+                    .find(|span| span.content == theme.glyph(GlyphRole::CardFast))
+                    .unwrap();
+                let expected = theme.styled(Component::FastMode, Modifier::BOLD);
+                assert_eq!(bolt.style.fg, expected.fg);
+                assert_eq!(bolt.style.add_modifier, expected.add_modifier);
+                assert_eq!(bolt.style.sub_modifier, expected.sub_modifier);
+            }
+        }
+        let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
+        fast_children_mut(&mut snapshot)[0].model = None;
+        assert!(
+            !group_lines(&snapshot, &theme, 0)
+                .iter()
+                .any(|line| line.to_string().contains(theme.glyph(GlyphRole::CardFast)))
+        );
+    }
+}
+
+#[test]
+fn fast_child_model_cell_keeps_the_bolt_attached_and_efforts_aligned() {
+    let theme = Theme::fixed(false);
+    for (fast_model, plain_model) in [("Haiku", "LongModel"), ("模型模型", "Haiku")] {
+        let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
+        let children = fast_children_mut(&mut snapshot);
+        children[0].model = Some(fast_model.to_owned());
+        children[0].effort = Some("high".to_owned());
+        let mut sibling = children[0].clone();
+        sibling.id = "sibling".to_owned();
+        sibling.fast = false;
+        sibling.model = Some(plain_model.to_owned());
+        sibling.effort = Some("low".to_owned());
+        children.push(sibling);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let fast = lines
+            .iter()
+            .map(Line::to_string)
+            .find(|line| line.contains(fast_model))
+            .unwrap();
+        let plain = lines
+            .iter()
+            .map(Line::to_string)
+            .find(|line| line.contains(plain_model))
+            .unwrap();
+        assert!(fast.contains(&format!("{fast_model} ϟ")), "{fast}");
+        assert!(!plain.contains('ϟ'), "{plain}");
+        assert_eq!(
+            Line::from(&fast[..fast.find("high").unwrap()]).width(),
+            Line::from(&plain[..plain.find("low").unwrap()]).width()
+        );
+    }
+}
+
+#[test]
+fn fast_child_two_cell_bolt_drops_whole_at_the_clock_boundary() {
+    let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
+    snapshot.theme = toml::from_str("[glyphs.unicode.card]\nfast = '++'").unwrap();
+    let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+    for (width, visible) in [(29, false), (30, true), (31, true)] {
+        let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+        let metadata = lines
+            .iter()
+            .find(|line| line.to_string().contains("Haiku"))
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            metadata.contains("Haiku ++"),
+            visible,
+            "{width}: {metadata}"
+        );
+        assert_eq!(
+            metadata.contains('+'),
+            visible,
+            "no partial bolt: {metadata}"
+        );
+        assert!(
+            metadata.trim_end_matches('▐').ends_with("   2m"),
+            "{metadata}"
+        );
+        assert_eq!(Line::from(metadata).width(), width);
+    }
+}
+
+#[test]
+fn fast_child_adds_no_animation_cadence_at_rest_or_while_running() {
+    for status in [AgentStatus::Idle, AgentStatus::Running] {
+        let mut snapshot = fast_child_snapshot(status, false);
+        let fast = animation_cadence_for_test(&snapshot);
+        fast_children_mut(&mut snapshot)[0].fast = false;
+        assert_eq!(fast, animation_cadence_for_test(&snapshot), "{status:?}");
+    }
+}
 
 #[test]
 fn child_compaction_count_uses_the_child_record_for_live_and_finished_entries() {

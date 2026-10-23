@@ -3,6 +3,63 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::store::snapshot::SubAgentTokens;
 
 #[test]
+fn launched_child_fast_uses_its_own_live_reading_and_never_marks_native_children() {
+    let mut child = child_state("root", "child", AgentStatus::Running, 0);
+    child.launch_depth = Some(1);
+    child.record = Some(Box::new(crate::agents::LaunchRecord {
+        fast: true,
+        ..Default::default()
+    }));
+    child.context = None;
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert!(
+        projected.fast,
+        "a fast launch fills an unknown live reading"
+    );
+    let encoded = serde_json::to_value(&projected).unwrap();
+    assert_eq!(encoded["fast"], true);
+    assert!(
+        serde_json::from_value::<crate::store::snapshot::SidebarSubAgent>(encoded)
+            .unwrap()
+            .fast
+    );
+
+    child.context = Some(crate::agents::AgentContext {
+        fast: Some(false),
+        ..Default::default()
+    });
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert!(
+        !projected.fast,
+        "the child's live reading wins over its launch"
+    );
+    assert!(
+        serde_json::to_value(projected)
+            .unwrap()
+            .get("fast")
+            .is_none()
+    );
+
+    child.launch_depth = None;
+    child.context.as_mut().unwrap().fast = Some(true);
+    let projected = sub_agent_from_state(&child, epoch(), false, 1_800);
+    assert!(
+        !projected.fast,
+        "provider-native children never carry the badge"
+    );
+    let mut encoded = serde_json::to_value(projected).unwrap();
+    assert!(encoded.get("fast").is_none());
+    assert!(
+        !serde_json::from_value::<crate::store::snapshot::SidebarSubAgent>(encoded.clone())
+            .unwrap()
+            .fast
+    );
+    encoded["fast"] = serde_json::json!(false);
+    let decoded: crate::store::snapshot::SidebarSubAgent = serde_json::from_value(encoded).unwrap();
+    assert!(serde_json::to_value(decoded).unwrap().get("fast").is_none());
+}
+
+#[test]
 fn subagent_projection_carries_the_child_kind_and_completed_compactions() {
     for (kind, launched) in [("claude", false), ("codex", false), ("codex", true)] {
         let mut child = child_state("root", "child", AgentStatus::Running, 0);
