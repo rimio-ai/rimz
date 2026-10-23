@@ -161,29 +161,71 @@ pub(super) fn render_spend(
     nl: &str,
 ) -> Result<()> {
     let mut lines = Vec::new();
+    if role.is_none()
+        && stats.by_day.is_empty()
+        && [RoleView::Agents, RoleView::Teams, RoleView::Subagents]
+            .into_iter()
+            .all(|role| {
+                role.rows(stats, active)
+                    .values()
+                    .all(|row| !row.has_usage())
+            })
+    {
+        lines.push("  No agent sessions recorded on this machine yet.".into());
+        lines.push("  Spend appears here after your first agent session; rimz stats reads it from each agent's own session files.".into());
+        lines.push(spend_footer(stats, today_day, None));
+        return emit(w, &lines, 0, nl);
+    }
     if role.is_none() {
         let [_, week, month, year] = Window::TABS.map(|window| window.select(&stats.total));
-        lines.push(format!(
-            "  {:20} {:>12} {:>12} {:>12} {:>12}",
-            "Spend", "Today", "Week", "Month", "Year"
-        ));
         let today = stats.by_day.get(&today_day).cloned().unwrap_or_default();
-        lines.push(format!(
-            "  {:20} {:>12} {:>12} {:>12} {:>12}",
-            "dollars",
-            fmt_usd(today.usd),
-            fmt_usd(week.usd),
-            fmt_usd(month.usd),
-            fmt_usd(year.usd)
-        ));
-        lines.push(format!(
-            "  {:20} {:>12} {:>12} {:>12} {:>12}",
-            "tokens",
-            fmt_tokens(today.tokens),
-            fmt_tokens(week.display_tokens()),
-            fmt_tokens(month.display_tokens()),
-            fmt_tokens(year.display_tokens())
-        ));
+        let averages = Window::TABS.map(|window| {
+            per_active_day(&stats.by_day, today_day, window)
+                .map(fmt_usd)
+                .unwrap_or_else(|| "–".into())
+        });
+        let trends = Window::TABS.map(|window| {
+            spend_trend(&stats.by_day, today_day, window)
+                .map(|trend| format!(" {}", trend_label(trend)))
+                .unwrap_or_default()
+        });
+        // Each figure right-aligns to its column's edge, so a Week or Month trend runs into
+        // the next column's padding without moving any figure.
+        const COLUMN_EDGES: [usize; 4] = [35, 52, 69, 86];
+        for (label, values, row_trends) in [
+            (
+                "Spend",
+                Window::TABS.map(|window| window.label().to_owned()),
+                None,
+            ),
+            (
+                "dollars",
+                [today.usd, week.usd, month.usd, year.usd].map(fmt_usd),
+                Some(&trends),
+            ),
+            (
+                "tokens",
+                [
+                    today.tokens,
+                    week.display_tokens(),
+                    month.display_tokens(),
+                    year.display_tokens(),
+                ]
+                .map(fmt_tokens),
+                None,
+            ),
+            ("per active day", averages, None),
+        ] {
+            let mut line = format!("  {label:20}");
+            for (index, (value, edge)) in values.iter().zip(COLUMN_EDGES).enumerate() {
+                let start = edge
+                    .saturating_sub(display_width(value))
+                    .max(display_width(&line) + 1);
+                line = pad_to(&line, start) + value;
+                line.push_str(row_trends.map_or("", |trends| trends[index].as_str()));
+            }
+            lines.push(line);
+        }
         let models = stats
             .by_model
             .iter()
@@ -247,16 +289,28 @@ pub(super) fn render_spend(
             continue;
         }
         let rows = profile_role.rows(stats, active).into_iter().collect();
+        let mut section_lines = Vec::new();
         let shown = spend_section(
-            &mut lines,
+            &mut section_lines,
             SpendSection::Profiles(profile_role),
             rows,
             active.select(&stats.total).usd,
             if role.is_some() { None } else { Some(3) },
             active,
         );
+        if !visible_profiles && (shown || role.is_some()) {
+            let notes = recording_notes(stats, today_day, active);
+            if !notes.is_empty() {
+                lines.push(String::new());
+                lines.extend(notes);
+            }
+        }
+        lines.extend(section_lines);
         visible_profiles |= shown;
         if !shown && role.is_some() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
             lines.push(format!(
                 "  No {} spend recorded ({}).",
                 profile_role.noun(),
@@ -264,10 +318,29 @@ pub(super) fn render_spend(
             ));
         }
     }
-    if role.is_some() || visible_profiles {
-        lines.extend(recording_notes(stats, today_day, active));
-    }
     if role.is_none() {
+        let total = active.select(&stats.total).usd;
+        let assigned: f64 = [RoleView::Agents, RoleView::Teams, RoleView::Subagents]
+            .into_iter()
+            .flat_map(|role| role.rows(stats, active).into_values())
+            .map(|row| row.spend.usd)
+            .sum();
+        let unassigned = (total - assigned).max(0.0);
+        if unassigned >= 0.01 {
+            lines.push(String::new());
+            lines.push(format!(
+                "  {} {} {:>6.1}%",
+                pad_to(
+                    &render::paint(render::palette::muted(), "No role recorded"),
+                    20
+                ),
+                render::paint(
+                    render::palette::money(),
+                    &format!("{:>10}", fmt_usd(unassigned))
+                ),
+                share_of(unassigned, total) * 100.0,
+            ));
+        }
         lines.push(String::new());
         heatmap_lines(
             &mut lines,
@@ -276,14 +349,63 @@ pub(super) fn render_spend(
             weeks_for_terminal(render::terminal_columns(80)),
             dollars,
         );
+        let activity = Activity::of(&stats.by_day, today_day, active);
+        let streak = Activity::of(&stats.by_day, today_day, Window::Year).current_streak;
+        let busiest = activity
+            .most_active
+            .map(fmt_day)
+            .unwrap_or_else(|| "–".into());
+        let summary = format!(
+            "{} of last {} days active · streak {} · busiest {busiest}",
+            activity.active_count,
+            activity.window_days,
+            plural_days(streak)
+        );
+        if let Some(key) = lines.last_mut() {
+            *key = format!(
+                "{}{}",
+                pad_to(key, 40),
+                render::paint(render::palette::muted(), &summary)
+            );
+        }
     }
-    let as_of = stats.as_of();
-    let same_day = stats.today_day(stats.refreshed_at_ms / 1000) == today_day;
-    lines.push(format!(
-        "\n  as of {}",
-        as_of.strftime(if same_day { "%H:%M" } else { "%b %d %H:%M" })
+    lines.push(spend_footer(
+        stats,
+        today_day,
+        role.is_none().then_some(active),
     ));
     emit(w, &lines, 0, nl)
+}
+
+fn spend_footer(stats: &Stats, today_day: i64, window: Option<Window>) -> String {
+    let as_of = stats.as_of();
+    let same_day = stats.today_day(stats.refreshed_at_ms / 1000) == today_day;
+    let mut line = format!(
+        "\n  as of {}",
+        as_of.strftime(if same_day { "%H:%M" } else { "%b %d %H:%M" })
+    );
+    let Some(window) = window else { return line };
+    let spend = window.select(&stats.total);
+    if spend.sessions == 0 {
+        return line;
+    }
+    let period = match window {
+        Window::Today => "today",
+        Window::Week => "this week",
+        Window::Month => "this month",
+        Window::Year => "this year",
+    };
+    line.push_str(&format!(
+        " · {} {} {period} at {} each",
+        rimz::theme::fmt::group_thousands(u64::from(spend.sessions)),
+        if spend.sessions == 1 {
+            "session"
+        } else {
+            "sessions"
+        },
+        rimz::theme::fmt::dollars2(spend.usd / f64::from(spend.sessions))
+    ));
+    line
 }
 
 fn share_of(value: f64, total: f64) -> f64 {
@@ -310,16 +432,7 @@ fn show_agents(stats: &Stats, active: Window, admits: fn(&SpendWindow) -> bool) 
 }
 
 fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String> {
-    [
-        (
-            stats.recorded_since(),
-            "roles",
-            "; earlier spend shows under Providers only",
-        ),
-        (stats.effort_since(), "active time and messages", ""),
-    ]
-    .into_iter()
-    .filter_map(|(since, label, suffix)| {
+    let date = |since: Option<jiff::Zoned>| {
         let since = since?;
         let start = active.assist_since(stats.as_of().timestamp(), &stats.timezone)?;
         if start >= since.timestamp() {
@@ -333,12 +446,22 @@ fn recording_notes(stats: &Stats, today_day: i64, active: Window) -> Vec<String>
         } else {
             "%b %d %Y"
         });
-        Some(render::paint(
-            render::palette::muted(),
-            &format!("  {label} recorded since {date}{suffix}"),
-        ))
-    })
-    .collect()
+        Some(date.to_string())
+    };
+    let note = match (date(stats.recorded_since()), date(stats.effort_since())) {
+        (Some(roles), Some(effort)) => format!(
+            "roles recorded since {roles}, earlier spend counts as No role · agent-time and messages since {effort}"
+        ),
+        (Some(roles), None) => {
+            format!("roles recorded since {roles}, earlier spend counts as No role")
+        }
+        (None, Some(effort)) => format!("agent-time and messages recorded since {effort}"),
+        (None, None) => return Vec::new(),
+    };
+    vec![render::paint(
+        render::palette::muted(),
+        &format!("  {note}"),
+    )]
 }
 
 fn spend_section(
@@ -390,8 +513,8 @@ fn spend_section(
     };
     let effort_header = match section {
         SpendSection::Profiles(role) => format!(
-            " {:>8}{}",
-            "ACTIVE",
+            " {:>11}{}",
+            "AGENT-TIME",
             if role == RoleView::Teams {
                 format!(" {:>messages_width$}", "MESSAGES")
             } else {
@@ -451,7 +574,7 @@ fn spend_section(
             } else {
                 format!(" {:>messages_width$}", messages_label(&row))
             };
-            format!(" {active:>8}{messages}")
+            format!(" {active:>11}{messages}")
         } else {
             String::new()
         };
@@ -462,7 +585,7 @@ fn spend_section(
         let detail = if compact {
             format!(
                 "{:>8}{effort} {:>8} {:>4} {:>5}",
-                spend.sessions,
+                rimz::theme::fmt::group_thousands(u64::from(spend.sessions)),
                 fmt_tokens(spend.display_tokens()),
                 hit,
                 spend
@@ -478,7 +601,10 @@ fn spend_section(
                 fmt_tokens_precise(spend.cache_read),
                 hit,
                 if matches!(section, SpendSection::Profiles(_)) {
-                    format!(" {:>8}", spend.sessions)
+                    format!(
+                        " {:>8}",
+                        rimz::theme::fmt::group_thousands(u64::from(spend.sessions))
+                    )
                 } else {
                     String::new()
                 }
