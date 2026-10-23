@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
+use rimz::ids::PaneId;
 use rimz::store::runtime::{AgentLiveness, OWNER_EXIT_BOUND, agent_liveness, await_owner_exits};
 use rimz::store::snapshot::find_agent;
 
@@ -22,7 +23,7 @@ struct StopTracker {
 pub(in crate::cli) struct TreeStop {
     root: Option<AgentKey>,
     /// Each row this tree closed, with the handle its failure lines use.
-    closed: Vec<(AgentKey, String)>,
+    closed: Vec<(AgentKey, Option<PaneId>, String)>,
     child_receipts: Vec<String>,
     still_running: Vec<(AgentKey, String, u32)>,
     failures: Vec<String>,
@@ -339,10 +340,13 @@ fn stop_live_agent(
     store: &rimz::Store,
     globals: &GlobalFlags,
     agent: &AgentState,
-) -> Result<AgentKey> {
+) -> Result<(AgentKey, Option<PaneId>)> {
     if let Some(run) = stop_run(store, agent)? {
         supervised::stop_supervised_run(workspace, store, globals, &run)?;
-        Ok((agent.kind.clone(), agent.agent_id.clone()))
+        Ok((
+            (agent.kind.clone(), agent.agent_id.clone()),
+            agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+        ))
     } else {
         close_agent_pane(workspace, store, agent)
     }
@@ -390,7 +394,7 @@ pub(in crate::cli) fn stop_resolved(
     let closed = stops
         .iter()
         .flat_map(|stop| &stop.closed)
-        .filter_map(|((kind, id), _)| rimz::address::launch_row(&projection.agents, kind, id))
+        .filter_map(|(key, pane, _)| closed_row(&projection.agents, key, pane.as_ref()))
         .collect::<Vec<_>>();
     // An owner may change or record its end during the wait, so a wait that
     // slept decides from a fresh read.
@@ -401,13 +405,12 @@ pub(in crate::cli) fn stop_resolved(
     };
     let settled = refreshed.as_ref().unwrap_or(&projection);
     for stop in &mut stops {
-        for ((kind, id), label) in &stop.closed {
-            let Some(agent) = rimz::address::launch_row(&settled.agents, kind, id) else {
+        for (key, pane, label) in &stop.closed {
+            let Some(agent) = closed_row(&settled.agents, key, pane.as_ref()) else {
                 continue;
             };
             if let AgentLiveness::Live { pid } = agent_liveness(agent) {
-                let key = (kind.clone(), id.clone());
-                stop.still_running.push((key, label.clone(), pid));
+                stop.still_running.push((key.clone(), label.clone(), pid));
             }
         }
     }
@@ -459,7 +462,7 @@ fn stop_live_agent_tree(
         stop.failures.extend(child_stop.failures);
     }
 
-    let closed = match stop_live_agent(workspace, store, globals, agent) {
+    let (closed, pane) = match stop_live_agent(workspace, store, globals, agent) {
         Ok(closed) => closed,
         Err(err) => {
             stop.failures.push(format!("{parent_label}: {err:#}"));
@@ -467,7 +470,8 @@ fn stop_live_agent_tree(
         }
     };
     stop.root = Some(closed.clone());
-    stop.closed.push((closed.clone(), parent_label.clone()));
+    stop.closed
+        .push((closed.clone(), pane, parent_label.clone()));
     tracker.stopped.insert(closed);
     tracker.stopped.insert(key);
     if let Err(err) = rimz::harness::schedule::arm::retire_session(
@@ -485,7 +489,7 @@ fn close_agent_pane(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     agent: &AgentState,
-) -> Result<AgentKey> {
+) -> Result<(AgentKey, Option<PaneId>)> {
     let refreshed;
     let agent = if agent.molted_from.is_some() && agent.agent_id.is_provisional() {
         let cwd = agent
@@ -498,7 +502,7 @@ fn close_agent_pane(
             &workspace.session_name,
             cwd,
         )? {
-            return Ok((agent.kind.clone(), agent.agent_id.clone()));
+            return Ok(((agent.kind.clone(), agent.agent_id.clone()), None));
         }
         refreshed = store.runtime_projection(rimz::RuntimeScope::Audit)?;
         rimz::address::launch_row(&refreshed.agents, &agent.kind, &agent.agent_id)
@@ -513,12 +517,79 @@ fn close_agent_pane(
     rimz::harness::hibernate::wake_pane(store, &pane.pane_id)?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
     backend.close_pane(&workspace.session_name, &pane.pane_id)?;
-    Ok((agent.kind.clone(), agent.agent_id.clone()))
+    Ok((
+        (agent.kind.clone(), agent.agent_id.clone()),
+        Some(pane.pane_id.clone()),
+    ))
+}
+
+/// The row a stop closed: the exact key, else (once a hook re-keyed it) the
+/// launch's row on the closed pane. Never `launch_row` across panes, which can
+/// pick a live peer of the same launch in another pane.
+fn closed_row<'a>(
+    agents: &'a [AgentState],
+    (kind, id): &AgentKey,
+    pane: Option<&PaneId>,
+) -> Option<&'a AgentState> {
+    find_agent(agents, kind, id).or_else(|| {
+        let pane = pane?;
+        rimz::address::launch_row(
+            agents.iter().filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|bound| &bound.pane_id == pane)
+            }),
+            kind,
+            id,
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_row_prefers_the_exact_ended_row_to_a_live_launch_peer() {
+        let mut exact = AgentState::stub("claude", "closed", rimz::agents::AgentStatus::Success);
+        exact.launch_id = Some("launch_shared".into());
+        exact.ended_at = Some(jiff::Timestamp::now());
+        let mut peer = exact.clone();
+        peer.agent_id = "other".into();
+        peer.ended_at = None;
+        let key = (exact.kind.clone(), exact.agent_id.clone());
+        let agents = [exact, peer];
+        assert_eq!(
+            closed_row(&agents, &key, None).map(|agent| agent.agent_id.as_str()),
+            Some("closed")
+        );
+    }
+
+    #[test]
+    fn closed_row_follows_a_rekey_only_on_the_closed_pane() {
+        let pane = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_3");
+        let mut successor =
+            AgentState::stub("claude", "successor", rimz::agents::AgentStatus::Idle);
+        successor.launch_id = Some("launch_closed".into());
+        successor.pane = Some(rimz::pane::PaneRef::from_id(pane.clone()));
+        let mut peer = successor.clone();
+        peer.agent_id = "other".into();
+        peer.pane = Some(rimz::pane::PaneRef::from_id(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            "terminal_4",
+        )));
+        let key = (successor.kind.clone(), "launch_closed".into());
+        let agents = [successor, peer];
+        assert_eq!(
+            closed_row(&agents, &key, Some(&pane)).map(|agent| agent.agent_id.as_str()),
+            Some("successor")
+        );
+        assert!(closed_row(&agents, &key, None).is_none());
+        assert!(closed_row(&agents[1..], &key, Some(&pane)).is_none());
+        let unrelated = (key.0.clone(), "unrelated".into());
+        assert!(closed_row(&agents, &unrelated, Some(&pane)).is_none());
+    }
 
     #[test]
     fn stopping_peer_uses_interactive_pane_path_without_canceling_turn() {

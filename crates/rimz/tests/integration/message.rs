@@ -3619,6 +3619,107 @@ fn stop_names_a_still_running_owner_without_offering_resume() {
 }
 
 #[test]
+fn stop_waits_only_for_the_closed_pane_of_a_shared_launch() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("claude");
+    let pid = env.agent_owner_pid();
+    for (id, name, pane, owner) in [
+        ("receipt-session", "receipt-pet", TRACE_PANE, None),
+        (
+            "other-session",
+            "other-pet",
+            "terminal_4",
+            Some(rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "other-session",
+                pid,
+            )),
+        ),
+    ] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(name.to_owned());
+                observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, pane));
+                observation.runtime_owner = owner.clone();
+            },
+        );
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                workspace.session_name.clone(),
+                &kind,
+                AgentLaunchPayload {
+                    agent_id: id.into(),
+                    launch_id: Some("launch_shared".into()),
+                    system_prompt_digest: None,
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane)),
+                    runtime_owner: owner,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    }
+    append_lifecycle(
+        &env,
+        "claude",
+        "UserPromptSubmit",
+        "other-session",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        |_| {},
+    );
+    let projection = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    assert_eq!(projection.agents.len(), 2);
+    assert!(
+        projection
+            .agents
+            .iter()
+            .all(|agent| agent.ended_at.is_none())
+    );
+    assert_eq!(
+        rimz::address::launch_row(&projection.agents, &kind, &"receipt-session".into())
+            .unwrap()
+            .agent_id,
+        "other-session"
+    );
+
+    let mut command = traced_rimz(&env, "receipt.log");
+    command.env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "10000").args([
+        "agents",
+        "stop",
+        "@receipt-session",
+    ]);
+    let started = Instant::now();
+    let stop = command.output().unwrap();
+    let elapsed = started.elapsed();
+    assert!(stop.status.success(), "{stop:?}");
+    let receipt = String::from_utf8_lossy(&stop.stdout);
+    assert_eq!(
+        receipt.trim(),
+        "stopped @receipt-pet (claude); resume: rimz agents resume @receipt-pet"
+    );
+    assert!(elapsed < Duration::from_secs(5), "stop took {elapsed:?}");
+}
+
+#[test]
 fn stop_non_resumable_agent_omits_resume_clause() {
     let env = Env::new();
     env.record(&env.project_root);
