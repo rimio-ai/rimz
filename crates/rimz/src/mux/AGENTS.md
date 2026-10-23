@@ -31,3 +31,5 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 Planner, width, and selection logic stay unit-level — no mux required. Live-backend behaviour belongs in [`tests/integration/backend/`](../../tests/integration/backend/), which self-skips when the mux binary is absent.
 
 A change to what a Zellij birth waits on also runs `cargo xtask test -P live -E 'binary(integration) & test(/^journey::deep::zellij/)'`, which covers clientless births through the real plugin.
+
+Where Zellij places a pane depends on the session options RimZ fixes at birth, which `zellij_session_options` in [`zellij.rs`](./zellij.rs) resolves: `auto_layout false`, `stacked_resize true`, and `stacked_pane_list false`. A hand-built placement probe sets them, as top-level lines in its layout or `config.kdl` the way the birth layout carries them, and an upstream source read about placement states them. Without them, either describes a session RimZ never runs.
