@@ -131,10 +131,22 @@ pub struct SpendingWalkResult {
     pub login_day: BTreeMap<LoginKey, SpendWindow>,
     pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
+    pub chart: ChartSpend,
     pub timezone: String,
     pub models: BTreeMap<String, ModelTally>,
     pub roles: RoleTallies,
     pub stats: WalkStats,
+}
+
+/// Stored model dollars for the dashboard's daily and weekly spend charts.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChartSpend {
+    /// Local epoch day anchoring the newest block in the published history zone.
+    pub today: i64,
+    /// Local epoch days for the last 30 days, including today.
+    pub days: BTreeMap<i64, BTreeMap<String, f64>>,
+    /// Last local epoch day of each of the 52 seven-day blocks ending today.
+    pub weeks: BTreeMap<i64, BTreeMap<String, f64>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

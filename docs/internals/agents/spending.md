@@ -71,9 +71,9 @@ The walk publishes machine-shared `provider-spending.json`, and every reader tak
 | fleet store `W:` and `M:` rows | the fleet-wide trailing-week and trailing-month totals; `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
 | cockpit `◎`, `¤`, and breakdown | a workspace-scoped tally limited to the room's project root and grouped worktrees, omitting unknown-origin files |
 | account daily caps | a local-calendar-day `SpendWindow` per kind (`day_by_provider`) and per history pool (`day_by_login`), computed for eligible kinds independently of the headline ([budget.md](../harness/budget.md)) |
-| `rimz stats` | local-calendar-day buckets and per-model buckets ([stats.md](../stats.md)) |
+| `rimz stats` | local-calendar-day and per-model buckets; `chart.days` holds model dollars for the last 30 local days, and `chart.weeks` for 52 seven-day blocks ending at `chart.today`, keyed by each block's last day ([stats.md](../stats.md)) |
 
-The publication names its resolved `timezone`; both its day keys (local civil dates expressed as epoch-day numbers) and the reader's today index use that zone. Raw rows use their local date. Rows compacted beyond eight days carry only a UTC rollup's maximum timestamp, so their heatmap cell uses that timestamp's local date, an approximation that does not change window totals. Local-midnight boundaries are computed once per history pass, not by converting every row. Only the aggregate version changes; the raw spending cache stays readable without reparsing pruned transcripts.
+The publication names its resolved `timezone`; both its day keys (local civil dates expressed as epoch-day numbers) and the reader's today index use that zone. `chart.today` records the walk's local epoch day in that history zone, anchoring weekly blocks independently of the system-zone midnight cutoff. Raw rows use their local date. Rows compacted beyond eight days carry only a UTC rollup's maximum timestamp, so their heatmap cell uses that timestamp's local date, an approximation that does not change window totals. Local-midnight boundaries are computed once per history pass, not by converting every row. Only the aggregate version changes; the raw spending cache stays readable without reparsing pruned transcripts.
 
 An unnamed system timezone cannot be carried in the publication. History then uses and publishes UTC, with a tracing warning to set `timezone` in config. Named zones are unchanged. Account-day budget windows retain their existing configured/system-zone behavior.
 
@@ -113,7 +113,7 @@ Three version constants gate schema changes:
 | Constant | Current version | Bump when | Effect |
 | --- | --- | --- | --- |
 | `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 28: per-entry fast-mode flag | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
-| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 21: team-role tallies separate from solo agent profiles, with active-time and message effort windows | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
+| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 22: bounded daily and weekly model-dollar chart cells | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 8: calendar-day tally window | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
 Writers refuse a schema downgrade after a cheap leading-version probe. An older long-lived build therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
