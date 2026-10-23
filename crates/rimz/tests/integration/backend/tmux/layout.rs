@@ -1422,6 +1422,33 @@ fn directional_split_of_a_broken_stack_falls_back_to_join() {
 }
 
 #[test]
+fn stacked_split_refreshes_members_after_a_member_exits() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-split-window",
+        &format!(
+            "set-hook -gu -t {caller} after-split-window ; kill-pane -t {}",
+            members[1]
+        ),
+    ]);
+    let new = stack_split(&server, &members[2], SplitPlacement::Stacked);
+    assert_eq!(
+        server.display(new.raw(), "#{@rimz_stack}"),
+        server.display(&members[0], "#{@rimz_stack}"),
+        "the newcomer must be marked despite the exited member"
+    );
+    assert_stack(
+        &server,
+        &[members[0].clone(), members[2].clone(), new.raw().into()],
+        new.raw(),
+    );
+}
+
+#[test]
 fn directional_stack_split_refreshes_members_after_a_member_exits() {
     require_tmux!();
     let server = TmuxServer::new();
