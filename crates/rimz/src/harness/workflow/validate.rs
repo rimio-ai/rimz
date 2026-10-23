@@ -158,7 +158,13 @@ pub(super) fn validate_spec(
             );
         }
         let condition = matches!(check.kind(), Some(CheckKind::Condition));
+        for wake in check.wake.iter().flatten() {
+            if let Err(error) = wake.subscription() {
+                report.error(&format!("{path}.wake"), error);
+            }
+        }
         for (field, present) in [
+            ("wake", check.wake.is_some() && condition),
             ("else", check.else_outcome.is_some() && !condition),
             ("provider", check.provider.is_some() && !condition),
             ("account", check.account.is_some() && !condition),

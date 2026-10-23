@@ -10,6 +10,7 @@ mod judges;
 mod scope;
 mod shells;
 mod ticks;
+mod wakes;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     let env = Env::new();
@@ -338,7 +339,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
 #[test]
 fn wait_is_merged_clamped_and_cleared_by_signal() {
     let script = format!("printf x >> \"$RIMZ_WORKFLOW_DIR/count\"\n{PENDING}");
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), &script);
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &script);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"]["count"] == 1);
     let recheck: jiff::Timestamp = value["record"]["recheck_at"]
@@ -410,7 +411,7 @@ fn signal_during_evaluation_rechecks_the_result_without_backoff() {
         "printf x >> \"$RIMZ_WORKFLOW_DIR/count\"\nif test \"$(wc -c < \"$RIMZ_WORKFLOW_DIR/count\")\" -eq 1; then\n{PENDING}\nelse\n{}\nfi",
         evaluation_script("done")
     );
-    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), &script);
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), &script);
     let socket = env.runtime_root.join("wake-result.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -450,7 +451,7 @@ fn signal_during_evaluation_rechecks_the_result_without_backoff() {
 
 #[test]
 fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
-    let spec = format!("{HEADER}{WAIT}");
+    let spec = format!("{HEADER}{WAIT}wake=['review.ready']\n");
     let (env, first_dir) = fixture(&spec, PENDING);
     let second_dir = first_dir.with_file_name("another");
     fs::create_dir_all(second_dir.join("checks")).unwrap();
@@ -508,7 +509,7 @@ fn run_dot_resolves_the_current_definition_directory() {
 
 #[test]
 fn signal_wakes_every_run_without_waiting_for_another_script() {
-    let spec = format!("{HEADER}{WAIT}");
+    let spec = format!("{HEADER}{WAIT}wake=['review.ready']\n");
     let (env, first_dir) = fixture(&spec, PENDING);
     let second_dir = first_dir.with_file_name("another");
     fs::create_dir_all(second_dir.join("checks")).unwrap();
@@ -596,7 +597,7 @@ fn malformed_and_unrouted_objects_are_invalid() {
 
 #[test]
 fn invalid_defaults_park_and_deleted_script_is_invalid() {
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::remove_file(dir.join("checks/pr.sh")).unwrap();
@@ -637,7 +638,7 @@ fn cap_only_self_cycle_is_refused_before_launch() {
 #[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
-        "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
+        "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nwake=['review.ready']\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
     let (env, dir) = fixture(&spec, PENDING);
     let id = start(&env);
@@ -1079,7 +1080,7 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
 
 #[test]
 fn human_show_wait_and_journal_are_readable() {
-    let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
     let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));

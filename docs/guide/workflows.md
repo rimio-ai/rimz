@@ -52,6 +52,8 @@ Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, an
 
 Select exactly one of `run`, `shell`, `agent`, or nonempty `cases` on a check. Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `shell` accepts shell syntax and arbitrary paths; it is not confined to the workflow directory. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
 
+Run, shell, and agent checks accept an optional `wake` list of signal subscriptions. Condition checks derive their subscriptions from their terms and refuse `wake`; see [waiting on the outside world](#wait-on-the-outside-world).
+
 ## Check it and start a run
 
 Validate the definition first. The command prints every node with the edges it resolved, including the defaults the engine adds:
@@ -159,11 +161,32 @@ Cases are ordered. Each `when` array is ANDed, and its strings take the loop gra
 
 Unread is not false: an unread case before the first true case answers `unknown`, even for `!pr=open`. The default `unknown → @wait` keeps the run there; override `on.unknown` to route elsewhere. Do not write `pr=unknown` in a case: unread terms answer the `unknown` outcome instead. Forge readings must come from a successful probe at or after entry to this check (including after resume). Until then, `show` names the unread keys. Stage and usage-window readings have no freshness floor. Keep the room open for fresh forge data: an idle repository's next probe can take up to five minutes. Two consecutive forge checks each need a post-entry probe, so put related decisions in cases of one check. This floor does not eliminate forge propagation lag after a push, and closing the room leaves its last post-entry facts in force.
 
-A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Signals and the minute tick re-sample; changes entirely between samples go unseen. `key` fixes the case's string or integer key; without it the answer inherits the run's key.
+A case's optional `for` is a nonzero duration in `s`, `m`, `h`, or `d`. A held case must route its outcome away from `@wait`. While that case keeps winning, the run shows `holding red 1m/2m`; the next evaluation at or after two minutes follows `on.red`. A different answer closes the hold, and a later true starts a new one. Subscribed signals and the minute tick re-sample; changes entirely between samples go unseen. `key` fixes the case's string or integer key; without it the answer inherits the run's key.
 
 A condition reading `window.*` requires `provider = "claude"` (an agent kind, not a profile) and accepts an optional `account = "work"`. Both are refused when inapplicable. `team.stage` values are checked against the project's effective teams plus `Done`; validation outside a workspace warns that stage names were not checked.
 
-A waiting check without `recheck_at` runs again about once a minute. A signal in the room clears `recheck_at` and runs it at once. Every [signal](./loops.md#signals-the-rooms-event-bus) does this except agent lifecycle signals such as `agent.idle`.
+A waiting check without `recheck_at` runs again about once a minute. A signal matching the current check's subscription clears `recheck_at` and runs it at once. A check with no subscription gets only its recheck time and the minute tick; signals never wake a step.
+
+A condition derives these subscriptions from all its cases, including negated terms:
+
+| Term | Signal subscription |
+| --- | --- |
+| `ci` | `ci.*` for the run's checkout |
+| `pr`, `pr.queue` | `pr.*` for the run's checkout |
+| `team.stage` | `team.stage` for the run's board |
+| Branch-selector terms such as `ci[main]`, and `window.*` | None; recheck time and the minute tick only |
+
+For a run, shell, or agent check, declare the signals that should re-run it:
+
+```toml
+[checks.review]
+run = "checks/review.py"
+on = { ready = "@done", pending = "@wait" }
+timeout = "2d"
+wake = ["ci.failed", { signal = "deploy.finished", match = { env = "prod" } }]
+```
+
+Each entry is a selector string or a table with `signal` and optional `match`; other table keys are refused. Selectors and match values use the [loop signal grammar](../reference/cli/loop.md#signals). `ci` and `pr` default to the run's checkout `path`, unless the entry explicitly matches `path` or `branch`. `team.stage` defaults to the run's current board, unless the entry matches `team`, `instance`, or `board`; relinking the checkout changes which board wakes it. Other families, such as `review.ready`, are room-wide unless given match filters. For example, `{ signal = "ci.failed", match = { path = "*" } }` accepts any checkout. Project-scoped runs use the project root for these defaults. Agent lifecycle selectors and team selectors other than exact `team.stage` are refused.
 
 A check that can wait must have a `timeout`. It starts each time the run enters the check and runs across every wait there. When it passes, the run parks. Here each return from `sweep` starts a new two days.
 
@@ -283,7 +306,7 @@ A shell check constructs its answer for you: `outcome` is `pass` or `fail`, `cod
 | --- | --- | --- |
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
 | `reason` | no | Text for the history, and the park text when the outcome routes to `@user`. |
-| `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a signal arrives. |
+| `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a subscribed signal arrives. |
 | `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later context files carry it. |
 
 Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.

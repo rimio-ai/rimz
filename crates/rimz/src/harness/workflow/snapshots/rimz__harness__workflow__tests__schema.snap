@@ -104,6 +104,15 @@ expression: value
             "null"
           ]
         },
+        "wake": {
+          "items": {
+            "$ref": "#/$defs/Wake"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "window": {
           "type": [
             "string",
@@ -237,6 +246,32 @@ expression: value
         }
       },
       "type": "object"
+    },
+    "Wake": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "match": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "signal": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "signal"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -1105,7 +1105,8 @@ path = "crates/rimz/src/harness"
 # WorkflowSpec::forge_branches exposes read-only sealed-spec demand to the sidebar (+1).
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
-surface-budget = 975
+# WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
+surface-budget = 976
 
 [[verdict]]
 kind = "item"

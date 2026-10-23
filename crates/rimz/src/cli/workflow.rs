@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::config::definitions::{self, SkillCheck};
 use rimz::disk::paths;
+use rimz::harness::schedule::signal::Signal;
 use rimz::harness::workflow::{self, Validation};
 use rimz::ids::WorkflowRunId;
 use rimz::store::workflow::{self as records, RunRecord};
@@ -56,8 +57,12 @@ enum Command {
     Advance {
         #[arg(required_unless_present = "wake_signal")]
         id: Option<WorkflowRunId>,
-        #[arg(long, conflicts_with = "id")]
-        wake_signal: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "id",
+            value_parser = |raw: &str| serde_json::from_str::<Signal>(raw)
+        )]
+        wake_signal: Option<Signal>,
     },
     /// Validate one workflow directory, or every machine workflow.
     Validate {

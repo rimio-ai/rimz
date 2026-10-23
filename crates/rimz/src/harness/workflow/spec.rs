@@ -5,9 +5,11 @@ use std::path::{Component, Path, PathBuf};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::harness::schedule::when::WhenExpr;
+use crate::harness::schedule::{self, signal::SignalSelector, when::WhenExpr};
 
 pub use crate::store::workflow::ScopeKind;
+
+type Subscription = (SignalSelector, BTreeMap<String, String>);
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +73,7 @@ pub struct Check {
     pub agent: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
+    pub(super) wake: Option<Vec<Wake>>,
     #[serde(default, deserialize_with = "nonempty_cases")]
     #[schemars(length(min = 1))]
     pub cases: Vec<Case>,
@@ -83,6 +86,31 @@ pub struct Check {
     #[serde(default)]
     pub on: BTreeMap<String, String>,
     pub timeout: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub(super) enum Wake {
+    Selector(String),
+    Binding {
+        signal: String,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
+    },
+}
+
+impl Wake {
+    pub(super) fn subscription(&self) -> Result<Subscription, SpecErr> {
+        let (raw, matches) = match self {
+            Self::Selector(signal) => (signal, BTreeMap::new()),
+            Self::Binding { signal, matches } => (signal, matches.clone()),
+        };
+        let selector = schedule::parse_signal_selector("workflow wake", raw, Some(&matches))?;
+        if selector.family() == "agent" || (selector.family() == "team" && raw != "team.stage") {
+            return Err(SpecErr::LifecycleWake);
+        }
+        Ok((selector, matches))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -113,6 +141,23 @@ pub(super) enum CheckKind<'a> {
 }
 
 impl Check {
+    pub(super) fn subscriptions(&self) -> Result<Vec<Subscription>, SpecErr> {
+        if !matches!(self.kind(), Some(CheckKind::Condition)) {
+            return self.wake.iter().flatten().map(Wake::subscription).collect();
+        }
+        let mut subscriptions = Vec::new();
+        for case in &self.cases {
+            let expression = WhenExpr::parse(&case.when)?;
+            subscriptions.extend(
+                expression
+                    .terms()
+                    .filter_map(|term| term.wake_selector())
+                    .map(|selector| (selector, BTreeMap::new())),
+            );
+        }
+        Ok(subscriptions)
+    }
+
     pub(super) fn kind(&self) -> Option<CheckKind<'_>> {
         match (&self.run, &self.shell, &self.agent, self.cases.is_empty()) {
             (Some(run), None, None, true) => Some(CheckKind::Run(run)),
@@ -181,6 +226,10 @@ pub enum SpecErr {
     Window(#[from] crate::harness::schedule::when::WhenError),
     #[error("only provider-window keys are allowed")]
     WindowKeys,
+    #[error(transparent)]
+    Signal(#[from] schedule::ScheduleErr),
+    #[error("lifecycle signals cannot wake workflows; use team.stage or a non-lifecycle selector")]
+    LifecycleWake,
 }
 
 pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
@@ -217,6 +266,12 @@ fn schema_path(value: &toml::Value) -> String {
                 _ => node.clone().try_into::<Step>().is_err(),
             };
             if invalid {
+                if table == "checks"
+                    && let Some(wake) = node.get("wake")
+                    && wake.clone().try_into::<Vec<Wake>>().is_err()
+                {
+                    return format!("{table}.{name}.wake");
+                }
                 return format!("{table}.{name}");
             }
         }

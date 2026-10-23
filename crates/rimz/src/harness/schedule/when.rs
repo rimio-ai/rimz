@@ -499,6 +499,24 @@ impl WhenTerm {
         ForgeKey::parse(&self.key).is_some()
     }
 
+    /// The emitted selector for this scope's reading, excluding branch and window terms.
+    pub(in crate::harness) fn wake_selector(&self) -> Option<super::signal::SignalSelector> {
+        use super::signal::SignalSelector;
+        if self.key == "team.stage" {
+            // This fixed stage key satisfies the signal-name grammar.
+            return Some(SignalSelector::Exact(
+                self.key.parse().expect("team.stage is a valid signal name"),
+            ));
+        }
+        match ForgeKey::parse(&self.key)? {
+            ForgeKey::Ci(None) => Some(SignalSelector::Family("ci".into())),
+            ForgeKey::Pr(None) | ForgeKey::PrQueue(None) => {
+                Some(SignalSelector::Family("pr".into()))
+            }
+            _ => None,
+        }
+    }
+
     fn comparison_evidence(&self, reading: Option<&str>) -> String {
         let op = if reading.is_none() || self.matches(reading) {
             self.op.token()
