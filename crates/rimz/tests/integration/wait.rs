@@ -261,10 +261,9 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
     assert!(!body.contains("@stale-child"), "{body}");
 }
 
-#[test]
-fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
-    let env = Env::new();
-    env.record(&env.project_root);
+/// Registers the state a Claude `/clear` leaves: `cleared-session`, then its successor
+/// `owner-session`, both on tmux pane `%1`, which is returned.
+fn register_cleared_and_owner_sessions(env: &Env) -> rimz::pane::PaneRef {
     let pane = crate::common::tmux_pane("%1", "claude", &env.project_root);
     for session in ["cleared-session", "owner-session"] {
         let mut observation = AgentLifecycleObservation::new(
@@ -284,6 +283,14 @@ fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
             })
             .unwrap();
     }
+    pane
+}
+
+#[test]
+fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let pane = register_cleared_and_owner_sessions(&env);
     let snapshot = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
     assert_eq!(snapshot["agents"].as_array().unwrap().len(), 2);
     assert_eq!(snapshot["agent_panes"][0]["agent_id"], "owner-session");
@@ -325,6 +332,80 @@ fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
         body.lines().next().unwrap().trim(),
         receipt["target"].as_str().unwrap()
     );
+}
+
+#[test]
+fn loop_wait_targets_name_and_resolve_the_pane_owner_like_the_arm_receipt() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, address) in [
+        ("bare", None),
+        ("named", Some("@claude")),
+        ("shadowed", Some("@cleared-session")),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let pane = register_cleared_and_owner_sessions(&env);
+        let pane_fixture = env.write_pane_fixture(&[pane]);
+        let run = |args: &[&str]| {
+            env.rimz()
+                .args(["--mux", "tmux"])
+                .args(args)
+                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "owner-session")
+                .output()
+                .unwrap()
+        };
+        let receipt = run(&["wait", "--in", "5m", "--json"]);
+        assert!(
+            receipt.status.success(),
+            "{}",
+            String::from_utf8_lossy(&receipt.stderr)
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&receipt.stdout).unwrap();
+        assert_eq!(receipt["target"], "@claude#main");
+
+        let mut args = vec!["loop", "add", name, "--wait"];
+        args.extend(address);
+        args.extend(["--signal", "deploy.done"]);
+        let output = run(&args);
+        let tasks = wait_instances(&env);
+        assert_eq!(
+            tasks.0.contains_key(name),
+            output.status.success(),
+            "{name}"
+        );
+        actual.push(serde_json::json!({
+            "task": name,
+            "success": output.status.success(),
+            "stderr": String::from_utf8(output.stderr).unwrap().trim(),
+            "wait": tasks.0.get(name).and_then(|task| task.wait.as_ref()),
+        }));
+        expected.push(if address == Some("@cleared-session") {
+            serde_json::json!({
+                "task": name,
+                "success": false,
+                "stderr": concat!(
+                    "error: no live agent matches `@cleared-session`; ",
+                    "see `rimz agents list` for live handles",
+                ),
+                "wait": null,
+            })
+        } else {
+            serde_json::json!({
+                "task": name,
+                "success": true,
+                "stderr": "",
+                "wait": {
+                    "kind": "claude",
+                    "session": "owner-session",
+                    "handle": receipt["target"],
+                },
+            })
+        });
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]

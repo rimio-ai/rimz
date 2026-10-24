@@ -40,13 +40,13 @@ impl AddTaskAction {
 
 // ---- add / remove -----------------------------------------------------------
 
-pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
+pub(super) fn add(args: AddArgs, globals: &GlobalFlags) -> Result<()> {
     let action_kind = validate_add_args(&args)?;
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
     condition::validate(&args.when, &project_root)?;
     let check = resolve_add_check(&args, &workspace)?;
-    let action = resolve_add_action(&args, &workspace, action_kind)?;
+    let action = resolve_add_action(&args, &workspace, action_kind, globals.mux)?;
     let action = match action {
         AddTaskAction::Deliver {
             target,
@@ -657,6 +657,7 @@ fn resolve_add_action(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
     kind: TaskActionKind,
+    mux: Option<rimz::ids::MuxName>,
 ) -> Result<AddTaskAction> {
     let preset = rimz::agents::LaunchPreset {
         effort: rimz::harness::plan::normalized_preset_value(args.effort.as_deref()),
@@ -676,7 +677,7 @@ fn resolve_add_action(
         }
         TaskActionKind::Deliver => {
             let address = args.wait.as_deref().unwrap_or_default();
-            resolve_delivery_target(workspace, args, address)?
+            resolve_delivery_target(workspace, args, address, mux)?
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
         TaskActionKind::Workflow => unreachable!("loop add has no workflow flag"),
@@ -1070,9 +1071,11 @@ fn resolve_delivery_target(
     workspace: &rimz::ResolvedWorkspace,
     args: &AddArgs,
     address: &str,
+    mux: Option<rimz::ids::MuxName>,
 ) -> Result<AddTaskAction> {
     let store = crate::cli::require_existing_store(workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let snapshot = rimz::sidebar::produce::resolution_snapshot(workspace, &store, mux)
+        .context("reading agent snapshot")?;
     let channel = crate::cli::current_channel(workspace, Some(&store));
     let agent = match crate::cli::resolve_agent_one(
         &store,

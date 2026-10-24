@@ -215,7 +215,7 @@ fn both_entry_builders_preserve_the_same_guard() {
         "fix",
     ];
     let spawn_args = judge_args(&[vec!["--agent", "codex"], flags.to_vec()].concat());
-    let action = resolve_add_action(&spawn_args, &workspace, TaskActionKind::Spawn).unwrap();
+    let action = resolve_add_action(&spawn_args, &workspace, TaskActionKind::Spawn, None).unwrap();
     let (spawn, _) = build_task_entry(
         &spawn_args,
         action,
