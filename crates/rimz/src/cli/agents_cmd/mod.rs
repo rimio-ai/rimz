@@ -252,6 +252,20 @@ pub(crate) struct CohortLaunchArgs {
     pub(crate) detach: bool,
 }
 
+impl CohortLaunchArgs {
+    fn validate_fresh_worktree(&self) -> Result<()> {
+        if self.fresh
+            && self
+                .worktree
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+        {
+            bail!("--fresh needs a named worktree (-w NAME)");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Args)]
 pub(crate) struct LaunchOverrideArgs {
     /// Let the agent ask before tool use where supported.
@@ -1159,9 +1173,7 @@ fn into_supervised_request(
     rimz::harness::run::SupervisedRunRequest,
     supervised::SupervisedPresentation,
 )> {
-    if args.launch.cohort.fresh {
-        bail!("--fresh is only supported for interactive cohort launches, not -p");
-    }
+    args.launch.cohort.validate_fresh_worktree()?;
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
@@ -1190,6 +1202,7 @@ fn into_supervised_request(
     );
     request.description = args.launch.cohort.description;
     request.worktree = args.launch.cohort.worktree;
+    request.fresh = args.launch.cohort.fresh;
     request.cwd = args.launch.cwd;
     request.from_pr = args.launch.cohort.from_pr;
     request.channel = args.launch.cohort.channel;

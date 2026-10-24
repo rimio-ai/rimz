@@ -198,7 +198,7 @@ A run launches through the same layout resolution and finalization as an interac
 - An unset permission mode defaults to `auto`; a profile or virtual cell keeps its declared mode. Explicit `--ask` or `--yolo` replaces either declaration; the two flags conflict. For a subagent with a caller, the planner caps this choice against the caller's recorded mode before finalization (unrecorded is auto), refusing an explicit higher mode and lowering a higher default. Peers, loops, workflows, and caller-less launches are not capped. `rimz subagents` exposes only `--yolo`, not `--ask`.
 - `--max-turns` renders through the adapter's turn-limit argv, and an adapter without one refuses it at finalization.
 - The layout must resolve to exactly one agent cell and no other cells.
-- `--fresh` and `--json` are refused; JSON output is `--output-format json`.
+- `--fresh` accepts a named worktree (`-w NAME`); `--json` is refused, and JSON output is `--output-format json`.
 
 The per-kind argv mappings live in the adapter pages indexed under [the agent layer](../README.md#the-agent-layer).
 

@@ -64,16 +64,7 @@ pub(super) fn launch_layout(
     if args.launch.cohort.continue_cohort {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
     }
-    if args.launch.cohort.fresh
-        && args
-            .launch
-            .cohort
-            .worktree
-            .as_deref()
-            .is_none_or(|name| name.trim().is_empty())
-    {
-        bail!("--fresh needs a named worktree (-w NAME) whose prior cohort it replaces");
-    }
+    args.launch.cohort.validate_fresh_worktree()?;
     let machine_config = machine_config();
     if args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some() {
         crate::cli::require_worktree_config(&machine_config)?;
