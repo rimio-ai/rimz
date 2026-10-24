@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentCardRef, AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, RunId, WorkspaceId};
 use crate::transcript::SectionOrigin;
 
 mod codec;
@@ -453,6 +453,9 @@ pub struct MessageRecord {
     /// Messages that opened the sender turn which authored this message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub in_reply_to: Vec<MessageId>,
+    /// The run this record reports on; delivery cancels it once that run has ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about_run: Option<RunId>,
     pub workspace_id: WorkspaceId,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
@@ -627,6 +630,7 @@ impl MessageRecord {
         Self {
             message_id: MessageId::new(),
             in_reply_to: Vec::new(),
+            about_run: None,
             workspace_id,
             kind,
             agent_id,
@@ -680,6 +684,7 @@ impl MessageRecord {
         .with_sender(record.sender.clone())
         .with_automated(record.automated)
         .with_in_reply_to(record.in_reply_to.clone())
+        .with_about_run(record.about_run.clone())
         .with_force(record.force)
         .with_auto_compact(record.auto_compact)
         .with_body(record.body)
@@ -730,6 +735,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_in_reply_to(mut self, in_reply_to: Vec<MessageId>) -> Self {
         self.in_reply_to = in_reply_to;
+        self
+    }
+
+    #[must_use]
+    pub fn with_about_run(mut self, about_run: Option<RunId>) -> Self {
+        self.about_run = about_run;
         self
     }
 
