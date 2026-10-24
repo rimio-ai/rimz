@@ -1762,6 +1762,180 @@ fn sandbox_guard_restores_replaced_entries_in_a_running_view() {
     );
 }
 
+/// A hibernated view is frozen, not running: SIGSTOP stands in for the cgroup freezer, since the
+/// repair joins the view through its namespace files and needs nothing from the stopped target.
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_guard_restores_a_replaced_entry_while_the_view_is_stopped() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use rimz::sandbox::BindGuard;
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn state(pid: u32) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat[stat.rfind(')')? + 1..].trim_start().chars().next()
+    }
+    fn signal_tree(pid: u32, signal: Signal) -> Vec<u32> {
+        let mut tree = vec![pid];
+        let mut index = 0;
+        while index < tree.len() {
+            let _ = kill(Pid::from_raw(tree[index] as i32), signal);
+            tree.extend(rimz::proc::children(tree[index]));
+            index += 1;
+        }
+        tree
+    }
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let checkout = env.home_root.join("linked");
+    guard_fixture(&env, &checkout);
+    let config = env.project_root.join(".git/config");
+    let vars = environment(&env);
+    let state_paths = env.store();
+    let unit = state_paths.paths().temp_unit_dir(None);
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
+        env: &vars,
+        cwd: &checkout,
+        project_root: &env.project_root,
+        worktree: Some(&checkout),
+        checkout: Some(&checkout),
+        tmp_dir: &unit,
+        skills_dir: &state_paths.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: None,
+        skills: SkillInputs {
+            kind: "codex",
+            home: None,
+            manual: ManualSkill::OpenAiPolicy,
+            callable: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    assert!(plan.guarded_entries().contains(&config));
+    let (tx, rx) = mpsc::channel();
+    let guard = BindGuard::arm(plan.guarded_entries(), &env.rimz_bin(), move |outcome| {
+        tx.send(outcome).unwrap();
+    })
+    .unwrap()
+    .unwrap();
+    // The view waits in a builtin read, forking nothing: a child stopped between vfork and exec
+    // would hold its shell in `D`, which no SIGSTOP turns into `T`.
+    nix::unistd::mkfifo(
+        &unit.join("guard-go"),
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped).unwrap().unwrap(), &plan.plan, &checkout,
+        &["/bin/sh".into(), "-c".into(), r#"
+            : > /tmp/guard-ready
+            read _ < /tmp/guard-go
+            test "$(cat "$1")" = replacement || exit 10
+            if (printf bad >> "$1") 2>/dev/null; then exit 11; fi
+            test "$(awk -v p="$1" '$5 == p { n++ } END { print n+0 }' /proc/self/mountinfo)" = 1 || exit 13
+        "#.into(), "guard-test".into(), config.display().to_string()],
+    );
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("HOME", &env.home_root)
+        .env("RIMZ_HOME", env.rimz_home())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !unit.join("guard-ready").exists() {
+        if child.try_wait().unwrap().is_some() {
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "view exited before readiness: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(Instant::now() < deadline, "view did not signal readiness");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    guard.point(child.id());
+    let view = rimz::proc::children(child.id())[0];
+    let tree = signal_tree(child.id(), Signal::SIGSTOP);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !tree
+        .iter()
+        .all(|pid| matches!(state(*pid), None | Some('T' | 'Z')))
+    {
+        assert!(Instant::now() < deadline, "view did not stop: {tree:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    std::fs::write(config.with_extension("lock"), "replacement").unwrap();
+    std::fs::rename(config.with_extension("lock"), &config).unwrap();
+    let restored = rx.recv_timeout(Duration::from_secs(30));
+    assert!(
+        restored
+            .as_ref()
+            .is_ok_and(|o| o.paths == [config.clone()] && o.result.is_ok()),
+        "replacement under a stopped view must be repaired: {restored:?}"
+    );
+    assert_eq!(
+        state(view),
+        Some('T'),
+        "the repair must not resume the view"
+    );
+    let inside = Path::new(&format!("/proc/{view}/root")).join(config.strip_prefix("/").unwrap());
+    assert_eq!(
+        std::fs::metadata(&inside).unwrap().ino(),
+        std::fs::metadata(&config).unwrap().ino(),
+        "the view must see the replacement"
+    );
+    let mounts: Vec<_> = std::fs::read_to_string(format!("/proc/{view}/mountinfo"))
+        .unwrap()
+        .lines()
+        .filter(|line| line.split(' ').nth(4) == Some(config.to_str().unwrap()))
+        .map(|line| line.split(' ').nth(5).unwrap().to_owned())
+        .collect();
+    assert_eq!(mounts.len(), 1, "one mount at the entry: {mounts:?}");
+    assert!(
+        mounts[0].split(',').any(|option| option == "ro"),
+        "the entry must be read-only again: {mounts:?}"
+    );
+    let write = std::fs::OpenOptions::new().append(true).open(&inside);
+    assert_eq!(
+        write.err().and_then(|error| error.raw_os_error()),
+        Some(nix::libc::EROFS)
+    );
+
+    signal_tree(child.id(), Signal::SIGCONT);
+    // Opened read-write, the FIFO neither blocks nor drops the line before the view's read opens.
+    let mut go = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(unit.join("guard-go"))
+        .unwrap();
+    go.write_all(b"\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    drop(go);
+    assert!(
+        output.status.success(),
+        "view exit {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(guard);
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn sandbox_guard_refuses_unwatchable_entries_and_empty_sets_need_no_helper() {
