@@ -480,7 +480,7 @@ pub struct IdleCycleFixture {
     sink: ResultSink,
     state: StatePaths,
     cursors: Vec<super::views::Cursor>,
-    renderers: Vec<(super::loop_state::LoopState, FetchDispatcher)>,
+    renderers: Vec<(super::loop_state::LoopState, FetchHandle)>,
 }
 
 #[cfg(feature = "testkit")]
@@ -563,7 +563,6 @@ impl IdleCycleFixture {
                     self.worker.runtime.clone(),
                     std::path::PathBuf::new(),
                     crate::diag::DiagSink::disabled(),
-                    subscriber.completion.clone(),
                     None,
                     std::sync::mpsc::sync_channel(1).0,
                     Default::default(),
@@ -572,7 +571,7 @@ impl IdleCycleFixture {
                 renderer.share_views(views.clone(), 0);
                 (
                     renderer,
-                    FetchDispatcher::for_plane(std::sync::mpsc::channel().0),
+                    FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
                 )
             })
             .collect();
@@ -1477,48 +1476,45 @@ fn drive(
     }
 }
 
-/// The render loop's handle to the fetch worker. It owns immediate, deferred,
-/// in-flight, and follow-up scheduling so request strength and deadlines merge
-/// in one place.
-pub(super) struct FetchDispatcher {
+/// A pane's send end and completion latch. Pane observations send immediately;
+/// level-triggered deadlines wait while this pane awaits a completed cycle.
+pub(super) struct FetchHandle {
     tx: Sender<FetchRequest>,
-    in_flight: bool,
-    pending_refetch: Option<FetchRequest>,
+    completion: Arc<AtomicBool>,
+    awaiting: bool,
 }
 
-impl FetchDispatcher {
-    pub(super) fn for_plane(tx: Sender<FetchRequest>) -> Self {
+impl FetchHandle {
+    pub(super) fn new(tx: Sender<FetchRequest>, completion: Arc<AtomicBool>) -> Self {
         Self {
             tx,
-            in_flight: false,
-            pending_refetch: None,
+            completion,
+            awaiting: false,
         }
     }
 
-    /// Ask the fetch worker for a fresh snapshot. `in_flight` collapses
-    /// redundant requests while one is already running; `force_after` (set by a
-    /// store delta, i.e. new committed data) guarantees one more fetch once
-    /// the in-flight one returns, so a delta that races an in-flight fetch is
-    /// never lost. `request` carries the strongest freshness requirement
-    /// currently known.
-    pub(super) fn request(&mut self, request: FetchRequest, force_after: bool) {
-        if !self.in_flight {
-            if self.tx.send(request).is_ok() {
-                self.in_flight = true;
-            }
-        } else if force_after {
-            match &mut self.pending_refetch {
-                Some(pending) => pending.merge(request),
-                None => self.pending_refetch = Some(request),
-            }
+    /// Send now; the worker merges it into its next cycle.
+    pub(super) fn request(&mut self, request: FetchRequest) {
+        if self.tx.send(request).is_ok() {
+            self.awaiting = true;
         }
     }
 
-    pub(super) fn complete(&mut self, dispatch_follow_up: bool) {
-        self.in_flight = false;
-        if dispatch_follow_up && let Some(request) = self.pending_refetch.take() {
-            self.request(request, false);
+    /// A due deadline: send unless a request of this pane still awaits a cycle.
+    pub(super) fn request_if_idle(&mut self, request: FetchRequest) {
+        if !self.awaiting {
+            self.request(request);
         }
+    }
+
+    /// Whether a cycle this pane belonged to completed since the last call;
+    /// clears the awaiting latch when true.
+    pub(super) fn completed(&mut self) -> bool {
+        let completed = self.completion.swap(false, Ordering::Relaxed);
+        if completed {
+            self.awaiting = false;
+        }
+        completed
     }
 }
 

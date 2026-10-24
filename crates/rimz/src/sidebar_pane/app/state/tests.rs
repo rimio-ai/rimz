@@ -358,6 +358,7 @@ fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
 
 struct ApplyHarness {
     state: LoopState,
+    completion: std::sync::Arc<std::sync::atomic::AtomicBool>,
     views: std::sync::Arc<std::sync::Mutex<Views>>,
     own: PaneId,
 }
@@ -399,7 +400,6 @@ impl ApplyHarness {
             runtime,
             socket_path,
             diag,
-            Default::default(),
             None,
             observe_tx,
             PixelRenderCaps::default(),
@@ -408,7 +408,12 @@ impl ApplyHarness {
         state.views.scratch_for_test().1.current = snapshot(ws);
         let views = std::sync::Arc::default();
         state.share_views(std::sync::Arc::clone(&views), 0);
-        Self { state, views, own }
+        Self {
+            state,
+            completion: Default::default(),
+            views,
+            own,
+        }
     }
 
     /// Deliver a snapshot through the attachment's entry; returns whether the gate rejected it.
@@ -440,9 +445,7 @@ impl ApplyHarness {
         {
             let mut views = self.views.lock().unwrap();
             views.publish(outcome.clone());
-            self.state
-                .pane
-                .completion
+            self.completion
                 .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
         }
         self.state.apply_latest_snapshot(outcome)

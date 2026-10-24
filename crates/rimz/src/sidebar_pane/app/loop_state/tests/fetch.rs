@@ -8,8 +8,10 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     for phase in [FetchPhase::Interim, FetchPhase::Final] {
         snapshot.now += jiff::SignedDuration::from_secs(1);
         rig.send(FetchUpdate::Snapshot {
@@ -24,10 +26,10 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
         rig.state.pane.content_applications, 1,
         "coalescing must retain clock-only delivery"
     );
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
-        rig.next_request().is_some(),
-        "unchanged final completed the prior request"
+        rig.next_request().unwrap().is_fresh_panes(),
+        "unchanged final clears the latch"
     );
 }
 
@@ -753,9 +755,10 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         frame: Some(Arc::new(frame)),
     };
 
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     rig.state.pane.dirty = false;
     rig.state.seed(&fold);
 
@@ -808,7 +811,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     assert!(rig.view().ctx().last_focus_observation.presence_known);
     assert!(
         rig.next_request().is_none(),
-        "a seed does not complete the in-flight fetch"
+        "a seed does not clear the latch"
     );
 
     let mut correction = agent_snapshot(&rig.ws);
@@ -855,9 +858,10 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         0,
         "the changed pane set commits"
     );
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
-        "only the final correction completes the fetch"
+        "only the final correction clears the latch"
     );
 }
 
@@ -947,9 +951,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .name = "unread-snapshot".into();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     rig.send(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -985,9 +990,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         "snapshot context is applied with its snapshot"
     );
     assert_eq!(rig.view().ctx().health.failure_streak, 1);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
-            .expect("final outcome releases the queued request")
+            .expect("final outcome clears the latch")
             .is_fresh_panes()
     );
     assert!(rig.next_request().is_none());
@@ -996,9 +1002,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
 #[test]
 fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
     let mut rig = Rig::new();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     for (name, phase) in [
         ("final-snapshot", FetchPhase::Final),
         ("interim-snapshot", FetchPhase::Interim),
@@ -1020,6 +1027,7 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
         "final-snapshot",
         "an interim must not displace the pending final snapshot"
     );
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
             .expect("completion survives an interim publication")
@@ -1030,9 +1038,10 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
 #[test]
 fn a_failed_completion_survives_a_later_interim_snapshot() {
     let mut rig = Rig::new();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
     });
@@ -1048,9 +1057,10 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
         "an interim must not erase a pending failure"
     );
     assert_eq!(rig.view().ctx().current.rows().count(), 1);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
-            .expect("failed final releases the request")
+            .expect("failed final clears the latch")
             .is_fresh_panes()
     );
 }

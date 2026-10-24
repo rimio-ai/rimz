@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use crate::sidebar_pane::render::SectionLabel;
 use crate::{RuntimePaths, SidebarInstanceId};
 
 use super::clock::LoopClock;
-use super::fetch::{FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
+use super::fetch::{FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
 use super::inbox::WakeupInbox;
 use super::input::{KeyAction, Wakeup};
 use super::loop_state::LoopState;
@@ -152,7 +153,8 @@ struct Column {
     state: LoopState,
     terminal: Terminal<PaneBackend>,
     requests: Receiver<FetchRequest>,
-    fetch: FetchDispatcher,
+    fetch: FetchHandle,
+    completion: Arc<AtomicBool>,
     inbox: WakeupInbox,
     at: Duration,
     next: Duration,
@@ -236,6 +238,7 @@ impl Column {
             Surface::Text => (PixelRenderCaps::default(), None),
             Surface::Live { caps, slot } => (caps, slot),
         };
+        let completion: Arc<AtomicBool> = Arc::default();
         let mut state = LoopState::new(
             clock.clone(),
             config,
@@ -243,7 +246,6 @@ impl Column {
             runtime.clone(),
             runtime.sidebar_host_wake_socket_path(crate::MuxName::Zellij, "scenario"),
             crate::diag::DiagSink::disabled(),
-            Default::default(),
             Some(scenario.width),
             mpsc::sync_channel(64).0,
             caps,
@@ -262,7 +264,8 @@ impl Column {
             state,
             terminal,
             requests,
-            fetch: FetchDispatcher::for_plane(tx),
+            fetch: FetchHandle::new(tx, completion.clone()),
+            completion,
             inbox: WakeupInbox::new(mpsc::channel().1),
             at: Duration::ZERO,
             next: Duration::ZERO,
@@ -294,7 +297,7 @@ impl Column {
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         });
-        self.state.pane.completion.store(true, Ordering::Relaxed);
+        self.completion.store(true, Ordering::Relaxed);
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {

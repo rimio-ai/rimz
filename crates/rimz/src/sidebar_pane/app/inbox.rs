@@ -7,7 +7,7 @@ use ratatui::Terminal;
 
 use super::Result;
 use super::backend::PaneBackend;
-use super::fetch::FetchDispatcher;
+use super::fetch::FetchHandle;
 use super::input::Wakeup;
 use super::loop_state::LoopState;
 
@@ -74,7 +74,7 @@ impl WakeupInbox {
     pub(super) fn dispatch_input(
         &mut self,
         state: &mut LoopState,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.has_input();
@@ -96,7 +96,7 @@ impl WakeupInbox {
     pub(super) fn dispatch_next(
         &mut self,
         state: &mut LoopState,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         timeout: Duration,
     ) -> Result<()> {
