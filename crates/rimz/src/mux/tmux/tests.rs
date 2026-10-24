@@ -747,8 +747,8 @@ fn companion_append_geometry_timeout_is_before_spawn() {
         matches!(
             &result,
             Err(crate::mux::CompanionAppendErr::BeforeSpawn(
-                crate::mux::MuxErr::Timeout { seconds: 2, .. }
-            ))
+                crate::mux::MuxErr::Timeout { timeout, .. }
+            )) if *timeout == Duration::from_secs(2)
         ),
         "{result:?}"
     );

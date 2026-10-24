@@ -224,19 +224,28 @@ pub enum MuxErr {
         socket: PathBuf,
     },
     #[error(
-        "multiplexer command `{program} {}` did not finish within {seconds}s; killed",
-        args_summary(args)
+        "multiplexer command `{program} {}` did not finish within {}; killed",
+        args_summary(args),
+        timeout_summary(*timeout)
     )]
     Timeout {
         program: String,
         args: String,
-        seconds: u64,
+        timeout: Duration,
     },
     #[error(transparent)]
     Io(#[from] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
+
+fn timeout_summary(timeout: Duration) -> String {
+    let millis = timeout.as_millis();
+    if timeout.subsec_nanos() == 0 {
+        return format!("{}s", millis / 1000);
+    }
+    format!("{millis}ms")
+}
 
 fn args_summary(args: &str) -> String {
     let mut tokens = args.split_whitespace();
@@ -1565,7 +1574,7 @@ mod tests {
                 MuxErr::Timeout {
                     program: "zellij".to_owned(),
                     args: "attach --create rimz-room options --default-mode locked".to_owned(),
-                    seconds: 8,
+                    timeout: Duration::from_secs(8),
                 },
                 vec!["zellij attach rimz-room ..."],
                 vec!["--default-mode"],
@@ -1605,5 +1614,35 @@ mod tests {
                 assert!(matches!(err, MuxErr::Command { args, .. } if args == stored_args));
             }
         }
+
+        let timeouts = [
+            (Duration::from_millis(500), "500ms"),
+            (Duration::from_millis(1500), "1500ms"),
+            (Duration::from_secs(8), "8s"),
+            (Duration::from_secs(60), "60s"),
+            (Duration::from_nanos(137_482_913), "137ms"),
+            (Duration::from_micros(400), "0ms"),
+        ];
+        let rendered: Vec<_> = timeouts
+            .iter()
+            .map(|(timeout, _)| {
+                MuxErr::Timeout {
+                    program: "zellij".to_owned(),
+                    args: args.clone(),
+                    timeout: *timeout,
+                }
+                .to_string()
+            })
+            .collect();
+        let expected: Vec<_> = timeouts
+            .iter()
+            .map(|(_, bound)| {
+                format!(
+                    "multiplexer command `zellij attach rimz-room ...` did not finish within {bound}; killed"
+                )
+            })
+            .collect();
+        assert_eq!(rendered, expected);
+        assert!(!rendered[0].contains("0s"), "{}", rendered[0]);
     }
 }

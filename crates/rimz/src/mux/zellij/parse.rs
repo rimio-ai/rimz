@@ -170,6 +170,8 @@ pub(super) fn terminal_client_ids(view: &ClientView) -> BTreeSet<u32> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::ids::{MuxName, PaneId};
     use crate::mux::MuxErr;
@@ -352,11 +354,13 @@ mod tests {
             MuxErr::Timeout {
                 program: "zellij".to_owned(),
                 args: format!("action {}", concat!("list", "-panes")),
-                seconds: 8,
+                timeout: Duration::from_secs(8),
             },
             "missing-room",
         );
-        assert!(matches!(err, MuxErr::Timeout { seconds: 8, .. }));
+        assert!(
+            matches!(err, MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(8))
+        );
     }
 
     #[test]

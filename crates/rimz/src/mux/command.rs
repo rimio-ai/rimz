@@ -293,7 +293,7 @@ impl CommandSpec {
             return Err(MuxErr::Timeout {
                 program: self.program.clone(),
                 args: self.error_text(self.args.join(" ")),
-                seconds: timeout.as_secs(),
+                timeout,
             });
         }
         // Preserve the command's stderr on failure; successful commands

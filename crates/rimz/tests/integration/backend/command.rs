@@ -20,15 +20,20 @@ fn run_surfaces_success_and_nonzero_exit() {
 
 #[test]
 fn run_with_timeout_kills_a_hung_child() {
+    let bound = Duration::from_millis(500);
     let started = std::time::Instant::now();
     let err = CommandSpec::new("sleep")
         .arg("30")
-        .run_with_timeout(Duration::from_secs(1))
+        .run_with_timeout(bound)
         .expect_err("the deadline fires");
     // The error names the caller's bound, not what was left of it.
     assert!(
-        matches!(err, MuxErr::Timeout { seconds: 1, .. }),
+        matches!(err, MuxErr::Timeout { timeout, .. } if timeout == bound),
         "got: {err}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "multiplexer command `sleep 30` did not finish within 500ms; killed"
     );
     // The kill lands and the child is reaped promptly — well under the child's
     // own 30s sleep. Loose bound so a loaded CI box never flakes.

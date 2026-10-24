@@ -861,7 +861,10 @@ exit 0
         started.elapsed()
     );
     assert!(
-        matches!(err, crate::mux::MuxErr::Timeout { seconds: 1, .. }),
+        matches!(
+            err,
+            crate::mux::MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(1)
+        ),
         "{err}"
     );
     let message = err.to_string();
@@ -1120,7 +1123,10 @@ exec sleep 30
         started.elapsed()
     );
     assert!(
-        matches!(err, crate::mux::MuxErr::Timeout { seconds: 2, .. }),
+        matches!(
+            err,
+            crate::mux::MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(2)
+        ),
         "{err}"
     );
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 2);
@@ -4921,7 +4927,10 @@ fn a_rerun_that_outlasts_the_deadline_reports_the_callers_bound() {
         .run_with_timeout(Duration::from_secs(1))
         .expect_err("the rerun hangs");
 
-    assert!(matches!(err, MuxErr::Timeout { seconds: 1, .. }), "{err:?}");
+    assert!(
+        matches!(err, MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(1)),
+        "{err:?}"
+    );
     assert_eq!(action_runs(&temp), 2);
 }
 
