@@ -175,7 +175,11 @@ fn unstamped_replacements_including_equal_size_and_mtime_are_visible() {
     );
     let original = fs::metadata(&paths.rollup_cache).unwrap();
     let stamp = fs::read(stamp_path(&paths)).unwrap();
+    // Each replaced rollup stays open so ext4 cannot hand its freed inode to the next
+    // replacement: a recycled inode with forged size and mtime is the accepted stamp gap.
+    let mut replaced = Vec::new();
     for generation in [8, 9] {
+        replaced.push(fs::File::open(&paths.rollup_cache).unwrap());
         cache.extent.generation = generation;
         atomic::write_temp_then_rename_cache_compact(&paths.rollup_cache, &cache).unwrap();
         fs::File::open(&paths.rollup_cache)
