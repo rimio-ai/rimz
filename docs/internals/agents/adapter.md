@@ -215,7 +215,7 @@ Install wires every event the state machine needs (the turn-boundary signals) pl
 
 Inside whatever shape the agent's config takes, the installed form stays minimal:
 
-- One feed command for every event, commonly `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with `--event <event>` appended when the agent omits the event name from its payload. Muse uses a shell-neutral `rimz hooks feed --source muse` and managed env passthrough ([adapter_muse.md](./adapter_muse.md#managed-installation-and-identity)).
+- One feed command for every event, commonly `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with `--event <event>` appended when the agent omits the event name from its payload. Muse uses a shell-neutral `rimz hooks feed --source muse` and managed env passthrough ([adapter_muse.md](./adapter_muse.md#hook-environment-and-owner)).
 - Install reclaims every RimZ-owned entry before rewriting the canonical set, so duplicate or stale blocks never accumulate and user-authored hooks stay untouched. JSON-merge entries are owned by a `_rimz_managed` marker key ([`managed_json_hooks.rs`](../../../crates/rimz/src/agents/managed_json_hooks.rs)), and an unmarked entry counts as RimZ's when its command contains the hook command substring.
 - Claude, Codex, Droid, Qwen, Qoder, and Grok have no wildcard event key, so install writes one block per wired event. Copilot, Amp, Pi, OMP, and OpenCode instead get one whole integration file that RimZ authors, so the payload schema is RimZ's by design ([adapter_copilot.md](./adapter_copilot.md), [adapter_amp.md](./adapter_amp.md), [adapter_pi.md](./adapter_pi.md), [adapter_omp.md](./adapter_omp.md), [adapter_opencode.md](./adapter_opencode.md)).
 
