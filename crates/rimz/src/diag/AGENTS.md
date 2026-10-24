@@ -9,6 +9,7 @@ Local contract for `crates/rimz/src/diag/` — append-only JSONL evidence. Exten
 - **Writes are best-effort.** A failed append logs at debug and returns; the calling path continues unchanged.
 - **Only the sink touches disk.** Pure projection layers return diagnostics as data and hand them to `DiagSink`, so a fold stays testable and quiet.
 - Rate limiting lives with the sink: an identity window plus a per-kind ceiling bounds a loop that would otherwise flood the log. Earlier-boot ingress drops aggregate each consecutive run within a read and use both limits.
+- A new kind whose occurrences scale with a queue or a backlog aggregates them into one record per run, with a count, and goes through both limits. Exempting a kind from the limiter is a design decision that states its worst-case record count against the main log's 1 MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`), since a flood rotates out the evidence that explains it.
 
 ## Wire compatibility
 
