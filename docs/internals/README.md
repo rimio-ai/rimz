@@ -64,7 +64,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | [web.md](./web.md) | Browser access: the writable and broadcast daemons, the named-token and trusted-header gate, room attach and the session picker, sharing a room, the token store, the browser client, remote rooms, and the security boundaries. |
 | [stats.md](./stats.md) | The `rimz stats` surfaces (one-shot report, held dashboard, JSON): where the figures come from, windows and token measures, the heatmap, breakdowns, insights, terminal fitting, the held loop, the JSON fields, and the assist rollup. |
 | [lsp.md](./lsp.md) | Shared language servers: the module map, stop reasons, launch and query admission, leases and lost-row revival, build retirement, the memory watchdog, learned cost, the broker and editor attachment, query resolution, anchor checks, and the diagnostic events. |
-| [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable log and its record envelope, the event taxonomy, the frame-stream observer, retention, frame captures, reading an episode, and off-box error reporting. |
+| [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable logs and the record envelope, the event taxonomy with each kind's severity and doctor state, retention and frame captures, the frame-stream observer, the focus trace, reading the log and an episode, and off-box error reporting. |
 
 ## Cost and profiling
 
