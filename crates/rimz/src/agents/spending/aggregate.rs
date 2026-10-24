@@ -478,6 +478,7 @@ pub(crate) fn aggregate_counted_rollups(
     }
 
     SpendingWalkResult {
+        session_start_secs: cutoffs.session_start_secs,
         spending,
         workspace: ScopedSpending {
             tally: workspace_tally,
@@ -532,6 +533,7 @@ pub(crate) fn aggregate_counted_rollups(
 struct CountedCutoffs {
     total: u64,
     scoped: Option<u64>,
+    session_start_secs: Option<u64>,
 }
 
 impl CountedCutoffs {
@@ -542,13 +544,6 @@ impl CountedCutoffs {
         now_secs: u64,
         spec: &HeadlineSpec,
     ) -> Self {
-        if let Some(cutoff) = uniform_headline_cutoff(spec, now_secs) {
-            return Self {
-                total: cutoff,
-                scoped: scope.map(|_| cutoff),
-            };
-        }
-
         let mut total_activity = Vec::new();
         let mut scoped_activity = Vec::new();
         for counted in counted {
@@ -580,9 +575,14 @@ impl CountedCutoffs {
             }
         }
 
+        let session_start = burst_cutoff(&total_prompts, &total_activity, now_secs);
+        let uniform = uniform_headline_cutoff(spec, now_secs);
         Self {
-            total: burst_cutoff(&total_prompts, &total_activity, now_secs),
-            scoped: scope.map(|_| burst_cutoff(&scoped_prompts, &scoped_activity, now_secs)),
+            total: uniform.unwrap_or(session_start),
+            scoped: scope.map(|_| {
+                uniform.unwrap_or_else(|| burst_cutoff(&scoped_prompts, &scoped_activity, now_secs))
+            }),
+            session_start_secs: (session_start != NO_BURST_CUTOFF).then_some(session_start),
         }
     }
 

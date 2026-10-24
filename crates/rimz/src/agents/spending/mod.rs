@@ -126,6 +126,7 @@ pub struct SpendingCaches {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpendingWalkResult {
     pub spending: Spending,
+    pub session_start_secs: Option<u64>,
     pub workspace: ScopedSpending,
     pub provider_day: BTreeMap<String, SpendWindow>,
     pub login_day: BTreeMap<LoginKey, SpendWindow>,

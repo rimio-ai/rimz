@@ -73,6 +73,9 @@ pub struct ProviderSpendingCache {
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
+    /// Machine-wide cockpit session start, independent of the headline mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_start_secs: Option<u64>,
     /// Account-local calendar-day spend by provider kind.
     #[serde(default)]
     pub day_by_provider: BTreeMap<String, SpendWindow>,
@@ -110,6 +113,7 @@ impl ProviderSpendingCache {
         Self {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms,
+            session_start_secs: result.session_start_secs,
             day_by_provider: result.provider_day.clone(),
             day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,

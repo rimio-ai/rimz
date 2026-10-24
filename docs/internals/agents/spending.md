@@ -62,7 +62,7 @@ Two narrower reads share the walk's parsers and dedup.
 
 ### What reads the totals
 
-The walk publishes machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it.
+The walk publishes machine-shared `provider-spending.json`, and every reader takes its figures from there or from the workspace cache derived beside it. Its optional `session_start_secs` records the machine-wide cockpit session start in Unix seconds in every headline mode (`session`, `24h`, and `today`), independently of headline and workspace cutoffs. It is absent when no prompt has opened a current session or an older writer published the cache; the aggregate version stays 22.
 
 | Reader | Reads |
 | --- | --- |

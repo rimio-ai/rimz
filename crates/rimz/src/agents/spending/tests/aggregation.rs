@@ -2,6 +2,53 @@ use super::*;
 use jiff::Timestamp;
 
 #[test]
+fn session_start_is_machine_wide_and_independent_of_headline_mode() {
+    let path = PathBuf::from("/x/session.jsonl");
+    let files = vec![spending_file(claude_adapter(), path.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &path,
+            vec![cached_entry(NOW_SECS - 1, 1.0, "session")],
+        )]),
+        ..Default::default()
+    };
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let prompts = [user_input(
+        NOW_SECS - 100,
+        "claude",
+        Some(Path::new("/other")),
+    )];
+    let scope = SpendScope::from_roots(Some(Path::new("/project")), &[]);
+    let mut actual = Vec::new();
+    for mode in [
+        SpendWindowMode::Session,
+        SpendWindowMode::Trailing24h,
+        SpendWindowMode::Today,
+    ] {
+        let spec = HeadlineSpec {
+            mode,
+            timezone: Some("UTC".into()),
+        };
+        for inputs in [&prompts[..], &[]] {
+            let result = aggregate_counted_rollups(
+                &files,
+                &cache,
+                &counted,
+                Some(&scope),
+                HeadlineContext {
+                    user_inputs: inputs,
+                    now_secs: NOW_SECS,
+                    spec: &spec,
+                },
+                None,
+            );
+            actual.push(result.session_start_secs);
+        }
+    }
+    assert_eq!(actual, [Some(NOW_SECS - 100), None].repeat(3));
+}
+
+#[test]
 fn unnamed_history_zone_falls_back_to_published_utc() {
     let unnamed = jiff::tz::TimeZone::fixed(jiff::tz::offset(8));
     let (zone, name) = super::super::aggregate::history_zone(unnamed);
