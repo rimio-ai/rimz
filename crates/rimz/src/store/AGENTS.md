@@ -36,3 +36,5 @@ Workflow record and journal codecs live in `workflow.rs`; the harness owns every
 ## Tests
 
 Durability behaviour — CAS round trips, torn-record recovery, rotation, the write path — lives in [`tests/integration/store/`](../../tests/integration/store/); pure reducer and helper tests stay in-module. Time is fixed-epoch in fixtures, except lifecycle events a test reads back through `Store::snapshot()`: the snapshot reaps pidless rows idle past three hours, so those stamps stay near now.
+
+A test that forges a replacement's size or mtime to prove an identity check sees the inode change holds each replaced file open: ext4 hands a freed inode to the next file at once, while the dev host's ZFS does not, so the test passes locally and fails in CI.
