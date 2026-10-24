@@ -103,7 +103,7 @@ The supervisor watches the directory that holds `config.toml`, which catches the
 
 Termination is a ladder: `SIGTERM`, a 300 ms grace (`CHILD_SIGNAL_GRACE`), then `SIGKILL`. `SIGHUP` or `SIGTERM` to the supervisor terminates its child that way and exits. The supervisor ignores `SIGINT`, but its child shares the pane's foreground process group, so `Ctrl-C` reaches the child. The default stats pane ignores it (`--hold`). A configured command that exits on it ends the supervisor as below.
 
-When the child exits, the supervisor exits with the child's exit code, or 1 when a signal killed it (`cli/daemon.rs::run_content`). Whether the pane then closes and the next repair pass respawns the slot depends on the backend's close-on-exit handling ([Repair](#repair)).
+When the child exits, the supervisor exits with the child's exit code, or 1 when a signal killed it (`crates/rimz/src/cli/daemon.rs::run_content`). Whether the pane then closes and the next repair pass respawns the slot depends on the backend's close-on-exit handling ([Repair](#repair)).
 
 The pane count follows the specification, which only a birth or a repair rebuilds. A `[[daemon.pane]]` entry added to a running room creates a new slot in the next specification, and repair spawns it under the preceding slot: on the host tracker's next pass ([Who repairs, and when](#who-repairs-and-when)), or at the next `rimz start`. A removed entry leaves its slot pane outside the specification. Repair ignores unmatched panes, so the orphaned supervisor resolves past the end of the list and runs the stats pane until the room is reborn.
 
