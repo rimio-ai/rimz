@@ -1140,6 +1140,59 @@ mod runs {
     use super::*;
 
     #[test]
+    fn session_provider_exit_settles_without_waiting_for_terminal_hooks() {
+        let state = tempfile::tempdir().unwrap();
+        let runtime = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let workspace = test_workspace(state.path());
+        let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), state.path()).unwrap();
+        let runtime =
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), runtime.path()).unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let mut record = RunRecord::new(
+            workspace.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".into(),
+            state.path().to_owned(),
+        );
+        record.lifecycle = rimz::store::run::RunLifecycle::Session;
+        let context = RunExecContext {
+            run_id: record.run_id.clone(),
+            store,
+            session_name: workspace.session_name.clone(),
+            workspace,
+        };
+        let globals = GlobalFlags {
+            mux: Some(MuxName::Tmux),
+            tmux: false,
+            zellij: false,
+            root: None,
+            color: crate::cli::ColorWhen::Auto,
+        };
+        let grace = Duration::from_secs(1);
+        let mut outcomes = Vec::new();
+        for status in [RunStatus::Pending, RunStatus::Running, RunStatus::Canceled] {
+            record.status = status;
+            rimz::harness::run::create(context.store.paths(), &record).unwrap();
+            let start = Instant::now();
+            fail_run_if_child_exited_first(&context, &globals, grace);
+            let stored = rimz::harness::run::load(context.store.paths(), &record.run_id).unwrap();
+            outcomes.push((stored.status, start.elapsed() < grace));
+        }
+        assert_eq!(
+            outcomes,
+            [
+                (RunStatus::Failed, true),
+                (RunStatus::Completed, true),
+                (RunStatus::Canceled, true)
+            ]
+        );
+    }
+
+    #[test]
     fn child_exit_drains_an_already_appended_stop_before_failing_the_run() {
         queued_stop_at_child_exit(false);
     }

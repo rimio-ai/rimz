@@ -21,6 +21,7 @@ mod pane_io;
 mod presence;
 mod reconcile;
 mod remote_reconnect;
+mod run_command;
 mod server_cwd;
 mod session;
 mod sidebar;

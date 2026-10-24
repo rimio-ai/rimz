@@ -1,4 +1,4 @@
-//! Durable records for supervised and launcher-opened peer turns: schema, codec, and the terminal wake sender.
+//! Durable run records: schema, codec, and the terminal wake sender.
 //!
 //! Run records are cold-path durable state: a waiting CLI may exit, a user may
 //! inspect the result later with `rimz agents show`, and the final assistant text
@@ -51,6 +51,20 @@ pub enum RunStoreErr {
         actual: &'static str,
         expected: &'static str,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLifecycle {
+    #[default]
+    Turn,
+    Session,
+}
+
+impl RunLifecycle {
+    fn is_turn(&self) -> bool {
+        *self == Self::Turn
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +207,13 @@ pub struct EarlierAnswer {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunSession {
+    pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
     pub workspace_id: WorkspaceId,
@@ -215,6 +236,8 @@ pub struct RunRecord {
     pub provider_process_start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_sessions: Vec<RunSession>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_tail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +249,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<RunVerify>,
     pub status: RunStatus,
+    #[serde(default, skip_serializing_if = "RunLifecycle::is_turn")]
+    pub lifecycle: RunLifecycle,
     pub permission_mode: PermissionMode,
     /// Never reclaim this run's pane automatically, including when its parent
     /// agent exits.
@@ -436,12 +461,14 @@ impl RunRecord {
             provider_pid: None,
             provider_process_start: None,
             transcript_path: None,
+            earlier_sessions: Vec::new(),
             failure_tail: None,
             retry_of: None,
             loop_task: None,
             workflow: None,
             verify: None,
             status: RunStatus::Pending,
+            lifecycle: RunLifecycle::Turn,
             permission_mode,
             keep: false,
             subagent: false,

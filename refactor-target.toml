@@ -2425,7 +2425,9 @@ path = "crates/rimz/src/store"
 # MessageRecord::awaiting_registration shares the card-aware registration wait across delivery, expiry and resume dispatch (+1).
 # ResumeAttempt carries the queue commit's join-or-start decision through dispatch to the doorway (+1).
 # workflow::Wait::is_hold shares hold recognition across workflow settlement and scheduling (+1).
-surface-budget = 495
+# RunLifecycle carries the default-compatible turn/session run contract (+1).
+# RunSession preserves outgoing session bindings for a session run's total spend (+1).
+surface-budget = 497
 
 [[verdict]]
 kind = "item"
@@ -2634,7 +2636,8 @@ surface-budget = 23
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
 # The hidden duty request and entry re-export cross to agents dispatch (+2).
-surface-budget = 3
+# close_own_pane shares self-cleanup with the run-bound command wrapper (+1).
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec/duty.rs"
@@ -3102,7 +3105,23 @@ allowed-dependencies = [
 # Thin exec supervision cancels runs through paths without a Store (+1).
 # Host readers share the crate-private cached listing wrapper (+1).
 # rekey_team_run moves a molting leader's open team run after placement (+1).
-surface-budget = 57
+# settle_session_exit settles provider-exit spend before waking a session run (+1).
+surface-budget = 58
+
+[[verdict]]
+kind = "item"
+key = "harness::run::settle_session_exit"
+reason = "The exec wrapper settles session runs on provider exit through the run owner's locked transition and spend-before-wake boundary."
+
+[[verdict]]
+kind = "item"
+key = "store::run::RunLifecycle"
+reason = "The durable run schema and launcher carry turn/session lifecycle across the binary/library boundary; omitted turn values preserve existing records."
+
+[[verdict]]
+kind = "item"
+key = "store::run::RunSession"
+reason = "Session runs retain outgoing conversation bindings so provider-exit settlement includes every session's spend."
 
 [[verdict]]
 kind = "item"

@@ -2674,6 +2674,81 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
 }
 
 #[test]
+fn run_bound_command_cells_wrap_raw_argv_and_the_users_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    let run_id = crate::ids::RunId::new();
+    let argv = vec!["nvim".to_owned(), "file with spaces;$(no-shell)".to_owned()];
+    let layout = LayoutSpec {
+        columns: vec![Column {
+            rows: vec![Cell::Command { argv: argv.clone() }, Cell::shell()],
+            stacked: false,
+        }],
+    };
+    let mut results = Vec::new();
+    for bound in [false, true] {
+        let panes = compile_layout_panes(
+            &layout,
+            LayoutPaneParams {
+                runtime: &runtime,
+                cwd: dir.path(),
+                cleanup_worktree: false,
+                in_place: false,
+                pick_session: false,
+                resume_seeds: None,
+                launch_identities: &[],
+                fallback_channel: None,
+                loop_reminder: None,
+                leader_run: bound.then_some(LayoutRunParams {
+                    run_id: &run_id,
+                    leader_index: 0,
+                    managed_launch: None,
+                    cleanup: false,
+                    subagent: false,
+                }),
+            },
+        )
+        .unwrap();
+        let expected = [argv.clone(), vec![crate::proc::user_shell_program()]].map(|raw| {
+            if !bound {
+                return raw;
+            }
+            [
+                vec![
+                    crate::proc::rimz_exe().display().to_string(),
+                    "agents".into(),
+                    "run-command".into(),
+                    "--workspace".into(),
+                    runtime.workspace_id.to_string(),
+                    "--run".into(),
+                    run_id.to_string(),
+                    "--".into(),
+                ],
+                raw,
+            ]
+            .concat()
+        });
+        results.push(
+            panes.columns[0]
+                .panes
+                .iter()
+                .map(|pane| pane.argv.clone())
+                .collect::<Vec<_>>()
+                == expected,
+        );
+    }
+    assert_eq!(
+        results,
+        [true, true],
+        "only run-bound command cells are wrapped"
+    );
+}
+
+#[test]
 fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     let dir = tempfile::tempdir().expect("temp dir");
     let runtime = RuntimePaths::under(
