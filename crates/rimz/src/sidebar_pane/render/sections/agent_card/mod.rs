@@ -346,18 +346,18 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// live cell an agent row wears — the thinking head while the child reasons,
 /// the working fill while it acts, or the static `✓`/`!` verdict once it
 /// finishes — then its type and description, with its known cost pinned right.
-/// Line 2 carries the typed token figure, model with an optional still fast-mode
-/// bolt, reasoning effort, and compactions on a per-card column grid, with a
-/// five-cell clock pinned right: plain muted runtime, frozen on finish; a
-/// running child quiet for five minutes instead shows a face and quiet age
-/// heated over the configured stall window. A stalled child keeps that quiet
-/// clock in alarm. Children stay at the soft middle weight and indent past the
-/// parent's stats. The token glyph distinguishes current window occupancy from
-/// a whole-run total; unknown figures leave a blank slot. A metadata-free
-/// finished child degrades to its bare type line, its frozen runtime pinned
-/// ahead of its cost. Entry lines for `rows`, laid on the metadata grid of
-/// every child in `grid`, so rows rendered in separate bands share one set of
-/// columns.
+/// Line 2 carries the typed token figure, model, reasoning effort, then the
+/// optional still fast-mode bolt and compactions on a per-card column grid.
+/// Without effort, the bolt follows the model. A five-cell clock pins right:
+/// plain muted runtime, frozen on finish. A running child quiet for five
+/// minutes instead shows a face and quiet age heated over the configured stall
+/// window. A stalled child keeps that quiet clock in alarm. Children stay at
+/// the soft middle weight and indent past the parent's stats. The token glyph
+/// distinguishes current window occupancy from a whole-run total; unknown
+/// figures leave a blank slot. A metadata-free finished child degrades to its
+/// bare type line, its frozen runtime pinned ahead of its cost. Entry lines for
+/// `rows`, laid on the metadata grid of every child in `grid`, so rows rendered
+/// in separate bands share one set of columns.
 fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
     grid: &[SidebarSubAgent],
@@ -368,10 +368,10 @@ fn sub_agent_entry_lines(
     let animation_phase = ctx.animation_phase;
     let mut lines = Vec::new();
     // The metadata lines below form one per-card grid: the token figure
-    // right-aligns to the widest sibling and the model pads to the widest
-    // sibling, so the `·` seams, the models, and the efforts stack into
-    // columns across children (the clock already stacks via its
-    // fixed right-pinned slot). A column exists only while some child carries
+    // right-aligns to the widest sibling and the model label pads to the widest
+    // sibling label, excluding the fast bolt, so the `·` seams, models, and
+    // efforts stack into columns across children (the clock already stacks via
+    // its fixed right-pinned slot). A column exists only while some child carries
     // the field; a child missing a carried field blank-fills the slot. Finished
     // metadata-free children render no second row.
     let token_col = grid
@@ -382,15 +382,8 @@ fn sub_agent_entry_lines(
         .unwrap_or(0);
     let model_col = grid
         .iter()
-        .filter_map(|sub| {
-            let model = sub.model.as_deref()?;
-            let bolt_width = if sub.fast {
-                1 + text_width(theme.glyph(GlyphRole::CardFast))
-            } else {
-                0
-            };
-            Some(text_width(&model_label_parts(model).0) + bolt_width)
-        })
+        .filter_map(|sub| sub.model.as_deref())
+        .map(|model| text_width(&model_label_parts(model).0))
         .max()
         .unwrap_or(0);
     for sub in rows {
@@ -527,6 +520,9 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
+    if effort.is_some() {
+        append_sub_agent_bolt(theme, &mut left, sub, left_width);
+    }
     let mut compactions = context_compaction_spans(theme, sub.compaction_count);
     if !prev_rendered && effort.is_none() && !compactions.is_empty() {
         // The leading seam has no figure before it to separate.
@@ -619,22 +615,13 @@ fn append_sub_agent_model(
             // hold wide characters, and `{:<N}` pads by char count.
             let label = model_label_parts(model).0;
             let pad = model_col.saturating_sub(text_width(&label));
-            let bolt = theme.glyph(GlyphRole::CardFast);
-            let bolt_width = 1 + text_width(bolt);
-            if sub.fast && spans_width(left) + text_width(&label) + bolt_width <= left_width {
-                left.push(Span::styled(label, theme.muted()));
-                left.push(Span::raw(" "));
-                left.push(Span::styled(
-                    bolt.to_owned(),
-                    theme.styled(Component::FastMode, Modifier::BOLD),
-                ));
-                left.push(Span::raw(" ".repeat(pad.saturating_sub(bolt_width))));
+            left.push(Span::styled(label, theme.muted()));
+            let bolt_width = if sub.effort.is_none() {
+                append_sub_agent_bolt(theme, left, sub, left_width)
             } else {
-                left.push(Span::styled(
-                    format!("{label}{}", " ".repeat(pad)),
-                    theme.muted(),
-                ));
-            }
+                0
+            };
+            left.push(Span::raw(" ".repeat(pad.saturating_sub(bolt_width))));
             *prev_rendered = true;
         }
         None => left.push(Span::raw(" ".repeat(seam + model_col))),
@@ -658,6 +645,28 @@ fn append_sub_agent_effort(
         left.push(Span::raw(" ".repeat(text_width(&value_seam(theme)))));
     }
     left.push(Span::styled(effort.to_owned(), theme.muted()));
+}
+
+fn append_sub_agent_bolt(
+    theme: &Theme,
+    left: &mut Vec<Span<'static>>,
+    sub: &SidebarSubAgent,
+    left_width: usize,
+) -> usize {
+    if !sub.fast || sub.model.is_none() {
+        return 0;
+    }
+    let bolt = theme.glyph(GlyphRole::CardFast);
+    let width = 1 + text_width(bolt);
+    if spans_width(left) + width > left_width {
+        return 0;
+    }
+    left.push(Span::raw(" "));
+    left.push(Span::styled(
+        bolt.to_owned(),
+        theme.styled(Component::FastMode, Modifier::BOLD),
+    ));
+    width
 }
 
 fn elapsed_cluster(theme: &Theme, secs: i64, ceiling: i64) -> String {

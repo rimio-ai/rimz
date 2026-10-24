@@ -78,9 +78,13 @@ fn fast_child_bolt_is_bold_and_still_in_every_status_and_absent_without_a_model(
 }
 
 #[test]
-fn fast_child_model_cell_keeps_the_bolt_attached_and_efforts_aligned() {
+fn fast_child_bolt_follows_effort_without_reserving_model_cells() {
     let theme = Theme::fixed(false);
-    for (fast_model, plain_model) in [("Haiku", "LongModel"), ("模型模型", "Haiku")] {
+    for (fast_model, plain_model) in [
+        ("Haiku", "LongModel"),
+        ("模型模型", "Haiku"),
+        ("Haiku", "Haiku"),
+    ] {
         let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
         let children = fast_children_mut(&mut snapshot);
         children[0].model = Some(fast_model.to_owned());
@@ -95,20 +99,50 @@ fn fast_child_model_cell_keeps_the_bolt_attached_and_efforts_aligned() {
         let fast = lines
             .iter()
             .map(Line::to_string)
-            .find(|line| line.contains(fast_model))
+            .find(|line| line.contains(fast_model) && line.contains("high"))
             .unwrap();
         let plain = lines
             .iter()
             .map(Line::to_string)
-            .find(|line| line.contains(plain_model))
+            .find(|line| line.contains(plain_model) && line.contains("low"))
             .unwrap();
-        assert!(fast.contains(&format!("{fast_model} ϟ")), "{fast}");
+        assert!(fast.contains("high ϟ"), "{fast}");
         assert!(!plain.contains('ϟ'), "{plain}");
+        let fast_prefix = &fast[..fast.find("high").unwrap()];
+        let plain_prefix = &plain[..plain.find("low").unwrap()];
         assert_eq!(
-            Line::from(&fast[..fast.find("high").unwrap()]).width(),
-            Line::from(&plain[..plain.find("low").unwrap()]).width()
+            Line::from(fast_prefix).width(),
+            Line::from(plain_prefix).width()
         );
+        if fast_model == plain_model {
+            assert_eq!(fast_prefix, plain_prefix);
+            assert!(plain_prefix.ends_with("Haiku · "), "{plain}");
+        }
     }
+}
+
+#[test]
+fn fast_child_without_effort_attaches_bolt_to_model_without_reserving_sibling_cells() {
+    let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
+    let children = fast_children_mut(&mut snapshot);
+    children[0].compaction_count = 1;
+    let mut sibling = children[0].clone();
+    sibling.id = "sibling".to_owned();
+    sibling.fast = false;
+    children.push(sibling);
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.to_string().contains("Haiku ϟ · ↻ 1"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.to_string().contains("Haiku · ↻ 1")),
+        "{lines:?}"
+    );
 }
 
 #[test]
@@ -116,23 +150,66 @@ fn fast_child_two_cell_bolt_drops_whole_at_the_clock_boundary() {
     let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
     snapshot.theme = toml::from_str("[glyphs.unicode.card]\nfast = '++'").unwrap();
     let theme = Theme::fixed_for_theme(false, &snapshot.theme);
-    for (width, visible) in [(29, false), (30, true), (31, true)] {
+    for (effort, first_width, label) in [(None, 30, "Haiku ++"), (Some("high"), 37, "high ++")] {
+        fast_children_mut(&mut snapshot)[0].effort = effort.map(str::to_owned);
+        for (width, visible) in [
+            (first_width - 1, false),
+            (first_width, true),
+            (first_width + 1, true),
+        ] {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let metadata = lines
+                .iter()
+                .find(|line| line.to_string().contains("Haiku"))
+                .unwrap()
+                .to_string();
+            assert_eq!(metadata.contains(label), visible, "{width}: {metadata}");
+            assert_eq!(
+                metadata.contains('+'),
+                visible,
+                "no partial bolt: {metadata}"
+            );
+            assert!(
+                metadata.trim_end_matches('▐').ends_with("   2m"),
+                "{metadata}"
+            );
+            assert_eq!(Line::from(metadata).width(), width);
+        }
+    }
+}
+
+#[test]
+fn fast_child_bolt_precedes_compactions_which_drop_first_at_the_clock_boundary() {
+    let mut snapshot = fast_child_snapshot(AgentStatus::Running, false);
+    let child = &mut fast_children_mut(&mut snapshot)[0];
+    child.effort = Some("high".to_owned());
+    child.compaction_count = 12;
+    let theme = Theme::fixed(false);
+    for (width, bolt, compactions) in [
+        (44, true, true),
+        (43, true, true),
+        (42, true, false),
+        (37, true, false),
+        (36, true, false),
+        (35, false, false),
+    ] {
         let lines = group_lines_at_width(&snapshot, &theme, 0, width);
         let metadata = lines
             .iter()
             .find(|line| line.to_string().contains("Haiku"))
             .unwrap()
             .to_string();
+        assert_eq!(metadata.contains("high ϟ"), bolt, "{width}: {metadata}");
+        assert_eq!(metadata.contains('ϟ'), bolt, "{width}: {metadata}");
         assert_eq!(
-            metadata.contains("Haiku ++"),
-            visible,
+            metadata.contains("↻ 12"),
+            compactions,
             "{width}: {metadata}"
         );
-        assert_eq!(
-            metadata.contains('+'),
-            visible,
-            "no partial bolt: {metadata}"
-        );
+        assert_eq!(metadata.contains('↻'), compactions, "{width}: {metadata}");
+        if compactions {
+            assert!(metadata.contains("high ϟ · ↻ 12"), "{metadata}");
+        }
         assert!(
             metadata.trim_end_matches('▐').ends_with("   2m"),
             "{metadata}"
