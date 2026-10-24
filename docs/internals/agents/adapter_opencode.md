@@ -1,83 +1,196 @@
 # OpenCode adapter
 
-Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the pinned upstream protocol is in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
+This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at OpenCode 2.0.27, is in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
 
-RimZ supports OpenCode 2 only, verified against 2.0.27. OpenCode 1 users stay on RimZ 0.4.3. The adapter embeds [`plugin.ts`](../../../crates/rimz/src/agents/adapters/opencode/plugin.ts) and installs it as `~/.config/opencode/plugin/rimz.ts`. Its default export is `{ id: "rimz", setup }`. Only the registry reaches the concrete adapter; account, database, payload, transcript, and spend readers remain private.
+RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` declares a 2.0.0 floor through `min_version`. RimZ authors the whole wire: an in-process TypeScript plugin flattens OpenCode's hooks and bus events into a snake_case envelope that RimZ owns. A payload drift is therefore a RimZ bug in the plugin, never an upstream one.
 
-## Shared language servers
+## Files
 
-No native language-server suppression is verified for OpenCode. Configuring [shared servers](../lsp.md) does not suppress OpenCode's own servers.
-
-## Hooks and lifecycle
-
-`setup(ctx)` does nothing without a nonempty `RIMZ_WORKSPACE_ID` or an executable RimZ (`RIMZ_BIN`, otherwise `PATH`). Repeated setup on the same context reuses its activation. Each activation owns its session, child, model, form, and gauge state, registers session/tool hooks, and consumes `ctx.event.subscribe({signal})`.
-
-The plugin spawns `rimz hooks feed --source opencode`, writes a RimZ-owned snake-case envelope on stdin, and ignores stdout. `RIMZ_AGENT_PID = process.ppid` identifies the pane's TUI, not the private server running the plugin. Every envelope carries its session id, directory, and available title, version, model, and token gauge. Creation records `data.location.directory` and `data.version`; session lookup has no version field.
-
-| Native v2 surface | RimZ envelope or effect |
+| File | Owns |
 | --- | --- |
-| root `session.created` | `session_created`, registration |
-| session `prompt` hook | `chat_message`, turn start with `prompt.text` |
-| root `session.execution.succeeded` / `interrupted` | `session_idle`, turn end; plan agent adds `plan_proposed` |
-| root `session.execution.failed` | `session_error`, with error type and message |
-| child `session.created` | `SubagentStart`, parent id and sanitized title |
-| child execution terminal | `SubagentStop`, failed execution marked as error |
-| `session.step.started` / `ended` / `failed` | paired by `assistantMessageID`; terminal steps clear the pair and update the gauge when tokens are present, no separate envelope |
-| `session.model.selected` / `agent.selected` | update remembered model / agent |
-| `session.renamed`, session metadata refresh | `session_updated` when title changes |
-| root tool `execute.after` hook | `tool_after`, tool name and error status |
-| `session.compaction.started` | `session_compacting` |
-| `session.compaction.ended` / `failed` | `session_compacted`, failure marked as error |
-| `permission.asked` / `replied` | `permission_ask` / `permission_replied`, request id, action/resources or reply |
-| `form.created` | `question_ask`, form title and one question per field; field description supplies the question and field title supplies its header |
-| `form.replied` / `cancelled` | `question_replied` / `question_rejected`; answers flattened in remembered field order |
-| root `session.deleted` | `session_ended`, reason `deleted` |
-| activation cleanup | per-root `session_ended`, reason `dispose` |
+| `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, the subagent lockdown, and `context_window_for` |
+| `crates/rimz/src/agents/adapters/opencode/plugin.ts` | The plugin RimZ installs: activation, root and child classification, the event mapping, the gauge, launch reminders, and cleanup |
+| `crates/rimz/src/agents/adapters/opencode/payloads.rs` | `OpencodeHookPayload`, the typed envelope, and its tolerant parse |
+| `crates/rimz/src/agents/adapters/opencode/database.rs` | Database discovery, the logical stat, read-only SQLite access, and credential loading |
+| `crates/rimz/src/agents/adapters/opencode/account.rs` | The OpenCode `Config` for the shared delegated-account probes |
+| `crates/rimz/src/agents/adapters/opencode/transcript.rs` | Transcript reads, the assistant-page cursor, and the final message |
+| `crates/rimz/src/agents/adapters/opencode/spend.rs` | The spend parser |
 
-Registration is lazy: a wired pane can exist before a session id, and its first prompt creates the session. The sidebar synthesizes an idle row until binding evidence arrives. `/new` hands pane ownership to the latest root; same-process supersession collapses the replaced record. RimZ records no `Fresh` lineage because the wire does not distinguish how a root was created.
+Only the registry reaches `OpencodeAdapter`. The modules above stay private to the adapter directory.
 
-Child model resolution re-emits `SubagentStart` once per changed model, enriching the original task and start time. Unknown sessions are classified through `ctx.session.get({sessionID}).parentID`, including after reload and before queued creation events arrive. Child tool events and reminders are skipped so they cannot move the parent's state. Cleanup aborts the subscription, disposes hook registrations, and waits at most 1.5 seconds for the root-end sweep and pending sends. Event handlers recheck disposal after awaits, and a failed handler does not end the subscription. Pane liveness and the reaper remain the crash backstop.
+## The plugin
 
-**Native prompts own answers.** Permission and form asks raise waiting cards and retain their structured questions. Replies clear waiting, record native answers, and expire pending asks. `native_ask_ui: true` routes attention to OpenCode's dialog; `rimz answer` is unsupported because no answer transport is wired.
+### Install
 
-**Plan approval is derived.** Successful or interrupted root execution under the remembered `plan` agent raises `PlanApproval`; the next prompt clears it. Select the agent in OpenCode's TUI with Shift+Tab. Launch-time Plan adds no arguments and does not select that agent. Yolo maps to `--auto`; Ask and Auto keep the provider default.
+The plugin is a whole file that RimZ writes, through `ManagedSource` (`OPENCODE_MANAGED_SOURCE` in `mod.rs`). It installs at `RIMZ_OPENCODE_PLUGIN` when that is set and nonempty, otherwise at `<config>/opencode/plugin/rimz.ts`, where `<config>` is `XDG_CONFIG_HOME` or `~/.config` (`mod.rs::opencode_plugin_path`). The path resolves from the process environment, not the login environment. The file's first line carries the `_rimz_managed` marker, and ownership follows the marker:
 
-**Install.** A marked file is reclaimed byte-for-byte on reinstall; an unmarked file is user-owned and install/preview refuse to overwrite it. Setup offers a consented refresh when the marked file differs from the build's embedded copy. Uninstall removes only a marked file.
+- Install and reinstall replace a marked file byte for byte.
+- Install and preview refuse to overwrite an unmarked file, which the user owns.
+- Uninstall removes only a marked file.
+- The source is declared upgradeable, so setup offers a consented refresh when the marked file differs from the copy embedded in the build.
+
+`OpencodeManagedIntegration::install_blocker` refuses install and preview when the located `opencode` reports a version below the floor (see [Launch and resume](#launch-and-resume)).
+
+### Activation
+
+OpenCode calls the plugin's `setup(ctx)` from its default export, `{ id: "rimz", setup }`. Setup does nothing unless `RIMZ_WORKSPACE_ID` is nonempty and an executable `rimz` resolves (`RIMZ_BIN`, otherwise the first `rimz` on `PATH`). A second setup on the same context returns the same activation, from a `WeakMap` keyed by context. Each activation keeps its own session, child, model, agent, form, and gauge maps. It registers the session `prompt` and `context` hooks and the tool `execute.after` hook, and it consumes `ctx.event.subscribe`.
+
+The plugin classifies each session as a root or a child. `session.created` classifies by its `parentID`. A session first seen through another event or hook is classified through `ctx.session.get({sessionID}).parentID`, which covers a plugin reload and events that arrive before the creation event. A failed lookup leaves the session unclassified, and the plugin drops its events instead of crediting them to the root. The plugin also drops events from another `location.directory` and events for the `global` session.
+
+Each envelope goes to RimZ as one `rimz hooks feed --source opencode` child, which reads the JSON line on stdin. The plugin discards the child's stdout and stderr, so a RimZ reply never reaches OpenCode. Every envelope carries the session id, the session directory as `cwd` and `worktree_path`, and the remembered title, version, model, effort, display name, window, and token split. `payloads.rs::parse_payload` is tolerant: a field of the wrong type degrades the whole envelope to an empty record.
+
+Cleanup runs when OpenCode disposes the activation. It aborts the subscription, sends `session_ended` with reason `dispose` for every root, disposes the hook registrations, and waits at most 1.5 seconds for the pending sends and the disposals to settle. Every handler checks for disposal again after each `await`. A handler that throws does not end the subscription. Pane liveness and the reaper cover a crash, where no cleanup runs ([instances.md](./instances.md#session-death)).
+
+### Process identity
+
+RimZ launches OpenCode with `--standalone`, so the TUI starts a private `opencode serve` child that inherits the pane environment, and the plugin runs in that child ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-plugins-and-runtime)). The plugin sets `RIMZ_AGENT_PID` to its own `process.ppid` in each feed child, which names the TUI. `crates/rimz/src/cli/hooks/owner.rs::attach_agent_owner` stamps that pid, with its process-start token, as the session's `RuntimeOwner`, which feeds the reaper and every same-instance proof ([instances.md](./instances.md#session-death)). Before the first hook, a fresh RimZ launch records the exec wrapper as the owner (`crates/rimz/src/cli/agents_cmd/exec.rs::attach_own_launch_pane`), and the first hook replaces it with the TUI. A resume attaches the provider pid it spawned before any hook fires ([instances.md](./instances.md#binding-a-session), step 2).
+
+The default shared OpenCode server is outside this contract. Its environment and parent belong to no pane, so its hooks name neither the pane nor the TUI. Process detection still recognizes both `opencode` and `bun` (`process_names`).
+
+## Events
+
+| OpenCode event or hook | Wire event | RimZ effect |
+| --- | --- | --- |
+| `session.created`, root | `session_created` | `Registered`, then a metadata refresh |
+| `session.created`, child | `SubagentStart`, with `parent_session_id` and the title as `prompt` | `SubagentStarted` |
+| `prompt` hook, root | `chat_message`, with `prompt.text` | `TurnStarted` |
+| `session.execution.started`, root | none | marks the root and refreshes metadata |
+| `session.execution.succeeded` or `interrupted`, root | `session_idle`, with `plan_proposed` under the `plan` agent | `TurnEnded`, or `AwaitingInput` for `PlanApproval` |
+| `session.execution.failed`, root | `session_error`, with `error_class` and `error_message` | `TurnEnded`, errored |
+| `session.execution.*` terminal, child | `SubagentStop`, `is_error` on failure | `SubagentStopped` |
+| `session.step.started`, `ended`, `failed` | none | the gauge (see [Context gauge](#context-gauge)) |
+| `session.model.selected` | none | the remembered model |
+| `session.agent.selected` | none | the remembered agent |
+| `session.renamed`, metadata refresh | `session_updated`, when the title changes | the session name, no lifecycle signal |
+| `execute.after` tool hook, root | `tool_after`, with `tool_name` and `is_error` | `ToolUsed` |
+| `session.compaction.started` | `session_compacting` | `Compacting` |
+| `session.compaction.ended` or `failed` | `session_compacted`, `is_error` on failure | `CompactionEnded` |
+| `permission.asked` | `permission_ask`, with `request_id`, the action as `tool_name`, the resources as `patterns` | `AwaitingInput` for `Permission` |
+| `permission.replied` | `permission_replied`, with `reply` | a native answer and `ToolUsed` |
+| `form.created` | `question_ask`, with one question per field | `AwaitingInput` for `Question` |
+| `form.replied` | `question_replied`, answers in the form's field order | native answers and `ToolUsed` |
+| `form.cancelled` | `question_rejected` | the native answer `(rejected)` and `ToolUsed` |
+| `session.deleted`, root | `session_ended`, reason `deleted` | `Ended` |
+| activation cleanup | `session_ended` per root, reason `dispose` | `Ended` |
+
+`decode_hook` in `mod.rs` maps the wire event to the signal. The tool tables in `OPENCODE_DESCRIPTOR` count `bash`, `edit`, `write`, `apply_patch`, and `patch` as mutating, and all of them except `bash` as editing. On `session_idle` and `session_error`, `decode_hook` reads the session's last assistant message from the database as the final message (`transcript.rs::last_assistant_message`). The plugin sends no transcript path, so the observation names the newest database (`database::newest_file`).
+
+### Sessions
+
+Registration is lazy (`registers_lazily`). A fresh OpenCode TUI creates its session at the first prompt, so `session.created` and `session_created` arrive only then ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment)). Until then the pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds).
+
+`/new` registers a new root inside the same process. The adapter declares `SamePaneSessionPolicy::FollowLatest`, so pane and card ownership follow the latest root ([instances.md](./instances.md#same-pane-ownership)). The older root is collapsed by the in-place-switch rule of [supersession](./instances.md#supersession). The fresh-conversation rule never applies, because the wire does not say how a root was created and RimZ records no `Fresh` origin for it.
+
+### Subagents
+
+A child session reports only its start, its model, and its terminal execution. When a child's model first resolves or later changes, through a step or `session.model.selected`, the plugin sends `SubagentStart` again. The repeat sends no prompt, so the card keeps the original task and start time. The plugin drops a child's prompt, tool, permission, form, compaction, and rename events, and gives it no launch reminder, so a child cannot move the parent's state. A deleted child is forgotten without a `SubagentStop`.
+
+### Asks and plan approval
+
+Permission and form asks raise waiting cards that keep their structured questions. `decode_hook` takes at most four questions from a form. Each question's text comes from the field's description, then its title, then its key, and its header from the field's title. The adapter declares `native_ask_ui`, so attention goes to OpenCode's own dialog. The asks carry no native key (keyless, [model.md](./model.md#edges)). A reply event records the native answer and emits `ToolUsed`, which clears waiting ([model.md](./model.md#waiting-and-asks)). `rimz answer` is unsupported: RimZ has no mapped transport to answer OpenCode.
+
+Plan approval is derived from the agent the plugin remembers. A root execution that succeeds or is interrupted while that agent is `plan` sends `session_idle` with `plan_proposed`, and `decode_hook` raises `PlanApproval`. The next prompt clears it. A launch in Plan mode selects no agent (see [Launch and resume](#launch-and-resume)), so only a plan agent the user picks in the TUI raises the gate.
 
 ## Launch and resume
 
-`crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` launches `opencode --standalone [--auto] [--prompt <text>]` and resumes with `opencode --session <id> --standalone`. A private serve child inherits the pane environment and has the TUI as parent. The default shared service is outside this contract: its environment and parent do not identify the pane. Process detection still recognizes `opencode` and `bun`.
+`OPENCODE_DESCRIPTOR.launch` renders:
 
-Detection searches `PATH`, then `~/.opencode/bin`. Launch, install/setup, and doctor refuse a readable version below 2.0.0, the oldest release RimZ supports, with the fix `opencode upgrade --major`. An unreadable version abstains. Fork and model presets are unsupported; a configured model preset is refused before launch.
+| Action | Argv |
+| --- | --- |
+| launch | `opencode --standalone [--auto] [--prompt <text>]` |
+| resume | `opencode --session <id> --standalone` |
+| compact | `/compact`, typed into the pane |
 
-Supervised children append `{"action":"subagent","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT.permissions`, preserving the configured object and preceding rules while accepting JSONC comments and trailing commas on input. The emitted value is strict JSON. Absent, invalid, or non-object content becomes an object with that permissions array. Agent-specific permission rules can override this global deny because upstream appends them later. See [subagents](../harness/subagents.md) for the surrounding delegation contract.
+| Permission mode | Arguments |
+| --- | --- |
+| Ask, Auto | none: OpenCode's default |
+| Plan | none: no agent is selected |
+| Yolo | `--auto` |
 
-Launch reminders ride `RIMZ_LAUNCH_REMINDERS`. The first activation claims the text into a `globalThis` symbol and deletes the environment variable so tool children cannot inherit it. The session `context` hook appends `{type: "text", text}` to the mutable `system` array for root primary requests only. Title, compaction, generation, and known child requests get none.
+Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Fork and every preset are unsupported (`PresetMatchers::EMPTY`), and a configured model preset refuses before launch.
 
-## Context and transcript
+OpenCode never carries this launch text:
 
-Paired step events provide input, output, reasoning, cache-read, and cache-write tokens. Reasoning is added to output; total is the sum of all five counters. A positive split replaces the gauge, including zero-valued siblings; an all-zero split preserves the last measurement. Later lifecycle envelopes carry the gauge. Context utilization counts input plus cache-read and cache-write, never output.
+- A profile system-prompt replacement or prompt file refuses with `PromptComposeErr::Unsupported`, because the adapter declares no system-prompt matcher (`crates/rimz/src/harness/prompt_compose.rs`).
+- A headless request refuses, because `launch.headless` is `None`.
+- A compaction instruction is dropped without notice, because `CompactInstruction::Unsupported` renders only `/compact`.
 
-`ctx.model.list()` supplies model names and a positive `limit.input`, falling back to a positive `limit.context`; otherwise the window is omitted. The per-activation catalog retries after an empty or failed read. Rust retains its Claude-family window fallback when the catalog is unavailable. `ctx.session.get({sessionID})` refreshes title, agent, and model asynchronously at registration, prompt, and execution boundaries without holding terminal envelopes. Timestamped `New session - …` and `Child session - …` titles are never cached. Native rename events also update the title. Version is retained from creation, not fetched from session metadata.
+Launch reminders arrive through `SystemTextChannel::ExtensionEnv`, which sets `RIMZ_LAUNCH_REMINDERS` ([fleet.md](../harness/fleet.md#launch-reminders) owns the text). The first activation in the process claims the value into a `globalThis` symbol and deletes the variable, so tool children never inherit it. The `context` hook then appends `{type: "text", text}` to the mutable `system` array for root sessions only. The hook checks the session and nothing else: it has no request-kind check.
 
-`crates/rimz/src/agents/adapters/opencode/transcript.rs::read_messages` binds the session id and reads `session_message` user `data.text` and assistant `data.content[]` text entries only. Reasoning, tools, synthetic timeline records, and other sessions stay out. Full reads order by `time_created`, then `rowid`. Incremental output and the final-message pick use completed assistant rowids: `time.completed`, `finish`, or `error` marks completion, so an in-place streaming update is not lost behind an early cursor. Imported older-timestamped rows can remain new to this cursor. Cursor identity includes database path and session id.
+A subagent launch (`ExecRequest::subagent`) of OpenCode passes its environment through `OpencodeAdapter::lockdown_subagent_env` (`crates/rimz/src/harness/launch.rs::compose_agent_env`). It parses `OPENCODE_CONFIG_CONTENT` as JSONC and appends `{"action":"subagent","resource":"*","effect":"deny"}` to its `permissions` array, keeping the rest of the object and the earlier rules. It writes the result back as strict JSON. Content that is absent, invalid, or not an object becomes an object that holds only that array. An agent-specific `permissions` allow overrides the deny, because OpenCode appends agent rules after global ones and the last match wins ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-native-requests)). `--auto` keeps the deny, because it approves everything except explicit denies. The delegation contract is in [subagents.md](../harness/subagents.md#children-cannot-delegate-again).
 
-`rimz agents history` combines these messages with session-scoped spend rows. Spend timestamps have second precision; turn attribution compares boundaries at that precision, while displayed timestamps retain their precision. If two turns open in the same stored second, the later boundary owns it.
+## Context gauge
+
+The plugin's gauge is a per-session record of the model, its window, and the latest token split, stamped onto every envelope. `session.step.started` stores the step's model and agent under its `assistantMessageID`. `session.step.ended` or `failed` removes that pair and reads the step's tokens:
+
+- Output is OpenCode's output plus its reasoning.
+- The total is input, output, cache read, and cache write.
+- A positive total replaces the whole split, zero-valued fields included. An all-zero split keeps the last measurement.
+
+`ctx.model.list()` gives the display name and the window: a positive `limit.input`, otherwise a positive `limit.context`, otherwise none. One activation reads the catalog once, and reads it again after an empty or failed result. When an envelope carries no window, `mod.rs::context_window_for` supplies 1M for an id containing `[1m]` or a Claude id containing `1m`, 200k for any other Claude id, and nothing for other models. The gauge counts input-side tokens only ([model.md](./model.md#enrichment)).
+
+`ctx.session.get` refreshes the title, agent, and model at registration, at each prompt, and at each root execution boundary. The refresh runs in the background, so a slow lookup never holds a terminal envelope. The plugin never stores OpenCode's placeholder titles, `New session - ...` and `Child session - ...`. The version comes from `session.created` alone, because session lookup returns none.
+
+## Transcript
+
+`transcript.rs::read_messages` reads `session_message` rows for one session id only, since every OpenCode agent on the machine shares the database. It takes a user row's `data.text` and the `text` entries of an assistant row's `data.content[]`. Reasoning, tool content, and other record types stay out. Full reads order by `time_created`, then `rowid`.
+
+The assistant-page cursor follows `rowid` over completed assistant rows only: `time.completed`, `finish`, or `error` marks completion. The cursor never advances over a message that is still streaming, so the in-place update that completes it is still read. An imported row with an older timestamp but a higher `rowid` still counts as new. The cursor's identity includes the database path and the session id.
+
+`rimz agents history` joins these messages with the session's spend rows. Spend timestamps have second precision, so turn attribution compares boundaries at that precision while displayed timestamps keep theirs. When two turns open in the same second, the later boundary owns that second.
 
 ## Account and balance
 
-`crates/rimz/src/agents/adapters/opencode/database.rs::credentials_in_file` reads SQLite's `credential` table, ordered by `active DESC, time_created DESC, id DESC`, keeping the first parsed row per `integration_id`. Credential stamps use the maximum `time_updated` in milliseconds of those kept rows, so session writes do not invalidate OAuth usage caches. A missing database or credential table means logged out; database read failures mean unavailable. Types map as `oauth` to metered subscription, `key` to unmetered API key, and `external` to unknown metering. Provider selection prefers the latest assistant row's `model.providerID`, then the first OAuth credential, then provider-name order. The raw provider key becomes `sub_provider`.
+Both account probes run through `crates/rimz/src/agents/delegated_account.rs`, which OpenCode shares with Pi. `account.rs::config` supplies the OpenCode inputs: `database::load_credentials`, the used provider from `database::latest_message_provider`, `key` as the API-key type, and the account-key domain `rimz/opencode-oauth-account-key/v1`. Both probes ignore the login environment, and database discovery reads the process environment, so a named login does not change what they read ([providers.md](./providers.md#logins)).
 
-The delegated-account loader shares identity and usage selection with Pi, whose loader remains file-backed. OpenAI identity prefers `value.metadata.accountID`, otherwise hashes the refresh token or access-token fallback under OpenCode's domain. Supported OpenAI and Anthropic OAuth credentials delegate to Codex and Claude usage normalization respectively. Windows and extra credits cache under `opencode`; OpenAI receives Codex's lifted 5h completion. API-key, external, and unsupported-provider credentials carry no OAuth quota scope. The plugin does not wire response-header budget enrichment, so bars come from the out-of-band usage probe.
+`database.rs::credentials_in_file` reads the newest database's `credential` table, ordered by `active DESC, time_created DESC, id DESC`, and keeps the first row that parses for each `integration_id`. The credential stamp is the largest `time_updated`, in milliseconds, of the rows kept. Session writes therefore never invalidate the OAuth usage cache. A missing database or `credential` table reads as logged out. A database that exists but fails to read is unavailable.
+
+The account probe and the usage probe select the credential differently:
+
+| Step | Account probe (`select_display`) | Usage probe (`select_usage_entries`) |
+| --- | --- | --- |
+| 1 | the provider of the latest assistant row, across databases | the same |
+| 2 | the first OAuth credential | the same |
+| 3 | the first credential in provider-key order | none: no credentials |
+| a non-OAuth pick | shown, with its metering | refused as API-key only |
+
+The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, and the raw provider key becomes `sub_provider`. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain.
+
+| OpenCode provider | Quota surface | Account scope |
+| --- | --- | --- |
+| `anthropic` | Claude OAuth usage | `anthropic` OAuth |
+| `openai`, `openai-codex` | Codex OAuth usage | `openai` OAuth |
+| any other | none | none |
+
+`delegated_account.rs::quota_surface` owns the table. An API-key, external, or unsupported credential carries no OAuth scope ([providers.md](./providers.md#account-scope)). The plugin wires no response-header enrichment, so the out-of-band usage probe is the only source of the bars ([providers.md](./providers.md#the-out-of-band-probe)).
 
 ## Cost
 
-`crates/rimz/src/agents/adapters/opencode/database.rs::files` discovers `opencode.db` and valid `opencode-<channel>.db` files under `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode` (`RIMZ_OPENCODE_DATA_DIR` in tests). Per directory it selects the most recently modified logical database, considering the main file and optional WAL. Ties prefer the primary filename, then channel names lexicographically. Credentials and the hook transcript-path fallback share newest-logical-database selection across those directories. Access is read-only. WAL changes invalidate spend and live-cost caches; shared-memory coordination churn does not.
+`database.rs::files` finds one database per data directory. The data directory is `RIMZ_OPENCODE_DATA_DIR` (a comma-separated list) when set, otherwise `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`. A directory's candidates are `opencode.db` and every `opencode-<channel>.db` whose channel holds only ASCII letters, digits, `_`, and `-`. The candidate with the newest logical stat wins, where the logical stat is the main file plus its optional WAL (`database::logical_stat`). Ties go to `opencode.db`, then to channel names in lexical order. Credentials and the hook's transcript path take the newest database across directories (`database::newest_file`). Every access is read-only. A WAL change invalidates the spend and live-cost caches, and a shared-memory file change does not.
 
-`crates/rimz/src/agents/adapters/opencode/spend.rs::parse` cold-folds assistant and usage-bearing compaction `session_message` rows, joining `session_v2.directory` for origin. Compaction uses its own model when present, otherwise the session's latest assistant model, and the row's creation timestamp. Cost-only compaction rows also count. Compaction summaries stay out of transcripts and active-provider selection. Mutable rows require authoritative replacement of that database's cache set, not cursor resumption. Each assistant row supplies `model.id`, `model.providerID`, tokens, timestamp, cost, and content. Positive cost is authoritative; zero cost is priced from tokens, including reasoning at the output rate and both cache rates. Unknown models retain tokens and zero dollars until pricing refresh. Numeric strings are accepted for token, time, and cost fields; absent token splits fall back to a reported total as output, otherwise a row without positive cost is dropped.
+`spend.rs::parse` reads `assistant` and `compaction` rows from `session_message`, joined to `session_v2.directory` for the origin. OpenCode updates rows in place, so every parse cold-folds the whole table and returns `SpendUpdate::Replace` for that database's cache set ([spending.md](./spending.md#the-incremental-cache)). Each row keeps its `session_id`. A row's figures follow these rules:
 
-Each spend entry retains its `session_id`. Turn-end hooks reconcile the live card to that session's authoritative dollar sum, not the whole database. Live tool counts come from named `tool_after` events; historical counts come from each assistant row's tool content entries and their `name` fields.
+- An assistant row needs `model.id`, `model.providerID`, and a token object with a nonzero split, or it is dropped, whatever its cost.
+- A compaction row needs tokens or a positive cost. It takes its own model, otherwise the session's latest assistant model, and the row's `time_created`. Compaction rows never reach the transcript or the used-provider choice.
+- Output adds reasoning. A reported `total` above the itemized sum adds the difference to output.
+- A positive stored `cost` is authoritative. A zero cost is priced from tokens, with reasoning at the output rate and both cache rates. The price lookup tries the model id, a few aliases, and each name prefixed with the provider (`spend.rs::model_candidates`).
+- An unknown model keeps its tokens at zero dollars until a pricing refresh.
+- Token, time, and cost fields accept numeric strings.
+- Tool counts come from each assistant row's `tool` content entries, by `name`. Live tool counts come from `tool_after`.
+
+The live card's dollar figure comes from the database alone, since the plugin pushes no cost. At each turn end, `crates/rimz/src/cli/hooks/lifecycle/context.rs::supplement_realtime_cost` sums the session's spend rows. It writes the sum only when it exceeds the card's stored cost, and it skips the read when the database's logical stat is unchanged. A correction downward in the database therefore leaves the card overstated.
+
+The spend cache stamps one origin per database file, either an origin override from a live agent or the first parsed row's directory. One OpenCode database holds the sessions of every project, so workspace-scoped spend attributes all of them to that one directory.
 
 ## Known gaps
 
-Run `rimz coverage` for the current matrix. Native answering, background parking, and remote control remain unsupported. Idle attention is partial, reconstructed from turn boundaries, native asks, and the stall window. Launch-time plan selection, model presets, and fork are not supported, although an interactive plan-agent turn still derives a waiting gate. The agent-specific permission override limit is described above. RimZ does not yet honor upstream's `OPENCODE_DB` override; standard-directory discovery remains the storage contract.
+`rimz coverage --wiring` prints the declared integration grid.
+
+- Native answering, background parking, background shells, and remote control are unsupported.
+- Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.
+- Plan mode at launch, presets, fork, system-prompt replacement, and headless runs are unsupported.
+- An agent-specific permission rule can lift the subagent deny.
+- RimZ does not read `OPENCODE_DB`, and it skips channel databases whose names contain a `.`, which OpenCode allows ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-storage-and-credentials)).
+- Workspace-scoped spend reads one origin for the whole shared database.
+- The reference does not record whether OpenCode runs the `context` hook for title or generate requests, so whether those requests carry the launch reminder is unverified.
+- No shared language-server suppression is verified for OpenCode, so [shared servers](../lsp.md) run beside OpenCode's own.
