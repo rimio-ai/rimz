@@ -28,7 +28,7 @@ use std::time::Duration;
 
 /// Native Linux boot identity, cached once per process, including failed reads.
 /// Other platforms have no cheap native identity and return `None`.
-pub(crate) fn boot_id() -> Option<String> {
+pub fn boot_id() -> Option<String> {
     static BOOT_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     BOOT_ID
         .get_or_init(|| {

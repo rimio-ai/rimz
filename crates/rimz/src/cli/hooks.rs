@@ -634,6 +634,7 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         &project_root,
     ));
     let frame = HookIngress {
+        boot_id: rimz::proc::boot_id(),
         schema_version: "1".to_owned(),
         event_id: EventId::new(),
         ts: jiff::Timestamp::now(),

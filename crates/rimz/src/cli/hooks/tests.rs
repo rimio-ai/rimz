@@ -111,6 +111,7 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
         env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
         env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
         let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
             ts: jiff::Timestamp::now(),
@@ -232,6 +233,7 @@ fn cold_plain_frames_read_a_constant_number_of_sidecars() {
             env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
             env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
             let frame = rimz::store::ingress::HookIngress {
+                boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::EventId::new(),
                 ts: jiff::Timestamp::now(),
@@ -345,6 +347,7 @@ fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
     run.agent_id = Some(child.agent_id.clone());
     let payload = serde_json::json!({"session_id": "child", "tool_name": "Bash", "tool_input": {"command": "true"}});
     let frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
         ts: ingress_at,
@@ -471,6 +474,7 @@ fn lifecycle_records_pane_roles_for_roots_and_native_children() {
         };
         let frame_for =
             |event: &str, payload: &serde_json::Value| rimz::store::ingress::HookIngress {
+                boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::EventId::new(),
                 ts: jiff::Timestamp::now(),
@@ -579,6 +583,7 @@ fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
     let home = store.paths().root.join("home");
     let unit = store.paths().temp_unit_dir(Some("scout"));
     let mut frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::EventId::new(),
         ts: jiff::Timestamp::now(),

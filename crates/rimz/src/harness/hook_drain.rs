@@ -893,6 +893,7 @@ struct CachedReply {
 }
 
 struct Drainer {
+    boot_id: Option<String>,
     applied: u64,
     epoch: EventId,
     replies: HashMap<EventId, CachedReply>,
@@ -913,6 +914,7 @@ impl Drainer {
             })
             .unwrap_or_else(|_| crate::diag::DiagSink::disabled());
         Self {
+            boot_id: crate::proc::boot_id(),
             applied: 0,
             epoch: EventId::default(),
             replies: HashMap::new(),
@@ -962,7 +964,8 @@ impl Drainer {
                 return Ok(());
             }
             let mut expected = cursor.clone();
-            for (frame, end) in frames {
+            let mut frames = frames.into_iter().peekable();
+            while let Some((frame, mut end)) = frames.next() {
                 let recovering = cursor.claimed > cursor.applied && end == cursor.claimed;
                 let Some(frame) = frame else {
                     let lock = workspace_lock()?;
@@ -972,7 +975,7 @@ impl Drainer {
                     cursor.claimed = end;
                     cursor.applied_event_id = None;
                     cursor.claimed_event_id = None;
-                    ingress::write_cursor(store.paths(), &cursor, &lock)?;
+                    ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                     self.applied = end;
                     drop(lock);
@@ -988,6 +991,55 @@ impl Drainer {
                     )
                     .into());
                 }
+                let other_boot = |frame: &HookIngress| {
+                    frame
+                        .boot_id
+                        .as_ref()
+                        .zip(self.boot_id.as_ref())
+                        .is_some_and(|(frame_boot, own_boot)| frame_boot != own_boot)
+                };
+                if other_boot(&frame) {
+                    let first_ingress = frame.event_id;
+                    let mut last_ingress = first_ingress.clone();
+                    let mut dropped = 1;
+                    while let Some((Some(frame), next_end)) =
+                        frames.next_if(|(frame, _)| frame.as_ref().is_some_and(other_boot))
+                    {
+                        last_ingress = frame.event_id;
+                        end = next_end;
+                        dropped += 1;
+                    }
+                    let lock = workspace_lock()?;
+                    validate_ownership(store, socket, &expected, identity)?;
+                    self.diag
+                        .emit(crate::diag::record::DiagEvent::HookIngressDropped {
+                            dropped,
+                            first_ingress,
+                            last_ingress: last_ingress.clone(),
+                        });
+                    let mut cursor = expected.clone();
+                    cursor.applied = end;
+                    cursor.claimed = end;
+                    cursor.applied_event_id = Some(last_ingress.clone());
+                    cursor.claimed_event_id = Some(last_ingress);
+                    ingress::write_cursor_cache(store.paths(), &cursor, &lock)?;
+                    expected = cursor;
+                    self.applied = end;
+                    drop(lock);
+                    if respond(self)? {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                let write_cursor = if self
+                    .boot_id
+                    .as_ref()
+                    .is_some_and(|boot| frame.boot_id.as_ref() == Some(boot))
+                {
+                    ingress::write_cursor_cache
+                } else {
+                    ingress::write_cursor
+                };
                 #[cfg(feature = "testkit")]
                 let mut processor_succeeded = true;
                 #[cfg(feature = "testkit")]
@@ -1022,7 +1074,7 @@ impl Drainer {
                     }
                     cursor.claimed = end;
                     cursor.claimed_event_id = Some(frame.event_id.clone());
-                    ingress::write_cursor(store.paths(), &cursor, &lock)?;
+                    write_cursor(store.paths(), &cursor, &lock)?;
                     expected = cursor;
                 }
                 let processor = PROCESSOR.get().ok_or_else(|| {
@@ -1070,7 +1122,7 @@ impl Drainer {
                 let mut cursor = expected.clone();
                 cursor.applied = end;
                 cursor.applied_event_id = Some(frame.event_id.clone());
-                ingress::write_cursor(store.paths(), &cursor, &lock)?;
+                write_cursor(store.paths(), &cursor, &lock)?;
                 expected = cursor;
                 self.applied = end;
                 #[cfg(feature = "testkit")]
@@ -1224,6 +1276,7 @@ mod tests {
         let mut bytes = Vec::new();
         for _ in 0..prefix_frames + 4 {
             let frame = HookIngress {
+                boot_id: None,
                 schema_version: "1".into(),
                 event_id: EventId::new(),
                 ts: "2026-01-01T00:00:00Z".parse().unwrap(),
@@ -1335,6 +1388,243 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn other_boot_frames_drop_before_pending_or_claimed_application() {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        register_processor(|_, _, _, _, _| {
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(HookReply::Silent)
+        });
+        for claimed in [false, true] {
+            let (_dir, store, pending) = pending_boot_fixture(Some("other-boot"), 4);
+            if claimed {
+                let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+                let cursor = ingress::HookDrainCursor {
+                    claimed: pending[0].1,
+                    claimed_event_id: Some(pending[0].0.event_id.clone()),
+                    ..Default::default()
+                };
+                ingress::write_cursor(store.paths(), &cursor, &lock).unwrap();
+            }
+            let lifetime =
+                WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+            let mut drain = Drainer::new(&store);
+            drain.boot_id = Some("this-boot".into());
+            drain.diag = crate::diag::DiagSink::under(
+                store.paths().root.clone(),
+                store.paths().workspace_id.clone(),
+                "session",
+                None,
+            );
+            let log = drain.diag.log_path().unwrap();
+            let mut responses = 0;
+            drain
+                .drain(&store, &lifetime, None, None, |_| {
+                    let cursor = ingress::read_cursor(store.paths()).unwrap();
+                    let (frame, end) = pending.last().unwrap();
+                    assert_eq!((cursor.applied, cursor.claimed), (*end, *end));
+                    assert_eq!(cursor.applied_event_id.as_ref(), Some(&frame.event_id));
+                    assert_eq!(cursor.claimed_event_id.as_ref(), Some(&frame.event_id));
+                    responses += 1;
+                    Ok(false)
+                })
+                .unwrap();
+            assert_eq!(
+                CALLS.load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "foreign frames must never invoke the processor, including recovery"
+            );
+            assert_eq!(responses, 1);
+            let records = fs::read_to_string(log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 1);
+            assert_eq!(
+                records[0]["event"],
+                serde_json::json!({
+                    "kind": "hook_ingress_dropped",
+                    "dropped": pending.len(),
+                    "first_ingress": pending[0].0.event_id,
+                    "last_ingress": pending.last().unwrap().0.event_id,
+                })
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn other_boot_runs_publish_one_cursor_each_and_apply_intervening_frames() {
+        use rustix::fs::inotify;
+
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        register_processor(|_, frame, recover, _, _| {
+            assert!(matches!(frame.boot_id.as_deref(), Some("this-boot") | None));
+            assert!(recover.is_none());
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(HookReply::Silent)
+        });
+        for boot in [Some("this-boot"), None] {
+            let (_dir, store, mut pending) = pending_boot_fixture(Some("other-boot"), 3);
+            {
+                let lock =
+                    crate::disk::lock::SharedAppendLock::acquire(&store.paths().hook_ingress_lock)
+                        .unwrap();
+                for boot in [boot, Some("other-boot"), Some("another-boot")] {
+                    let mut frame = pending[0].0.clone();
+                    frame.event_id = EventId::new();
+                    frame.boot_id = boot.map(str::to_owned);
+                    let end = ingress::append(store.paths(), &frame, &lock).unwrap();
+                    pending.push((frame, end));
+                }
+            }
+            let watch = inotify::init(inotify::CreateFlags::NONBLOCK).unwrap();
+            // Interleaved source events prevent identical target events from coalescing.
+            inotify::add_watch(
+                &watch,
+                store.paths().hook_drain_cursor.parent().unwrap(),
+                inotify::WatchFlags::MOVED_FROM | inotify::WatchFlags::MOVED_TO,
+            )
+            .unwrap();
+            let lifetime =
+                WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+            let mut drain = Drainer::new(&store);
+            drain.boot_id = Some("this-boot".into());
+            drain.diag = crate::diag::DiagSink::under(
+                store.paths().root.clone(),
+                store.paths().workspace_id.clone(),
+                "session",
+                None,
+            );
+            let log = drain.diag.log_path().unwrap();
+            let mut responses = Vec::new();
+            drain
+                .drain(&store, &lifetime, None, None, |drain| {
+                    let cursor = ingress::read_cursor(store.paths()).unwrap();
+                    assert_eq!(cursor.applied, cursor.claimed);
+                    assert_eq!(cursor.applied_event_id, cursor.claimed_event_id);
+                    assert_eq!(cursor.applied, drain.applied);
+                    assert!(
+                        fs::read_to_string(&log)
+                            .unwrap()
+                            .contains("hook_ingress_dropped")
+                    );
+                    responses.push(cursor.applied);
+                    Ok(cursor.applied == pending.last().unwrap().1)
+                })
+                .unwrap();
+            assert_eq!(responses, vec![pending[2].1, pending[3].1, pending[5].1]);
+            let mut buffer = [std::mem::MaybeUninit::uninit(); 4096];
+            let mut reader = inotify::Reader::new(&watch, &mut buffer);
+            let mut publications = 0;
+            loop {
+                match reader.next() {
+                    Ok(event) => {
+                        if event.file_name().is_some_and(|name| {
+                            name.to_bytes()
+                                == store
+                                    .paths()
+                                    .hook_drain_cursor
+                                    .file_name()
+                                    .unwrap()
+                                    .as_encoded_bytes()
+                        }) {
+                            publications += 1;
+                        }
+                    }
+                    Err(rustix::io::Errno::AGAIN) => break,
+                    Err(error) => panic!("cursor watch failed: {error}"),
+                }
+            }
+            assert_eq!(
+                publications, 4,
+                "one write per run, two for the applied frame"
+            );
+            let records = fs::read_to_string(log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 2);
+            for (record, (first, last)) in records.iter().zip([(0, 2), (4, 5)]) {
+                assert_eq!(
+                    record["event"],
+                    serde_json::json!({
+                        "kind": "hook_ingress_dropped",
+                        "dropped": last - first + 1,
+                        "first_ingress": pending[first].0.event_id,
+                        "last_ingress": pending[last].0.event_id,
+                    })
+                );
+            }
+        }
+        assert_eq!(CALLS.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    fn pending_boot_fixture(
+        boot: Option<&str>,
+        count: usize,
+    ) -> (tempfile::TempDir, Store, Vec<(HookIngress, u64)>) {
+        let (dir, store, pending) = fixture(1);
+        let mut bytes = Vec::new();
+        let mut frames = Vec::new();
+        for (frame, _) in pending.into_iter().take(count) {
+            let mut wire = serde_json::to_value(frame).unwrap();
+            wire["boot_id"] = serde_json::json!(boot);
+            wire["ts"] = serde_json::json!(jiff::Timestamp::now());
+            let payload = serde_json::to_string(&wire).unwrap();
+            writeln!(
+                bytes,
+                "{} {:08x} {}",
+                payload.len(),
+                crc32fast::hash(payload.as_bytes()),
+                payload
+            )
+            .unwrap();
+            frames.push((serde_json::from_value(wire).unwrap(), bytes.len() as u64));
+        }
+        fs::write(&store.paths().hook_ingress_log, bytes).unwrap();
+        fs::remove_file(&store.paths().hook_drain_cursor).unwrap();
+        (dir, store, frames)
+    }
+
+    fn cursor_fsyncs(boot: Option<&str>, own_boot: Option<&str>, finish: bool) -> u64 {
+        register_processor(|_, _, _, _, _| Ok(HookReply::Silent));
+        let (_dir, store, _) = pending_boot_fixture(boot, if finish { 1 } else { 2 });
+        let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
+        let mut drain = Drainer::new(&store);
+        drain.boot_id = own_boot.map(str::to_owned);
+        let before = crate::disk::atomic::testkit::fsync_count();
+        drain
+            .drain(&store, &lifetime, None, None, |_| Ok(!finish))
+            .unwrap();
+        crate::disk::atomic::testkit::fsync_count() - before
+    }
+
+    #[test]
+    fn same_boot_claim_and_applied_are_cache_class() {
+        assert_eq!(
+            cursor_fsyncs(Some("this-boot"), Some("this-boot"), false),
+            0
+        );
+    }
+
+    #[test]
+    fn unstamped_claim_and_applied_stay_durable() {
+        assert_eq!(cursor_fsyncs(None, Some("this-boot"), false), 4);
+    }
+
+    #[test]
+    fn unknown_drainer_boot_keeps_stamped_claims_durable() {
+        assert_eq!(cursor_fsyncs(Some("this-boot"), None, false), 4);
+    }
+
+    #[test]
+    fn singleton_same_boot_drain_only_syncs_the_truncation() {
+        assert_eq!(cursor_fsyncs(Some("this-boot"), Some("this-boot"), true), 1);
     }
 
     #[test]

@@ -1080,6 +1080,11 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
     let ingress = rimz::ids::EventId::new();
     for (wire, state, impact) in [
         (
+            serde_json::json!({"kind": "hook_ingress_dropped", "dropped": 3500, "first_ingress": ingress, "last_ingress": rimz::ids::EventId::new()}),
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+        (
             serde_json::json!({"kind": "hook_drain_lag", "ingress": ingress, "hook_event": null, "lag_ms": 60_000, "pending_bytes": 1024}),
             model::DoctorState::Investigate,
             model::DoctorImpact::Warn,

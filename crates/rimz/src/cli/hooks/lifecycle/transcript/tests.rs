@@ -105,6 +105,7 @@ fn workspace() -> ResolvedWorkspace {
 
 fn conversation_frame(workspace: &ResolvedWorkspace) -> rimz::store::ingress::HookIngress {
     rimz::store::ingress::HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
         ts: jiff::Timestamp::now(),

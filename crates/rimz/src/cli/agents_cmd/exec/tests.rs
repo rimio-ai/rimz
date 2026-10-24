@@ -1176,6 +1176,7 @@ mod runs {
         run.agent_id = Some("exit-stop".into());
         rimz::harness::run::create(store.paths(), &run).unwrap();
         let frame = rimz::store::ingress::HookIngress {
+            boot_id: None,
             schema_version: "1".into(),
             event_id: rimz::EventId::new(),
             ts: jiff::Timestamp::now(),

@@ -1287,6 +1287,7 @@ fn classify_diagnostic(
             rimz::diag::record::ModelCatalogFallback::Baked => model::DoctorState::Investigate,
         },
         DiagEvent::HookIngressTruncated { .. }
+        | DiagEvent::HookIngressDropped { .. }
         | DiagEvent::WorkflowRetry { .. }
         | DiagEvent::WorkflowRerun { .. }
         | DiagEvent::FrameRejected { .. }

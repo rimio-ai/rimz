@@ -41,6 +41,7 @@ fn stop_frame(env: &Env) -> HookIngress {
         ),
     ]);
     HookIngress {
+        boot_id: rimz::proc::boot_id(),
         schema_version: "1".into(),
         event_id: EventId::new(),
         ts: Timestamp::now(),
@@ -56,6 +57,108 @@ fn stop_frame(env: &Env) -> HookIngress {
 
 fn append_stop(env: &Env) -> (HookIngress, u64) {
     append_frame(env, stop_frame(env))
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_simulated_reboot_drops_pending_frames_and_fresh_frames_apply_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let marker = EventId::new();
+    rimz::diag::DiagSink::under(
+        store.paths().root.clone(),
+        env.workspace_id.clone(),
+        "session",
+        None,
+    )
+    .emit(rimz::diag::record::DiagEvent::HookDrainLag {
+        ingress: marker.clone(),
+        hook_event: Some("Stop".into()),
+        lag_ms: 60_000,
+        pending_bytes: 1,
+    });
+    let mut old_ids = Vec::new();
+    for _ in 0..6000 {
+        let mut wire = serde_json::to_value(stop_frame(&env)).unwrap();
+        wire["boot_id"] = json!("a-previous-boot");
+        let frame: HookIngress = serde_json::from_value(wire).unwrap();
+        old_ids.push(frame.event_id.clone());
+        append_frame(&env, frame);
+    }
+    let output = env
+        .rimz()
+        .args(["hooks", "drain", "--project-root"])
+        .arg(&env.project_root)
+        .arg("--once")
+        .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let events = rimz::store::event_log::read_all(&env.store().paths().events_log).unwrap();
+    assert!(
+        events.iter().all(|event| !event
+            .ingress
+            .as_ref()
+            .is_some_and(|id| old_ids.contains(id))),
+        "pre-reboot frames must not apply"
+    );
+    assert!(
+        timing_records(&output.stderr).is_empty(),
+        "dropped frames are not claimed timing samples"
+    );
+    let records = std::fs::read_to_string(diag_log_path(&env))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        records.iter().any(|record| {
+            record["event"]["kind"] == "hook_drain_lag"
+                && record["event"]["ingress"] == marker.to_string()
+        }),
+        "a reboot backlog must not evict its pre-drain evidence"
+    );
+    let drops = records
+        .iter()
+        .filter(|record| record["event"]["kind"] == "hook_ingress_dropped")
+        .collect::<Vec<_>>();
+    assert_eq!(drops.len(), 1);
+    assert_eq!(
+        drops[0]["event"],
+        json!({
+            "kind": "hook_ingress_dropped", "dropped": old_ids.len(),
+            "first_ingress": old_ids.first().unwrap(),
+            "last_ingress": old_ids.last().unwrap(),
+        })
+    );
+    assert_eq!(
+        drops
+            .iter()
+            .map(|record| record["event"]["dropped"].as_u64().unwrap())
+            .sum::<u64>(),
+        6000
+    );
+    let (fresh, _) = append_stop(&env);
+    for _ in 0..2 {
+        let output = env
+            .rimz()
+            .args(["hooks", "drain", "--project-root"])
+            .arg(&env.project_root)
+            .arg("--once")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let events = rimz::store::event_log::read_all(&env.store().paths().events_log).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.ingress.as_ref() == Some(&fresh.event_id)
+                && matches!(event.kind(), EventKind::AgentLifecycle(_)))
+            .count(),
+        1
+    );
 }
 
 #[test]
