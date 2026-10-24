@@ -1011,6 +1011,52 @@ mod tests {
     }
 
     #[test]
+    fn restart_resets_the_not_ready_stretch_to_the_new_lifetime() {
+        let root = tempfile::tempdir().unwrap();
+        let request = ServeRequest {
+            root: root.path().into(),
+            project: root.path().into(),
+            server: "rust".into(),
+            config: serde_json::from_value(json!({
+                "command": ["stub"], "extensions": ["rs"], "root-markers": []
+            }))
+            .unwrap(),
+            policy: Default::default(),
+            eager: true,
+            settings_hash: "s".into(),
+        };
+        let mut model = dormant_model(Some(StopReason::Idle));
+        model.entry.root = request.root.clone();
+        model.entry.started_at_ms = 1;
+        model.not_ready_since_ms = 2;
+        let shared = Shared {
+            policy: Default::default(),
+            settings: Arc::new(Mutex::new(Settings {
+                kind: LspServerKind::Generic,
+                options: Value::Null,
+                editor_check_on_save: None,
+            })),
+            router: mpsc::channel().0,
+            model: Mutex::new(model),
+            changed: Condvar::new(),
+            started: Instant::now(),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+            editor_forwarding: std::sync::atomic::AtomicUsize::new(0),
+            requests: socket::Requests::default(),
+            #[cfg(feature = "testkit")]
+            ticks: Mutex::new(None),
+        };
+
+        assert!(prepare_start(&shared, &request, true).unwrap());
+        let model = shared.model.lock().unwrap();
+        assert_eq!(model.entry.state, State::Starting);
+        assert!(model.entry.started_at_ms > 2);
+        assert_eq!(model.not_ready_since_ms, model.entry.started_at_ms);
+        std::fs::remove_dir_all(registry::directory(&request.root, &request.server).unwrap())
+            .unwrap();
+    }
+
+    #[test]
     fn retirement_waits_for_dormancy_without_start_or_editor() {
         let dormant = dormant_model(None).entry.state;
         let cases = [
