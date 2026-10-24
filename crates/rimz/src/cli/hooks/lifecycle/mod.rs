@@ -466,7 +466,7 @@ fn derive_subagent_lifecycle(
     if observations.is_empty() {
         return Ok(Vec::new());
     }
-    let snapshot = match store.snapshot_cached() {
+    let snapshot = match store.snapshot_with_context(|_, _| false) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(

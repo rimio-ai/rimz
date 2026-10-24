@@ -234,7 +234,19 @@ impl Store {
     /// fetch racing a just-appended event and re-projects instead. Cached
     /// snapshots also attach cache-class agent context so every address
     /// resolver sees the same rest certificates as pane ownership.
+    /// Reads that need only selected context use [`Self::snapshot_with_context`].
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
+        self.snapshot_with_context(|_, _| true)
+    }
+
+    /// The same cached rows and membership as [`Self::snapshot_cached`], with
+    /// context attached only to selected `(kind, agent_id)` keys. Unselected
+    /// rows stay raw. An empty selection performs no sidecar read and leaves
+    /// this thread's sidecar parse cache intact.
+    pub fn snapshot_with_context(
+        &self,
+        mut select: impl FnMut(&AgentKind, &AgentSessionId) -> bool,
+    ) -> Result<SidebarSnapshot> {
         let snapshot = match self
             .hook_transaction
             .is_none()
@@ -244,13 +256,16 @@ impl Store {
             Some(snapshot) => snapshot,
             None => self.snapshot()?,
         };
-        let context = agent_context::read_for_keys(
-            &self.inner.runtime,
-            snapshot
-                .agents
-                .iter()
-                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-        );
+        let mut keys = snapshot
+            .agents
+            .iter()
+            .filter(|agent| select(&agent.kind, &agent.agent_id))
+            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str()))
+            .peekable();
+        if keys.peek().is_none() {
+            return Ok(snapshot);
+        }
+        let context = agent_context::read_for_keys(&self.inner.runtime, keys);
         Ok(snapshot.with_agent_context(context))
     }
 
@@ -438,6 +453,105 @@ mod tests {
             sidecar::testkit::parse_reads(),
             1,
             "cached snapshots read context only for projected agent keys"
+        );
+    }
+
+    #[test]
+    fn selected_context_preserves_membership_masking_and_cache_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let store = Store::open(paths.clone(), runtime.clone()).unwrap();
+        let at = Timestamp::now();
+        for index in 0..2 {
+            let context = AgentContext {
+                tokens: Some(crate::agents::AgentTokenUsage {
+                    context_window_size: Some(200_000),
+                    current_context_tokens: Some(42),
+                    used_percentage: Some(1),
+                    ..Default::default()
+                }),
+                ..AgentContext::new("claude", at)
+            };
+            agent_context::write(
+                &runtime,
+                "claude",
+                &format!("agent-{index}"),
+                &context,
+                None,
+            )
+            .unwrap();
+        }
+        let mut raw = store.snapshot().unwrap();
+        raw.agents = (0..2)
+            .map(|index| {
+                crate::agents::AgentState::stub(
+                    "claude",
+                    &format!("agent-{index}"),
+                    AgentStatus::Idle,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        Arc::make_mut(&mut raw.agents)[0].retired_context_tokens = Some(42);
+        crate::disk::atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &raw).unwrap();
+        let full = store.snapshot_cached().unwrap();
+        let own = |kind: &AgentKind, id: &AgentSessionId| kind == "claude" && id == "agent-0";
+        let selected = store.snapshot_with_context(own).unwrap();
+        assert_eq!(selected.agents.len(), full.agents.len());
+        assert_eq!(selected.agents[0], full.agents[0]);
+        assert_eq!(selected.agents[1].agent_id, full.agents[1].agent_id);
+        assert!(
+            selected.agents[1].context.is_none(),
+            "unselected row stays raw"
+        );
+        let tokens = selected.agents[0]
+            .context
+            .as_ref()
+            .unwrap()
+            .tokens
+            .as_ref()
+            .unwrap();
+        assert_eq!(tokens.current_context_tokens, None);
+        assert_eq!(tokens.used_percentage, None);
+        assert_eq!(tokens.context_window_size, Some(200_000));
+
+        let before = sidecar::testkit::read_counts();
+        let empty = store.snapshot_with_context(|_, _| false).unwrap();
+        assert!(empty.agents.iter().all(|agent| agent.context.is_none()));
+        store.snapshot_with_context(own).unwrap();
+        let after = sidecar::testkit::read_counts();
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+            (1, 0, 0)
+        );
+
+        let replacement = AgentContext {
+            tokens: Some(crate::agents::AgentTokenUsage {
+                current_context_tokens: Some(9_999),
+                ..Default::default()
+            }),
+            ..AgentContext::new("claude", at + std::time::Duration::from_secs(1))
+        };
+        agent_context::write(&runtime, "claude", "agent-0", &replacement, None).unwrap();
+        let selected = store.snapshot_with_context(own).unwrap();
+        assert_eq!(
+            selected.agents[0]
+                .context
+                .as_ref()
+                .unwrap()
+                .tokens
+                .as_ref()
+                .unwrap()
+                .current_context_tokens,
+            Some(9_999)
+        );
+        agent_context::remove(&runtime, "claude", "agent-0").unwrap();
+        assert!(
+            store.snapshot_with_context(own).unwrap().agents[0]
+                .context
+                .is_none()
         );
     }
 

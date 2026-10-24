@@ -174,6 +174,138 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
 }
 
 #[test]
+fn cold_plain_frames_read_a_constant_number_of_sidecars() {
+    let mut budgets = Vec::new();
+    for event in ["UserPromptSubmit", "Stop"] {
+        let mut counts = Vec::new();
+        for population in [8, 216] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path().join("repo");
+            std::fs::create_dir(&repo).unwrap();
+            for args in [
+                vec!["init", "-q", "-b", "main"],
+                vec![
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "fixture",
+                ],
+            ] {
+                assert!(
+                    std::process::Command::new("git")
+                        .current_dir(&repo)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            let workspace =
+                rimz::WorkspaceResolver::resolve_under(&repo, None, dir.path()).unwrap();
+            let paths = rimz::StatePaths::for_project_root_under(&repo, dir.path()).unwrap();
+            let runtime =
+                rimz::RuntimePaths::under(paths.workspace_id.clone(), dir.path()).unwrap();
+            let store = rimz::Store::open(paths.clone(), runtime).unwrap();
+            store.record_workspace(&workspace).unwrap();
+            for slot in 0..population {
+                rimz::store::event_log::append(
+                    &paths.events_log,
+                    &rimz::testkit::fleet::registered_lifecycle(&paths.workspace_id, slot),
+                )
+                .unwrap();
+                rimz::store::agent_context::write(
+                    store.runtime_paths(),
+                    "claude",
+                    &format!("agent-{slot}"),
+                    &rimz::agents::AgentContext::new("claude", jiff::Timestamp::now()),
+                    None,
+                )
+                .unwrap();
+            }
+            let mut env = rimz::workspace::pin_env(&paths.workspace_id, &repo);
+            env.insert("HOME".into(), dir.path().display().to_string());
+            env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
+            env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
+            let frame = rimz::store::ingress::HookIngress {
+                schema_version: "1".into(),
+                event_id: rimz::EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: rimz::ids::AgentKind::new_unchecked("claude"),
+                event: Some(event.into()),
+                payload: serde_json::json!({
+                    "session_id": "agent-0", "cwd": repo, "prompt": "work",
+                    "last_assistant_message": "done"
+                })
+                .to_string(),
+                cwd: repo,
+                hook_pid: std::process::id(),
+                env,
+            };
+            counts.push(
+                std::thread::spawn(move || {
+                    let before = rimz::testkit::sidecar_read_counts();
+                    rimz::harness::hook_drain::with_frame_env(
+                        &frame,
+                        rimz::harness::hook_drain::FrameAttempt::First,
+                        || {
+                            super::process_frame(
+                                &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                                &frame,
+                                &[],
+                            )
+                        },
+                    )
+                    .unwrap();
+                    let after = rimz::testkit::sidecar_read_counts();
+                    let projection = store
+                        .runtime_projection(rimz::store::RuntimeScope::Audit)
+                        .unwrap();
+                    let agent = projection
+                        .agents
+                        .iter()
+                        .find(|agent| agent.agent_id == "agent-0")
+                        .unwrap();
+                    assert_eq!(
+                        agent.status,
+                        if event == "UserPromptSubmit" {
+                            rimz::agents::AgentStatus::Running
+                        } else {
+                            rimz::agents::AgentStatus::Success
+                        }
+                    );
+                    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+                    assert!(entries.iter().any(|entry| entry.ingress.as_ref()
+                        == Some(&frame.event_id)
+                        && entry.text
+                            == if event == "UserPromptSubmit" {
+                                "work"
+                            } else {
+                                "done"
+                            }));
+                    (after.0 - before.0, after.1 - before.1, after.2 - before.2)
+                })
+                .join()
+                .unwrap(),
+            );
+        }
+        budgets.push(counts);
+    }
+    assert_eq!(
+        budgets.iter().map(|counts| counts[0]).collect::<Vec<_>>(),
+        budgets.iter().map(|counts| counts[1]).collect::<Vec<_>>(),
+        "prompt and Stop sidecar work must not grow with the fleet"
+    );
+    for counts in budgets {
+        assert_eq!((counts[0].1, counts[0].2), (0, 1), "{counts:?}");
+    }
+}
+
+#[test]
 fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
     use rimz::agents::{
         AgentContext, AgentState, AgentStatus, AgentTurnError, PermissionMode, TurnErrorClass,

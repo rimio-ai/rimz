@@ -139,7 +139,7 @@ fn context_window_is_unset(
     let Some(agent_id) = agent_id else {
         return false;
     };
-    let Ok(snapshot) = store.snapshot_cached() else {
+    let Ok(snapshot) = store.snapshot_with_context(|_, _| false) else {
         return false;
     };
     find_agent(&snapshot.agents, kind, agent_id)
@@ -158,7 +158,7 @@ pub(in crate::cli::hooks) fn root_identity_rollup(
     let Some(agent_id) = observation.agent_id.as_ref() else {
         return ((false, false), None);
     };
-    let Ok(snapshot) = store.snapshot_cached() else {
+    let Ok(snapshot) = store.snapshot_with_context(|_, _| false) else {
         return ((false, false), None);
     };
     let state = find_agent(&snapshot.agents, kind, agent_id);
@@ -297,7 +297,7 @@ fn correlate_subagent_observation(
     let Some(child_id) = observation.agent_id.as_ref() else {
         return;
     };
-    let snapshot = match store.snapshot_cached() {
+    let snapshot = match store.snapshot_with_context(|_, _| false) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(
