@@ -132,6 +132,11 @@ pub enum QueryErr {
     )]
     Indexing { server: String, seconds: u64 },
     #[error(
+        "{server} did not answer within {seconds}s; \
+         use grep for this question and retry on the next"
+    )]
+    Unanswered { server: String, seconds: u64 },
+    #[error(
         "no language server handles .{extension} files ({coverage}); use grep for this target",
         coverage = coverage.iter().map(|(name, extensions)| {
             let extensions = extensions.iter().map(|ext| format!(".{ext}"))
@@ -160,7 +165,10 @@ impl QueryErr {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::Unavailable { .. } => 3,
-            Self::Indexing { .. } | Self::MemoryShort { .. } | Self::MemoryPressure { .. } => 4,
+            Self::Indexing { .. }
+            | Self::Unanswered { .. }
+            | Self::MemoryShort { .. }
+            | Self::MemoryPressure { .. } => 4,
             Self::UncoveredExtension { .. } | Self::MultipleServers { .. } | Self::Failed(_) => 1,
         }
     }
@@ -172,6 +180,10 @@ impl QueryErr {
                 reason: reason.clone(),
             },
             Self::Indexing { server, seconds } => Self::Indexing {
+                server: server.clone(),
+                seconds: *seconds,
+            },
+            Self::Unanswered { server, seconds } => Self::Unanswered {
                 server: server.clone(),
                 seconds: *seconds,
             },

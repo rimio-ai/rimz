@@ -33,6 +33,13 @@ fn outcomes_classify_raw_answers_lookup_results_and_failures() {
             "empty",
         ),
         (
+            Err(QueryErr::Unanswered {
+                server: "rust".into(),
+                seconds: 60,
+            }),
+            "unanswered",
+        ),
+        (
             Err(QueryErr::Indexing {
                 server: "rust".into(),
                 seconds: 1,
@@ -103,6 +110,7 @@ fn reads_counted_rows_and_skips_corruption_and_unknown_outcomes() {
         ("results", 4),
         ("empty", 2),
         ("indexing", 3),
+        ("unanswered", 7),
         ("memory", 2),
         ("error", 1),
         ("future", 99),
@@ -124,14 +132,14 @@ fn reads_counted_rows_and_skips_corruption_and_unknown_outcomes() {
         snapshot.total,
         Counts {
             answered: 7,
-            failed: 6
+            failed: 13
         }
     );
     assert_eq!(
         snapshot.counts[&(dir.path().to_owned(), "rust".into())],
         Counts {
             answered: 6,
-            failed: 6
+            failed: 13
         }
     );
 }

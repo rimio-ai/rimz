@@ -121,7 +121,7 @@ fn outline_requests_stop_after_server_failure() {
     other.server = "other".into();
     let entries = [entry, other];
     let mut counts = Vec::new();
-    for code in [3, 4, 1, 8, 9] {
+    for code in [3, 4, 1, 8, 9, 10] {
         let before = usage.read().total.failed;
         let mut context = Context {
             checkout: Path::new("/checkout"),
@@ -160,6 +160,10 @@ fn outline_requests_stop_after_server_failure() {
                                 root: "/checkout".into(),
                                 server: "rust".into(),
                             },
+                            10 => query::QueryErr::Unanswered {
+                                server: "rust".into(),
+                                seconds: 60,
+                            },
                             _ => LspErr::Protocol("bad outline".into()).into(),
                         })
                     },
@@ -182,7 +186,7 @@ fn outline_requests_stop_after_server_failure() {
             .unwrap();
         assert_eq!(error.exit_code(), 1);
     }
-    assert_eq!(counts, [1, 1, 2, 1, 1]);
+    assert_eq!(counts, [1, 1, 2, 1, 1, 1]);
 }
 
 #[test]

@@ -3,6 +3,7 @@
 use super::*;
 use crate::lsp::registry::{self, Entry, State};
 use serde_json::json;
+use std::io::ErrorKind;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -154,12 +155,25 @@ fn request_with_wait(
     params: Value,
     wait_ms: u64,
 ) -> std::result::Result<Value, QueryErr> {
+    // Outlast readiness by 5s; each main query request still reports before a 120s agent shell
+    // timeout.
+    let socket_timeout = Duration::from_millis(wait_ms) + Duration::from_secs(5);
     let response = registry::request(
         entry,
         &json!({"op": "query", "method": method, "params": params, "wait_ms": wait_ms}),
-        // Outlast readiness by 5s; main queries still report before a 120s agent shell timeout.
-        Duration::from_millis(wait_ms) + Duration::from_secs(5),
-    )?;
+        socket_timeout,
+    )
+    .map_err(|error| match error {
+        LspErr::Io(error)
+            if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+        {
+            QueryErr::Unanswered {
+                server: entry.server.clone(),
+                seconds: socket_timeout.as_secs(),
+            }
+        }
+        error => QueryErr::Failed(error),
+    })?;
     if let Some(refused) = response.get("refused") {
         return Err(QueryErr::MemoryShort {
             root: entry.root.clone(),
@@ -171,6 +185,12 @@ fn request_with_wait(
         return Err(QueryErr::Indexing {
             server: entry.server.clone(),
             seconds: indexing["elapsed_ms"].as_u64().unwrap_or(0) / 1000,
+        });
+    }
+    if let Some(unanswered) = response.get("unanswered") {
+        return Err(QueryErr::Unanswered {
+            server: entry.server.clone(),
+            seconds: unanswered["after_ms"].as_u64().unwrap_or(0) / 1000,
         });
     }
     if let Some(error) = response.get("error") {

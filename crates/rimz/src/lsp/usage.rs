@@ -28,6 +28,7 @@ fn outcome(result: &std::result::Result<Output, QueryErr>) -> &'static str {
         Ok(Output::NotFound { .. }) => "empty",
         Ok(_) => "results",
         Err(QueryErr::Indexing { .. }) => "indexing",
+        Err(QueryErr::Unanswered { .. }) => "unanswered",
         Err(QueryErr::MemoryShort { .. } | QueryErr::MemoryPressure { .. }) => "memory",
         Err(_) => "error",
     }
@@ -197,7 +198,7 @@ impl Counts {
     fn include(&mut self, outcome: &str, count: u64) {
         let total = match outcome {
             "results" | "empty" => &mut self.answered,
-            "indexing" | "memory" | "error" => &mut self.failed,
+            "indexing" | "unanswered" | "memory" | "error" => &mut self.failed,
             _ => return,
         };
         *total = total.saturating_add(count);
