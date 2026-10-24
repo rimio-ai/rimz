@@ -55,6 +55,7 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
     room.backend().open_sidebar(&opts, None).unwrap();
     wait_for_pane_count(room.path(), room.name(), 2);
     let mut first = AttachedClient::attach(&room, 160, 32);
+    let before_tabs = PaneSnapshot::expect(room.path(), room.name()).tab_ids();
     room.backend()
         .open_tab(&TabOptions {
             env: Default::default(),
@@ -67,12 +68,13 @@ fn two_clients_split_join_and_carry_the_sidebar_view() {
         })
         .unwrap();
     let snapshot = PaneSnapshot::expect(room.path(), room.name());
-    let agent_tab = snapshot
-        .panes
-        .iter()
-        .find(|pane| pane.tab_name.as_deref() == Some("agents"))
-        .unwrap()
-        .tab_id;
+    let new_tabs: Vec<_> = snapshot
+        .tab_ids()
+        .into_iter()
+        .filter(|id| !before_tabs.contains(id))
+        .collect();
+    assert_eq!(new_tabs.len(), 1, "one new tab: {new_tabs:?}");
+    let agent_tab = new_tabs[0];
     let agents: Vec<_> = snapshot
         .panes
         .iter()

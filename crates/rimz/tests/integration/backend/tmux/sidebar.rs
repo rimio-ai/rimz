@@ -1,5 +1,7 @@
 #![allow(clippy::print_stdout)]
 
+use std::collections::BTreeSet;
+
 use super::support::*;
 use crate::backend::shared_view::{
     agent_layout, seed_agents, sidebar_view, wait_frame, wait_screen,
@@ -56,6 +58,10 @@ fn two_clients_share_the_sidebar_view_through_detach() {
     };
     server.backend.open_sidebar(&opts, None).unwrap();
     let sidebar = wait_for_sidebar_pane(&server, session, None);
+    let before_windows: BTreeSet<_> = list_session_panes(&server, session)
+        .into_iter()
+        .filter_map(|pane| pane.view_id)
+        .collect();
     server
         .backend
         .open_tab(&TabOptions {
@@ -68,10 +74,18 @@ fn two_clients_share_the_sidebar_view_through_detach() {
             sidebar: opts,
         })
         .unwrap();
-    let agents: Vec<_> = list_session_panes(&server, session)
+    let panes = list_session_panes(&server, session);
+    let new_windows: BTreeSet<_> = panes
+        .iter()
+        .filter_map(|pane| pane.view_id.clone())
+        .filter(|id| !before_windows.contains(id))
+        .collect();
+    assert_eq!(new_windows.len(), 1, "one new window: {new_windows:?}");
+    let agent_window = new_windows.into_iter().next().unwrap();
+    let agents: Vec<_> = panes
         .into_iter()
         .filter(|pane| {
-            pane.view_name.as_deref() == Some("agents")
+            pane.view_id.as_ref() == Some(&agent_window)
                 && pane.command.as_deref() != Some("rimz-sidebar")
         })
         .collect();

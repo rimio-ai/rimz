@@ -1139,6 +1139,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let target_tab = "switch target";
     let input_log = cwd.path().join("routed-input.log");
     let pokes_before_target = poke_lines(&poke_log).len();
+    let before_tabs = expect_list_panes(xdg, &name).tab_ids();
     backend
         .open_tab(&TabOptions {
             env: Default::default(),
@@ -1170,7 +1171,25 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         pokes: &poke_log,
         pokes_before: pokes_before_target,
     };
-    let target_work = wait_for_named_work_pane_count(xdg, &name, target_tab, 1)[0];
+    let target_work = poll_until(
+        Duration::from_secs(30),
+        || {
+            list_panes(xdg, &name).map(|snapshot| {
+                snapshot
+                    .panes
+                    .iter()
+                    .filter(|pane| {
+                        !before_tabs.contains(&pane.tab_id)
+                            && pane.is_live_terminal()
+                            && !pane.is_sidebar()
+                    })
+                    .map(|pane| pane.geometry())
+                    .collect::<Vec<_>>()
+            })
+        },
+        |work| work.len() == 1,
+        "one work pane in the new tab",
+    )[0];
     let target_sidebar = wait_for_tab_sidebar_pane(xdg, &name, target_work.tab_id, || {
         logs.missing_sidebar_dump(&name, target_tab, target_work.tab_id)
     });
