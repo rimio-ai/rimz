@@ -216,7 +216,7 @@ A solo [`empty-dir: true` profile](../definitions.md#agent-and-subagent-keys) in
 | Flag | Effect |
 | --- | --- |
 | `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its scoped view under scoped isolation. Missing directories are refused, never created. An agent-started launch into an untrusted directory refuses with the grant command to ask the user to run; dropping `--cwd` uses the agent's own checkout. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--continue`, and `--fresh`. |
-| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Creating a named worktree whose channel live agents hold is refused with ``channel `NAME` is held by live agents``; reusing an existing worktree is unchanged. Bare `-w` creates a fresh worktree with a generated name. |
+| `-w`, `--worktree [NAME]` | Create the RimZ-owned worktree `NAME`, or check before entering an existing one, on channel `#NAME` in a tab named `#NAME`. Creating a named worktree whose channel live agents hold is refused with ``channel `NAME` is held by live agents``. Existing trees follow the [entry and cohort tables](#relaunch-into-a-named-worktree). Bare `-w` creates a fresh worktree with a generated name. |
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
 | `--channel <NAME>` | Launch into the lane `#NAME` in the selected directory, in a tab named `#NAME`. The lane exists while agents run in it. `NAME` is bare ASCII letters, digits, `_`, or `-` (`--channel '#design'` is refused with `invalid channel name`), and a name a RimZ-owned worktree holds is refused with ``channel `NAME` is backed by a worktree``. |
 
@@ -261,7 +261,20 @@ Before either closed-cohort offer, stderr shows the tree's age, last recorded ag
 
 The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--continue` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.
 
-Enter takes the default, and an unrecognized answer or end of input refuses with `canceled; nothing launched` and exit 1. Without a terminal on stdin, RimZ refuses with exit 1 and prints the resume-or-remove command and the `--fresh` command instead of prompting. Relaunch commands preserve the supplied prompt; teams use `team#lane` addresses. A single-agent spec launches fresh without reconciling.
+Enter takes the default, and an unrecognized answer or end of input refuses with `canceled; nothing launched` and exit 1. Without a terminal on stdin, RimZ refuses with exit 1 and prints the resume-or-remove command and the `--fresh` command instead of prompting. Relaunch commands preserve the supplied prompt; teams use `team#lane` addresses.
+
+A single-agent launch, a supervised `-p` run, or a team or multi-cell layout with no matching cohort also checks before entering an existing named RimZ-owned worktree when no agent occupies it. Occupancy follows the checkout path, including its subdirectories, not just the channel name. Stderr shows the same facts as the closed-cohort offers above:
+
+| Existing unoccupied tree | Terminal choice | Default |
+| --- | --- | --- |
+| Dirty, not landed, or landed state unknown | `(fresh/cancel)` | `fresh` |
+| Clean and landed | `(remove/fresh/cancel)` | `cancel` |
+
+`fresh` keeps the checkout and prints ``launching <subject> fresh in worktree `NAME` ``. `remove` uses the same protections and recreation as the closed-cohort choice. Cancellation, EOF, or an unknown answer starts nothing and prints `canceled; nothing launched` with the fresh command. Without a terminal, entry refuses with the facts and fresh command, plus `rimz worktree remove NAME` only for a clean, landed tree. The refusal writes no agent row and leaves the checkout intact. It exits `1`, or `2` on `-p`.
+
+The fresh command is `rimz agents <spec> -w NAME --fresh [PROMPT]`, `rimz teams TEAM#NAME --fresh [PROMPT]`, or `rimz agents <spec> -p -w NAME --fresh [PROMPT]`. It shell-quotes the prompt as one argument. Print runs keep `--stdin` or `--input-format stream-json` when used, never stdin content. Other launch flags are not repeated. `message --create --worktree NAME` uses this check too and prints the agents command with the message as its prompt.
+
+Occupied trees are entered without this question. Loop fires, `--from-pr`, `--continue`, `--resume`, bare `-w`, and missing trees skip it. Unmanaged trees keep their separate confirmation. Matching live or closed cohorts use their table above, never both questions.
 
 Two flags answer the prompt in advance. `--continue` resumes the prior cohort even when the worktree is clean or merged; see [Continue a cohort](#continue-a-cohort). `--fresh` starts new sessions in the existing checkout:
 
@@ -316,10 +329,11 @@ A supervised run refuses at entry, before it writes a run record or opens a pane
 - RimZ's hooks for the agent are not installed and trusted, because hooks are the completion signal;
 - the working directory is your home directory (`$HOME`), for every agent kind: nobody answers an unattended run's folder-trust prompt, and Claude never saves trust there. Run it from a project directory or pass `--cwd <DIR>`; a subdirectory of home passes;
 - a Claude or Codex project has no recorded trust decision, because its folder-trust screen would block the prompt (run `rimz trust grant --agents claude` or `rimz trust grant --agents codex` there, or answer that screen once in the provider's own interactive session); a Codex folder saved as untrusted also refuses, since its Folder access prompt recurs on every launch. RimZ leaves that decision alone; trust the folder in Codex before a supervised run. Codex projectless folders without a saved decision pass;
+- `-w NAME` names an existing unoccupied RimZ-owned tree and stdin is not a terminal, unless `--fresh` is passed; the refusal includes the facts and fresh command from the [entry table](#relaunch-into-a-named-worktree);
 - the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
 
-None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook, home-directory, and folder-trust refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
+None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook, home-directory, folder-trust, and existing-tree entry refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
 
 Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
 

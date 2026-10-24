@@ -331,7 +331,8 @@ def launch(plan, timeout=300):
     prompt = (TASK_DIR / "prompt.md").read_text()
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
-    argv = ["rimz", "teams", "launch", "spot", prompt, "-w", plan["branch"], "--bg"]
+    # --fresh: open_checkout just cut this tree, so there is no earlier work to ask about.
+    argv = ["rimz", "teams", "launch", "spot", prompt, "-w", plan["branch"], "--fresh", "--bg"]
     # Inside a loop check, RimZ turns a prompted launch into a blocking run and refuses --bg
     # (docs/guide/loops.md). This coordinator owns the lane itself (occupied_repair_lane,
     # stop_finished_lanes, reclaim_idle_checkouts), so it hands the team off: drop the loop

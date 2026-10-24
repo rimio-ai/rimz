@@ -142,11 +142,14 @@ fn launch_creation_signals_once_and_reuse_is_silent() {
         "[agents]\nisolation = 'host'\n",
     )
     .unwrap();
-    for _ in 0..2 {
+    for attempt in 0..2 {
         // Launch transport may be unavailable; creation precedes it.
-        let output = env
-            .rimz()
-            .args(["agents", "claude", "-p", "test signal", "-w", "demo"])
+        let mut command = env.rimz();
+        command.args(["agents", "claude", "-p", "test signal", "-w", "demo"]);
+        if attempt == 1 {
+            command.arg("--fresh");
+        }
+        let output = command
             .env("SHELL", &shell)
             .env("PATH", crate::common::path_with_front(&shim))
             .bounded_output()

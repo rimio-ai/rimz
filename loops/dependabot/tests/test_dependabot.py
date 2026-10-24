@@ -79,7 +79,7 @@ class FakeRimz:
                 git(self.root, "worktree", "remove", str(self.root.parent / branch.replace("/", "-")))
                 git(self.root, "branch", "-d", branch)
                 return ""
-            case ("teams", "launch", "spot", _prompt, "-w", _branch, "--bg"):
+            case ("teams", "launch", "spot", _prompt, "-w", _branch, "--fresh", "--bg"):
                 return ""
         raise AssertionError(f"unexpected rimz call {args}")
 
@@ -529,7 +529,7 @@ class LaunchTests(unittest.TestCase):
     def test_launch_drops_the_loop_marker_and_keeps_the_workspace_pin(self):
         self.launch()
         argv, env = self.run_call.args[0], self.run_call.kwargs["env"]
-        self.assertEqual(argv[:4] + argv[5:], ["rimz", "teams", "launch", "spot", "-w", "deps/repair-1", "--bg"])
+        self.assertEqual(argv[:4] + argv[5:], ["rimz", "teams", "launch", "spot", "-w", "deps/repair-1", "--fresh", "--bg"])
         self.assertNotIn("RIMZ_LOOP_TASK", env)
         self.assertEqual((env["RIMZ_WORKSPACE_ID"], env["RIMZ_PROJECT_ROOT"]), ("ws-1", "/repo"))
         self.assertEqual(self.run_call.kwargs["stdin"], subprocess.DEVNULL)
@@ -690,7 +690,7 @@ class RepairTests(unittest.TestCase):
             repair.launch(plan)
         args, = run.call_args.args
         prompt = (repair.TASK_DIR / "prompt.md").read_text() + "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
-        self.assertEqual(args, ["rimz", "teams", "launch", "spot", prompt, "-w", "deps/repair-1", "--bg"])
+        self.assertEqual(args, ["rimz", "teams", "launch", "spot", prompt, "-w", "deps/repair-1", "--fresh", "--bg"])
         kwargs = {key: value for key, value in run.call_args.kwargs.items() if key != "env"}
         self.assertEqual(kwargs, dict(cwd=repair.ROOT, stdin=subprocess.DEVNULL, text=True, capture_output=True,
                                       timeout=300, check=False))

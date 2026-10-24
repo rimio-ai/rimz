@@ -205,9 +205,11 @@ pub(crate) struct CohortLaunchArgs {
     /// Seed launched cards' descriptions until agents name their own sessions.
     #[arg(long, value_name = "TEXT")]
     pub(crate) description: Option<String>,
-    /// Use a RimZ-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it (no leading #).
+    /// Use a RimZ-owned worktree. NAME creates or checks an existing tree; bare -w generates a name.
+    /// Give NAME without a leading #.
     ///
-    /// For channel #feat-a, pass -w feat-a. With shell comments enabled, -w #feat-a becomes bare -w and generates a name; quoting #feat-a still passes an invalid worktree name.
+    /// For channel #feat-a, pass -w feat-a. With shell comments enabled, -w #feat-a becomes
+    /// bare -w and generates a name; quoting #feat-a still passes an invalid worktree name.
     #[arg(
         long,
         short = 'w',
@@ -235,7 +237,7 @@ pub(crate) struct CohortLaunchArgs {
         conflicts_with_all = ["channel", "from_pr", "description", "budget"]
     )]
     pub(crate) continue_cohort: bool,
-    /// Launch new sessions in a named worktree instead of resuming its closed cohort.
+    /// Launch new sessions in a named worktree without asking to enter it or resume a closed cohort.
     #[arg(long, conflicts_with_all = ["continue_cohort", "from_pr"])]
     pub(crate) fresh: bool,
     /// Cap each member's spend for the session (`5`) or local day (`20/day`).
@@ -1180,6 +1182,29 @@ fn into_supervised_request(
     let output_format = args.launch.output_format.unwrap_or_default();
     validate_supervised_output(&args, output_format)?;
     let prompt = resolve_print_prompt(&args, args.launch.input_format.unwrap_or_default())?;
+    let worktree_fresh_command = args
+        .launch
+        .cohort
+        .worktree
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            use crate::cli::worktree_entry::{PrintInput, relaunch_commands};
+            let input = match args.launch.input_format.unwrap_or_default() {
+                InputFormat::StreamJson => PrintInput::StreamJson,
+                InputFormat::Text if args.launch.stdin => PrintInput::Stdin,
+                InputFormat::Text => PrintInput::Text,
+            };
+            relaunch_commands(
+                name,
+                args.launch.spec.as_deref().unwrap_or("<spec>"),
+                None,
+                None,
+                args.launch.prompt.as_deref(),
+                Some(input),
+            )
+            .1
+        });
     let permission_mode = interactive_permission_mode_from_flags(
         args.launch.overrides.ask,
         args.launch.overrides.yolo,
@@ -1237,6 +1262,7 @@ fn into_supervised_request(
         supervised::SupervisedPresentation {
             output_format,
             stream_text: false,
+            worktree_fresh_command,
         },
     ))
 }
