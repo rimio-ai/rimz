@@ -1,87 +1,279 @@
 # Agent hibernation
 
-Hibernation is a default-on memory optimization under `[agents.hibernate]`, with `after = "30m"` and `deep_after = "120m"`. Both durations are validated at use, cannot exceed 24 hours, and require `deep_after >= after`. Off Linux the loader disables it silently unless `enabled = true` was explicit, in which case start prints a notice.
+Hibernation freezes an idle agent's provider process with the cgroup v2 freezer, then asks the kernel to move its anonymous memory to swap in steps. Every RimZ path that writes to the pane or closes it thaws the agent first, so the provider never acts on a frozen pane. Hibernation runs on Linux only and is on by default. It is enrichment under the root contract's fail-fast rule: a host that lacks a capability starts its room as usual and skips hibernation.
 
-Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hibernate-an-agent) covers freeze, deepen, and wake in a sandbox room with a stub agent; a check against a real provider's turns needs a host room the user starts ([recipe](../../contributing/sidebar-live-check.md#check-against-a-real-provider-login)).
+The settings are `[agents.hibernate]` `enabled` (unset reads as on), `after` (default `30m`, the rest time before the freeze), and `deep_after` (default `120m`, the rest time at which reclaim reaches zero). The [configuration guide](../../guide/configuration.md#agent-hibernation) owns them for users.
 
-## Admission
+Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hibernate-an-agent) covers freeze, deepen, and wake in a sandbox room with a stub agent. A check against a real provider's turns needs a host room the user starts ([recipe](../../contributing/sidebar-live-check.md#check-against-a-real-provider-login)).
 
-`crates/rimz/src/harness/hibernate.rs::admit` validates the schedule and returns the capability verdict without publishing it. A bad schedule returns an unavailable verdict with the error and fix, never a default schedule. `crates/rimz/src/room/birth.rs::RoomContext::birth` publishes admission before session creation and resume seeding, then again after its health gate and any recovery reset, for normal and supervised rooms alike. `crates/rimz/src/harness/hibernate.rs::Admission::publish` writes the rename-atomic runtime cache at `live/hibernate/admission.json`; GC preserves that file regardless of age, while sibling pacing and wake caches still expire. Launch planning, the producer, and the freeze helper require both the enabled setting and an available cached verdict; an absent or unreadable cache disables them. Adding swap or repairing delegation takes effect at the next room birth or reattach. `crates/rimz/src/harness/hibernate.rs::inspect` probes live capabilities for doctor, whose `active` line reports whether hibernation is available or why it is skipped.
+## Where the code lives
 
-Hibernation requires `systemd-run`, a reachable systemd user manager, and a writable user `app.slice` with the memory controller and writable `cgroup.freeze` and `memory.reclaim` files. Missing capabilities skip hibernation rather than refusing start; only an explicit `enabled = true` prints a start warning. Doctor reports capability failures as warnings, reserving errors for invalid schedule configuration. The user manager's `app.slice` is resolved from the uid, not the caller's cgroup membership, so a login in `session-N.scope` can use it. `/proc/meminfo` must report positive `SwapTotal`. `SwapFree = 0` produces an advisory doctor warning without disabling hibernation. Visible ancestors with `memory.swap.max = 0` skip hibernation; `max` does not prove swap is available. In a container, limits above the cgroup namespace may be invisible and virtualized meminfo is the swap authority.
+| Path | Owns |
+| --- | --- |
+| `crates/rimz/src/harness/hibernate.rs` | Admission and doctor checks, the producer pass, `decide`, the runtime caches, record projection, `scope_argv`. It is in the sidebar import graph. |
+| `crates/rimz/src/harness/hibernate/execute.rs` | The freeze helper: `run_request`, the freeze and deepen transactions, hold assists. |
+| `crates/rimz/src/harness/hibernate/wake.rs` | Synchronous wake, the focus-wake helper and its dwell, lock-timeout recovery, the refault sampler, start reconciliation. |
+| `crates/rimz/src/proc/cgroup.rs` | `ScopePath`, `scope_prefix`, freeze, thaw, reclaim, `memory_stat`, workspace scope listing. |
+| `crates/rimz/src/config/agents.rs` | `HibernateConfig` and the validated `Schedule`. |
+| `crates/rimz/src/store/hibernate.rs` | The durable record `records/hibernation.json`, whose schema [store.md](../store.md) owns. |
+| `crates/rimz/src/diag/hibernate.rs` | The wake diagnostics in `audit/hibernate.log.jsonl`. |
+| `crates/rimz/src/child_process.rs` | The helper-scope escape in `spawn_detached_reaped`. |
+| `crates/rimz/src/cli/agents_cmd/hibernate.rs` | The hidden `agents hibernate`, `agents wake`, and `agents wake-refault` helper commands. |
 
-## Provider scopes
+## Rules a change keeps
 
-The launch compiler wraps only a ready provider argv, outside bubblewrap, with a memory-accounted systemd user scope named `rimz-agent-<workspace_id>-<nonce>.scope`. Each compilation mints a fresh nonce. The exec wrapper retains its supervision and leases outside that scope.
+- Every function that opens a `PaneWriter` wakes the pane earlier in the same function. `cargo xtask invariants` enforces it ([Synchronous wake](#synchronous-wake)).
+- One per-workspace lock, `hibernate.lock`, serializes the final freeze decision, the freeze, each reclaim, publication of the record, and wake. Wake bypasses it only after a timeout ([Lock-timeout recovery](#lock-timeout-recovery)).
+- The record is published only after a confirmed freeze and a successful first reclaim. A failure between the freeze and publication thaws the scope. A deepen step never recreates an entry that a wake withdrew.
+- Hibernation never changes an agent's lifecycle or displayed status ([What a frozen row shows](#what-a-frozen-row-shows)).
+- A scope holds only the provider, its descendants, and its in-scope ancestor chain. Any other process vetoes the freeze.
+- The producer in `harness/hibernate.rs` writes only runtime caches and spawns helpers. Cgroup writes and durable writes stay in the helper modules, outside the sidebar graph.
+- The scopes are resource management, not a security boundary: any process of the same user can write the delegated cgroup files.
 
-Qwen's login-shell reentry stays unwrapped: it launches another exec wrapper. That wrapper compiles the finalized provider and adds its scope then. Scoping the reentry itself would put the wrapper inside an agent scope.
+## Configuration and admission
 
-## Detached helpers
+`crates/rimz/src/config/agents.rs::HibernateConfig::schedule` validates the two durations at use. Each takes `s`, `m`, `h`, or `d`, may not exceed 24 hours, and `deep_after` may not be less than `after`. An invalid schedule makes admission unavailable with the error and its fix. RimZ never substitutes the default schedule. `rimz start` warns with the error, and `rimz doctor` shows it as an error row, the only error hibernation reports.
 
-Helpers spawned from an agent scope use a separate `rimz-helper-<nonce>.scope`; agent-owned background commands keep their inherited scope. A failed scope spawn falls back to an ordinary helper with a debug diagnostic. Hibernation policy vetoes foreign processes that remain in an agent scope.
+Off Linux, the config loader (`crates/rimz/src/config.rs::MachineConfig::disable_unavailable_hibernation`) sets `enabled = false`. It adds a start warning only when `enabled = true` was explicit.
 
-`crates/rimz/src/child_process.rs::spawn_detached_reaped` owns command construction. Callers supply the program and a repeatable configuration callback so both scoped and fallback launches retain arguments, environment, working directory and log descriptors. This avoids trying to reconstruct opaque stdio from an already configured `Command`. The parent retains the child while confirming its helper-scope membership for at most two seconds. A successful early exit needs no retry; a failed exit or unconfirmed move stops and reaps the wrapper before retrying plainly. Only then does a live helper pass to the shared reaper.
+`crates/rimz/src/harness/hibernate.rs::inspect` probes the host's capabilities for `rimz doctor`. Each failed check is a warning row, and the first failure becomes the reason hibernation is skipped:
 
-The scoped view starts with a host-root bind and preserves `XDG_RUNTIME_DIR`; it does not hide the normal `/run/user/<uid>/bus`. No additional bus bind is needed. A reachable user manager is a hibernation capability, not something the mount view supplies.
+| Doctor check | Passes when |
+| --- | --- |
+| `systemd-run` | `systemd-run` is on `PATH`. |
+| `user manager` | `systemctl --user show-environment` succeeds within 3 seconds. |
+| `memory controller` | The user manager's `app.slice` is writable and lists `memory` in `cgroup.controllers`. |
+| `cgroup.freeze` | `app.slice/cgroup.freeze` is writable. |
+| `memory.reclaim` | `app.slice/memory.reclaim` is writable (Linux 5.19 or newer). |
+| `swap` | `/proc/meminfo` reports a positive `SwapTotal`. |
+| `swap limit` | No visible ancestor of `app.slice` has a `memory.swap.max` that reads `0`, is malformed, or cannot be read. A value of `max`, a positive limit, or a missing file passes. |
+| `free swap` | Advisory only: a warning when `SwapFree` is 0. It does not skip hibernation. |
 
-## Cgroup operations
+The `app.slice` path is `user.slice/user-<uid>.slice/user@<uid>.service/app.slice`, built from the uid. The caller's own cgroup does not matter, so a login shell in `session-N.scope` can use it. A passing `swap limit` does not prove swap is available: a container's cgroup namespace can hide a tighter ancestor limit, and inside a container the virtualized `/proc/meminfo` is the authority on swap.
 
-Scope discovery walks past an unscoped exec wrapper along its unambiguous child chain to the scoped provider. The shared liveness classifier recognizes wrappers too; their PID alone is not evidence of provider scope membership.
+`crates/rimz/src/harness/hibernate.rs::admit` runs the schedule check and the capability probe, and returns an `Admission { available, reason }` without publishing it. `crates/rimz/src/room/birth.rs::RoomContext::birth` publishes it through `Admission::publish` to the runtime cache `live/hibernate/admission.json`, in normal and supervised rooms alike. It publishes twice: before session creation and resume seeding, and again after the health gate and any recovery reset. GC keeps this file regardless of age ([store.md](../store.md)).
 
-Freeze writes `1` and waits at most two seconds for `cgroup.events` to confirm `frozen 1`. Failure thaws the scope. `crates/rimz/src/proc/cgroup.rs::memory_stat` reads anonymous and file bytes and both workingset refault counters. Reclaim requests an explicit byte count, measures `memory.current` before and after, requests `swappiness=200`, retries without that parameter on `EINVAL`, and accepts `EAGAIN` as partial reclaim. A zero-byte request skips the kernel write. These operations use injected filesystem roots in tests, without a live freezer or swap.
+Launch planning, the producer, and the freeze helper each require `enabled` and an `available` cached verdict. An absent or unreadable cache reads as unavailable with the reason `admission unavailable; run rimz start`. A fix to the host, such as adding swap or delegating the memory controller, therefore takes effect at the next room birth or reattach, even though `rimz doctor` probes live and reports it at once. `rimz start` warns about an unavailable verdict only when `enabled = true` is explicit (`crates/rimz/src/room/judgment.rs::hibernate_notice`).
 
-## Reclaim schedule
+## Scopes
 
-`crates/rimz/src/config/agents.rs::Schedule` owns the validated schedule shared by selection, helpers, and show. With `span = deep_after - after`, step `k` is due at `frozen_at + min(k * 30m, span)` and targets `anon_at_freeze * (span - min(k * 30m, span)) / (2 * span)` resident anonymous bytes. Step zero freezes and targets half the original anonymous memory. A zero span targets zero immediately. The final step is `ceil(span / 30m)`; defaults target 50%, approximately 33%, approximately 17%, and zero at idle ages 30, 60, 90, and 120 minutes. Each step requests `max(0, anon_now - target)`, not the original allocation or file-backed memory. A zero request still advances the step; partial reclaim does not retry a completed step.
+### Provider scopes
 
-`crates/rimz/src/store/hibernate.rs::Entry` remains version 1 and stores the freeze-time anonymous bytes, last applied step, and cumulative reclaimed bytes. Old version-1 entries default these new fields to zero, preserving wake identity; their next due step requests all remaining anonymous memory.
+The launch compiler (`crates/rimz/src/harness/launch_plan.rs`) wraps a ready provider argv on Linux when admission is available, through `crates/rimz/src/harness/hibernate.rs::scope_argv`. It wraps after the bubblewrap view is applied, so `systemd-run` is the outermost command:
 
-`crates/rimz/src/proc/cgroup.rs::ScopePath` is the validated scope identity passed to the cgroup operations. Process discovery returns an empty list on an unreadable scope, matching the process-reader convention. The decision requires the provider itself in that list, never accepting an empty list as proof that all members are descendants. Linux process liveness already admits frozen sleeping and uninterruptible-sleep states; only zombie and dead states are excluded.
+```sh
+systemd-run --user --scope --quiet --collect -p MemoryAccounting=yes \
+  --unit rimz-agent-<workspace_id>-<uuid>.scope --description "RimZ agent <kind>" -- <argv>
+```
 
-## Selection and publication
+Each compilation mints a fresh UUIDv7. `crates/rimz/src/proc/cgroup.rs::scope_prefix` replaces each workspace id character outside `[A-Za-z0-9_-]` with `_`, and the launch compiler, discovery, and reconciliation all use that one prefix. The exec wrapper stays outside the scope, so its supervision and leases keep running while the provider is frozen. A provider launched while admission was unavailable has no scope and holds as `NoScope` until it is relaunched.
 
-`crates/rimz/src/harness/hibernate.rs::hibernate_idle_agents` runs on the sidebar's heavy refresh without consulting read receipts. Non-Linux passes do nothing. Linux passes repair focus wakes and update the focus trail even when new hibernation is disabled or unavailable. A runtime cache under `live/hibernate` paces freeze helper spawns to once per session per 30 seconds; it is published before spawn so a fast helper's hold reason is not overwritten. The producer checks wake-stamp grace before recording a fire and disregards a fire predating a focus wake for a new freeze, so the first pass after grace can freeze without an extra pacing delay.
+Qwen's login-shell reentry (`AgentProcessStage::LoginShellReentry`, for a pending provider-account binding) stays unwrapped. The reentry launches a second exec wrapper, which compiles the finalized provider and wraps that. Wrapping the reentry itself would put an exec wrapper inside an agent scope.
 
-`crates/rimz/src/harness/hibernate.rs::decide` shares idle-stop's resting, rest-clock, and debt predicates, not its board or launched-tree vetoes. For unrecorded sessions it refuses ended sessions, provider subagents, native input, budget parks, compaction, active work, unfinished rest-clock or wake-stamp grace periods, focus, remote control, keep-warm holds, owed wakes, queued messages, and open runs. `Hold::Clock` identifies the rest clock; `Hold::WakeClock` identifies wake-stamp grace. The validated `Policy` resolves the schedule and effective keep-warm definitions before deciding; `Hold::KeepWarm` uses the same horizon and ping eligibility as cache keepalive. Scope discovery walks the pane's single-child process chain and takes the first scope named for this workspace, passing both an unscoped exec wrapper and a scope that wrapper inherited from another room's agent (a mux server started from that agent's pane). The scope must then include the provider pid and contain only that process, its descendants, and its own in-scope ancestor chain (such as bwrap and sh). Siblings under those ancestors remain foreign. No such scope, or a provider no longer in it, yields `NoScope`; a foreign or unreadable ancestry yields `ForeignProcess` with pid and command evidence. Idle-stop evaluates a frozen agent's real state, so an armed wait still holds it as sleeping.
+### Helper scopes
 
-A recorded session bypasses rest and debt checks: its next step yields `Deepen` when due and `AlreadyHibernating` otherwise, including after the final step. The producer uses the same step clock and 30-second spawn pacing. Under the hibernation lock, deepening re-reads the entry and confirms the scope is still frozen, then checks again after reclaim before publishing. A missing or thawed scope loses its stale entry; a withdrawn or replaced stretch is never recreated. Successful deepening updates the step, timestamp, and cumulative bytes without changing the freeze time. A failed deepen retains the previous step for retry. Each successful freeze or deepen appends an assist with that step's byte delta; only the freeze sets `frozen = true`.
+A detached helper started from inside an agent scope, such as a hook or a `rimz` command the agent runs, would freeze with the agent and count as a foreign process. `crates/rimz/src/child_process.rs::spawn_detached_reaped` prevents this. When `/proc/self/cgroup` names a `rimz-agent-*.scope`, it prefixes the command with `systemd-run --user --scope --quiet --collect --unit rimz-helper-<uuid>.scope --`.
 
-The hidden `agents hibernate --request` helper reads an event-fresh published snapshot, probes the scope, and decides again. For an initial freeze, its CLI-supplied reader refreshes that same enriched view inside the lock, rather than using the raw store snapshot that lacks focus. A fresh mux focus intent also holds the target while the published frame catches up. `crates/rimz/src/harness/hibernate/execute.rs::run_request` then freezes, reclaims, and publishes the [durable record](../store.md). An initial reclaim or publication failure attempts to thaw; a success appends a [hibernate assist](./loops.md#the-assist-log). Holds requiring a scope probe or failed freezer/reclaim attempt are recorded only when their reason changes. The helper mutation module is outside the sidebar's read-only producer file.
+The caller supplies the program and a `configure` callback instead of a built `Command`. The callback can run twice, so a plain retry keeps the arguments, environment, working directory, and log descriptors. The parent holds the child for at most two seconds, until `/proc/<pid>/cgroup` shows a `rimz-helper-*.scope`. A successful early exit needs no retry. A failed exit or an unconfirmed move kills and reaps the wrapper, then retries without the scope and logs a debug line. Only a confirmed child passes to the shared reaper. Agent-owned background commands (`spawn_detached_reaped_as_agent`) keep the inherited agent scope.
 
-A per-workspace hibernation lock serializes the final decision, freeze, reclaim, and publication with synchronous wake and reconciliation. The final freeze decision reads a fresh rest clock and message/run debt under that lock. Each freeze or deepen transaction holds it for one reclaim: input arriving during reclaim waits for publication, then thaws and withdraws the entry before transport. Wake latency therefore includes the remaining freeze confirmation (bounded at two seconds), reclaim, and publication; reclaim has no kernel-independent time bound. Lock acquisition uses the standard 30-second timeout; wake alone bypasses a timed-out hibernation lock as described below.
+A helper started inside a scoped agent runs `systemd-run` inside the bubblewrap view. The view binds the host root and keeps `XDG_RUNTIME_DIR`, so the user bus at `/run/user/<uid>/bus` stays reachable without an extra bind. The user manager must still be reachable on the host, which the `user manager` check covers.
 
-Enrichment attaches the record without changing lifecycle or displayed status. Frozen rows keep their real glyph, ranking, unread episodes, notifications, and turn-completion behavior; pending waits keep their working or sleeping display classification. Cache keepalive and idle compaction skip recorded frozen rows. List/show JSON carries hibernation metadata whenever a record exists, and show renders its freeze time, step out of the configured final step, and cumulative reclaimed bytes; [stats](../stats.md) keeps reclaimed memory separate from GC disk recovery.
+### Scope identity and discovery
 
-## Wake and recovery
+`crates/rimz/src/proc/cgroup.rs::ScopePath` is the validated scope identity that every cgroup operation takes. It is built only from a `0::` membership line that names a direct child of this uid's `app.slice` called `rimz-agent-*.scope`. Recorded paths are validated again before a thaw (`crates/rimz/src/harness/hibernate/wake.rs::recorded_scope`).
 
-`crates/rimz/src/proc/mod.rs::input_tty` is an optional Linux input-queue probe. It resolves the provider's controlling terminal from `tty_nr` in `/proc/<pid>/stat`, mapping Unix98 slave device numbers to `/dev/pts/N` without relying on the provider's dumpability or backend-specific tty discovery. It opens read-only with `O_NOCTTY | O_NONBLOCK | O_CLOEXEC`; zero or non-pts devices, unreadable stat files, and open failures yield no handle, as does every other platform. `FIONREAD` counts queued bytes without reading or consuming pane content, so it is not a pane read.
+`crates/rimz/src/harness/hibernate.rs::ScopeView::probe` finds the scope from the pane's root pid. It resolves the provider process and takes its scope when the name carries this workspace's prefix. Otherwise it moves to the process's only child and tries again, and stops at zero or several children. The walk passes the exec wrapper, which is either unscoped or in another room's agent scope that it inherited from a multiplexer server started in that agent's pane. The probe then reads the scope's `cgroup.procs` (an unreadable file yields an empty list, as the process readers do elsewhere) and each member's parent chain. The provider lookup's Linux liveness check treats a frozen process in the sleeping or uninterruptible-sleep state as alive and excludes only zombie and dead states, so a probe of a frozen agent still finds its provider.
 
-`crates/rimz/src/harness/hibernate/wake.rs::wake_pane` thaws every recorded scope for the pane before withdrawing its entry. A missing scope is already gone; other thaw failures retain the record and stop the input path. Scope paths must resolve beneath the current user's `app.slice` with an agent-unit name. `wake_pane_at` supplies the same operation to paths-only callers without opening or creating a store; raw pane sends outside managed rooms remain ordinary mux input.
+## Selection
 
-A failed locked thaw saves `wake_error` on the retained entry before returning the error. The field defaults to absent for older version-1 entries. Show appends `, wake failed: <error>` to its hibernation detail and exposes the same field in JSON; a successful retry withdraws the entry and its error. Detached focus-helper failures therefore remain visible without changing the sidebar status.
+### The producer pass
 
-On hibernation-lock timeout only, wake proceeds without that lock and thaws every scope of the workspace, including scopes the helper has frozen but not yet recorded. It withdraws all workspace hibernation entries through the store's normal record-update lock. Other lock errors and thaw failures still stop wake. The room-wide reset is reserved for this pathological timeout; the next producer pass can hibernate agents that remain idle. Wake reports `Thawed` when the requested pane had a record and `NotHibernating` otherwise. After the reset it appends one best-effort rotating diagnostic to `audit/hibernate.log.jsonl`: event `wake_lock_timeout`, timestamp `at`, `workspace_id`, `pane_id`, `lock_path`, and the `withdrawn` entry count. If a delayed helper publishes a stale entry over a thawed scope afterward, the next reconciliation withdraws it.
+`crates/rimz/src/harness/hibernate.rs::hibernate_idle_agents` is the `hibernate` step of the sidebar's heavy refresh (`crates/rimz/src/sidebar/refresh/mod.rs::refresh_heavy_lanes`). It does not read read receipts. Off Linux it returns at once. On Linux each pass:
 
-Message delivery, answers, pane sends, budget interrupts, targeted CLI focus, and pane closes invoke synchronous wake before transport. The read-only sidebar graph instead spawns the hidden `agents wake --request` helper. Room-host focus events from either backend and producer passes observing a recorded, focused pane share two-second wake pacing. Pulled focus repairs a lost event or focus that arrived before publication; sidebar clicks also spawn a helper. Session retirement attempts thaw and withdrawal before retiring its wait rows, logging failures. Typed keys received before thaw remain queued in the pty.
+1. Updates the focus trail ([Grace stamps](#grace-stamps)).
+2. Spawns a paced focus wake when the focused pane has a record ([Focus wakes](#focus-wakes)). Steps 1 and 2 run even when hibernation is disabled or unavailable, so an agent frozen before a setting change still wakes.
+3. Stops unless hibernation is enabled and the cached admission is available, and stops with a warning when the schedule fails to validate.
+4. For each agent with a pane and a pane pid, skips it when a recorded entry has no due step, or when an unrecorded agent fails the cheap holds (rows 1 to 6 below).
+5. Skips the agent when its fire record shows a spawn in the last 30 seconds. An unrecorded agent whose focus stamp is newer than that fire is not skipped, so the first pass after focus grace can freeze it at once.
+6. Writes the fire record, then spawns `rimz agents hibernate --request`. The record is written first because the helper may write its hold reason into the same record at once. A failed spawn clears the fire time.
 
-`crates/rimz/src/harness/hibernate/wake.rs::wake_request` dwells only in the detached helper, never in the host event handler or producer pass. A recorded pane gets a one-second dwell measured from `requested_at_ms`, falling back to helper start. After a 250ms settle from that same time, the helper samples the pty queue baseline and polls every 50ms. Growth after the baseline samples focus directly through the backend's `client_view`: some attached client's focused pane must match, with detailed client rows taking precedence over summarized pane ids. If focused, growth thaws early (`dwell = input`); otherwise it aborts, since focus-out reporting can itself grow the queue. Expiry samples focus the same way and thaws only if focused (`dwell = elapsed`). Each mux sample has a 250ms command timeout; a failed sample counts as focused. An unavailable pty removes only early waking, not expiry waking.
+### The decision
 
-The settle absorbs the focus-in report even when a sidebar helper starts before mux focus dispatch. Keys typed in the first 250ms may wait until expiry, and input followed by departure stays queued until a later wake. Codex can interpret a queued paste-like burst's Enter as a newline; that existing trap is not repaired here, though early input waking narrows its window. A passing glance writes no stamp, record change, or diagnostic. The helper checks focus again after acquiring the hibernation lock, so time waiting for another transaction cannot turn a departure into a thaw. A record published during lock acquisition still requires a dwell decision. An unrecorded pane needs no dwell and writes no focus stamp.
+`crates/rimz/src/harness/hibernate.rs::decide` gives one `Verdict`: `Hibernate`, `Deepen { step }`, or `Hold(Hold)`. An agent that already has an entry skips every rest and debt check: its next step yields `Deepen` when due and `Hold::AlreadyHibernating` otherwise, including after the final step. An agent without an entry takes the first hold that applies:
 
-Sidebar toggle and pane zoom are browsing actions: neither synchronously wakes its chosen work pane. Their focus change reaches the same detached dwell through the room host or producer repair, just like card clicks and mux navigation. A command naming its target, including `rimz pane focus`, remains immediate with a full-`after` synchronous stamp.
+| Order | Hold | Cause |
+| --- | --- | --- |
+| 1 | `Ended`, `ProviderSubagent`, `AwaitingInput`, `BudgetPark`, `Compacting`, `Busy` | `idle_stop::resting` refuses the agent: the session ended, it is a provider subagent, a native prompt is open, a budget park holds it, or it is compacting. `Busy` covers an effective status other than idle or success, a parked turn phase, and a running background shell. |
+| 2 | `Clock` | The rest clock (`idle_stop::rested_since`) is younger than `after`. |
+| 3 | `Focused` | The pane is focused. |
+| 4 | `RemoteControl` | Remote control is on for the provider. |
+| 5 | `KeepWarm` | A keep-warm hold applies, with the same horizon and ping eligibility as cache keepalive (`SeatPolicy::holding`). |
+| 6 | `WakeClock` | A wake stamp's grace has not run out ([Grace stamps](#grace-stamps)). |
+| 7 | `NoScope` | No scope with this workspace's prefix was found, or the provider is not in it. |
+| 8 | `ForeignProcess { pid, comm }` | A member is neither on the provider's in-scope ancestor chain (such as `bwrap` and `sh`) nor able to reach the provider through its parent chain. Siblings under those ancestors are foreign, and so is a member whose chain breaks on an unreadable parent. `comm` is `unknown` when the member's own command cannot be read. |
+| 9 | `Owed`, `Message`, `OpenRun` | `idle_stop::debt`: an owed wake, a queued message, or an open run. |
 
-`xtask/src/invariants.rs::ensure_pane_writes_wake_first` guards pane input without adding a harness dependency to the mux layer. Outside mux and test sources, each function containing `PaneWriter::open(` must contain an earlier `hibernate::wake_pane(`, `hibernate::wake_pane_at(`, or `hibernate::wake_pane_in(` in that same function. The check has no caller allowlist; its regression test rejects an open placed before the wake.
+`decide` shares idle-stop's resting, rest-clock, and debt predicates. It does not take idle-stop's board, tree, or molt-successor vetoes. `Policy` resolves the schedule and the keep-warm definitions once, before any decision.
 
-Each actual wake exit appends a best-effort `wake` diagnostic per entry before withdrawal, retaining its identity, freeze time, step, freeze-time anonymous bytes, and cumulative reclaimed bytes. `trigger` distinguishes `sync`, `helper`, and `lock_timeout`. `thaw_ms` measures locked-wake entry to the thaw write, including lock acquisition; timeout recovery instead uses completion of the workspace-wide thaw for every entry. Helper wakes also carry `focus_to_thaw_ms` from focus handling when the request has that timestamp, including the dwell. Their optional `dwell` field is `input` or `elapsed`; sync and lock-timeout records omit it. These records are diagnostic evidence, not assists or correctness inputs.
+## Freeze and deepen
 
-A failed locked thaw also emits `wake`, with `error` carrying the failure and latency measured through the failed attempt; successful wakes carry a null error. Failed wakes do not spawn refault samplers.
+### The freeze helper
 
-After a locked thaw, readable `memory.stat` counters seed a detached `agents wake-refault --request` helper. It samples at approximately 1, 10, and 60 seconds from thaw and appends one `wake_refault` diagnostic with the same identity, `thawed_at`, and cumulative anonymous/file refault deltas from that baseline. `after_ms` records actual elapsed time; a decreasing counter saturates its delta at zero. A missing or unreadable scope ends sampling silently, retaining any samples already collected. Timeout recovery does not spawn samplers. Counter reads, diagnostic appends, and sampler spawn failures never prevent input delivery.
+`rimz agents hibernate --request` (`crates/rimz/src/cli/agents_cmd/hibernate.rs::run`) reads an event-fresh published snapshot and calls `crates/rimz/src/harness/hibernate/execute.rs::run_request`. The helper checks again that the agent's pane and root pid match the request, probes the scope, and decides again. For the helper, focus also includes a fresh multiplexer focus intent (`mux::focus_anchor`), which holds the target while the published frame catches up. A `NoScope` or `ForeignProcess` hold appends a hold assist. Any other hold ends the helper without a record.
 
-Synchronous wake records a per-pane stamp under runtime `live/hibernate` while holding the hibernation lock, before reading records, even if a queued helper has not yet published. It keeps the bare JSON timestamp format and holds for the full configured `after`; focus helpers write an object with a `focus` timestamp only after successfully thawing a recorded scope, best-effort, so a failed write still withdraws the thawed record. Timeout reset records a bare workspace-wide timestamp without that lock and holds every pane for `after`. These are atomic cache writes without durable fsync; a missing or unreadable stamp grants no extra grace. Rooms with neither a hibernation lock nor a record create no lock or stamp on ordinary pane input.
+A `Hibernate` verdict runs the freeze transaction under `hibernate.lock`:
 
-A focus stamp holds for 10 seconds after the later of wake and the pane's last observed departure. The producer alone owns the `focus.json` runtime trail: on a focused-pane change it records the previous pane's departure time, prunes departures older than 10 seconds, and atomically replaces the cache. It never refreshes the file on an unchanged focus or edits a wake stamp, so it cannot downgrade a synchronous wake. A missing trail falls back to wake time. Both `decide` and the producer use the same stamp predicate; focus itself still prevents a new freeze. A new turn moves the rest clock and restores the full `after`, independently of the focus stamp. Re-freezing starts the deepening ladder again from the new freeze time.
+1. Re-read the published snapshot, probe again, and require the same scope, the same provider pid, and a `Hibernate` verdict. This gives the final decision a fresh rest clock, focus, and message and run debt. The raw store snapshot lacks focus, so the helper uses the enriched view.
+2. Freeze: write `1` to `cgroup.freeze` and poll `cgroup.events` every 10 ms for `frozen 1`, for at most two seconds. A failed write returns its error at once. A read error or the timeout thaws the scope and fails, and the timeout's error is `FreezeTimeout`.
+3. Read `memory_stat` and keep the anonymous bytes as `anon_at_freeze`.
+4. Reclaim step 0, which targets half of `anon_at_freeze`.
+5. Publish the entry with step 0, the reclaimed bytes, and `frozen_at` set to the time of publication. The deepen deadlines count from this time, after the first reclaim.
 
-Start and recovery reconcile frozen scopes against the durable record. A recorded scope that disappeared or is no longer frozen loses its entry; a recordless scope with this workspace's prefix is thawed when freeze was requested, even before `cgroup.events` confirms it. Other workspaces are untouched. Process sweeps thaw the workspace's scopes before signals; supervised children thaw their own scope before SIGTERM. Surplus daemon panes use synchronous wake before close. An exiting exec wrapper logs a wake failure but still closes its pane. The launch compiler and sweep use one scope-prefix definition.
+A failure in steps 3 to 5 thaws the scope and publishes nothing. On success the helper clears the fire record's hold and appends a [hibernate assist](./loops.md#the-assist-log) with `frozen = true` and the reclaimed bytes.
 
-Same-user processes can write delegated cgroup controls; the scopes are resource management, not a security boundary.
+Holds that cost a probe (`NoScope`, `ForeignProcess`) and failed freeze or reclaim attempts append an assist only when the reason differs from the one in the fire record. A repeated hold therefore costs nothing in the assist log.
+
+### Reclaim steps
+
+`crates/rimz/src/config/agents.rs::Schedule` owns the step clock, shared by the producer, the helper, and `rimz agents show`. With `span = deep_after - after`, step `k` is due at `frozen_at + min(k * 30m, span)` and targets `anon_at_freeze * (span - min(k * 30m, span)) / (2 * span)` resident anonymous bytes. The final step is `ceil(span / 30m)`. A zero span targets zero at once, so the freeze reclaims everything. The default schedule:
+
+| Step | Rest time | Target resident anonymous memory |
+| --- | --- | --- |
+| 0 (freeze) | 30 minutes | 50% |
+| 1 | 60 minutes | about 33% |
+| 2 | 90 minutes | about 17% |
+| 3 (final) | 120 minutes | 0 |
+
+Each step requests `max(0, anon_now - target)` bytes, never the original allocation or file-backed memory. A zero request still advances the step, and a partial reclaim does not retry a completed step. An overdue entry advances one step per transaction, so a pass that runs late does not jump to the target for the current rest time. `crates/rimz/src/proc/cgroup.rs::reclaim` measures `memory.current` before and after, writes `<bytes> swappiness=200` to `memory.reclaim`, retries without `swappiness` on `EINVAL`, and accepts `EAGAIN` as a partial reclaim. A zero-byte request skips the kernel write. The cgroup operations take an injected filesystem root, so tests run without a live freezer or swap.
+
+### Deepening
+
+A `Deepen` verdict runs the deepen transaction under `hibernate.lock`. It re-reads the entry and requires the same scope and `frozen_at`, so a stretch that a wake withdrew or a new freeze replaced is never recreated. It checks that the scope is still frozen, reclaims, and checks again before it publishes. A missing or thawed scope loses its entry at either check. A successful step updates `step` and adds to the cumulative `reclaimed_bytes`, and leaves `frozen_at` unchanged. A failed reclaim keeps the previous step, so the next due pass retries it. Each step appends an assist with that step's byte delta and `frozen = false`.
+
+### Lock hold and wake latency
+
+Each transaction holds `hibernate.lock` for one reclaim. Input that arrives during a reclaim waits for publication, then thaws and withdraws the entry before transport. Wake latency can therefore include the rest of the freeze confirmation (at most two seconds), the reclaim, and publication. Reclaim has no time bound of its own: the kernel decides how long it takes. The lock uses the standard 30-second timeout.
+
+## What a frozen row shows
+
+`crates/rimz/src/harness/hibernate.rs::project_hibernation` attaches a `Hibernation` (`frozen_at`, `step`, `reclaimed_bytes`, `wake_error`) to each live row that has an entry. It changes nothing else: a frozen row keeps its lifecycle, displayed status and glyph, ranking, unread episodes, notifications, and turn-completion behaviour. A pending wait keeps its working or sleeping classification, and idle-stop reads the real state, so an armed wait still holds a frozen agent as sleeping. Cache keepalive and idle compaction skip rows with an entry.
+
+`rimz agents list --json` and `show --json` carry `hibernation` whenever the row carries the projection. An entry with no matching live row shows nowhere. `rimz agents show` renders `hibernating since <frozen_at>, step <n> of <final>, <bytes> reclaimed`, and appends `, wake failed: <error>` when `wake_error` is set. [stats.md](../stats.md) counts freezes and keeps reclaimed memory apart from GC disk recovery.
+
+## Wake
+
+### Synchronous wake
+
+`crates/rimz/src/harness/hibernate/wake.rs::wake_pane` thaws a pane before its caller writes to it or closes it. `wake_pane_at` does the same for a caller that has state paths but no `Store`, and opens or creates none. The crate-private `wake_pane_in` also takes the cgroup root. All three return `NotHibernating` at once when the room has neither `hibernate.lock` nor a record, so ordinary pane input in such a room creates no lock or stamp. Under the lock, a synchronous wake:
+
+1. Writes the pane's synchronous wake stamp before it reads the record, so a freeze helper that publishes later still sees the grace. A failed stamp write stops the wake before any thaw.
+2. Reads the pane's entries. With none it returns `NotHibernating`.
+3. For each entry, thaws its scope unless the scope is already gone, and appends a `wake` diagnostic.
+4. On a thaw failure, saves the error as the entry's `wake_error`, keeps the entry, and returns the error, so the caller stops before transport.
+5. On success, starts the refault sampler when `memory.stat` is readable, withdraws the entry, and returns `Thawed`.
+
+A later successful wake withdraws the entry and its `wake_error` together, so a failed wake from a detached focus helper stays visible in `rimz agents show` without changing the sidebar status.
+
+| Caller | Function | Then |
+| --- | --- | --- |
+| Message delivery | `crates/rimz/src/message/send.rs::send_batch_to_live_pane` | writes the batch |
+| `rimz answer` | `crates/rimz/src/cli/answer.rs::run` | writes the answer keys |
+| `rimz pane send` in a managed room | `crates/rimz/src/cli/pane.rs::send` | writes the keys |
+| Budget park helper | `crates/rimz/src/cli/agents_cmd/budget_park.rs::run_budget_park` | sends Esc. A wake failure ends the helper. |
+| `rimz pane focus` | `crates/rimz/src/cli/pane.rs::focus` | focuses the pane |
+| `rimz agents focus`, `rimz teams focus` | `crates/rimz/src/cli/agents_cmd/show.rs::focus_resolved` | focuses the pane |
+| A resume that finds the agent live | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane`, `crates/rimz/src/cli/agents_cmd/reconcile.rs::focus_existing` | focuses the pane |
+| `rimz agents restart` | `crates/rimz/src/cli/agents_cmd/restart.rs::restart_resolved` | closes the old pane |
+| `rimz agents stop` | `crates/rimz/src/cli/agents_cmd/stop.rs::close_agent_pane` | closes the pane |
+| Supervised run cleanup | `crates/rimz/src/cli/supervised/pane.rs::close_run_pane` | closes the run's pane |
+| Orphaned subagent repair | `crates/rimz/src/cli/agents_cmd/orphan_subagent.rs::repair_orphan` | closes the pane |
+| Daemon view | `crates/rimz/src/daemon_view.rs::close_surplus_panes`, `repair_daemon_shape` | closes the pane. A failed wake ends the pass with `Retry`. |
+| Exec wrapper exit | `crates/rimz/src/cli/agents_cmd/exec.rs::close_own_pane` | closes its own pane. A wake failure is logged and the pane still closes. |
+| Session retirement | `crates/rimz/src/harness/schedule/arm.rs::retire_session_in` | retires the session's wait rows. A wake failure is logged. |
+
+`rimz pane send` outside a managed room is ordinary multiplexer input and wakes nothing. Typed keys that arrive before a thaw stay queued in the pty and reach the provider after it.
+
+`xtask/src/invariants.rs::ensure_pane_writes_wake_first` guards the writers. Outside the multiplexer layer and test sources, each function that contains `PaneWriter::open(` must contain an earlier `hibernate::wake_pane(`, `hibernate::wake_pane_at(`, or `hibernate::wake_pane_in(` in the same function. The multiplexer layer is exempt so it takes no harness dependency. The check has no caller allowlist, and its regression test rejects an open placed before the wake. It does not see pane closes: a new close path must call the wake itself.
+
+### Lock-timeout recovery
+
+Only a timeout on `hibernate.lock` lets a wake go on without the lock. Every other lock error and every thaw failure still stops the wake. A focus helper first repeats its dwell check, and returns `NotHibernating` if the user left. Then `wake_workspace_unlocked`:
+
+1. Writes the workspace-wide wake stamp, without the lock. A failed write stops the wake.
+2. Thaws every scope with this workspace's prefix, including scopes the helper froze but has not yet recorded.
+3. For each entry in the workspace, appends a `wake` diagnostic with trigger `lock_timeout` and withdraws the entry through the store's normal record-update lock.
+4. Appends one `wake_lock_timeout` diagnostic.
+
+It returns `Thawed` when the requested pane had an entry and `NotHibernating` otherwise, and starts no refault samplers. The room-wide reset is reserved for this case. The workspace stamp holds every pane for the full `after`, so agents that stay idle freeze again only after that grace. If a delayed helper later publishes an entry over a thawed scope, the next wake of that pane, deepen step, or start reconciliation withdraws it.
+
+### Focus wakes
+
+The sidebar import graph cannot write the store, so it never wakes synchronously. It spawns the hidden `rimz agents wake --request` helper (`crates/rimz/src/cli/agents_cmd/hibernate.rs::wake`), which runs `crates/rimz/src/harness/hibernate/wake.rs::wake_request`. Three paths spawn it:
+
+- A room-host focus event from either backend: `crates/rimz/src/sidebar_pane/app/plane.rs` calls `wake_focused` for each `FocusChanged` event.
+- A producer pass that sees a focused pane with an entry. This repairs a lost event, or focus that arrived before the entry was published.
+- A sidebar card click (`crates/rimz/src/sidebar_pane/app/focus.rs::spawn_pane_focus`), before the focus request.
+
+The first two paths share a per-pane pacing of two seconds in `live/hibernate/wake.json` and spawn only for a pane with an entry. Sidebar toggle and pane zoom are browsing actions: they wake nothing directly, and the focus change reaches the helper through the room host or the producer repair. A command that names its target wakes synchronously instead ([Synchronous wake](#synchronous-wake)).
+
+The helper waits for a dwell so that a passing glance does not thaw an agent. A pane without an entry needs no dwell and writes no stamp. For a pane with an entry, `focus_dwell` measures time from the request's `requested_at_ms`, or from helper start when it is absent:
+
+1. When one second has already passed, it samples focus and thaws only if the pane is focused (`dwell = elapsed`).
+2. Otherwise it waits until 250 ms, then samples the pty's input queue as a baseline.
+3. It polls the queue every 50 ms. Growth past the baseline samples focus: a focused pane thaws at once (`dwell = input`), and an unfocused pane aborts, because a focus-out report can itself grow the queue.
+4. At one second it samples focus and thaws only if the pane is focused (`dwell = elapsed`).
+
+A focus sample calls the backend's `client_view` with a 250 ms command timeout. Some attached client's focused pane must match. Detailed client rows take precedence, and only a view without them falls back to the summarized pane ids. A failed sample counts as focused. The helper samples focus again after it gets the lock, so time spent waiting for another transaction cannot turn a departure into a thaw. An entry published while the helper waited for the lock still gets a dwell. A glance that ends without a thaw writes no stamp, record change, or diagnostic.
+
+The 250 ms settle absorbs a focus-in report that reaches the pty before the baseline sample. It does not cover a report that arrives later. A sidebar click spawns the helper before the click's focus request reaches the multiplexer, and a cross-tab jump can wait up to `PAINT_WAIT` (500 ms, `crates/rimz/src/sidebar_pane/app/focus_push.rs`) before focus moves. A focus-in report that lands after the baseline counts as input, so a focused pane can thaw before the one-second expiry without a key typed.
+
+Keys typed in the first 250 ms can wait until the one-second expiry, and input followed by a departure stays queued until a later wake. Codex can read the Enter of a queued paste-like burst as a newline. Early input waking narrows that window but does not close it.
+
+`crates/rimz/src/proc/mod.rs::input_tty` opens the pty for the queue samples. It reads the provider's controlling terminal from `tty_nr` in `/proc/<pid>/stat` and maps a Unix98 pts device number (majors 136 to 143) to `/dev/pts/N`. This works whatever the provider's dumpability and needs no backend tty lookup. It opens the device read-only with `O_NOCTTY | O_NONBLOCK | O_CLOEXEC`. A zero or non-pts device, an unreadable stat file, a failed open, or a platform other than Linux yields no handle, which removes early waking and keeps the one-second expiry. `FIONREAD` counts queued bytes without reading them, so the probe is not a pane read under the pane I/O invariant.
+
+### Grace stamps
+
+A wake stamp keeps a just-woken agent from freezing again at the next pass. `decide` and the producer share one predicate, `wake_stamp_holds`. The stamps and the other runtime caches live under the room's runtime `live/hibernate/` directory:
+
+| File | Writer | Content | Effect |
+| --- | --- | --- | --- |
+| `woke-<pane digest>.json`, synchronous | Synchronous wake, under the lock, before it reads the record | a bare timestamp | holds the pane for the full `after` |
+| `woke-<pane digest>.json`, focus | The focus helper, after it thaws a recorded scope (best-effort) | `{"focus": <timestamp>}` | holds the pane for 10 seconds after the later of the wake and the pane's last departure in `focus.json` |
+| `woke-workspace.json` | Lock-timeout recovery, without the lock | a bare timestamp | holds every pane for the full `after` |
+| `focus.json` | The producer only | the focused pane and recent departures | departure times for the focus stamp, pruned to 10 seconds |
+| `wake.json` | Focus-wake spawns from host events and the producer | last spawn per pane | two-second focus-wake pacing |
+| `<agent digest>.json` | The producer (`fired_at`) and the freeze helper (`hold`) | the fire record | 30-second spawn pacing and hold-assist deduplication |
+| `admission.json` | Room birth | the admission verdict | [Configuration and admission](#configuration-and-admission) |
+
+These are atomic cache writes without a durable fsync. A missing or unreadable stamp grants no grace. A failed focus-stamp write still withdraws the thawed entry, since the stamp only grants grace. The producer rewrites `focus.json` only when the focused pane changes, recording the previous pane's departure, and never edits a wake stamp, so it cannot shorten a synchronous wake's grace. Without a trail entry, the focus stamp counts from the wake. Focus itself still blocks a new freeze (hold 3). A new turn moves the rest clock and restores the full `after` on its own, and a new freeze starts the reclaim steps again from step 0.
+
+### Shutdown paths
+
+Paths that signal or close agents thaw before they act:
+
+- The process sweep (`crates/rimz/src/mux/recovery.rs::sweep_orphan_processes`) thaws the workspace's scopes before it selects targets, and thaws each target's own scope before its SIGTERM.
+- A supervised child (`crates/rimz/src/child_process.rs::SupervisedChild::signal_term`) thaws its own scope before SIGTERM.
+- Pane closes wake through the callers in the [synchronous wake table](#synchronous-wake).
+
+## Start reconciliation
+
+`crates/rimz/src/harness/hibernate/wake.rs::reconcile_at` runs at every `rimz start` (`crates/rimz/src/cli/room/mod.rs::start`) and before a recovery (`preflight_recovery`). It returns at once when the room has neither a record nor a scope with its prefix. Otherwise, under `hibernate.lock`, it:
+
+1. Withdraws each entry whose scope is missing or not frozen.
+2. Thaws each scope with this workspace's prefix that has no entry and is frozen or has a freeze requested (`cgroup.freeze` reads `1`), whether or not `cgroup.events` has confirmed it.
+
+Scopes of other workspaces are untouched. A missing, corrupt, or unknown-version record reads as empty ([store.md](../store.md)), so reconciliation then thaws every frozen scope of the workspace.
+
+## Wake diagnostics
+
+`crates/rimz/src/diag/hibernate.rs` appends best-effort records to the rotating log `audit/hibernate.log.jsonl` in the workspace state directory. They are diagnostic evidence only, never assists or inputs to a decision, and a failed append, counter read, or sampler spawn never delays input. Every record carries `at`, `workspace_id`, and `pane_id`. `wake` and `wake_refault` also carry `kind` and `agent_id`.
+
+| `event` | Written | Fields |
+| --- | --- | --- |
+| `wake` | Once per entry at each wake exit, before withdrawal, including a failed locked thaw | `frozen_at`, `step`, `anon_at_freeze`, `reclaimed_bytes`, `trigger` (`sync`, `helper`, or `lock_timeout`), `thaw_ms`, `focus_to_thaw_ms`, `dwell`, `error` |
+| `wake_refault` | Once by the refault sampler, after a successful locked thaw | `thawed_at`, and `samples`, each with `after_ms`, `refault_anon`, and `refault_file` |
+| `wake_lock_timeout` | Once after a lock-timeout recovery | `lock_path`, `withdrawn` (the number of entries withdrawn) |
+
+For a locked wake, `thaw_ms` runs from wake entry to the thaw write, lock acquisition included. For lock-timeout recovery it runs to the end of the workspace-wide thaw and is the same for every entry. `focus_to_thaw_ms` is present on helper wakes whose request carries `requested_at_ms`, and includes the dwell. `dwell` is `input` or `elapsed` on helper wakes and is omitted from the other triggers. `error` is null on success and carries the thaw failure otherwise, with the latency measured through the failed attempt.
+
+The refault sampler is the hidden `rimz agents wake-refault --request` helper. A locked thaw that reads `memory.stat` passes it the `workingset_refault_anon` and `workingset_refault_file` counters as a baseline. It samples at about 1, 10, and 60 seconds after the thaw and records the cumulative deltas from that baseline. `after_ms` is the measured time since the thaw, and a counter that decreases gives a delta of zero. A missing or unreadable scope ends sampling and writes the samples already taken. A failed wake and lock-timeout recovery start no sampler.

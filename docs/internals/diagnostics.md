@@ -20,7 +20,7 @@ Diagnostic logs live in persistent state because an investigation starts after t
 | `focus-repairs.log.jsonl` | account-global `~/.rimz/logs/`, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `audit/binding.log.jsonl` | workspace state dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `hook-feed.log.jsonl` | machine `~/.rimz/logs/` | returned hook-feed errors, including before workspace resolution | `at`, `source`, nullable `event`, full `error` chain; 4 MiB rotation |
-| `audit/hibernate.log.jsonl` | workspace state dir | `wake` latency, reclaimed bytes and thaw errors, `wake_refault` samples, and `wake_lock_timeout` recovery | [hibernate.md](./harness/hibernate.md#wake-and-recovery) |
+| `audit/hibernate.log.jsonl` | workspace state dir | `wake` latency, reclaimed bytes and thaw errors, `wake_refault` samples, and `wake_lock_timeout` recovery | [hibernate.md](./harness/hibernate.md#wake-diagnostics) |
 | `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, evictions, crashes, broker retirements, and unreadable registry rows | [lsp.md](./lsp.md#visibility) |
 | `lanes/topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
