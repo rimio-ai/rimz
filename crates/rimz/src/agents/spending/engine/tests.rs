@@ -28,6 +28,11 @@ fn provider_freshness_expires_at_local_midnight_inside_ttl() {
         refreshed_at_ms: midnight - 1,
         day_cutoff_secs: midnight / 1000 - 86_400,
         timezone: "Asia/Shanghai".into(),
+        chart: crate::agents::spending::ChartSpend {
+            today: super::super::local_day_index(midnight / 1000 - 1, Some("Asia/Shanghai"))
+                .unwrap(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert!(cache.is_fresh_within(midnight - 1, SPENDING_TTL));
@@ -35,6 +40,10 @@ fn provider_freshness_expires_at_local_midnight_inside_ttl() {
     let current = ProviderSpendingCache {
         refreshed_at_ms: midnight,
         day_cutoff_secs: midnight / 1000,
+        chart: crate::agents::spending::ChartSpend {
+            today: cache.chart.today + 1,
+            ..Default::default()
+        },
         ..cache.clone()
     };
     assert!(current.is_fresh_within(midnight, SPENDING_TTL));
@@ -47,6 +56,31 @@ fn provider_freshness_expires_at_local_midnight_inside_ttl() {
         !straddled.is_fresh_within(midnight, SPENDING_TTL),
         "a walk ending after midnight still carries the previous day's windows"
     );
+}
+
+#[test]
+fn provider_freshness_uses_the_published_history_day_across_zones() {
+    let now_ms = "2026-06-01T12:00:00Z"
+        .parse::<Timestamp>()
+        .unwrap()
+        .as_millisecond() as u64;
+    let mut cache = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: now_ms,
+        day_cutoff_secs: super::super::local_day_start_secs(now_ms / 1000, Some("Asia/Shanghai"))
+            .unwrap(),
+        timezone: "UTC".into(),
+        chart: crate::agents::spending::ChartSpend {
+            today: super::super::local_day_index(now_ms / 1000, Some("UTC")).unwrap(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(cache.is_fresh_within(now_ms, SPENDING_TTL));
+    assert!(cache.is_fresh_within(now_ms, SPENDING_STALE_GRACE));
+    cache.chart.today -= 1;
+    assert!(!cache.is_fresh_within(now_ms, SPENDING_TTL));
+    assert!(!cache.is_fresh_within(now_ms, SPENDING_STALE_GRACE));
 }
 
 fn published_workspace_fixture() -> (tempfile::TempDir, RuntimePaths) {
@@ -384,6 +418,11 @@ fn fresh_shared_publish_returns_without_walking() {
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
             day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None).unwrap(),
+            timezone: "UTC".into(),
+            chart: crate::agents::spending::ChartSpend {
+                today: (published_at / 86_400_000) as i64,
+                ..Default::default()
+            },
             spending: spending.clone(),
             ..Default::default()
         },
@@ -423,6 +462,11 @@ fn shared_spending_lock_serves_the_elected_publish_to_a_contender() {
                     refreshed_at_ms: published_at,
                     day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None)
                         .unwrap(),
+                    timezone: "UTC".into(),
+                    chart: crate::agents::spending::ChartSpend {
+                        today: (published_at / 86_400_000) as i64,
+                        ..Default::default()
+                    },
                     spending: spending.clone(),
                     ..Default::default()
                 },
@@ -474,6 +518,11 @@ fn produce_local_serves_published_within_grace() {
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
             day_cutoff_secs: super::super::local_day_start_secs(now_ms / 1000, None).unwrap(),
+            timezone: "UTC".into(),
+            chart: crate::agents::spending::ChartSpend {
+                today: (now_ms / 86_400_000) as i64,
+                ..Default::default()
+            },
             spending: spending.clone(),
             ..Default::default()
         },

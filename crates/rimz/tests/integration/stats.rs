@@ -5,6 +5,42 @@ use serde_json::json;
 
 use crate::common::Env;
 
+#[test]
+fn stats_reads_spend_under_an_unnamed_system_zone() {
+    let env = Env::new();
+    let session = env.home_root.join(".claude/projects/repo/session.jsonl");
+    std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+    std::fs::write(
+        session,
+        serde_json::to_vec(&json!({
+            "timestamp": jiff::Timestamp::now(),
+            "costUSD": 0.25,
+            "requestId": "req-1",
+            "message": {
+                "id": "msg-1",
+                "usage": {"input_tokens": 1200, "output_tokens": 80}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = env
+        .rimz()
+        .env("TZ", "CST-8")
+        .arg("stats")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let spend = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("dollars "))
+        .expect("the report's spending row");
+    assert_eq!(spend.split_whitespace().nth(2), Some("$0.25"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("no IANA name"), "{stderr}");
+}
+
 fn publish_team_effort(env: &Env) {
     use rimz::agents::spending::{
         EffortTally, EffortWindow, ProviderSpendingCache, RoleTally, SpendTally, SpendWindow,
@@ -16,6 +52,10 @@ fn publish_team_effort(env: &Env) {
         timezone: "UTC".into(),
         refreshed_at_ms: now * 1000,
         day_cutoff_secs: now,
+        chart: rimz::agents::spending::ChartSpend {
+            today: (now / 86_400) as i64,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let spend = SpendWindow {

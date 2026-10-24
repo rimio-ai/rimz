@@ -476,6 +476,11 @@ fn concurrent_clients_elect_one_private_socket_owner() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: super::super::ChartSpend {
+                today: (super::super::unix_secs_now() / 86_400) as i64,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );
@@ -627,6 +632,11 @@ fn fresh_publication_bypasses_busy_walker() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: super::super::ChartSpend {
+                today: (super::super::unix_secs_now() / 86_400) as i64,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );

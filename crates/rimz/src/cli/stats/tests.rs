@@ -1088,6 +1088,11 @@ fn one_shot_refreshes_previous_local_day_but_serves_today() {
             Some("Asia/Shanghai"),
         )
         .unwrap(),
+        chart: rimz::agents::spending::ChartSpend {
+            today: rimz::agents::spending::local_day_index(unix_secs_now(), Some("Asia/Shanghai"))
+                .unwrap(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cache.spending.total = tally(100, 99.0, 1);
@@ -1097,7 +1102,7 @@ fn one_shot_refreshes_previous_local_day_but_serves_today() {
     );
     let today = load_stats_from_paths(&runtime, false).unwrap();
     assert_eq!(today.total.year.usd, 99.0);
-    cache.day_cutoff_secs -= 86_400;
+    cache.chart.today -= 1;
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         &cache,
@@ -1132,6 +1137,42 @@ fn one_shot_refreshes_previous_local_day_but_serves_today() {
         refreshed.today_day(refreshed.refreshed_at_ms / 1000),
         refreshed.today_day(unix_secs_now())
     );
+}
+
+#[test]
+fn one_shot_serves_the_published_history_day_across_zones() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    ensure_shared_runtime(&runtime).unwrap();
+    let today = rimz::agents::spending::local_day_index(unix_secs_now(), Some("UTC")).unwrap();
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        refreshed_at_ms: Timestamp::now().as_millisecond() as u64,
+        day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+            today as u64 * 86_400,
+            Some("Asia/Shanghai"),
+        )
+        .unwrap(),
+        chart: rimz::agents::spending::ChartSpend {
+            today,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    cache.spending.total = tally(100, 99.0, 1);
+    assert!(rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &cache,
+    ));
+    let stats = load_today_stats(&runtime).expect("today's history despite another account day");
+    assert_eq!(stats.total.year.usd, 99.0);
+    cache.chart.today -= 1;
+    assert!(rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &cache,
+    ));
+    assert!(load_today_stats(&runtime).is_none());
 }
 
 #[test]
@@ -1761,6 +1802,11 @@ fn stats_serves_published_cache_without_walking() {
             refreshed_at_ms: Timestamp::now().as_millisecond() as u64,
             day_cutoff_secs: rimz::agents::spending::local_day_start_secs(unix_secs_now(), None)
                 .unwrap(),
+            timezone: "UTC".into(),
+            chart: rimz::agents::spending::ChartSpend {
+                today: (unix_secs_now() / 86_400) as i64,
+                ..Default::default()
+            },
             spending,
             days: by_day.clone(),
             models: by_model.clone(),
@@ -2115,7 +2161,6 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -2171,7 +2216,6 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
             Ok(Stats {
                 timezone: "UTC".into(),
                 refreshed_at_ms: 0,
-                day_cutoff_secs: 0,
                 agents: BTreeMap::new(),
                 subagents: BTreeMap::new(),
                 recorded_since_secs: None,
@@ -2244,7 +2288,6 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -2285,7 +2328,6 @@ fn refresh_result_carries_success_error_and_panic() {
         let mut stats = Stats {
             timezone: "UTC".into(),
             refreshed_at_ms: 0,
-            day_cutoff_secs: 0,
             agents: BTreeMap::new(),
             subagents: BTreeMap::new(),
             recorded_since_secs: None,
@@ -2363,7 +2405,6 @@ fn heatmap_cells_render_spaced() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -2438,7 +2479,6 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -2588,7 +2628,6 @@ fn today_dashboard_uses_day_breakdowns_and_year_activity_without_a_trend() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,
@@ -3301,7 +3340,6 @@ fn today_index_uses_the_publications_zone() {
     let stats = Stats {
         timezone: "Asia/Shanghai".into(),
         refreshed_at_ms: 0,
-        day_cutoff_secs: 0,
         agents: BTreeMap::new(),
         subagents: BTreeMap::new(),
         recorded_since_secs: None,

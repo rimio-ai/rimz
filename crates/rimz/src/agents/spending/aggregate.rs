@@ -280,10 +280,10 @@ pub(crate) fn aggregate_counted_rollups(
     };
     let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
     let today = local_day_index(now_secs, Some(&timezone)).unwrap_or((now_secs / 86_400) as i64);
+    chart.today = today;
     let history_day_cutoff = local_day_start_secs(now_secs, Some(&timezone))
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
     let day_boundaries = if history_roles.is_some() {
-        chart.today = today;
         let first = counted.iter().map(|row| row.entry().ts_secs).min();
         let last = counted.iter().map(|row| row.entry().ts_secs).max();
         first

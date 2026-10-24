@@ -137,6 +137,11 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: rimz::agents::spending::ChartSpend {
+                today: (unix_now_ms() / 86_400_000) as i64,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );

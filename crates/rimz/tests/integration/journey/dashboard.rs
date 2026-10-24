@@ -89,6 +89,11 @@ fn provider_dashboard_renders_published_spend_and_session_cost() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: rimz::agents::spending::ChartSpend {
+                today: (unix_now_ms() / 86_400_000) as i64,
+                ..Default::default()
+            },
             spending: spending(),
             ..Default::default()
         },

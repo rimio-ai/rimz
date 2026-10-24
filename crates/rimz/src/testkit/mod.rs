@@ -416,6 +416,11 @@ pub mod fleet {
                 refreshed_at_ms: now_ms,
                 day_cutoff_secs: agents::spending::local_day_start_secs(now_ms / 1000, None)
                     .expect("current timestamp has a local day start"),
+                timezone: "UTC".into(),
+                chart: agents::spending::ChartSpend {
+                    today: (now_ms / 86_400_000) as i64,
+                    ..Default::default()
+                },
                 spending: agents::spending::Spending::default(),
                 ..Default::default()
             },
