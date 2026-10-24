@@ -566,6 +566,65 @@ fn failed_apply_leaves_a_durable_diagnostic() {
     );
 }
 
+fn timing_records(bytes: &[u8]) -> Vec<Value> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|record| record.get("hook_drain_timing").cloned())
+        .collect()
+}
+
+#[test]
+fn timing_is_published_only_after_the_applied_cursor() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let (frame, _) = append_stop(&env);
+    let barrier = store.runtime_paths().sock_dir.join("timing.sock");
+    let listener = UnixListener::bind(&barrier).unwrap();
+    let log = store.paths().hook_drainer_log();
+    let mut child = drain_command(&env)
+        .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
+        .env("RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY", &barrier)
+        .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
+        .stderr(std::fs::File::create(&log).unwrap())
+        .spawn()
+        .unwrap();
+    let mut release = apply_barrier(&store, Some(&mut child), &listener, "apply never paused");
+    assert!(timing_records(&std::fs::read(&log).unwrap()).is_empty());
+    assert_eq!(ingress::read_cursor(store.paths()).unwrap().applied, 0);
+    release.write_all(&[1]).unwrap();
+    assert!(child.wait().unwrap().success());
+    let records = timing_records(&std::fs::read(log).unwrap());
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["ingress"], frame.event_id.as_str());
+    assert_eq!(records[0]["hook_event"], "Stop");
+    assert_eq!(records[0]["applied"], true);
+    assert!(records[0]["claim_to_applied_us"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn timing_marks_a_processor_error_as_unapplied() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mut frame = stop_frame(&env);
+    frame.payload = "{".into();
+    let (frame, _) = append_frame(&env, frame);
+    let output = drain_command(&env)
+        .arg("--once")
+        .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let records = timing_records(&output.stderr);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["ingress"], frame.event_id.as_str());
+    assert_eq!(records[0]["applied"], false);
+}
+
 #[test]
 fn deferred_lifecycle_and_active_time_use_the_ingress_timestamp() {
     let env = Env::new();
@@ -2812,7 +2871,14 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
         crate::common::git::init_repo(&env.project_root);
         env.record(&env.project_root);
         let store = env.store();
-        let mut drainer = drain_command(&env).spawn().unwrap();
+        let log = store.paths().hook_drainer_log();
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let mut drainer = drain_command(&env)
+            .env("RIMZ_TEST_HOOK_DRAIN_TIMING", "1")
+            .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "100")
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .unwrap();
         let _lease = drainer_connection(&store, Some(&mut drainer));
         let mut command = env.hook_command(source);
         command
@@ -2841,8 +2907,20 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
                 .iter()
                 .any(|event| event.ingress.is_some())
         );
-        drainer.kill().unwrap();
-        drainer.wait().unwrap();
+        drop(_lease);
+        assert!(drainer.wait().unwrap().success());
+        let records = timing_records(&std::fs::read(log).unwrap());
+        let ids: std::collections::HashSet<_> = env
+            .read_events()
+            .into_iter()
+            .filter_map(|event| event.ingress)
+            .collect();
+        assert_eq!(records.len(), ids.len(), "{records:?}");
+        for record in records {
+            assert!(ids.iter().any(|id| record["ingress"] == id.as_str()));
+            assert_eq!(record["hook_event"], "UserPromptSubmit");
+            assert_eq!(record["applied"], true);
+        }
     }
 }
 

@@ -876,6 +876,16 @@ fn idle() -> Duration {
     DRAINER_IDLE
 }
 
+#[cfg(feature = "testkit")]
+struct DrainTiming(Value);
+
+#[cfg(feature = "testkit")]
+impl Drop for DrainTiming {
+    fn drop(&mut self) {
+        let _ = writeln!(io::stderr().lock(), "{}", self.0);
+    }
+}
+
 struct CachedReply {
     epoch: EventId,
     value: Option<Value>,
@@ -978,6 +988,17 @@ impl Drainer {
                     )
                     .into());
                 }
+                #[cfg(feature = "testkit")]
+                let mut processor_succeeded = true;
+                #[cfg(feature = "testkit")]
+                let timing_start = {
+                    static ENABLED: OnceLock<bool> = OnceLock::new();
+                    ENABLED
+                        .get_or_init(|| {
+                            std::env::var("RIMZ_TEST_HOOK_DRAIN_TIMING").as_deref() == Ok("1")
+                        })
+                        .then(Instant::now)
+                };
                 {
                     let lock = workspace_lock()?;
                     validate_ownership(store, socket, &expected, identity)?;
@@ -1028,6 +1049,10 @@ impl Drainer {
                 ) {
                     Ok(reply) => reply,
                     Err(error) => {
+                        #[cfg(feature = "testkit")]
+                        {
+                            processor_succeeded = false;
+                        }
                         tracing::warn!(ingress = %frame.event_id, %error, "hook ingress apply failed");
                         self.diag
                             .emit(crate::diag::record::DiagEvent::HookApplyFailed {
@@ -1048,6 +1073,18 @@ impl Drainer {
                 ingress::write_cursor(store.paths(), &cursor, &lock)?;
                 expected = cursor;
                 self.applied = end;
+                #[cfg(feature = "testkit")]
+                let elapsed = timing_start.map(|start| start.elapsed());
+                #[cfg(feature = "testkit")]
+                let _timing = elapsed.map(|elapsed| {
+                    DrainTiming(serde_json::json!({"hook_drain_timing": {
+                        "ingress": frame.event_id,
+                        "hook_event": frame.event,
+                        "claim_to_applied_us": u64::try_from(elapsed.as_micros())
+                            .unwrap_or(u64::MAX),
+                        "applied": processor_succeeded,
+                    }}))
+                });
                 self.replies.insert(
                     frame.event_id,
                     CachedReply {
