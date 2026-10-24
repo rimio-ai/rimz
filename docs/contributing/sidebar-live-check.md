@@ -131,7 +131,7 @@ On each backend, force a focus dispatch to fail without racing a pane removal. P
 
 ## Room host
 
-A room runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). The host is the only painter; `serve` refuses non-terminal stdout or unavailable runtime paths before socket or terminal-mode work. Take the process shape from inside the room, where the session name is on your card:
+A room runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). The host is the only painter; `serve` refuses outside a mux pane, on non-terminal stdout, or with unavailable runtime paths before socket or terminal-mode work. Take the process shape from inside the room, where the session name is on your card:
 
 ```sh
 ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep

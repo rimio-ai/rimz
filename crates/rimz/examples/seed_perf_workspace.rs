@@ -74,10 +74,6 @@ fn main() -> Result<()> {
         "consumer_snapshot_command=env -u RIMZ_TEST_PANE_LIST ./target/release/rimz sidebar snapshot --json --no-produce --workspace-id {workspace_id} --mux zellij --session-name {}",
         rimz::testkit::fleet::SESSION_NAME
     );
-    println!(
-        "serve_command=./target/release/rimz sidebar serve --workspace-id {workspace_id} --mux zellij --session-name {}",
-        rimz::testkit::fleet::SESSION_NAME
-    );
     for (index, (workspace_id, session_name)) in spending_scopes.iter().enumerate() {
         println!(
             "spending_scope_{}_command=./target/release/rimz sidebar snapshot --json --workspace-id {workspace_id} --mux zellij --session-name {session_name}",

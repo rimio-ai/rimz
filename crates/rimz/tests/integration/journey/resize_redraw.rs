@@ -8,9 +8,9 @@
 //!
 //! A grow resize (attach is one: 1x1 -> usable) now defers its paint until the
 //! next fresh pane-frame fold resolves self-close, so the sidebar never paints
-//! at the grown width on its way out (the self-close full-width flash). With no
-//! `ZELLIJ_PANE_ID` set, the placeholder path keeps the resize redraw prompt
-//! within this test's budget.
+//! at the grown width on its way out (the self-close full-width flash). Failed
+//! pane reads leave no observed sibling here, so `held_grow && seen_sibling`
+//! is false and the resize redraw stays within this test's budget.
 //!
 //! This drives the real `rimz sidebar serve` command through a PTY: render into
 //! a 1x1 pane, resize to a usable size, and assert the full frame appears well
@@ -78,6 +78,8 @@ fn sidebar_redraws_at_new_size_on_resize() {
 
     let mut cmd = CommandBuilder::new(&bin);
     cmd.scrub_session_env();
+    cmd.env("ZELLIJ_PANE_ID", "999999");
+    cmd.env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "present");
     cmd.env("RIMZ_SIDEBAR_INSTANCE_ID", instance.as_str());
     cmd.args([
         "sidebar",
