@@ -278,6 +278,7 @@ impl Rig {
             self.views.clone(),
             self.state.views.events.clone(),
             super::super::fetch::Subscribers::default(),
+            std::sync::mpsc::channel().0,
         )
         .record(envelope, self.state.pane.clock.now_ms());
     }

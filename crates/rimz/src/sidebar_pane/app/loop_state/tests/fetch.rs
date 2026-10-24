@@ -1074,60 +1074,6 @@ fn disabled_observer_extracts_no_signature() {
 }
 
 #[test]
-fn store_delta_requests_default_or_panes_changed_freshness() {
-    use crate::agents::LifecycleSignal;
-
-    for (event, expected) in [
-        (store_delta(), FetchRequest::default()),
-        (SidebarEvent::PanesChanged, FetchRequest::fresh_panes()),
-        (
-            SidebarEvent::StoreDelta {
-                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-                agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
-            },
-            FetchRequest::fresh_panes(),
-        ),
-        (
-            SidebarEvent::StoreDelta {
-                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-                agent_signal: Some(LifecycleSignal::Ended.tag().to_owned()),
-            },
-            FetchRequest::fresh_panes(),
-        ),
-    ] {
-        let mut rig = Rig::new();
-
-        rig.event(event.clone());
-
-        let request = rig.requests.try_recv().expect("immediate event fetch");
-        assert_eq!(
-            request.is_fresh_panes(),
-            expected.is_fresh_panes(),
-            "{event:?}",
-        );
-        assert!(rig.next_request().is_none(), "one fetch for {event:?}");
-    }
-}
-
-#[test]
-fn lifecycle_store_delta_preserves_fresh_pane_verification() {
-    for signal in [
-        crate::agents::LifecycleSignal::Registered.tag(),
-        crate::agents::LifecycleSignal::Ended.tag(),
-    ] {
-        let mut rig = Rig::new();
-
-        rig.event(SidebarEvent::StoreDelta {
-            event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-            agent_signal: Some(signal.to_owned()),
-        });
-
-        let request = rig.next_request().expect("immediate lifecycle fetch");
-        assert!(request.is_fresh_panes(), "signal: {signal}");
-    }
-}
-
-#[test]
 fn only_watched_metrics_and_presence_publications_fold_immediately() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
@@ -1169,7 +1115,7 @@ fn only_watched_metrics_and_presence_publications_fold_immediately() {
 }
 
 #[test]
-fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
+fn room_events_send_no_pane_request() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
     for watched in [true, false] {
@@ -1181,7 +1127,7 @@ fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
 
         rig.event(store_delta());
 
-        assert!(rig.next_request().is_some());
+        assert!(rig.next_request().is_none());
     }
 }
 
