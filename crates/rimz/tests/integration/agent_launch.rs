@@ -3362,6 +3362,21 @@ fn explain_prints_the_plan_without_side_effects() {
             .windows(2)
             .any(|pair| { pair[0] == "--append-system-prompt" && pair[1] == reminder })
     );
+    let leader: serde_json::Value = serde_json::from_slice(
+        &env.rimz()
+            .args(["agents", "explain", "leader", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("leader explain JSON");
+    let leader_reminder = leader["prompt"]["reminder"].as_str().unwrap();
+    assert!(
+        leader_reminder.contains("- `scout`: Inspect the code"),
+        "{leader_reminder}"
+    );
+    assert!(leader_reminder.contains("### Skills"), "{leader_reminder}");
     assert_eq!(report["env"]["RIMZ_AGENT_PROFILE"], "worker");
     assert_eq!(report["env"]["RIMZ_AGENT_ID"], "");
     assert!(report["env"].get("RIMZ_AGENT_NAME").is_none());
