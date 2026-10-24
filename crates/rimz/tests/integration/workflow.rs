@@ -480,6 +480,33 @@ fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
 }
 
 #[test]
+fn signal_wake_survives_the_emitters_process_group_exiting() {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    let (env, dir) = fixture(&format!("{HEADER}{WAIT}wake=['review.ready']\n"), PENDING);
+    let id = start(&env);
+    until(&env, &id, |v| v["record"]["wait"].is_object());
+    // The woken advance is still evaluating when the emitter's group is killed.
+    let script = format!("sleep 1\n{}", evaluation_script("done"));
+    fs::write(dir.join("checks/pr.sh"), script).unwrap();
+    let emitter = env
+        .rimz()
+        .args(["events", "emit", "review.ready"])
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let emitter_group = nix::unistd::Pid::from_raw(i32::try_from(emitter.id()).unwrap());
+    success(emitter.wait_with_output().unwrap());
+    let killed = nix::sys::signal::killpg(emitter_group, nix::sys::signal::Signal::SIGTERM);
+    assert!(killed.is_ok() || killed == Err(nix::errno::Errno::ESRCH));
+    let value = settled(&env, &id, "done");
+    assert_eq!(events(&value, "wake")[0]["signal"], "review.ready");
+}
+
+#[test]
 fn run_dot_resolves_the_current_definition_directory() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
     for name in [".", "./"] {
