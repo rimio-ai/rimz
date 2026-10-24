@@ -766,7 +766,7 @@ The file lives at `/etc/claude-code/managed-settings.json` on Linux and WSL, `/L
 
 Identity fields depend on the login. A `claude.ai` login includes `email`, `orgId`, `orgName`, and `subscriptionType`, each nullable. A stored Console login can include the three identity fields. A gateway login adds only `email`. Ordinary environment API-key logins omit those identity fields and `subscriptionType`.
 
-In the [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310), auth status prints saved `oauthAccount.emailAddress` and `organizationUuid` as `email` and `orgId`. Sign-in populates those from the profile's `account.email` and `organization.uuid`.
+In the [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310), auth status prints saved `oauthAccount.emailAddress` and `organizationUuid` as `email` and `orgId`. Sign-in populates those from the profile's `account.email` and `organization.uuid`. The saved `oauthAccount` in `.claude.json` also holds `organizationType`, `organizationRateLimitTier`, and `profileFetchedAt`, Claude Code's own copy of the profile.
 
 `projectsDirectory` can be null when project or local `env.CLAUDE_CONFIG_DIR` disagrees with the directory resolved by the process.
 
