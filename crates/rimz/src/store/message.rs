@@ -88,9 +88,9 @@ pub enum HarnessNotice {
     Stage,
     /// The leader of an agent-launched team, reported when its board reaches Done.
     TeamReport,
-    /// A launched child stopped on a provider limit; told to its parent once per park.
+    /// A launched child parked on a provider limit; queued for its parent once per park.
     SubagentPaused,
-    /// A launched child silent past the stall window; told to its parent once per run.
+    /// A launched child silent past the stall window; queued for its parent once per run.
     SubagentStalled,
     /// An agent-sent message ended without delivery.
     MessageUndelivered,

@@ -16,6 +16,7 @@ use crate::store::message::{
     MessageStatus, QUEUED_NOTICE_BUSY_DELAY, QUEUED_NOTICE_BUSY_ENV, QUEUED_NOTICE_IDLE_DELAY,
     QUEUED_NOTICE_IDLE_ENV, WhenCondition, env_ms, older_ready_blocker, queue_head, sender_notice,
 };
+use crate::store::run::RunStoreErr;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::store::writer::BlockerUpdate;
 use crate::workspace::ResolvedWorkspace;
@@ -330,11 +331,15 @@ fn attempt_delivery(
         .iter()
         .find(|message| &message.message_id == message_id)
     {
-        match cancel_joined_subagent_report(workspace, store, message) {
+        match cancel_moot_message(workspace, store, message) {
             Ok(false) => {}
             Ok(true) => return Ok(DeliveryReport::Stopped),
             Err(error) => {
-                tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
+                tracing::warn!(
+                    %message_id,
+                    %error,
+                    "deferring message: cannot check or cancel obsolete notice"
+                );
                 return Ok(DeliveryReport::Stopped);
             }
         }
@@ -360,33 +365,47 @@ fn attempt_delivery(
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
-    match cancel_joined_subagent_report(workspace, store, &claimed[0]) {
-        Ok(false) => {}
-        Ok(true) => return Ok(DeliveryReport::Stopped),
-        Err(error) => {
-            tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
-            store.release_message_claims(
-                &claimed,
-                "deferred: cannot check or settle joined runs",
-                &workspace.session_name,
-            )?;
-            return Ok(DeliveryReport::Stopped);
+    let mut send_messages = Vec::with_capacity(claimed.len());
+    for message in &claimed {
+        match cancel_moot_message(workspace, store, message) {
+            Ok(false) => send_messages.push(
+                message
+                    .clone()
+                    .with_pane_id(candidate.target.pane_id.clone()),
+            ),
+            Ok(true) => {}
+            Err(error) => {
+                tracing::warn!(
+                    message_id = %message.message_id,
+                    %error,
+                    "deferring message: cannot check or cancel obsolete notice"
+                );
+                let reason = if message.about_run.is_some() {
+                    "deferred: cannot cancel ended run notice"
+                } else {
+                    "deferred: cannot check or settle joined runs"
+                };
+                store.release_message_claims(&claimed, reason, &workspace.session_name)?;
+                return Ok(DeliveryReport::Stopped);
+            }
         }
     }
+    let Some(first) = send_messages.first() else {
+        return Ok(DeliveryReport::Stopped);
+    };
     // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend::new(
-        claimed[0].force
+        first.force
             || matches!(
                 policy,
                 DeliveryPolicy::Steer { force: true } | DeliveryPolicy::Interrupt { force: true }
             ),
         policy.kind(),
     );
-    let send_messages: Vec<MessageRecord> = claimed
-        .iter()
-        .cloned()
-        .map(|message| message.with_pane_id(candidate.target.pane_id.clone()))
-        .collect();
+    let batch_id = (send_messages.len() > 1).then(|| first.message_id.clone());
+    for message in &mut send_messages {
+        message.batch_id = batch_id.clone();
+    }
     let outcome = execute_attempt(
         Attempt {
             workspace,
@@ -405,23 +424,41 @@ fn attempt_delivery(
     })
 }
 
-fn cancel_joined_subagent_report(
+fn cancel_moot_message(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message: &MessageRecord,
 ) -> crate::store::Result<bool> {
-    if !matches!(
+    let reason = if matches!(
         &message.sender,
         MessageSender::Harness { notice } if notice.is_fleet_digest()
-    ) || !crate::harness::run::report::digest_fully_joined(store.paths(), &message.message_id)?
-    {
-        return Ok(false);
-    }
-    store.cancel_message(
+    ) && crate::harness::run::report::digest_fully_joined(
+        store.paths(),
         &message.message_id,
-        &workspace.session_name,
-        "joined before delivery",
-    )?;
+    )? {
+        "joined before delivery".to_owned()
+    } else {
+        let Some(run_id) = &message.about_run else {
+            return Ok(false);
+        };
+        match crate::harness::run::load(store.paths(), run_id) {
+            Ok(run) if run.status.is_terminal() => {
+                format!("child run {} before delivery", run.status.as_str())
+            }
+            Err(RunStoreErr::NotFound(_)) => "child run gone before delivery".to_owned(),
+            Ok(_) => return Ok(false),
+            Err(error) => {
+                tracing::warn!(
+                    message_id = %message.message_id,
+                    %run_id,
+                    %error,
+                    "delivering notice: cannot read linked run"
+                );
+                return Ok(false);
+            }
+        }
+    };
+    store.cancel_message(&message.message_id, &workspace.session_name, &reason)?;
     Ok(true)
 }
 

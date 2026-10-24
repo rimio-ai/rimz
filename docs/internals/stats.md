@@ -203,7 +203,7 @@ The rollup counts only assists that took effect. In the held dashboard and in `-
 
 | Assist | Takes effect when |
 | --- | --- |
-| stall notice | it has no error, since an undelivered notice waits in the parent's queue |
+| stall notice | it has no error once queued for the parent, including a notice later withdrawn because its child run ended before delivery |
 | auto-continue, cache keepalive, idle compaction, flip compaction | it was delivered |
 | idle stop | the agent's pane closed, even with a cleanup error |
 | hibernation | it froze, or a deepening step reclaimed bytes |

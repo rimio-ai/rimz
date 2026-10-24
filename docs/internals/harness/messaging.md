@@ -54,6 +54,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `automated` | Background orchestration traffic. Never earns a dollar-budget waiver, and makes a queued command perishable |
 | `reply_wait` | A CLI is blocked on this record's reply ([Reply waits](#reply-waits)) |
 | `in_reply_to` | The messages that opened the sender's authoring turn. Empty starts a new conversation ([transcript.md § Causality](./transcript.md#causality)) |
+| `about_run` | Optional run id. Delivery withdraws the record when that run is terminal or gone; omitted when absent and preserved by requeue |
 | `body` | `Prompt` (pasted) or `Command` (typed, such as `/compact`) |
 | `text` | The content |
 | `enter` | Submit with Enter after the write |
@@ -160,7 +161,7 @@ The seven terminal states are final. A terminal transition removes the record fr
 | The address resolved to no agent, after the durable fallback | `Errored` |
 | A send failure with no retry path: a live pane target with no durable card, a failed compact-first command write, or a fresh steer to an agent waiting on input (a self wait's wake stays `Queued` instead) | `Errored` |
 | A queued compaction command would follow an unprompted compaction ([the repeat guards](#the-repeat-guards)) | `Errored` |
-| `message cancel`, `message clear`, or the [join guard](#the-subagent-digest-join-guard) | `Canceled` |
+| `message cancel`, `message clear`, the [join guard](#the-subagent-digest-join-guard), or the [run-link guard](#the-run-linked-notice-guard) | `Canceled` |
 | A retryable failure with `attempts` at its cap | `Abandoned` |
 | The receiver session ended, a watched `when` session ended, or the channel was torn down | `Archived` |
 
@@ -351,15 +352,27 @@ A fleet digest (`SUBAGENT_REPORT` or `AGENT_REPORT`) points a launcher at the re
 
 The producer cancels first, as eager cleanup. An attended inline `rimz subagents wait` stamps `joined_at` on the answer it prints, and `rimz subagents stop` stamps every answer of the selected run. Both cancel each digest whose every listed answer is joined, and the composer rechecks after queueing ([subagents.md § Composing the digest](./subagents.md#composing-the-digest)). Any of these cancels can fail after the stamp and before the queue changes, so delivery cannot rely on them.
 
-Delivery is the guarantee. [`attempt_delivery`](../../../crates/rimz/src/message/deliver.rs) calls `cancel_joined_subagent_report` before it claims, and again after a successful claim and before sending. For a record whose sender is `Harness { notice: SubagentReport }`, each call runs `harness::run::report::digest_fully_joined` over current and earlier answers whose `report_message_id` is this digest. Reopening a child keeps that link on its unjoined earlier answer.
+Delivery is the guarantee. [`attempt_delivery`](../../../crates/rimz/src/message/deliver.rs) calls `cancel_moot_message` before candidacy, and again on each claimed member before sending. For a `Harness` fleet digest, each call runs `harness::run::report::digest_fully_joined` over current and earlier answers whose `report_message_id` is this digest. Reopening a child keeps that link on its unjoined earlier answer.
 
 > **A digest with at least one linked answer, every listed answer joined, never reaches the pane.**
 
-When either scan finds that, the guard cancels the digest with reason `joined before delivery` and skips the write. It skips the write even when producer cleanup already removed the record and the cancel finds nothing to cancel. A digest with some rows unjoined, or with no linked rows, delivers its full text, so a genuinely unread result still reaches the parent. Other harness notices take ordinary delivery.
+When either scan finds that, the guard cancels the digest with reason `joined before delivery` and skips the write. It skips the write even when producer cleanup already removed the record and the cancel finds nothing to cancel. A digest with some rows unjoined, or with no linked rows, delivers its full text, so a genuinely unread result still reaches the parent. Other harness notices take ordinary delivery, subject to the [run-link guard](#the-run-linked-notice-guard).
 
 A guard that cannot answer never sends. When the run scan or the cancel fails, the helper warns with the message id. Before the claim it stops. After the claim it calls `release_message_claims` to return the digest to `Queued` without an attempt penalty, and stops. That queue commit refreshes the wake stamp. An error from the release propagates, but an unreadable run file does not abort the sweep. The queued digest keeps its FIFO head position, like any head that cannot deliver.
 
 One race remains. A join after the post-claim scan can still race the send, because the store's workspace lock does not span pane I/O (the per-pane write lock does, and it serializes writers, not store transitions). The join-side cancel accepts a `Queued` or `Claimed` record and leaves a `Sent` one for confirmation, since a cancel cannot retract a paste. A cancel that lands while the paste is being written stands: the sender's `Sent` mark finds no live record, warns with the message id, and the record stays `Canceled`. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
+
+### The run-linked notice guard
+
+The pause and stall helpers set `MessageRecord.about_run` to the child run they claimed before queueing their notices. `cancel_moot_message` checks any record carrying that link, independently of its sender or notice kind. The run-link check adds no run read for an unlinked record; digest scans remain unchanged.
+
+Before candidacy, the head's linked run is read even while the parent's turn-boundary gate is closed. After the claim, every claimed member passes the same check. A terminal run cancels its record through `Store::cancel_message` with reason `child run <status> before delivery`, using `RunStatus::as_str`; a missing run cancels it with `child run gone before delivery`. No pane write follows, even if the cancel finds the record already closed. `rimz message show` keeps the reason in its timeline. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
+
+A nonterminal run leaves the record deliverable. Any run-read error other than `RunStoreErr::NotFound` warns with the message and run ids and also leaves it deliverable, without releasing its claim. Unlike a digest, an advisory notice must not hold the parent's FIFO lane on an unreadable run file. A failed cancellation still defers the attempt.
+
+Linked notices remain batchable. Moot members are canceled, and the survivors form the paste: two or more share a `batch_id` naming the first survivor, while a lone survivor has none. If none survive, delivery stops without a pane write.
+
+The link names a run, not a park episode. A child that resumes while its run stays open can still produce a notice, and an ended run reopened by a follow-up before the check reads open again. Neither case withdraws the old notice. A transition after the final check can still race external pane I/O, as with the digest guard above; a `Sent` notice is never retracted. An older binary can also drop the link on a queue rewrite ([mixed binaries](#mixed-binaries)).
 
 ### Batching
 
@@ -372,7 +385,7 @@ When a queued head delivers, the helper extends the claim through the contiguous
 
 The first record that fails a rule ends the batch. `Resume` control messages never batch.
 
-A fleet digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message, and a batch member joins a claim without passing the [join guard](#the-subagent-digest-join-guard). Other harness notices batch normally, `TEAM_REPORT` included.
+A fleet digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message. Other harness notices batch normally, `TEAM_REPORT` and run-linked pause/stall notices included. Every claimed member passes the [retirement guards](#the-run-linked-notice-guard) before the paste.
 
 The batch lands as one paste and one submit. Attributed members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction.
 
@@ -500,8 +513,8 @@ Content:
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
-| `SUBAGENT_PAUSED` | A launched child parked on a provider limit, sent to its parent once per park ([backstops](./subagents.md#backstops)) | `@rimz` |
-| `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, sent to its parent once per run ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `SUBAGENT_PAUSED` | A launched child parked on a provider limit, queued for its parent once per park and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
+| `SUBAGENT_STALLED` | A launched child silent mid-turn or not yet started past the same stall window, queued for its parent once per run and withdrawn if its run ends before delivery ([backstops](./subagents.md#backstops)) | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message stays queued past its receiver-class delay, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A deadline-ladder rung steered to the supervised child | `@rimz` |
@@ -797,10 +810,11 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ### Mixed binaries
 
-A room can be shared by binaries of different versions, and three record changes have a compatibility edge:
+A room can be shared by binaries of different versions, and four record changes have a compatibility edge:
 
 - `Expired` is a status an older binary cannot decode. Once an expired record is in `audit/messages/`, older binaries fail the history reads behind `message list`, `message show`, `message requeue`, and `send_compact`'s settled lookup. The terminal commit removes the record from the live queue, so older queue transactions never meet the status. Event-log readers keep unknown methods through their catch-all.
 - `queued_notice_at` is dropped by an older binary that rewrites the queue, so a later sweep by a newer binary can send a second still-queued notice. No status or event method marks this.
+- `about_run` is dropped by an older binary that rewrites the queue, so a linked notice can then deliver even after its child run has ended. Records written without a link retain their existing JSON shape.
 - Harness notice strings a binary does not know survive its queue rewrites as `HarnessNotice::Other`.
 
 ## The inbox verbs
@@ -811,7 +825,7 @@ Flags and rendering are in [cli/message.md](../../reference/cli/message.md). Und
 - `message edit` is the single compare-and-swap path for a queued record. It accepts only `Queued`, refuses `Claimed` as in flight, reports terminal records from history, applies the delivery changes, clears `retry_after` so the next sweep sees them, and appends `message.edited` naming the changed fields. Receiver, channel, card, sender, and pane pin are not editable: retargeting is cancel plus send.
 - `message steer` pushes one queued record through now ([The delivery helper](#the-delivery-helper)).
 - `message interrupt <id> [--force]` pushes one queued record through the paste-then-key path. Claimed and terminal records are refused as for steer.
-- `message requeue` copies a terminal history record into a fresh `Queued` record with a new id. It keeps text, receiver, channel, sender, body, delivery settings, and `in_reply_to`, and clears condition stamps. A terminal row known only from events cannot be requeued, because its text was never stored there.
+- `message requeue` copies a terminal history record into a fresh `Queued` record with a new id. It keeps text, receiver, channel, sender, body, delivery settings, `in_reply_to`, and `about_run`, and clears condition stamps. A run-linked notice is canceled again if its run is still ended. A terminal row known only from events cannot be requeued, because its text was never stored there.
 - `message cancel` settles named open records (`Queued` or `Claimed`). A `Sent` record is past canceling, since its text is in the pane. `message clear <target>` cancels every open record for one card, and a targetless `message clear` cancels the scoped lane. Both include system records hidden from the inbox, and `clear` prints the ids it canceled.
 
 Two hidden helpers do the pipeline's background work, each spawned detached: `message deliver --message-id <id>` and `message sweep --workspace-id <id>`. The sweep opens the recorded room by id without recording it again. The id wins over `--root`, and a missing workspace record is an error. Without an id, it resolves the participant room and opens only an existing store. No room means ``no room at <project_root>: run `rimz start` there, or pass --root <room>; nothing to sweep``, a nonzero exit, and no state created.
