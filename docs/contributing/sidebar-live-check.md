@@ -85,6 +85,8 @@ Run Look for one sidebar, then its Capture twice across a displayed clock-unit b
 
 Flip back to `Review` before checks 3 and 4.
 
+Flip to `Ship` for a fresh clock under a minute.
+
 ### 3. Client views on each tab
 
 For every Sidebar block, run its Look, then its Capture. Repeat the Capture while the frame is still the pre-Look one: a capture taken a few tens of milliseconds after Look can still show `Build`. Each tab must show `Review` within 5 s of Look.
