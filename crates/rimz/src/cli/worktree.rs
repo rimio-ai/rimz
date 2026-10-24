@@ -240,7 +240,7 @@ fn new_worktree(
             "channel recreated",
             &workspace.session_name,
         );
-        super::emit_worktree_created(&store, workspace, &created.marker);
+        rimz::launcher::checkout::emit_worktree_created(&store, workspace, &created.marker);
         archival.context("archiving messages for recreated worktree channel")?;
     }
     if let Some(stale) = &created.stale_base {

@@ -36,6 +36,7 @@ pub mod forge;
 pub mod harness;
 pub mod ids;
 pub mod lane;
+pub mod launcher;
 pub mod lsp;
 pub mod message;
 pub mod mux;
