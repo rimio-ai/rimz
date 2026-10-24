@@ -295,9 +295,8 @@ pub(super) fn handle_wakeup(
         }
         Wakeup::Scroll { down } => handle_scroll(down, view, ui),
         Wakeup::Resize => InputOutcome::redraw(),
-        // The serve loop intercepts these before dispatching here: a tick, a
-        // typed sidebar event is a re-fetch trigger, worker completions are
-        // folded, and raw presses are resolved against the current UI mode.
+        // The serve loop intercepts ticks, room events and worker completions;
+        // raw presses resolve against the current UI mode.
         Wakeup::Tick
         | Wakeup::Event(_)
         | Wakeup::Press { .. }
@@ -812,9 +811,8 @@ impl LoopState {
                 Ok(())
             }
             // A recv timeout: the active grid reached a frame boundary, or the
-            // idle backstop interval elapsed. It carries no state of its own —
-            // the frame phase below advances the spin and paints, and the
-            // backstop poll runs there too.
+            // pane's idle tick elapsed. Maintenance checks view deadlines, and
+            // the frame phase advances animation and paints.
             Wakeup::Tick => Ok(()),
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
@@ -1872,9 +1870,8 @@ impl LoopState {
 
         // Self-close watchdog: if no resize or presence event fired, ask the
         // normal snapshot path to refresh so the snapshot's own-view count can
-        // close a lone sidebar. Once a zero-sibling verdict is pending, force a
-        // new fold so a prior cycle cannot absorb this renderer-local change
-        // before the confirm timer can close it.
+        // close a lone sidebar. While confirming zero siblings, require fresh
+        // topology before the confirm timer can close it.
         if self
             .pane
             .clock
