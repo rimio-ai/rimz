@@ -37,7 +37,7 @@ Five code paths construct a notification, and each sets its `NotificationKind`. 
 | `waiting`, `failed`, `paused`, `success`, `coalesced` | The host, over newly opened unread episodes ([the host](#the-host)) | Handlers, then `SidebarEvent::Notify` to every renderer for OSC and bell |
 | `reminder` | The host, over the room's unread scope ([unread reminders](#unread-reminders)) | Handlers once, then `SidebarEvent::Notify` to every renderer |
 | `link_lost`, `link_restored` | The local `rimz remote connect` supervisor ([remote link alerts](#remote-link-alerts)) | OSC and BEL on the supervisor's stderr, and handlers |
-| `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`cli/loop_cmd/run.rs::notify_loop_disabled`) | Handlers, then a broadcast `Notify` event with no panes |
+| `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`crates/rimz/src/cli/loop_cmd/run.rs::notify_loop_disabled`) | Handlers, then a broadcast `Notify` event with no panes |
 | any but the two link kinds | `rimz sidebar notify-test <target>`, a hidden verb in `cli/sidebar.rs` | Handlers unless `--no-command`, then a broadcast `Notify` event for the target rows' panes |
 
 Only the agent episode path applies triggers, debounce, and coalescing. Agent notifications and reminders both honour focus suppression, and the host writes a `notification_emitted` trace record for each one it delivers. The CLI emitters write no such record.
@@ -46,7 +46,7 @@ Only the agent episode path applies triggers, debounce, and coalescing. Agent no
 
 ## The host
 
-The room host's fetch worker decides agent notifications once for all its panes ([state.md → The cycle](./state.md#the-cycle)). It evaluates on every final fold, before publication, and delivers after publication.
+The room host's fetch worker decides agent notifications once for all its panes ([state.md → The cycle](./state.md#the-cycle)). It evaluates on every final fold, before publication, and delivers after publication. Every cycle ends in a final fold, and in a quiet room the worker's idle backstop supplies the cycles, one per data tick (1 s by default, [state.md → Requests](./state.md#requests)). A coalesce flush or a reminder that comes due between folds therefore fires on the next one, at most one data tick plus that cycle's fold time late.
 
 `evaluate_notifications` first calls `sidebar::unread::reconcile_snapshot`, which loads `unread.json` and the room read marks. A snapshot without a produced pane frame neither opens nor prunes, since a missing frame says nothing about which rows left the room. On a framed snapshot, reconcile does three things:
 
