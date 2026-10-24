@@ -191,6 +191,10 @@ fn hint_edit(
         index += 1;
         tail = &tail[start + end..];
     }
+    if let Some(rest) = tail.strip_prefix("-)") {
+        replacement.push_str(&format!("-{})", values[1]));
+        tail = rest;
+    }
     replacement.push_str(tail);
     if replacement == hint {
         return Ok(None);

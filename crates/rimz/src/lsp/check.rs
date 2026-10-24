@@ -668,7 +668,11 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<(Hint, usize)> {
     let mut form = HintForm::Single;
     if let Some(rest) = tail.strip_prefix('-') {
         form = HintForm::Range;
-        let (value, end) = number(rest)?;
+        let (value, end) = if parenthesized && rest.starts_with(')') {
+            (0, 0)
+        } else {
+            number(rest)?
+        };
         last = value;
         tail = &rest[end..];
     } else if let Some(rest) = tail.strip_prefix(':') {

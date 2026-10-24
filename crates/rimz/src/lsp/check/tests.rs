@@ -716,6 +716,68 @@ fn fix_preserves_hint_forms_and_every_other_byte() {
 }
 
 #[test]
+fn open_ended_range_hints_are_reported_and_replaced_in_place() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for old in [1, 15] {
+        for (before, after) in [
+            (format!("({old}-)"), "(11-16)"),
+            (format!("(~{old}-)"), "(~11-16)"),
+        ] {
+            for (source, refreshed) in [
+                (
+                    format!("é `a.rs::Type::method {before}` tail\r\n"),
+                    format!("é `a.rs::Type::method {after}` tail\r\n"),
+                ),
+                (
+                    format!("é `a.rs::Type::method` {before} tail\n"),
+                    format!("é `a.rs::Type::method` {after} tail\n"),
+                ),
+                (
+                    format!("é `` a.rs::Type::method {before} `` tail\n"),
+                    format!("é `` a.rs::Type::method {after} `` tail\n"),
+                ),
+                (
+                    format!("é `a.rs::Type::method(){before}` tail\n"),
+                    format!("é `a.rs::Type::method(){after}` tail\n"),
+                ),
+            ] {
+                let checked =
+                    check_symbol(extract(&source).remove(0), "a.rs".into(), &fixed_symbols());
+                for hints in [false, true] {
+                    let (updated, fixes, _) = rewrite_with(&source, false, hints);
+                    let (again, repeated, _) = rewrite_with(&updated, false, hints);
+                    actual.push((checked.status, updated, fixes.len(), again, repeated.len()));
+                    expected.push((
+                        Status::LineOutside,
+                        refreshed.clone(),
+                        1,
+                        refreshed.clone(),
+                        0,
+                    ));
+                }
+            }
+        }
+    }
+    let malformed = ["(-)", "(12-", "(12--14)"]
+        .into_iter()
+        .flat_map(|hint| {
+            [
+                format!("`a.rs::Type::method {hint}`"),
+                format!("`a.rs::Type::method` {hint}"),
+            ]
+        })
+        .map(|source| {
+            (
+                extract(&source)[0].hint.is_none(),
+                rewrite_hints(&source, false) == source,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!((actual, malformed), (expected, vec![(true, true); 6]));
+}
+
+#[test]
 fn fix_keeps_inside_hints_and_refreshes_other_forms() {
     for (name, before, after, inside) in [
         ("Type::method", "~15", "~15", true),
