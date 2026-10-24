@@ -1306,6 +1306,7 @@ fn classify_diagnostic(
         | DiagEvent::RecoveryChildEnded { .. }
         | DiagEvent::PaneWinsizeRepaired { .. }
         | DiagEvent::SidebarViewRepaired { .. }
+        | DiagEvent::ScopedBindRestored { .. }
         | DiagEvent::HealthAlert {
             recovered_after_ms: Some(_),
             ..
@@ -1377,6 +1378,7 @@ fn classify_diagnostic(
         | DiagEvent::SubagentZoneLookupFailed { .. }
         | DiagEvent::SubagentPaneBindTimeout { .. }
         | DiagEvent::ProviderStartupExit { .. }
+        | DiagEvent::ScopedBindRestoreFailed { .. }
         | DiagEvent::PaneCacheDivergence { .. }
         | DiagEvent::PresenceRosterStale { .. }
         | DiagEvent::SupervisorConvergence { .. }

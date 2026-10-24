@@ -671,7 +671,8 @@ path = "crates/rimz/src/diag"
 # ViewFitTrigger is the shared sweep/jump geometry-repair diagnostic vocabulary (+1).
 # SubagentPaneBindRead and SubagentPaneBindRow carry the bind wait's final observation (+2).
 # SubagentPaneBindCaller keeps the diagnostic's launch/resume vocabulary typed (+1).
-surface-budget = 109
+# DiagEvent::scoped_bind_restore shares batch outcome conversion across executors (+1).
+surface-budget = 110
 
 [[verdict]]
 kind = "item"
@@ -2498,7 +2499,8 @@ allowed-dependencies = [
 # Headless loop checks pin workspace identity without inheriting an agent or channel.
 # agent_temp_owner shares the launch ownership rule with the caller-supplied GC resolver (+1).
 # AgentTempOwners and its constructor/lookup share indexed batch ownership (+3).
-surface-budget = 17
+# LaunchPlan::state lends the headless executor its compiled room identity (+1).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -8474,7 +8476,7 @@ reason = "Loop and workflow judges share launch-plan compilation and materializa
 [[verdict]]
 kind = "item"
 key = "harness::headless::ProcessErr"
-reason = "Bounded headless execution preserves directory and version refusals versus I/O failure."
+reason = "Bounded headless execution preserves directory, version and scoped-guard refusals versus I/O failure."
 
 [[verdict]]
 kind = "item"

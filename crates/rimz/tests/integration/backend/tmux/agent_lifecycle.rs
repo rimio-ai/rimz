@@ -11,6 +11,19 @@ use rimz::testkit::sandbox::{SandboxSpec, sandbox_processes};
 
 #[test]
 fn parked_wrapper_holds_under_8_mib() {
+    parked_wrapper_memory_budget(rimz::config::Isolation::Host);
+}
+
+#[test]
+fn scoped_parked_wrapper_holds_under_8_mib() {
+    if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        crate::common::skip(&format!("bubblewrap unusable: {error}"));
+        return;
+    }
+    parked_wrapper_memory_budget(rimz::config::Isolation::Scoped);
+}
+
+fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
     if !cfg!(target_os = "linux") {
         crate::common::skip("Linux smaps_rollup not available");
         return;
@@ -66,7 +79,7 @@ fn parked_wrapper_holds_under_8_mib() {
         .expect("budget request")
         .request()
         .clone();
-        request.isolation_default = Some(rimz::config::Isolation::Host);
+        request.isolation_default = Some(isolation);
         request.close_pane_on_exit = false;
         if subagent {
             let store = env.store();
@@ -227,16 +240,18 @@ fn parked_wrapper_holds_under_8_mib() {
             );
             thread::sleep(Duration::from_millis(25));
         };
-        if subagent {
+        if subagent || isolation.is_scoped() {
             let argv = rimz::proc::argv(wrapper).expect("parked argv");
             let state_index = argv.iter().position(|arg| arg == "--supervise").unwrap() + 1;
             let state: serde_json::Value = serde_json::from_reader(
                 std::fs::File::open(&argv[state_index]).expect("park state"),
             )
             .expect("park document");
-            assert!(
-                !state["watchdog"].is_null(),
-                "subagent must seed a watchdog: {state}"
+            assert_eq!(!state["watchdog"].is_null(), subagent, "{state}");
+            assert_eq!(
+                !state["bind_guard"].is_null(),
+                isolation.is_scoped(),
+                "scoped park must inherit its guard: {state}"
             );
         }
         thread::sleep(Duration::from_secs(5));

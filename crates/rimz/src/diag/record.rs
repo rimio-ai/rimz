@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -650,6 +651,19 @@ pub enum DiagEvent {
         startup_ms: u64,
         relaunches: u8,
     },
+    ScopedBindRestored {
+        agent_kind: AgentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        paths: Vec<PathBuf>,
+    },
+    ScopedBindRestoreFailed {
+        agent_kind: AgentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        paths: Vec<PathBuf>,
+        error: String,
+    },
     RecoverySeatRefilled {
         agent_kind: AgentKind,
         agent_id: AgentSessionId,
@@ -702,6 +716,27 @@ pub enum DiagEvent {
 }
 
 impl DiagEvent {
+    pub fn scoped_bind_restore(
+        agent_kind: AgentKind,
+        agent_name: Option<String>,
+        paths: Vec<PathBuf>,
+        result: Result<(), String>,
+    ) -> Self {
+        match result {
+            Ok(()) => Self::ScopedBindRestored {
+                agent_kind,
+                agent_name,
+                paths,
+            },
+            Err(error) => Self::ScopedBindRestoreFailed {
+                agent_kind,
+                agent_name,
+                paths,
+                error,
+            },
+        }
+    }
+
     pub fn severity(&self) -> DiagSeverity {
         match self {
             Self::ModelCatalogRefreshFailed { rung, .. } => match rung {
@@ -757,7 +792,9 @@ impl DiagEvent {
                 ..
             } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
-            Self::RendererPanic { .. } => DiagSeverity::Error,
+            Self::RendererPanic { .. } | Self::ScopedBindRestoreFailed { .. } => {
+                DiagSeverity::Error
+            }
             Self::GhostSessionBind { .. } => DiagSeverity::Error,
             Self::RendererExit {
                 cause: RendererExitCause::DegradedGaveUp,
@@ -788,6 +825,7 @@ impl DiagEvent {
             | Self::RecoveryChildEnded { .. }
             | Self::PaneWinsizeRepaired { .. }
             | Self::SidebarViewRepaired { .. }
+            | Self::ScopedBindRestored { .. }
             | Self::HiddenViewsFitted { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
@@ -861,6 +899,8 @@ impl DiagEvent {
             Self::SubagentZoneLookupFailed { .. } => "subagent_zone_lookup_failed",
             Self::SubagentPaneBindTimeout { .. } => "subagent_pane_bind_timeout",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
+            Self::ScopedBindRestored { .. } => "scoped_bind_restored",
+            Self::ScopedBindRestoreFailed { .. } => "scoped_bind_restore_failed",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
             Self::SidebarViewRepaired { .. } => "sidebar_view_repaired",
             Self::HiddenViewsFitted { .. } => "hidden_views_fitted",
@@ -1136,6 +1176,17 @@ impl DiagEvent {
                 agent_name,
                 ..
             } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
+            Self::ScopedBindRestored {
+                agent_kind,
+                agent_name,
+                paths,
+            }
+            | Self::ScopedBindRestoreFailed {
+                agent_kind,
+                agent_name,
+                paths,
+                ..
+            } => format!("{}:{agent_kind}:{agent_name:?}:{paths:?}", self.kind_name()),
             Self::PaneWinsizeRepaired { pane, .. } => format!("{}:{pane}", self.kind_name()),
             Self::SidebarViewRepaired {
                 view,
@@ -1217,6 +1268,30 @@ impl DiagEvent {
     /// A one-line human description of what this event records.
     pub fn summary(&self) -> String {
         match self {
+            Self::ScopedBindRestored {
+                agent_kind,
+                agent_name,
+                paths,
+            }
+            | Self::ScopedBindRestoreFailed {
+                agent_kind,
+                agent_name,
+                paths,
+                ..
+            } => {
+                let agent = agent_name.as_deref().unwrap_or(agent_kind.as_str());
+                let paths = paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                match self {
+                    Self::ScopedBindRestoreFailed { error, .. } => {
+                        format!("{agent}: protected-bind repair failed for {paths}: {error}")
+                    }
+                    _ => format!("{agent}: protected binds restored for {paths}"),
+                }
+            }
             Self::WorkflowRetry {
                 run,
                 node,

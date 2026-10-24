@@ -8,12 +8,31 @@ mod linux;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BindGuardErr {
-    #[error("scoped protected-file guard: {0}")]
+    #[error("scoped protected-file guard: {0}{hint}", hint = watch_limit(.0))]
     Init(#[source] io::Error),
-    #[error("scoped protected-file guard: watching {path}: {source}")]
+    #[error(
+        "scoped protected-file guard: watching {path}: {source}{hint}",
+        hint = watch_limit(.source)
+    )]
     Watch { path: PathBuf, source: io::Error },
-    #[error("scoped protected-file guard: {0}")]
+    #[error("scoped protected-file guard: {0}{hint}", hint = watch_limit(.0))]
     Worker(#[source] io::Error),
+}
+
+fn watch_limit(error: &io::Error) -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        match error.raw_os_error() {
+            Some(nix::libc::EMFILE) => "; raise fs.inotify.max_user_instances",
+            Some(nix::libc::ENOSPC) => "; raise fs.inotify.max_user_watches",
+            _ => "",
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = error;
+        ""
+    }
 }
 
 #[derive(Debug)]
@@ -37,6 +56,13 @@ impl BindGuard {
         {
             if entries.is_empty() {
                 return Ok(None);
+            }
+            #[cfg(feature = "testkit")]
+            if let Some(errno) = std::env::var("RIMZ_TEST_SCOPED_BIND_ARM_ERRNO")
+                .ok()
+                .and_then(|value| value.parse().ok())
+            {
+                return Err(BindGuardErr::Init(io::Error::from_raw_os_error(errno)));
             }
             Ok(Some(Self {
                 inner: linux::Guard::arm(entries, helper, sink)?,

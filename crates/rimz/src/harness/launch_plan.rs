@@ -214,6 +214,10 @@ pub enum LaunchPlanErr {
 }
 
 impl LaunchPlan {
+    pub(super) fn state(&self) -> &StatePaths {
+        &self.state
+    }
+
     /// The handoff uses the same temp owner the provider's launch resolved.
     pub fn park_state_file(&self, wrapper_pid: u32) -> PathBuf {
         let launch_id = self
