@@ -227,6 +227,7 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
             login_key("qwen"),
             RateLimitCacheEntry {
                 scope,
+                reset_spotted_at_ms: None,
                 account_key: Some("owner".to_owned()),
                 limits: AgentRateLimits {
                     windows: vec![

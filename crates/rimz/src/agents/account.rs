@@ -592,6 +592,9 @@ impl Default for RateLimitsCache {
 
 #[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitCacheEntry {
+    /// Last early reset spotted in an authoritative account reading, in Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_spotted_at_ms: Option<u64>,
     #[serde(default)]
     pub scope: ProviderAccountScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -616,6 +619,7 @@ pub struct RateLimitCacheEntry {
 impl std::fmt::Debug for RateLimitCacheEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RateLimitCacheEntry")
+            .field("reset_spotted_at_ms", &self.reset_spotted_at_ms)
             .field("scope", &self.scope)
             .field(
                 "account_key",
