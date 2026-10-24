@@ -670,11 +670,11 @@ fn clock_thresholds_reach_every_consumer_as_content() {
                 workspace: WorkspaceSnapshot(snapshot),
                 frame: Some(frame.clone()),
             };
-            cycles.sink.publish(FetchUpdate::Fold {
-                fold: Arc::new(projected),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Cached,
-            });
+            cycles.sink.publish(Ok((
+                Arc::new(projected),
+                FetchPhase::Final,
+                SnapshotSource::Cached,
+            )));
             for renderer in &mut renderers {
                 renderer.on_snapshot();
                 assert_eq!(renderer.pane.content_applications, step as u64 + 1);
@@ -807,11 +807,11 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
                 "rimz-test",
             ))),
         };
-        sink.publish(FetchUpdate::Fold {
-            fold: Arc::new(projected),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Cached,
-        });
+        sink.publish(Ok((
+            Arc::new(projected),
+            FetchPhase::Final,
+            SnapshotSource::Cached,
+        )));
         let delivered: Vec<_> = receivers.iter().map(|rx| rx.try_recv().unwrap()).collect();
         for update in &delivered {
             let shown = snapshot(update);
@@ -1086,11 +1086,11 @@ fn refresh_override_stamps_folded_snapshot() {
         readers.push(reader);
     }
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
-    sink.publish(FetchUpdate::Fold {
-        fold: Arc::new(frameless(folded)),
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Cached,
-    });
+    sink.publish(Ok((
+        Arc::new(frameless(folded)),
+        FetchPhase::Final,
+        SnapshotSource::Cached,
+    )));
     for reader in readers {
         let mut config = pane_config(fixture.worker().config);
         config.own_pane = reader.own_pane.clone();
@@ -1950,11 +1950,11 @@ fn a_delivered_fold_is_already_the_hosts_latest_fold() {
     for (index, name) in ["first", "second"].into_iter().enumerate() {
         let mut snapshot = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
         snapshot.display_name = name.into();
-        sink.publish(FetchUpdate::Fold {
-            fold: Arc::new(frameless(snapshot)),
-            phase: FetchPhase::Final,
-            source: SnapshotSource::Produced,
-        });
+        sink.publish(Ok((
+            Arc::new(frameless(snapshot)),
+            FetchPhase::Final,
+            SnapshotSource::Produced,
+        )));
         assert_eq!(
             wakes.recv_timeout(Duration::from_secs(1)).unwrap(),
             Wakeup::Snapshot
@@ -2048,9 +2048,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
             .display_name,
         "second-and-longer",
     );
-    sink.publish(FetchUpdate::Failed {
-        error: "no fold".into(),
-    });
+    sink.publish(Err("no fold".into()));
     assert_eq!(
         sink.host_data
             .lock()
@@ -2209,14 +2207,14 @@ fn a_failed_final_is_not_replaced_by_its_projected_interim() {
     cycles.enable_renderer_apply();
     let snapshot = crate::sidebar_pane::app::fixtures::snapshot(&fixture.workspace_id);
     cycles.sink.context = Some(Arc::new(FoldShared::default()));
-    cycles.sink.publish(FetchUpdate::Fold {
-        fold: Arc::new(frameless(snapshot)),
-        phase: FetchPhase::Interim,
-        source: SnapshotSource::Cached,
-    });
-    cycles.sink.publish(FetchUpdate::Failed {
-        error: "producer failed after the interim fold".into(),
-    });
+    cycles.sink.publish(Ok((
+        Arc::new(frameless(snapshot)),
+        FetchPhase::Interim,
+        SnapshotSource::Cached,
+    )));
+    cycles
+        .sink
+        .publish(Err("producer failed after the interim fold".into()));
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
     let renderer = &mut cycles.renderers[0];
     renderer.on_snapshot();
@@ -3128,11 +3126,11 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     let (new_wake, new_wakes) = wake_channel();
     let (newcomer, newcomer_rx) = subscriber(&fixture, "03", "terminal_9", 2, new_wake);
     subscribe(&subscribers, newcomer);
-    sink.publish(FetchUpdate::Fold {
-        fold: Arc::new(folded),
-        phase: FetchPhase::Final,
-        source: SnapshotSource::Cached,
-    });
+    sink.publish(Ok((
+        Arc::new(folded),
+        FetchPhase::Final,
+        SnapshotSource::Cached,
+    )));
 
     let younger: Vec<_> = younger_rx.try_iter().collect();
     assert_eq!(younger.len(), 1);
@@ -3229,9 +3227,7 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        sink.publish(FetchUpdate::Failed {
-            error: "failed fold".into(),
-        });
+        sink.publish(Err("failed fold".into()));
         let _ = done_tx.send(());
     });
 
