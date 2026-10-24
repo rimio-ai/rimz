@@ -1176,20 +1176,14 @@ fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
         rig.event(store_delta());
 
         assert!(rig.next_request().is_some());
-        assert!(rig.fetch.next_deadline().is_none());
     }
 }
 
 #[test]
-fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
+fn maintenance_watchdog_requests_one_unwatched_fetch() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
     rig.hide();
-
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() + Duration::from_secs(1),
-    );
 
     rig.state.pane.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
     rig.maintenance();
@@ -1198,33 +1192,26 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
         rig.next_request().is_some(),
         "watchdog dispatches one fetch"
     );
-    assert!(rig.fetch.next_deadline().is_none());
     assert!(
         rig.next_request().is_none(),
-        "the deferred nudge merges into the watchdog fetch"
+        "the watchdog requests only one fetch"
     );
 }
 
 #[test]
-fn focus_resume_flushes_pending_metrics_fetch() {
+fn own_reveal_requests_fresh_panes() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.hide();
-
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() + Duration::from_secs(1),
-    );
 
     rig.event(SidebarEvent::FocusChanged {
         focused: vec![own_pane],
         unfocused: Vec::new(),
     });
 
-    assert!(rig.fetch.next_deadline().is_none());
     assert!(
         rig.next_request()
-            .expect("focus flushed pending fetch")
+            .expect("own reveal requests a fetch")
             .is_fresh_panes()
     );
 }

@@ -2157,34 +2157,12 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
 }
 
 #[test]
-fn fetch_dispatcher_merges_deferred_deadlines_and_absorbs_work() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    let later = Instant::now() + Duration::from_secs(10);
-    let earlier = later - Duration::from_secs(3);
-
-    dispatcher.defer_until(FetchRequest::default(), later);
-    dispatcher.defer_until(FetchRequest::fresh_panes(), earlier);
-
-    assert_eq!(dispatcher.next_deadline(), Some(earlier));
-    dispatcher.request(FetchRequest::default(), false);
-    let request = rx
-        .try_recv()
-        .expect("immediate request absorbs deferred work");
-    assert!(request.is_fresh_panes());
-    assert!(dispatcher.next_deadline().is_none());
-}
-
-#[test]
 fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::for_plane(tx);
     dispatcher.request(FetchRequest::default(), false);
     rx.try_recv().expect("initial request");
-    let due = Instant::now() + Duration::from_secs(3);
-    dispatcher.defer_until(FetchRequest::fresh_panes(), due);
-
-    dispatcher.fire_due(due);
+    dispatcher.request(FetchRequest::fresh_panes(), true);
     assert!(
         rx.try_recv().is_err(),
         "follow-up remains coalesced in flight"
@@ -2194,28 +2172,6 @@ fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
         .try_recv()
         .expect("one follow-up dispatches on completion");
     assert!(follow_up.is_fresh_panes());
-    assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
-}
-
-#[test]
-fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    dispatcher.request(FetchRequest::default(), false);
-    rx.try_recv().expect("initial request");
-    dispatcher.request(FetchRequest::default(), true);
-    dispatcher.defer_until(
-        FetchRequest::fresh_panes(),
-        Instant::now() + Duration::from_secs(3),
-    );
-
-    dispatcher.complete(true);
-
-    let follow_up = rx
-        .try_recv()
-        .expect("pending follow-up absorbs deferred work");
-    assert!(follow_up.is_fresh_panes());
-    assert!(dispatcher.next_deadline().is_none());
     assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
 }
 

@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::io;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
@@ -45,8 +46,6 @@ mod transcript_watch;
 mod view_state;
 mod views;
 mod width_control;
-
-use self::timing::FRAME_MIN_TIMEOUT;
 
 pub(super) use self::attachment::{Attachment, AttachmentExit, CloseHandle};
 pub(super) use self::backend::PaneBackend;
@@ -112,16 +111,6 @@ pub enum SidebarAppErr {
 }
 
 pub(super) type Result<T> = std::result::Result<T, SidebarAppErr>;
-
-fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {
-    deadline.map_or(base, |deadline| {
-        base.min(
-            deadline
-                .saturating_duration_since(now)
-                .max(FRAME_MIN_TIMEOUT),
-        )
-    })
-}
 
 pub(super) fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
     let prior = std::panic::take_hook();

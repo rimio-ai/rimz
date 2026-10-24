@@ -164,7 +164,7 @@ pub(super) fn gate_held_ms(gate: &GateState, now: Timestamp) -> u64 {
 /// regression is held: the prior committed frame remains rendered, so the cache
 /// never advances onto bad data and the next comparison still uses that frame.
 /// Returns the possibly-held state, the next gate state, whether this fetch was
-/// rejected (the loop fires one self-heal refetch on a reject), whether a held
+/// rejected (the gate's deadline asks for the reevaluation), whether a held
 /// regression was accepted by the escape hatch, and the rejected incoming
 /// snapshot so realtime fusion can retain it without a speculative clone.
 pub(super) fn apply_gate(
