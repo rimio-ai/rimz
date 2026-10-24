@@ -419,7 +419,7 @@ A scheduled fire opens with the origin paragraph: the rule, what it launches (`o
 
 ### Delivering to a live instance
 
-`wait` pins a task to one exact live kind and session at add time; `--wait @me` and bare `--wait` resolve the caller through the shared CLI resolver. The runner confirms the session is alive, including `ended_at`, before it sends through the ordinary durable message path. A missing or ended session records `target gone` and removes the row.
+`wait` pins a task to one exact live kind and session at add time; `--wait @me` and bare `--wait` resolve the caller through the shared CLI resolver. `crates/rimz/src/cli/loop_cmd/add.rs::resolve_delivery_target` takes one `crates/rimz/src/sidebar/produce/mod.rs::resolution_snapshot` with the command's `--mux` hint to resolve the target, name it over addressable peers, and scope signal defaults. The stored `wait.handle` equals that agent's `rimz wait` receipt target; rows armed earlier keep their stored handle. The runner confirms the session is alive, including `ended_at`, before it sends through the ordinary durable message path. A missing or ended session records `target gone` and removes the row.
 
 | Intent | Header | Dispatch |
 | --- | --- | --- |

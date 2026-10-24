@@ -379,7 +379,7 @@ rimz loop add merged --signal pr.merged --once --wait @me
 
 ## Waits and checks
 
-`--wait @<handle>` resolves the address at add time and pins that exact session id. `--wait @me` and a bare `--wait` pin the calling agent, identified from its launch environment or process ancestry; a user shell must name a live target. A session that has not registered yet is refused. When the pinned session ends, is lost, or is stopped, its tasks retire; a fire that finds it gone records `target gone` and removes the task.
+`--wait @<handle>` resolves the address at add time over the same live roster that `rimz wait` uses and pins that exact session id. A named address cannot target a session shadowed by its pane's current owner, such as the old session left by a Claude `/clear`. The task keeps the handle a `rimz wait` receipt gives that agent. `--wait @me` and a bare `--wait` pin the calling agent, identified from its launch environment or process ancestry; a user shell must name a live target. A session that has not registered yet is refused. When the pinned session ends, is lost, or is stopped, its tasks retire; a fire that finds it gone records `target gone` and removes the task.
 
 A `--wait` delivery arrives from `@rimz` and parks until the target's current turn ends. A signal fire carries `Type: SIGNAL`; a clock fire carries `Type: WAIT` and opens `scheduled wait` then `fired [<task>]`. The [message header](./message.md#the-message-header) lists every type. Waits armed by `rimz wait` interrupt instead ([the delivered message](./wait.md#the-delivered-message)).
 
