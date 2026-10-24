@@ -1,127 +1,213 @@
 # Kimi Code adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [kimi-reference.md](../../externals/agent-adapter/kimi-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The raw upstream protocol is in [kimi-reference.md](../../externals/agent-adapter/kimi-reference.md).
 
-Kimi runs in its stock interactive pane. Command hooks carry lifecycle boundaries and blocking waits; the durable per-agent `wire.jsonl` supplies transcript, model, token, and recovery enrichment.
+Kimi Code is a built-in adapter, `KimiAdapter` in `crates/rimz/src/agents/adapters/kimi/`, with its spec in `KIMI_DESCRIPTOR`. Kimi runs in its stock interactive pane. Command hooks in Kimi's `config.toml` carry the lifecycle edges and the blocking waits, and the durable per-agent `wire.jsonl` record log supplies the transcript, model, tokens, child agents, and spend. Only the registry names the concrete adapter. Everything Kimi-specific stays inside the module, and other code reads it through the provider-neutral capabilities.
 
-Only the registry reaches the concrete adapter. Account and quota probes, payloads, wire parsing, transcript normalization, child-record derivation, installation, and spend stay private to the Kimi adapter; other modules consume the provider-neutral capabilities.
+The adapter maps [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) (the TypeScript Kimi Code CLI) and nothing older. The retired Python `MoonshotAI/kimi-cli` is a different product: its `$KIMI_SHARE_DIR` and `~/.kimi` data root, `--afk` flag, enveloped Wire messages (`{timestamp,message:{type,payload}}`), and tool names are unsupported. Process binding accepts the executable name `kimi` and Kimi Code's runtime process title `kimi-code` (`process_names`), and binary discovery also searches `~/.kimi-code/bin`, where the official installer puts `kimi` (`extra_bin_dirs`).
 
-**Product boundary.** This adapter maps [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) and uses `$KIMI_CODE_HOME` (default `~/.kimi-code`) plus top-level agent-record logs. Binary discovery includes the official `~/.kimi-code/bin/kimi` install location, and process binding accepts both the executable name `kimi` and Kimi Code's runtime process title `kimi-code`. The retired Python `MoonshotAI/kimi-cli` protocol is unsupported: its `$KIMI_SHARE_DIR`, `~/.kimi`, `--afk`, enveloped Wire messages, and tool names stay outside the adapter.
-
-## Hooks and lifecycle
-
-RimZ installs additive `[[hooks]]` entries in `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml`. Every installed command uses the stable marker `rimz hooks feed --source kimi`, stamps owner-pid context where required, and preserves hook stdout as the decision channel. Uninstall reclaims RimZ-owned entries and preserves user hooks.
-
-Installation and preview refuse a detected CLI version below 2.1.1 with `kimi upgrade -y` as the fix. An unknown or unparseable version does not block installation. Every existing hook entry is validated against Kimi Code's full 20-event catalog and strict four-field schema before any rewrite. An invalid entry makes the installed check false and installation/preview refuse with the config path, entry, and fix: Kimi Code ignores every hook while one entry is invalid. Valid foreign hooks survive reinstall.
-
-| Kimi event | RimZ signal |
+| File | Owns |
 | --- | --- |
-| `SessionStart` | `registered`; bind the pane to `session_id` |
-| `UserPromptSubmit` | `turn_started` with the submitted content parts |
-| `TurnStarted` | `turn_started` for main-agent non-user origins, excluding `retry` and `system_trigger`/`subagent` |
-| `PermissionRequest` | `awaiting_input(Permission)`; specialize `ExitPlanMode` to `PlanApproval` |
-| `PreToolUse` for `AskUserQuestion` | `awaiting_input(Question)` |
-| `PermissionResult` | non-mutating answer edge that clears the native wait |
-| every `PostToolUse` / `PostToolUseFailure` | `tool_used`; successful `Write` and `Edit` set edit proof, successful `Bash` sets mutation proof, and failure clears a native wait without claiming mutation |
-| `Stop` / `StopFailure` | clean / errored `turn_ended`, unless the main wire identifies a child-fired hook |
-| `Interrupt` | clean `turn_ended`, unless the main wire identifies a child-fired hook |
-| `PreCompact` / `PostCompact` | `compacting` / `compaction_ended` with `manual` or `auto` trigger |
-| `SessionEnd` | `ended` |
+| `mod.rs` | the spec, the hook catalog `KIMI_HOOKS`, hook decoding and the lifecycle mapping, launch argv, the context refresh and its gauge |
+| `install.rs` | the config path, the `[[hooks]]` merge, entry validation, and the version floor |
+| `payloads.rs` | the tolerant hook payload `KimiHookPayload` |
+| `wire.rs` | the session lookup, the record decoder `decode_event`, the torn-safe `WireSnapshot`, attribution, and the context-fill folds |
+| `subagents.rs` | child derivation (`derive_at`) and child-fired hook suppression (`child_fired`) |
+| `transcript.rs` | the visible conversation fold and the latest assistant answer |
+| `account.rs` | the credential slot and the account probe |
+| `oauth_usage.rs` | the managed quota probe and the Booster projection |
+| `spend.rs` | the spend parser and the configured default model |
 
-An `AskUserQuestion` call with `background: true` creates durable background work and leaves the main turn runnable, so its `PreToolUse` stays lifecycle-only rather than opening a false foreground wait. `Notification` refreshes parent activity and the bounded record tail when background work reaches a terminal state.
+## Data root
 
-`PermissionRequest` and `PermissionResult` replace the old approval Wire scan. They fire around an approval that reaches the native RPC client and correlate by `tool_call_id`. Policy-approved, auto-approved, YOLO-approved, and statically denied calls do not open a native approval wait.
+The data root is `$KIMI_CODE_HOME`, else `$HOME/.kimi-code` (`wire::kimi_home_from`). `LaunchCapability::config_home` resolves it from the login env its caller passes, but every other read on this page resolves it from the RimZ process env through `wire::kimi_home`: the hook install, the account and quota probes, the spend sources, and the session lookup. Kimi therefore has one data root per RimZ process, whatever login a caller names, and `KIMI_CODE_HOME` is absent from the provider-home key list that `cargo xtask invariants` keeps out of process-env reads.
 
-Kimi exposes no separate question hook. `PreToolUse` for `AskUserQuestion` opens the wait; the correlated post-tool hook, interrupt, or turn/session close resolves it.
+## Hooks
 
-`Stop` is blockable. RimZ's observer returns empty stdout and exit 0 so a normal stop remains a clean boundary. A user interrupt skips `Stop` and emits `Interrupt`; a fatal turn emits `StopFailure`.
+### Install
 
-### Subagents and background work
+Install merges `[[hooks]]` entries into one TOML file, `install::config_path`: `$RIMZ_KIMI_CONFIG` when it is non-empty, else `config.toml` under the data root. Every installed entry runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source kimi`, with matcher `.*` on the tool and permission events and a timeout of 10 seconds (4 for `SessionEnd`). An entry is RimZ's when its command contains `rimz hooks feed --source kimi` (`RIMZ_COMMAND_MARKER`). Install strips owned entries and appends the canonical set, so a reinstall is idempotent and every foreign entry stays in place. Uninstall strips owned entries the same way.
 
-After each recorded root observation, the shared derive pass reads the main wire's durable `subagent.spawned`, `subagent.completed`, `subagent.failed`, and `subagent.cancelled` records. Child rollup ids are namespaced as `<session-id>:<subagentId>`, with the root `session_id` as the parent link. Child ids must be one normal path component. Starts carry the spawn's name, sanitized description, model, and effort; absent attribution falls back to the child wire at `agents/<subagentId>/wire.jsonl`.
+Two refusals guard the merge, and both apply to install and to preview:
 
-The fold retains each child's latest run. Failed records settle errored; completed and cancelled records settle not-errored. Completion usage supplies the child's run-token total, never an extra spend charge. The shared derive pass creates missing rows and settles nonterminal rows once; finished rows do not reopen on resume. `SubagentStart` and `SubagentStop` are not installed, and stale installations' copies record nothing: Start precedes durable identity, and Stop fires only on success.
+- Version floor. A detected CLI below 2.1.1 refuses with `kimi upgrade -y` as the fix (`install::version_blocker`), and the same text is the `install_blocker`. An unknown or unparseable detected version passes.
+- Entry validation. Before any rewrite, `install::validate_hooks` checks every existing entry against Kimi Code's 20-event catalog and its four-field schema (`event`, `matcher`, `command`, `timeout`, with a timeout from 1 to 600). Kimi Code ignores every hook while one entry is invalid, so an invalid foreign entry refuses with the config path, the entry number, and the fix, and leaves the file untouched. The installed check (`install::installed`) reads false for the same reason.
 
-A child turn also fires session-shaped turn hooks. Suppression requires a `subagent.spawned` record in the main wire and either an open main step (latest `step.begin`/`step.end` is `step.begin`) or a latest turn already closed with a reason this hook does not report. The open-step rule applies to Stop, StopFailure, Interrupt, and non-user TurnStarted. The closed-turn rule applies to Stop for every reason, StopFailure except `failed`, and Interrupt except `cancelled`. `llm.request` alone does not open a step. Bounded 10/20/40/80/100 ms rereads confirm suppression; unreadable wires or evidence that clears fail open. PreCompact and PostCompact always pass through, because main compaction can overlap an open step.
+The catalog accepts `SubagentStart`, `SubagentStop`, `TaskStarted`, `UserPromptQueued`, and `SessionHeartbeat` in foreign entries, but RimZ installs none of them.
 
-Background task state lives under each agent's `agents/<agent-id>/tasks/` tree, and terminal status reaches the root through `Notification`. The parent transcript, model, and context tokens stay main-only. Fleet spend, seat lifetime spend, and the parent card's live dollars include every child wire; child cards do not receive live dollar refreshes.
+### Event mapping
+
+`KIMI_HOOKS` is the installed set, and `kimi_root_signal` maps each event. A progress event touches the activity heartbeat ([what a decoded event carries](./adapter.md#what-a-decoded-event-carries)).
+
+| Kimi event | RimZ signal | Progress |
+| --- | --- | --- |
+| `SessionStart` | `registered`, binding the pane to `session_id` and the main wire path | yes |
+| `UserPromptSubmit` | `turn_started`, with the prompt's text parts as the task | yes |
+| `TurnStarted` | `turn_started`, except for origin `user` (`UserPromptSubmit` already opened the turn), `retry`, and `system_trigger` named `subagent` | yes |
+| `PreToolUse` for `AskUserQuestion` | `awaiting_input(Question)`, unless `tool_input.background` is true. Every other tool records nothing | no |
+| `PermissionRequest` | `awaiting_input(Permission)`, or `PlanApproval` for `ExitPlanMode` | no |
+| `PermissionResult` | a non-mutating `tool_used` that closes the wait | yes |
+| `PostToolUse` | `tool_used`. `Write` and `Edit` set edit proof, and `Bash`, `Write`, and `Edit` set mutation proof | yes |
+| `PostToolUseFailure` | a non-mutating `tool_used` | yes |
+| `Stop`, `Interrupt` | clean `turn_ended` | yes |
+| `StopFailure` | errored `turn_ended` with a turn error | no |
+| `PreCompact`, `PostCompact` | `compacting`, `compaction_ended` with the `manual` or `auto` trigger | no |
+| `SessionEnd` | `ended` | no |
+| `Notification` | no signal. Triggers a context refresh, which is how a terminal background task reaches the root | yes |
+
+`PreToolUse` is blockable upstream and installs with matcher `.*`, so every tool call waits for one `rimz hooks feed` before Kimi runs it ([output and exit semantics](../../externals/agent-adapter/kimi-reference.md#output-and-exit-semantics)). A `Stop`, `StopFailure`, `Interrupt`, or `TurnStarted` that a child fired records nothing ([child-fired hooks](#child-fired-hooks)).
+
+### Asks
+
+A permission ask opens only when Kimi's policy resolves a call to ask. Policy-approved, mode-approved, YOLO-approved, and statically denied calls fire no `PermissionRequest` ([approvals](../../externals/agent-adapter/kimi-reference.md#approvals)). The wait's detail is the payload's `action`, and a question's detail is its first question text.
+
+Kimi exposes no question hook. `PreToolUse` for `AskUserQuestion` opens the wait, and the correlated post-tool hook, an interrupt, or a turn or session close resolves it. A question with `background: true` starts a background task and leaves the turn runnable, so its `PreToolUse` opens no wait.
+
+Every Kimi ask is keyless. `KimiHookPayload` drops the payload's `tool_call_id`, and no signal carries a native key, so any `tool_used` on a waiting row clears the wait, a parallel sibling tool's `PostToolUse` included ([edges](./model.md#edges)).
+
+### Turn endings
+
+`Stop` is blockable upstream. RimZ's hook writes empty stdout and exits 0, so a normal stop stays a clean boundary. A user interrupt skips `Stop` and fires `Interrupt`, and a fatal turn fires `StopFailure`. `kimi_turn_error` labels the failure from `error_message`, else `error_type`, capped by `cap_turn_error_label`, and classifies the label with `TurnErrorClass::classify_label`.
+
+On `Stop` and `StopFailure`, `kimi_final_message` reads the main wire and returns the latest assistant message that follows the newest user prompt (`transcript::latest_assistant_from_records`). A stop whose turn produced no answer yet returns none, and never an answer to an earlier prompt.
+
+### Child-fired hooks
+
+A child agent's turn fires the same session-shaped `Stop`, `StopFailure`, `Interrupt`, and `TurnStarted` hooks as the main agent, with the root `session_id`. `subagents::child_fired` reads the main wire and suppresses the hook when the session has spawned a child (any `subagent.spawned` record) and either of two conditions holds:
+
+- The main step is open. The newest of `step.begin`, `step.end`, `turn.prompt`, and `turn.ended` is a `step.begin`. An `llm.request` alone does not open a step. This rule covers all four events.
+- The latest turn is already closed with a reason this hook does not report. A `turn.ended` follows the newest `turn.prompt`, and its reason is any reason for `Stop`, any reason except `failed` for `StopFailure`, and any reason except `cancelled` for `Interrupt`. This rule does not cover `TurnStarted`.
+
+A positive check is confirmed by rereads after 10, 20, 40, 80, and 100 ms, and any reread that clears lets the hook through. An unreadable wire or an unresolved session directory also lets it through. `PreCompact` and `PostCompact` always pass, because a main compaction can overlap an open step.
+
+## Subagents
+
+Children come from the main wire's durable records, not from hooks. After each recorded root observation that carries a session id, the shared derive pass (`derive_subagent_lifecycle` in `crates/rimz/src/cli/hooks/lifecycle/mod.rs`) calls `KimiAdapter::derive_subagent_observations`, which reads `subagent.spawned`, `subagent.completed`, `subagent.failed`, and `subagent.cancelled` (`subagents::derive_at`).
+
+- Identity. A child's id is `<session-id>:<subagentId>`, with the root `session_id` as its parent. A `subagentId` that is not one normal path component is skipped, since it names the child's directory.
+- Launch facts. A start carries the spawn's `subagentName`, sanitized `description`, `model`, and `thinkingEffort`. A missing model or effort falls back to the attribution in the child's own `agents/<subagentId>/wire.jsonl`, which is also the child's transcript path.
+- Settlement. The fold keeps each child's latest spawn and its terminal record. `subagent.failed` settles errored, and `subagent.completed` and `subagent.cancelled` settle clean. Completion usage becomes the child's run-token total and is never charged as spend.
+- Idempotence. The derive pass creates a row only for a child it has not seen, under a parent row that exists, and settles a row only once. A child respawned after it finished keeps its finished row.
+
+`SubagentStart` and `SubagentStop` stay uninstalled, and `kimi_observation` drops them from a stale installation, because `SubagentStop` fires only on success. Background task state lives in each agent's `agents/<agent-id>/tasks/` tree, and the root learns of a terminal task only through `Notification`. The parent's transcript, model, and context tokens are main-wire only. Spend includes every child ([cost](#cost)).
 
 ## Launch and resume
 
-Bare RimZ `--resume` uses the native `kimi --session` picker ([upstream](../../externals/agent-adapter/kimi-reference.md)).
-
-Permission launch cells map to the current CLI:
+The launch spec maps RimZ's permission modes onto Kimi's flags. What each Kimi mode allows is upstream behaviour ([permission modes](../../externals/agent-adapter/kimi-reference.md#permission-modes)).
 
 | RimZ mode | Kimi argv |
 | --- | --- |
-| `ask` | no permission flag; native `manual` mode |
+| `ask` | no flag. Kimi starts in its own default: `default_permission_mode` from `config.toml`, or a resumed session's saved mode |
 | `auto` | `--auto` |
 | `yolo` | `--yolo` |
 | `plan` | `--plan` |
 
-`--auto` handles approvals automatically and suppresses questions. `--yolo` skips regular tool approvals but still asks to exit plan mode. The retired `--afk` flag is invalid.
+| Surface | Mapping |
+| --- | --- |
+| Resume | `kimi --session <id>`. Bare `--resume` opens the native `kimi --session` picker |
+| Fork | unsupported. Kimi forks only by copying a session without opening it ([resume and fork](../../externals/agent-adapter/kimi-reference.md#resume-and-fork)), so `rimz agents fork` refuses |
+| Compaction | `/compact` sent through the pane, with no instruction text |
+| Model preset | `--model` or `-m` |
+| Fast preset | unsupported, with the fix `use --model kimi-for-coding-highspeed` |
 
-Resume uses `kimi --session <id>`; `--resume` is a hidden alias and `--continue` selects the worktree's latest session. `/fork` and `kimi fork [sessionId]` copy a session and print the new id without opening it, and no launch flag forks and opens in one command, so `rimz agents fork` refuses. Smart compaction sends `/compact` through the pane.
-
-Supervised execution uses `kimi -p <prompt> --output-format stream-json`. Prompt mode applies auto permission and rejects explicit `--auto`, `--yolo`, and `--plan`. Stdout carries stream records and stderr carries thinking, progress, and resume notices.
+A supervised run uses `KimiAdapter::launch_command`: `kimi [args] --prompt <prompt> --output-format stream-json`. Kimi rejects a permission flag in prompt mode, so the builder drops `--auto`, `--yolo`, and `--plan` from the passthrough arguments when it adds a prompt. Prompt mode applies Kimi's `auto` policy. The stream's lines are in [prompt mode](../../externals/agent-adapter/kimi-reference.md#prompt-mode).
 
 ## Context and transcript
 
-### Session binding and durable records
+### Session lookup
 
-Sessions live under `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/wd_<slug>_<sha256-prefix>/<session-id>/`. Resolve the directory through the parsed `session_index.jsonl`, which Kimi compacts since 2.0.1: each valid line names `sessionId`, absolute `sessionDir`, and `workDir`, and the latest valid line wins for an id. Validate the indexed directory against the data root and session-id basename, then use the `state.json` working directory as the authoritative workspace check: metadata version 2 records `cwd`, and a session Kimi has not rewritten yet still carries `workDir`. The index's workdir can be stale. Do not reproduce the bucket-key algorithm for identity binding.
+A session lives at `sessions/<bucket>/<session-id>/` under the data root, and `wire::session_dir` resolves it without reproducing Kimi's bucket-key algorithm:
 
-The main record path is `agents/main/wire.jsonl`; each child owns `agents/<agent-id>/wire.jsonl`. Records are top-level tagged JSON objects, beginning with metadata such as `{"type":"metadata","protocol_version":"1.5",...}`. They are not the retired Python envelope `{timestamp,message:{type,payload}}`. The tolerant tail parser skips metadata after recognizing the top-level shape.
+1. Index. Parse every line of `session_index.jsonl` that names the session id, and take the latest line whose `sessionDir` validates. Kimi compacts this file, and its `workDir` can be stale.
+2. Scan. With no valid index line, try `<bucket>/<session-id>` under every bucket in `sessions/`, and take the newest by modification time of the directory, its main wire, and its `state.json`.
 
-The adapter binds the resolved main path into the live context sidecar. Hook refreshes seed that path at session/prompt boundaries and retain it on every changed stat, so the shared filesystem watcher drives record-by-record updates even when the session index is temporarily stale. On a changed stat, one torn-safe full read parses every complete record once: cumulative cost consumes the full typed snapshot while context sees only its record-aligned logical 64 KiB tail, expanding for one oversized newest record. The historical spend cursor still consumes only complete appended lines by byte offset, and unknown record types and fields remain forward-compatible.
+A candidate validates when it canonicalizes under `sessions/`, its basename is the session id, and its `state.json` parses as an object. When the caller supplies a working directory, `state.json` must also record it: `cwd` in metadata version 2, or `workDir` in a session Kimi has not rewritten yet. The `SessionStart` binding and the final-message read pass the hook payload's `cwd`. The context refresh, the derive pass, and the child-fired check pass none.
 
-The tail mapper consumes:
+`KimiAdapter::session_transcript` skips the lookup when the sidecar already holds a path that is an existing `<session-id>/agents/main/wire.jsonl`. The `SessionStart` binding and every changed-stat refresh write that path, so the shared filesystem watcher follows the wire even while the index is stale.
 
-- genuine-user `turn.prompt` and `turn.steer` records for sanitized human transcript anchors;
-- `context.append_loop_event` step boundaries and text parts for ordinary assistant reconstruction, excluding thinking and tool plumbing;
-- visible assistant-role `context.append_message` records for explicit hook/block output while ignoring duplicated user and injected context messages;
-- `config.update` plus `llm.request` for normalized display alias, exact provider/model attribution, and thinking effort;
-- every additive `usage.record` for spend, with only explicit turn scope supplying the current-turn split;
-- nonzero `step.end.usage`, `context.clear`, and `context.apply_compaction.tokensAfter` as ordered context-fill boundaries.
+### The wire
 
-The durable log also exposes permission, compaction-bracket, tool-snapshot, and child-agent records, and protocol 1.5 adds `turn.ended`, `interaction.request` and `interaction.resolved`, `turn.step.retrying`, and `task.started` and `task.terminated`. Child derivation consumes the `subagent.*` records; the child-fired hook discriminator consumes `turn.ended` and its reason.
+The main record log is `agents/main/wire.jsonl`, and each child writes `agents/<agent-id>/wire.jsonl`. Records are top-level JSON objects tagged by `type`, opening with a metadata record such as `{"type":"metadata","protocol_version":"1.5",...}` ([file format](../../externals/agent-adapter/kimi-reference.md#file-format)). `wire::decode_event` maps the types the adapter reads and returns `Unknown` for every other type, so new record types and fields pass through.
 
-Hooks own turn, approval, and question edges; pane/process liveness reconciles missed delivery.
+A context refresh reads the main wire once per changed stat. `WireSnapshot::read` returns every complete record, which the cost fold consumes, and marks a record-aligned logical 64 KiB tail, which the context and attribution folds consume. The tail extends back to the start of an oversized newest record. The stat behind the gate is the main wire's, plus a companion stamp of every child wire's summed length and newest mtime, so a growing child invalidates the refresh.
 
-### Model, tokens, and the context gauge
+The folds read these records:
 
-The session `state.json` title publishes as the card's session preview. Kimi's pre-prompt `"New Session"` placeholder is dropped, so a new session publishes no preview until Kimi initializes the title from the first prompt; an explicit rename replaces it and keeps the activity description stable across later turns.
+| Records | Consumer |
+| --- | --- |
+| `turn.prompt`, `turn.steer` with a `user` origin | transcript: the sanitized human turns |
+| `context.append_loop_event` steps and text parts | transcript: assistant steps, without thinking or tool plumbing |
+| assistant-role `context.append_message` | transcript: explicit hook or block output. User and injected context messages are ignored |
+| `config.update`, `llm.request` | attribution: display alias, provider and canonical model, thinking effort |
+| `usage.record` | cost, and the newest turn-scoped record as the current-usage split |
+| `step.end.usage`, `context.clear`, `context.apply_compaction` | the context fill |
+| `subagent.*`, `turn.ended`, `step.begin`, `step.end`, `turn.prompt` | child derivation and the child-fired check |
 
-`usage.record` carries its model and the exact `inputOther`, `inputCacheRead`, `inputCacheCreation`, and `output` split. `llm.request` carries provider, canonical model id, model alias, effective thinking controls, and request hashes. Strip only a leading `kimi-code/` wrapper from display/config aliases.
+The log also carries approval, interaction, compaction-bracket, retry, and task records ([other record types](../../externals/agent-adapter/kimi-reference.md#other-record-types)). No fold reads them: hooks own turn, approval, and question edges, and pane and process liveness reconcile a missed hook.
 
-The stock pane does not persist the live `agent.status.updated` ratio. Replace turn-grained fill from the newest nonzero `step.end.usage` sum across all four fields, reset it on `context.clear`, and replace it with `context.apply_compaction.tokensAfter` after compaction. A zero-usage step preserves earlier evidence. When a clear or a compaction replaced the window after the latest counted step, publish that count as `current_context_tokens` too: the tail still holds the older step's split, and the scalar outranks it as the card's numerator. A step's own count includes its output and sits beside that step's split, so it publishes no scalar. Resolve the window from the normalized effective `[models.<alias>]` entry, honoring `[models.<alias>.overrides].max_context_size`, and fall back to 262,144 tokens. Publish the shared unknown-fill, zero-usage sentinel when the bounded tail contains no context boundary so an established meter stays stable.
+### Model and the context gauge
+
+The model is the effective alias: the latest `config.update` or `llm.request` `modelAlias`, else the latest `llm.request` model, else the agent's model hint, else `default_model` from `config.toml`. `wire::normalize_model_alias` strips one leading `kimi-code/` wrapper and nothing else. The thinking effort is the latest non-empty `thinkingEffort` from either record.
+
+Kimi's stock pane does not persist its live `agent.status.updated` ratio, so `wire::latest_context_tokens` derives the fill from boundaries in tail order:
+
+- A `step.end` with nonzero usage sets the fill to the sum of its four fields (`inputOther`, `inputCacheRead`, `inputCacheCreation`, `output`). A zero-usage step keeps the earlier value.
+- `context.clear` sets the fill to 0.
+- `context.apply_compaction` sets it to `tokensAfter`.
+
+When a clear or a compaction is newer than the latest counted step, the fill also publishes as `current_context_tokens` (`wire::context_replaced_since_step`), because the tail still holds the older step's split and the scalar must outrank it as the card's numerator. A step's own count includes its output and matches that step's split, so it publishes no scalar.
+
+The window is `max_context_size` from `[models.<alias>.overrides]`, else from `[models.<alias>]`, in `config.toml`, else 262,144 tokens. With no context boundary in the tail, the refresh publishes the shared unknown-fill, zero-usage sentinel under `LocalTokenPatch::PreserveEstablished`, so an established meter holds its value ([reading rules](./adapter.md#reading-rules)).
+
+The card's session preview is the `title` in the session's `state.json`. `wire::session_title` drops Kimi's pre-prompt `New Session` placeholder, so a new session shows no preview until Kimi titles it from the first prompt. A rename replaces the title.
 
 ## Account and balance
 
-The account probe resolves the credential slot from the `oauth.key` of `[providers."managed:kimi-code"]` in `config.toml`: `oauth/kimi-code` is `credentials/kimi-code.json`, and a scoped key such as the one a `global` (kimi.ai) login writes names `credentials/kimi-code-env-<hex>.json`. Without that entry it reads the default slot. It parses the typed credential shape; token bytes never enter output, logs, diagnostics, or hashes. A refresh token is enough to report a managed login, while the quota probe uses an access token only when its numeric `expires_at` remains more than 60 seconds in the future. RimZ leaves token refresh and credential-file writes to Kimi Code.
+The account and the quota are kind-wide: one managed Kimi login per data root ([account scope](./providers.md#account-scope)). Both probes read the credential slot that the `oauth.key` of `[providers."managed:kimi-code"]` in `config.toml` names (`ManagedProvider::credential_name`). `oauth/kimi-code` is `credentials/kimi-code.json`, and a scoped key, such as the one a `global` (kimi.ai) login writes, is `credentials/kimi-code-env-<hex>.json`. A missing entry, or a key with characters other than ASCII letters, digits, `-`, and `_`, reads the default slot. Token bytes never enter output, logs, diagnostics, or hashes, and RimZ leaves token refresh and credential writes to Kimi Code.
 
-The managed OAuth quota probe resolves the base as Kimi Code does (`$KIMI_CODE_BASE_URL`, then the `managed:kimi-code` `base_url`, then the mainland default) and sends `Accept: application/json` and the bearer only to `https://api.kimi.com/coding/v1/usages` or `https://api.kimi.ai/coding/v1/usages`, with redirects disabled. Any other effective base makes the probe unavailable before it reads the token, so a custom model endpoint never receives the managed credential.
+The account probe (`account::probe`) reports a managed login, plan `Code`, when the file holds a non-empty refresh token or an access token whose `expires_at` is in the future. The credential file's mtime is the account's credential stamp.
 
-The `usages` block supplies `limit_5h` (300 minutes), `limit_7d` (10,080 minutes), `limit_month_total` (scope `month_total`, label `mo`), and `limit_month_code` (scope `month_code`, label `mcd`). Month scopes have no fixed duration. A finite numeric or numeric-string `used_ratio` is clamped to 0..1 and rounded to a percentage; missing or invalid ratios drop that entry. An invalid `reset_time` leaves the window without a reset. Legacy `usage`/`limits` keys are ignored. A Booster-only response remains observable with no windows and a debug message about missing `usages`; a body with neither fails, even if it names a plan. Booster money reaches `ExtraCredits` only when every declared money value is USD.
+The quota probe (`oauth_usage::probe`) has three guards, in order:
 
-An API-key provider may run Kimi Code without managed Kimi OAuth. The managed account and quota cache remains kind-wide, while transcript spend can cover effective custom providers only where model attribution and the shared price book establish a local estimate; provider quota and local dollars remain separate facts.
+1. Base. The managed base resolves as Kimi Code resolves it: `$KIMI_CODE_BASE_URL`, then the `managed:kimi-code` `base_url`, then the mainland default. Only `https://api.kimi.com/coding/v1` and `https://api.kimi.ai/coding/v1` map to a usage URL. Any other base makes the probe unavailable before it reads the token, so a custom endpoint never receives the managed credential.
+2. Token. The access token is used only when its numeric `expires_at` is more than 60 seconds away.
+3. Request. A GET to the region's `/coding/v1/usages` sends `Accept: application/json` and the bearer, with redirects refused (`oauth_http_get`). A 404 reads as unavailable.
+
+`parse_response` maps the `usages` block onto windows:
+
+| Key | Window |
+| --- | --- |
+| `limit_5h` | 300 minutes |
+| `limit_7d` | 10,080 minutes |
+| `limit_month_total` | scope `month_total`, label `mo`, no fixed duration |
+| `limit_month_code` | scope `month_code`, label `mcd`, no fixed duration |
+
+A finite numeric or numeric-string `used_ratio` is clamped to 0..1 and rounded to a percentage, and an entry without one is dropped. An invalid `reset_time` leaves the window without a reset. The plan is the body's `plan` or `planName`, else `Code`. A body with a Booster wallet and no `usages` block yields an observation with no windows. A body with neither fails as schema drift, even when it names a plan.
+
+The Booster wallet projects onto `ExtraCredits` (`parse_booster_wallet`) only when its balance type is `BOOSTER` with a positive amount, and only when every declared currency on the monthly cap and monthly use is USD. `ExtraCredits` carries USD alone, so a non-USD wallet publishes nothing rather than a mislabelled figure. The cap and use publish only when `monthlyChargeLimitEnabled` is true.
+
+An API-key provider can run Kimi Code without managed OAuth. The managed account and quota stay kind-wide, and transcript spend covers a custom provider only where model attribution and the shared price book give a local estimate. Provider quota and local dollars stay separate facts.
 
 ## Cost
 
-Walk records in order and price each usage row from its recognized model, then the latest `llm.request` provider/canonical-model key, then a recognized exact configured model. Unknown aliases stay visible at zero cost and enter the shared unknown-model refresh path; the adapter does not guess K2.5. The byte-offset cursor retains request attribution across appends. `usageScope` says whether an additive request charge also belongs to the current turn; both `turn` and missing/default `session` records contribute to session spend, including full-compaction requests.
+Spend comes only from `usage.record`. `spend::fold_records` walks records in order, keeps the latest `llm.request` as attribution in the cursor state, and prices each usage record from the first name the price book knows:
 
-Fleet discovery, seat lifetime spend, and live parent cost use the main wire plus every `agents/<id>/wire.jsonl` in the session. Child entries retain the parent session's thread id. Only the per-card refresh stat includes a companion stamp of child lengths and newest child mtime, so growing child wires invalidate its live-cost gate. Fleet parsing uses each wire's physical stat and independent incremental cursor. The turn-end fallback also sees the physical stat; its upward-only reconciliation preserves the parent's child-inclusive cost. Only `usage.record` is priced; `subagent.completed.usage` is not added again.
+1. The record's own `model`.
+2. The latest `llm.request` as `<provider>/<model>`.
+3. The latest `llm.request` `model` alone.
 
-Subscription limits remain account enrichment rather than token spend. The managed `/usages` response also exposes optional Booster balance and monthly-cap money fields. The shared `ExtraCredits` projection currently carries USD only, so the adapter publishes USD Booster values and omits other declared currencies rather than mislabeling them.
+With none priced, the record stays visible at zero cost under the request's normalized alias, else the record's model, and enters the shared unknown-model refresh path. The adapter never guesses a model such as K2.5. A record with no timestamp, or with no model label at all, is skipped. Every record counts toward session spend whatever its `usageScope`, full-compaction requests included. Only the turn scope also marks a record as the current turn's split.
+
+Every spend consumer reads the main wire plus every `agents/<id>/wire.jsonl` in the session (`wire::session_wires`), and every entry's thread id is the session directory name, so child spend lands on the parent session. Fleet discovery globs `sessions/*/*/agents/*/wire.jsonl` (`spending_sources_at`) and gives each wire its own byte-offset cursor. The live card cost prices the main wire from the refresh snapshot and each child wire in full. The turn-end fallback prices the same set through `session_spend_transcripts`, and its upward-only reconciliation keeps the parent's child-inclusive total. `subagent.completed.usage` is never priced, so a child's spend counts once. Child cards get no live dollar refresh.
 
 ## Known gaps
 
-Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
+`rimz coverage --wiring` prints the current wired, partial, and unsupported grid. The gaps below have a reason worth recording.
 
-- **Structured answering stays in the Kimi UI.** RimZ has no SDK, server, or ACP client able to return Kimi's typed answer protocol, so `rimz answer` is unsupported.
-- **Background parking is unsupported.** Terminal task status reaches the root through `Notification`, but that notification does not prove the active-task set and a clean `Stop` does not include it. `bg` stays unsupported until the adapter joins durable task state and can prove the parent parked while work remains in flight.
-- **Subagent coverage is partial.** Children surface at the next recorded root hook after durable spawn records land. Resumed runs stay closed because the shared seam has no run discriminator. Cancellation, including upstream timeouts, shows as finished rather than failed. A child's compaction shows on the parent card; if cancelled before PostCompact, the card stays compacting until another root signal.
-- **Answered-ask recovery and tool replay stay deferred** until their consumers can preserve those facts without guessing.
-- **CLI compatibility has a floor, not an identity probe.** Installation refuses detected versions below 2.1.1; unknown versions pass. A colliding executable with an unparseable version is not automatically rejected. The Kimi Code data root, hook protocol, and process title remain the product boundary.
-- **Unused hook events stay unwired.** `TaskStarted`, `UserPromptQueued`, and `SessionHeartbeat` have no mapped RimZ behavior. Valid foreign entries using them are preserved.
-- **Supervised exit codes stay generic.** Prompt mode exits 1 for a failed, cancelled, or hook-blocked turn alike, and for startup, auth, and option errors, so a non-zero exit carries no failure class RimZ could map.
+- Structured answering stays in the Kimi UI. RimZ has no SDK, server, or ACP client that can return Kimi's typed answer, so `rimz answer` is unsupported.
+- Asks are keyless. RimZ keeps no `tool_call_id`, so a parallel sibling tool clears an open wait ([asks](#asks)).
+- Background parking is unsupported. `Notification` reports a terminal task, but it does not prove the active-task set, and a clean `Stop` does not include it. `bg` stays unsupported until the adapter joins the durable task state and can prove the parent parked with work in flight.
+- Subagent coverage is partial. A child appears at the next recorded root hook after its spawn record lands. A resumed child stays closed, because the shared derive pass has no run discriminator. A cancellation, an upstream timeout included, shows as finished, not failed. A child's compaction shows on the parent card, and a child cancelled before `PostCompact` leaves the card compacting until the next root signal.
+- The data root follows the RimZ process env, not the caller's login ([data root](#data-root)).
+- CLI compatibility is a floor, not an identity probe. Install refuses a detected version below 2.1.1 and passes an unknown one, so a colliding `kimi` executable with an unparseable version is not rejected.
+- Supervised exit codes stay generic. An ordinary prompt exits 1 for a failed, cancelled, or hook-blocked turn and for startup, auth, and option errors alike, so a nonzero exit carries no failure class RimZ could map. A `/goal` prompt passes through unchanged and exits 3 when blocked and 6 when paused, which RimZ also does not map ([prompt mode](../../externals/agent-adapter/kimi-reference.md#prompt-mode)).
