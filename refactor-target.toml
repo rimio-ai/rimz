@@ -1496,7 +1496,7 @@ reason = "The shared domain toggle persists machine intent for config and attend
 
 [[module]]
 path = "crates/rimz/src/sandbox"
-allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", "ids", "mux", "utils", "worktree"]
+allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", "ids", "mux", "proc", "utils", "worktree"]
 # Protected Git configuration resolves the linked checkout's common directory.
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
@@ -1505,7 +1505,9 @@ allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", 
 # Inspection shares read-only mount/copy plans and explicit application with exec.
 # Explicit launch cwd resolution and prompt-file resolution reverse the caller's tmp view through TmpView::host_path.
 # Hook mapping consumes the launch mount plan's identity binds and captured pin (+2).
-surface-budget = 24
+# BindGuard, BindGuardErr, BindRestore, their launch/handoff methods, the helper,
+# and SandboxPlan::guarded_entries share live protected-bind repair (+8).
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -6458,6 +6460,26 @@ reason = "The integration crate builds it at 22 sites (tests/integration/sandbox
 kind = "item"
 key = "sandbox::SandboxPlan"
 reason = "Pub field LaunchPlan.sandbox, and the integration crate imports it (tests/integration/sandbox.rs:11,52) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::BindGuard"
+reason = "The integration crate proves live repairs through the lifetime API reserved for both scoped executors."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::BindGuardErr"
+reason = "Integration tests match typed arm failures; launch wiring needs their inotify errno and watched path."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::BindRestore"
+reason = "The scoped guard reports batches to its owner's sink without importing diag."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::run_bind_helper"
+reason = "The binary branches into namespace repair before main starts any threads."
 
 [[verdict]]
 kind = "item"
