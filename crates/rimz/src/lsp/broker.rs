@@ -107,6 +107,7 @@ struct Model {
     entry: Entry,
     lifecycle: Lifecycle,
     readiness: Readiness,
+    not_ready_since_ms: u64,
     transport: Option<Arc<Transport>>,
     request_phase: RequestPhase,
     start_requested: bool,
@@ -157,6 +158,21 @@ impl Shared {
 }
 
 impl Model {
+    fn update_readiness(&mut self, elapsed: u64, now_ms: u64) -> bool {
+        let state = self.readiness.state(elapsed);
+        if state == self.entry.state {
+            return false;
+        }
+        if self.entry.state == State::Ready {
+            self.not_ready_since_ms = now_ms;
+        }
+        if state == State::Ready {
+            self.entry.ready_at_ms.get_or_insert(now_ms);
+        }
+        self.entry.state = state;
+        true
+    }
+
     fn should_retire(&self) -> bool {
         self.retiring
             && matches!(self.entry.state, State::Dormant { .. })
@@ -334,6 +350,7 @@ fn serve_inner(request: &mut ServeRequest, exit_shared: &mut Option<Arc<Shared>>
         })),
         router: router_tx,
         model: Mutex::new(Model {
+            not_ready_since_ms: entry.started_at_ms,
             entry,
             lifecycle: Lifecycle::default(),
             readiness: Readiness::default(),
@@ -515,6 +532,7 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
     model.entry.state = State::Starting;
     model.entry.last_crash = None;
     model.entry.started_at_ms = now;
+    model.not_ready_since_ms = now;
     model.entry.ready_at_ms = None;
     model.entry.estimate_bytes = estimate;
     model.lifetime_peak_kb = 0;
@@ -703,20 +721,12 @@ fn run(
             ) {
                 break;
             }
-            let state = model.readiness.state(shared.elapsed());
-            if state != model.entry.state {
-                if state == State::Ready {
-                    model
-                        .entry
-                        .ready_at_ms
-                        .get_or_insert(crate::utils::time::unix_now_ms());
-                    if model.ready_footprint_kb.is_none() {
-                        let reading = memory::tree(server.child.id());
-                        let footprint = reading.rss_kb.saturating_add(reading.swap_kb);
-                        model.ready_footprint_kb = (footprint != 0).then_some(footprint);
-                    }
+            if model.update_readiness(shared.elapsed(), crate::utils::time::unix_now_ms()) {
+                if model.entry.state == State::Ready && model.ready_footprint_kb.is_none() {
+                    let reading = memory::tree(server.child.id());
+                    let footprint = reading.rss_kb.saturating_add(reading.swap_kb);
+                    model.ready_footprint_kb = (footprint != 0).then_some(footprint);
                 }
-                model.entry.state = state;
                 registry::publish(&model.entry)?;
                 shared.changed.notify_all();
             }
@@ -985,6 +995,7 @@ mod tests {
             entry,
             lifecycle: Lifecycle::default(),
             readiness: Readiness::default(),
+            not_ready_since_ms: 0,
             transport: None,
             request_phase: RequestPhase::Serving,
             start_requested: false,

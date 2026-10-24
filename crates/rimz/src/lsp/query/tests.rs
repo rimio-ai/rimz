@@ -2116,12 +2116,51 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
         seconds: 47,
     };
     assert_eq!(indexing.exit_code(), 4);
-    insta::assert_snapshot!(indexing.to_string(), @"rust still indexing after 47s; use grep for this question");
+    let endings = [0, 47, 599, 600, 601].map(|seconds| {
+        QueryErr::Indexing {
+            server: "rust".into(),
+            seconds,
+        }
+        .to_string()
+    });
+    assert_eq!(
+        endings,
+        [0, 47, 599, 600, 601].map(|seconds| format!(
+            "rust still indexing after {seconds}s; {}",
+            if seconds < 600 {
+                "rerun to keep waiting"
+            } else {
+                "use grep for this question and retry on the next"
+            }
+        ))
+    );
+    insta::assert_snapshot!(indexing.to_string(), @"rust still indexing after 47s; rerun to keep waiting");
     for error in [
+        QueryErr::Indexing {
+            server: "rust".into(),
+            seconds: 599,
+        },
+        QueryErr::Indexing {
+            server: "rust".into(),
+            seconds: 600,
+        },
         QueryErr::MemoryShort {
             root: "/checkout".into(),
             server: "rust".into(),
             shortfall: None,
+        },
+        QueryErr::MemoryShort {
+            root: "/checkout".into(),
+            server: "rust".into(),
+            shortfall: Some(Box::new(crate::lsp::admission::Shortfall {
+                root: "/checkout".into(),
+                server: "rust".into(),
+                estimate_bytes: 90_000,
+                available_bytes: 5000,
+                swap_free_bytes: 50_000,
+                reserve_bytes: 1000,
+                holders: vec![],
+            })),
         },
         QueryErr::MemoryPressure {
             root: "/checkout".into(),
@@ -2129,10 +2168,19 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
         },
     ] {
         assert_eq!(error.exit_code(), 4);
-        assert!(
-            error
-                .to_string()
-                .starts_with("language server rust for /checkout "),
+        let message = error.to_string();
+        let rerun = message.ends_with("rerun to keep waiting");
+        let grep = message.ends_with("use grep for this question and retry on the next");
+        assert_ne!(rerun, grep, "{error}");
+        assert_eq!(
+            rerun,
+            matches!(
+                error,
+                QueryErr::Indexing {
+                    seconds: 0..600,
+                    ..
+                }
+            ),
             "{error}"
         );
     }

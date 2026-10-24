@@ -104,6 +104,9 @@ pub enum Verb {
     Callees,
 }
 
+// 600s covers about 99% of measured Rust starts (p99 481s); rerun below that ceiling.
+const INDEXING_RERUN_CEILING_SECS: u64 = 600;
+
 #[derive(Debug, thiserror::Error)]
 pub enum QueryErr {
     #[error("language server {server} for {root} stopped: memory pressure; use grep for this question and retry on the next", root = root.display())]
@@ -119,7 +122,14 @@ pub enum QueryErr {
         root: PathBuf,
         reason: UnavailableReason,
     },
-    #[error("{server} still indexing after {seconds}s; use grep for this question")]
+    #[error(
+        "{server} still indexing after {seconds}s; {next}",
+        next = if *seconds < INDEXING_RERUN_CEILING_SECS {
+            "rerun to keep waiting"
+        } else {
+            "use grep for this question and retry on the next"
+        }
+    )]
     Indexing { server: String, seconds: u64 },
     #[error(
         "no language server handles .{extension} files ({coverage}); use grep for this target",
