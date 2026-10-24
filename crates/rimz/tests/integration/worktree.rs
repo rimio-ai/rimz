@@ -4225,3 +4225,82 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
         .trim()
         .is_empty()
 }
+
+#[test]
+fn entry_read_combines_git_history_activity_and_takeover_occupancy() {
+    use jiff::Timestamp;
+    use rimz::harness::worktree_entry;
+    use rimz::ids::{MuxName, PaneId};
+    use rimz::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .unwrap()
+        .unwrap();
+    let mut row = rimz::testkit::agent_state(
+        "claude",
+        "entry-agent",
+        Timestamp::from_second(100).unwrap(),
+    );
+    row.worktree_path = Some(path.join("src").display().to_string());
+    row.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%3")));
+    let mut ended = row.clone();
+    ended.ended_at = Some(Timestamp::from_second(200).unwrap());
+    ended.last_activity = Timestamp::from_second(200).unwrap();
+    let mut outside = row.clone();
+    outside.worktree_path = Some(env.project_root.display().to_string());
+    outside.last_activity = Timestamp::from_second(300).unwrap();
+    let mut dead = row.clone();
+    dead.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "dead",
+        u32::MAX,
+        None,
+    ));
+    let cases = [
+        vec![],
+        vec![ended.clone()],
+        vec![outside.clone()],
+        vec![dead],
+        vec![row.clone()],
+    ];
+    let occupied =
+        cases.map(|alive| worktree_entry::occupied(&path, &env.project_root, &alive).unwrap());
+    let facts = [vec![ended.clone(), outside.clone()], vec![]].map(|audit| {
+        let entry = worktree_entry::read(&path, &marker, &audit).unwrap();
+        (
+            entry.last_activity,
+            entry.created_at,
+            entry.status.changed_files,
+            entry.removable,
+        )
+    });
+    let expected_facts =
+        [Some(ended.last_activity), None].map(|activity| (activity, marker.created_at, 0, true));
+    let nested = rimz::worktree::create(
+        &env.project_root,
+        &rimz::config::WorktreeConfig {
+            dir: path.join(".nested").display().to_string(),
+            ..Default::default()
+        },
+        Some("nested"),
+        None,
+        None,
+        false,
+        rimz::worktree::LaunchBase::Configured,
+    )
+    .unwrap();
+    row.worktree_path = Some(nested.marker.worktree_path.display().to_string());
+    let nested_occupied = worktree_entry::occupied(&path, &env.project_root, &[row]).unwrap();
+    assert_eq!(
+        (occupied, facts, nested_occupied),
+        ([false, false, false, false, true], expected_facts, false)
+    );
+}
