@@ -2098,6 +2098,7 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
                 reason,
             };
             assert_eq!(error.exit_code(), 3);
+            assert!(error.server_error().is_some());
             error.to_string()
         })
         .collect::<Vec<_>>()
@@ -2136,6 +2137,10 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     );
     insta::assert_snapshot!(indexing.to_string(), @"rust still indexing after 47s; rerun to keep waiting");
     for error in [
+        QueryErr::Unanswered {
+            server: "rust".into(),
+            seconds: 60,
+        },
         QueryErr::Indexing {
             server: "rust".into(),
             seconds: 599,
@@ -2168,7 +2173,17 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
         },
     ] {
         assert_eq!(error.exit_code(), 4);
+        assert!(error.server_error().is_some());
         let message = error.to_string();
+        if matches!(
+            error,
+            QueryErr::MemoryShort { .. } | QueryErr::MemoryPressure { .. }
+        ) {
+            assert!(
+                message.starts_with("language server rust for /checkout "),
+                "{error}"
+            );
+        }
         let rerun = message.ends_with("rerun to keep waiting");
         let grep = message.ends_with("use grep for this question and retry on the next");
         assert_ne!(rerun, grep, "{error}");
@@ -2182,6 +2197,22 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
                 }
             ),
             "{error}"
+        );
+    }
+    for error in [
+        QueryErr::UncoveredExtension {
+            extension: "txt".into(),
+            coverage: BTreeMap::new(),
+        },
+        QueryErr::MultipleServers {
+            root: "/checkout".into(),
+            servers: BTreeSet::from(["rust".into(), "other".into()]),
+        },
+        QueryErr::Failed(LspErr::Protocol("bad query".into())),
+    ] {
+        assert_eq!(
+            (error.exit_code(), error.server_error().is_some()),
+            (1, false)
         );
     }
 }

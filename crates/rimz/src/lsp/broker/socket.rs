@@ -13,6 +13,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+const QUERY_ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TextDocument {
@@ -355,6 +357,16 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
 }
 
 fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<Value> {
+    query_with_answer_timeout(shared, method, params, wait_ms, QUERY_ANSWER_TIMEOUT)
+}
+
+fn query_with_answer_timeout(
+    shared: &Shared,
+    method: &str,
+    params: Value,
+    wait_ms: u64,
+    answer_timeout: Duration,
+) -> Result<Value> {
     let _: QueryRequest = serde_json::from_value(json!({"method": method, "params": params}))?;
     let deadline = Instant::now() + Duration::from_millis(wait_ms.min(110_000));
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
@@ -415,7 +427,7 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
             return Ok(json!({"error": {"code": -32003, "message": StopReason::Crashed}}));
         }
     };
-    let response = receiver.recv_timeout(Duration::from_secs(60));
+    let response = receiver.recv_timeout(answer_timeout);
     transport.cancel(id);
     if matches!(&response, Ok(Err(error)) if !matches!(error, LspErr::Server { .. })) {
         transport_failed(shared, &transport);
@@ -431,6 +443,9 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
     }
     match response {
         Ok(result) => Ok(json!({"result": result?})),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Ok(json!({"unanswered": {"after_ms": answer_timeout.as_millis() as u64}}))
+        }
         Err(error) => Err(LspErr::Protocol(format!("query did not answer: {error}"))),
     }
 }
@@ -526,6 +541,90 @@ mod tests {
             #[cfg(feature = "testkit")]
             ticks: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn unanswered_query_keeps_the_ready_transport() {
+        let shared = shared(State::Ready);
+        let (_server, reader) = UnixStream::pair().unwrap();
+        let transport = super::super::Transport::start(
+            reader,
+            Vec::<u8>::new(),
+            shared.settings.clone(),
+            Value::Null,
+            std::sync::mpsc::channel().0,
+        );
+        shared.model.lock().unwrap().transport = Some(transport.clone());
+        let response = query_with_answer_timeout(
+            &shared,
+            "workspace/symbol",
+            json!({"query":"symbol"}),
+            0,
+            Duration::from_millis(20),
+        );
+        let model = shared.model.lock().unwrap();
+        assert_eq!(
+            (
+                response.map_err(|error| error.to_string()),
+                model.entry.state.clone(),
+                model
+                    .transport
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &transport)),
+                transport.is_closed(),
+                transport.has_outstanding(),
+            ),
+            (
+                Ok(json!({"unanswered":{"after_ms":20}})),
+                State::Ready,
+                true,
+                false,
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn stop_during_an_unanswered_query_takes_precedence() {
+        let shared = shared(State::Ready);
+        let (mut server, client) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let transport = super::super::Transport::start(
+            client.try_clone().unwrap(),
+            client,
+            shared.settings.clone(),
+            Value::Null,
+            std::sync::mpsc::channel().0,
+        );
+        shared.model.lock().unwrap().transport = Some(transport);
+        let (sent, response) = std::thread::scope(|scope| {
+            let querying = scope.spawn(|| {
+                query_with_answer_timeout(
+                    &shared,
+                    "workspace/symbol",
+                    json!({"query":"symbol"}),
+                    0,
+                    Duration::from_secs(1),
+                )
+            });
+            let sent = crate::lsp::protocol::read_frame(&mut BufReader::new(&mut server)).is_ok();
+            if sent {
+                shared.stop(StopReason::MemoryPressure);
+            }
+            (
+                sent,
+                querying.join().unwrap().map_err(|error| error.to_string()),
+            )
+        });
+        assert_eq!(
+            (sent, response),
+            (
+                true,
+                Ok(json!({"error":{"code":-32003,"message":"memory pressure"}}))
+            )
+        );
     }
 
     #[test]

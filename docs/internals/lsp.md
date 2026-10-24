@@ -114,6 +114,8 @@ After `initialize` and `initialized`, an open progress token means `indexing`. T
 
 A query request waits at most 110 seconds for startup and readiness. The client's socket timeout is 115 seconds; these are per-request bounds, not a whole-call deadline, since a name target can issue several requests in sequence. At the readiness deadline the broker returns `{"indexing":{"elapsed_ms":N}}`, measuring the current not-ready stretch from the lifetime's start or its last drop out of Ready, never an empty result from an unfinished index. The client-side 600-second ceiling beside `crates/rimz/src/lsp/query.rs::QueryErr` tells agents to `rerun to keep waiting` below the ceiling and to `use grep for this question and retry on the next` at or above it. A dormant broker whose next start has not begun still measures from the previous stretch.
 
+Once ready, the broker waits at most 60 seconds for an answer, then returns `{"unanswered":{"after_ms":60000}}` without failing the transport. The client's own 115-second socket timeout also becomes `Unanswered` in `crates/rimz/src/lsp/query/client.rs::request_with_wait`, covering a server that became ready late in the readiness window. Both paths exit 4, tell the agent to use grep for this question and retry on the next, and are remembered for the rest of the call. Other client I/O and protocol errors remain exit 1.
+
 The first Ready transition in `crates/rimz/src/lsp/broker.rs::run` samples RSS plus swap as the lifetime's ready footprint. It does so under the model lock that stamps `ready_at_ms`, before waiting queries wake. A zero reading leaves the baseline unset and a later Ready transition tries again. `crates/rimz/src/lsp/broker.rs::prepare_start` clears the baseline for each new lifetime.
 
 ### Leases and shutdown
@@ -176,7 +178,7 @@ The broker keeps the machine policy captured at spawn until it is replaced. Idle
 
 ### The agent's view of a kill
 
-Agents get no message. The next query against a dormant key requests a restart, answers normally if the server is ready within the wait, and exits 4 if it is still indexing or memory admission refuses. Memory pressure that interrupts an in-flight query also exits 4, and any other stop that interrupts one exits 3. The next call can try again without relaunching the agent.
+Agents get no message. The next query against a dormant key requests a restart, answers normally if the server is ready within the wait, and exits 4 if it is still indexing, a ready server did not answer in time, or memory admission refuses. Memory pressure that interrupts an in-flight query also exits 4, and any other stop that interrupts one exits 3. The next call can try again without relaunching the agent.
 
 ## Learned cost
 
@@ -358,6 +360,7 @@ The query client records one result per verb target after server selection succe
 | An answer other than null or an empty array, or an ambiguous lookup (exit 6) | `results` | answered |
 | A null or empty-array answer, or a name not found (exit 5) | `empty` | answered |
 | Indexing | `indexing` | failed |
+| No answer within the broker or client timeout | `unanswered` | failed |
 | Memory short or memory pressure | `memory` | failed |
 | Other query error | `error` | failed |
 

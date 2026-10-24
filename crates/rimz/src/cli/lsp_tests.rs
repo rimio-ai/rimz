@@ -197,7 +197,7 @@ fn query_exit_uses_severity_not_argument_order() {
 
 #[test]
 fn query_failures_reuse_server_conditions_only() {
-    for code in [1, 3, 4, 8, 9] {
+    for code in [1, 3, 4, 8, 9, 10] {
         let mut failures = QueryFailures::default();
         let mut requests = 0;
         for _ in 0..3 {
@@ -220,6 +220,10 @@ fn query_failures_reuse_server_conditions_only() {
                     9 => QueryErr::MemoryPressure {
                         root: "/repo".into(),
                         server: "rust".into(),
+                    },
+                    10 => QueryErr::Unanswered {
+                        server: "rust".into(),
+                        seconds: 60,
                     },
                     _ => rimz::lsp::LspErr::Protocol("bad request".into()).into(),
                 })

@@ -1,20 +1,30 @@
 use super::*;
 use std::sync::{Condvar, Mutex};
 
-fn query_reply(mut response: Value) -> QueryErr {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
-    let root = tempfile::tempdir().unwrap();
-    let entry: Entry = serde_json::from_value(json!({
-        "root":root.path(), "server":"rust", "nonce":"test", "broker_pid":1,
+fn entry(root: &Path) -> Entry {
+    serde_json::from_value(json!({
+        "root":root, "server":"rust", "nonce":"test", "broker_pid":1,
         "broker_start_token":"test", "state":"ready", "started_at_ms":0,
         "estimate_bytes":0, "settings_hash":"", "request_count":0, "peak_rss_kb":0, "leases":[]
     }))
-    .unwrap();
+    .unwrap()
+}
+
+fn query_reply(response: Value) -> QueryErr {
+    query_reply_with_wait(Some(response), 110_000)
+}
+
+fn query_reply_with_wait(mut response: Option<Value>, wait_ms: u64) -> QueryErr {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::net::UnixListener;
+    let root = tempfile::tempdir().unwrap();
+    let entry = entry(root.path());
     let directory = registry::directory(root.path(), "rust").unwrap();
     std::fs::create_dir_all(&directory).unwrap();
     let listener = UnixListener::bind(directory.join("sock")).unwrap();
-    response["nonce"] = json!("test");
+    if let Some(response) = &mut response {
+        response["nonce"] = json!("test");
+    }
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut line = String::new();
@@ -22,12 +32,72 @@ fn query_reply(mut response: Value) -> QueryErr {
             .read_line(&mut line)
             .unwrap();
         assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["op"], "query");
-        writeln!(stream, "{response}").unwrap();
+        if let Some(response) = response {
+            writeln!(stream, "{response}").unwrap();
+        } else {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            assert_eq!(
+                stream.read(&mut [0]).unwrap(),
+                0,
+                "client must close after timing out"
+            );
+        }
     });
-    let error = request(&entry, "workspace/symbol", json!({})).unwrap_err();
+    let error = request_with_wait(&entry, "workspace/symbol", json!({}), wait_ms).unwrap_err();
     server.join().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
     error
+}
+
+#[test]
+fn unanswered_replies_preserve_the_answer_bound() {
+    let cases = [
+        (json!({"after_ms":60_000}), 60),
+        (json!({}), 0),
+        (json!({"after_ms":"bad"}), 0),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(reply, _)| {
+            let error = query_reply(json!({"unanswered":reply}));
+            let seconds = match &error {
+                QueryErr::Unanswered { seconds, .. } => Some(*seconds),
+                _ => None,
+            };
+            (error.exit_code(), seconds, error.to_string())
+        })
+        .collect::<Vec<_>>();
+    let expected = cases.iter().map(|(_, seconds)| (
+        4,
+        Some(*seconds),
+        format!("rust did not answer within {seconds}s; use grep for this question and retry on the next"),
+    )).collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn socket_timeouts_are_unanswered() {
+    let error = query_reply_with_wait(None, 0);
+    assert_eq!(error.exit_code(), 4, "{error}");
+    assert!(
+        matches!(error, QueryErr::Unanswered { seconds: 5, .. }),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "rust did not answer within 5s; use grep for this question and retry on the next"
+    );
+}
+
+#[test]
+fn missing_socket_is_still_a_query_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let error =
+        request_with_wait(&entry(root.path()), "workspace/symbol", json!({}), 0).unwrap_err();
+    assert_eq!(error.exit_code(), 1);
+    assert!(matches!(error, QueryErr::Failed(LspErr::Io(_))), "{error}");
 }
 
 #[test]
