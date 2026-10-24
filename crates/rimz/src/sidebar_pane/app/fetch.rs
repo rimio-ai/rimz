@@ -833,9 +833,7 @@ impl FetchWorker {
                 self.publish_fold(state, fast, phase, SnapshotSource::Cached, sink);
             }
             Err(err) if !fold.produce => {
-                sink.publish(FetchUpdate::Failed {
-                    error: err.to_string(),
-                });
+                sink.publish(Err(err.to_string()));
             }
             // Producing cycle reports the produce fold's own error.
             Err(_) => {}
@@ -896,7 +894,7 @@ impl FetchWorker {
                     sink,
                 );
             }
-            Err(error) => sink.publish(FetchUpdate::Failed { error }),
+            Err(error) => sink.publish(Err(error)),
         }
     }
 
@@ -986,11 +984,7 @@ impl FetchWorker {
                 });
             }
         }
-        sink.publish(FetchUpdate::Fold {
-            fold: Arc::new(fold),
-            phase,
-            source,
-        });
+        sink.publish(Ok((Arc::new(fold), phase, source)));
         // After publication: a narrowing write waits on a mux listing, which must
         // not hold the frame.
         if let Some(roster) = roster {
@@ -1322,38 +1316,46 @@ impl ResultSink {
     }
 
     /// Publish content and completion atomically, then wake the frozen cycle members.
-    fn publish(&mut self, mut update: FetchUpdate) {
+    fn publish(
+        &mut self,
+        outcome: Result<(Arc<WorkspaceFold>, FetchPhase, SnapshotSource), String>,
+    ) {
         let views = self
             .host_data
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .views
             .clone();
-        if let FetchUpdate::Fold { fold, .. } = &mut update {
-            // Compare unlocked: panes replay and paint under the views lock, and
-            // this worker is the only writer of the retained fold.
-            let prior = views
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .fold
-                .clone();
-            if let Some(prior) = prior {
-                let shared = &mut Arc::make_mut(fold).workspace.0;
-                let prior = prior.workspace.snapshot();
-                reuse_shared(&mut shared.worktree_groups, &prior.worktree_groups);
-                reuse_shared(&mut shared.agents, &prior.agents);
-                reuse_shared(&mut shared.agent_panes, &prior.agent_panes);
-                reuse_shared(&mut shared.fenced_sessions, &prior.fenced_sessions);
-                if let (Some(shared), Some(prior)) =
-                    (&mut shared.resume_outcomes, &prior.resume_outcomes)
-                {
-                    reuse_shared(shared, prior);
+        let mut update = match outcome {
+            Ok((mut fold, phase, source)) => {
+                // Compare unlocked: panes replay and paint under the views lock, and
+                // this worker is the only writer of the retained fold.
+                let prior = views
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .fold
+                    .clone();
+                if let Some(prior) = prior {
+                    let shared = &mut Arc::make_mut(&mut fold).workspace.0;
+                    let prior = prior.workspace.snapshot();
+                    reuse_shared(&mut shared.worktree_groups, &prior.worktree_groups);
+                    reuse_shared(&mut shared.agents, &prior.agents);
+                    reuse_shared(&mut shared.agent_panes, &prior.agent_panes);
+                    reuse_shared(&mut shared.fenced_sessions, &prior.fenced_sessions);
+                    if let (Some(shared), Some(prior)) =
+                        (&mut shared.resume_outcomes, &prior.resume_outcomes)
+                    {
+                        reuse_shared(shared, prior);
+                    }
+                }
+                FetchUpdate::Fold {
+                    fold,
+                    phase,
+                    source,
                 }
             }
-        } else {
-            // The worker publishes only room folds or failed final outcomes.
-            assert!(matches!(update, FetchUpdate::Failed { .. }));
-        }
+            Err(error) => FetchUpdate::Failed { error },
+        };
         let completed = update.is_final();
         if let Some(context) = &self.context {
             update = FetchUpdate::Shared {
@@ -1432,9 +1434,7 @@ impl FetchWorker {
                     }
                     Err(err) => {
                         sink.begin_cycle();
-                        sink.publish(FetchUpdate::Failed {
-                            error: format!("resolving workspace state paths: {err}"),
-                        });
+                        sink.publish(Err(format!("resolving workspace state paths: {err}")));
                     }
                 }
             },
