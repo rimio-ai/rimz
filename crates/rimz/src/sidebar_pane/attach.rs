@@ -23,8 +23,7 @@ const HELLO_LIMIT: usize = 4096;
 pub(super) struct Hello {
     pub(super) protocol: String,
     pub(super) instance_id: SidebarInstanceId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) pane_id: Option<PaneId>,
+    pub(super) pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) baseline_pane: Option<PaneId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,7 +178,7 @@ mod tests {
         Hello {
             protocol: PROTOCOL.to_owned(),
             instance_id: SidebarInstanceId::new(),
-            pane_id: Some(PaneId::from_parts(crate::MuxName::Tmux, "%7")),
+            pane_id: PaneId::from_parts(crate::MuxName::Tmux, "%7"),
             baseline_pane: Some(PaneId::from_parts(crate::MuxName::Tmux, "%6")),
             supervisor_build: Some("build-a".to_owned()),
             tick_seconds: Some(2),
@@ -256,6 +255,24 @@ mod tests {
         let (supervisor, host) = UnixStream::pair().unwrap();
         write_line(&supervisor, &hello()).unwrap();
         assert!(recv_hello(&host).is_err());
+    }
+
+    /// The host reads `field` from every hello, so a hello without it is malformed.
+    fn assert_hello_requires(field: &str) {
+        let (supervisor, host) = UnixStream::pair().unwrap();
+        let mut line = serde_json::to_value(hello()).unwrap();
+        line.as_object_mut().unwrap().remove(field);
+        write_line(&supervisor, &line).unwrap();
+        let error = recv_hello(&host).unwrap_err().to_string();
+        assert!(
+            error.contains(&format!("missing field `{field}`")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_hello_without_a_pane_id_is_malformed() {
+        assert_hello_requires("pane_id");
     }
 
     #[test]

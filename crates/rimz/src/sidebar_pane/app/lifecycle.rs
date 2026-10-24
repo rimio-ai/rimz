@@ -42,7 +42,9 @@ impl SelfCloseState {
     /// run before Zellij materializes sibling panes; a tab born permanently
     /// sidebar-only still cleans itself up once the window elapses.
     ///
-    /// `sibling_count` is `None` when the count could not be determined (the snapshot carries no `own_view` — no mux pane env var, so no `--exclude-pane-id`, or our own pane was missing from the live list); in that case we never close.
+    /// `sibling_count` is `None` when the count could not be determined (the
+    /// snapshot carries no `own_view`: our own pane was missing from the live
+    /// list); in that case we never close.
     pub(super) fn should_close(&mut self, sibling_count: Option<usize>, now: Instant) -> bool {
         match sibling_count {
             Some(0) => {

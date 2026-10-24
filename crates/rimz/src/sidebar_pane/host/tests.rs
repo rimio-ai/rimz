@@ -79,10 +79,10 @@ impl Room {
         let instance_id = SidebarInstanceId::new();
         let stream = self.connect();
         let mut hello = hello(&instance_id);
-        if pane_id.is_some() {
+        if let Some(pane_id) = pane_id {
             hello.refresh_ms = Some(500);
+            hello.pane_id = pane_id;
         }
-        hello.pane_id = pane_id;
         self.attach_hello(pty, hello, stream)
     }
 
@@ -155,8 +155,11 @@ fn hello(instance_id: &SidebarInstanceId) -> Hello {
     Hello {
         protocol: PROTOCOL.to_owned(),
         instance_id: instance_id.clone(),
-        // No pane id: nothing in the attachment may ask a multiplexer.
-        pane_id: None,
+        // A synthetic, non-addressable pane: nothing in the attachment may ask a multiplexer.
+        pane_id: crate::ids::PaneId::from_parts(
+            MuxName::Zellij,
+            format!("sidebar_{}", instance_id.as_str()),
+        ),
         baseline_pane: None,
         supervisor_build: Some("build-a".to_owned()),
         tick_seconds: None,
@@ -294,7 +297,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
 
     for baseline in [Some("tmux:%6"), None, Some("tmux:%9")] {
         let mut greeting = hello(&instance);
-        greeting.pane_id = Some(own.clone());
+        greeting.pane_id = own.clone();
         greeting.baseline_pane = baseline.map(|pane| PaneId::parse(pane).unwrap());
         let mut pty = Pty::open(54, 30);
         let mut pane = room.attach_hello(&pty, greeting, room.connect());
@@ -1248,7 +1251,7 @@ esac
         // Keep B's real inbox under test control so receipt and acknowledgement
         // are observed independently of datagram folds or destination paints.
         let mut greeting = hello(&SidebarInstanceId::new());
-        greeting.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_20"));
+        greeting.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_20");
         let (destination, live) = room.host.admit(&greeting).unwrap();
         let _subscription = room
             .host

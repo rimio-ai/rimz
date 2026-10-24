@@ -126,10 +126,10 @@ impl Attachment {
                 config.room.mux,
                 &config.room.session_name,
                 PixelRenderCaps::default(),
-                config.own_pane.as_ref(),
+                &config.own_pane,
             );
         if config.room.mux == MuxName::Tmux
-            && let Err(err) = escalate_own_pane_passthrough(config.own_pane.as_ref())
+            && let Err(err) = escalate_own_pane_passthrough(&config.own_pane)
         {
             warn!(
                 session = %config.room.session_name,

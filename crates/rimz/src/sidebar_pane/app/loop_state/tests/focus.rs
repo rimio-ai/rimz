@@ -165,7 +165,7 @@ fn zellij_unattributable_focus_event_keeps_the_sample() {
 #[test]
 fn focus_failure_follows_its_source_view_after_rerouting() {
     let (mut rig, _, [first, _]) = child_focus_rig();
-    let own = rig.state.pane.config.own_pane.clone().unwrap();
+    let own = rig.state.pane.config.own_pane.clone();
     let other = zellij("sidebar_other");
     let sample = |rig: &Rig, swapped| {
         rig.views.lock().unwrap().reconcile(
@@ -418,19 +418,13 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
         assert!(!alert.is_active());
         let theme = {
             let pane = &mut rig.state.pane;
-            let mut guard = rig
-                .state
-                .views
-                .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+            let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
             let (_, context) = guard.pair();
             pane.ui.theme(&context.current.theme)
         };
         let frame = {
             let pane = &mut rig.state.pane;
-            let mut guard = rig
-                .state
-                .views
-                .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+            let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
             let (ui, context) = guard.pair();
             render::compose_lines(&context.current, Some(&alert), ui, &pane.ui, &theme, 80, 24)
         };
@@ -799,10 +793,7 @@ fn tmux_sidebar_departure_releases_parked_freeze_before_the_next_pull() {
     }
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (_, context) = guard.pair();
         pane.ui.theme(&context.current.theme);
     }
@@ -1141,7 +1132,7 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1160,7 +1151,7 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&foreign),
+            &foreign,
             1_000,
             1_050,
         )
@@ -1175,7 +1166,7 @@ fn focus_stranded_targets_recent_own_pane_events_only() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             now,
         )
@@ -1211,16 +1202,7 @@ fn focus_stranded_uses_evidence_without_snapshot_client_agreement() {
     for presence in [snapshot.presence, None] {
         snapshot.presence = presence;
         assert_eq!(
-            focus_stranded_target(
-                &snapshot,
-                &ui,
-                &sidebar,
-                &evidence,
-                Some(&sidebar),
-                1_000,
-                1_050,
-            )
-            .ok(),
+            focus_stranded_target(&snapshot, &ui, &sidebar, &evidence, &sidebar, 1_000, 1_050).ok(),
             Some(second_work.clone()),
             "a settled strand must not wait for the pane frame's client sample",
         );
@@ -1236,7 +1218,7 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
             &ViewState::default(),
             &sidebar,
             &[],
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1256,7 +1238,7 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
             &ViewState::default(),
             &tmux_sidebar,
             &[],
-            Some(&tmux_sidebar),
+            &tmux_sidebar,
             1_000,
             1_050,
         )
@@ -1277,7 +1259,7 @@ fn focus_stranded_keeps_empty_evidence_and_tmux_ambiguity_guards() {
                 &ViewState::default(),
                 &tmux_sidebar,
                 &[],
-                Some(&tmux_sidebar),
+                &tmux_sidebar,
                 1_000,
                 1_050,
             )
@@ -1301,7 +1283,7 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1320,7 +1302,7 @@ fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
             &ViewState::default(),
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1344,7 +1326,7 @@ fn focus_stranded_uses_settled_evidence_despite_stale_viewed_panes() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1361,7 +1343,7 @@ fn focus_stranded_uses_settled_evidence_despite_stale_viewed_panes() {
             &ui,
             &sidebar,
             &snapshot.client_views,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -1389,7 +1371,7 @@ fn focus_stranded_refuses_distinct_panes_in_settled_evidence() {
                 &ViewState::default(),
                 &sidebar,
                 &snapshot.client_views,
-                Some(&sidebar),
+                &sidebar,
                 1_000,
                 1_050,
             )
@@ -1429,7 +1411,7 @@ fn focus_stranded_ignores_a_fresh_automatic_repair_overlay() {
             &ViewState::default(),
             &sidebar,
             &evidence,
-            Some(&sidebar),
+            &sidebar,
             1_000,
             1_050,
         )
@@ -2476,7 +2458,7 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
     before.focused_pane = Some(selected.clone());
     // Only the sidebar itself is viewed: the sidebar watches, and the fold stays independent of
     // the existing focus-read hold trigger.
-    before.viewed_panes = rig.state.pane.config.own_pane.clone().into_iter().collect();
+    before.viewed_panes = vec![rig.state.pane.config.own_pane.clone()];
     before.sort_groups_for_presentation();
     rig.view().ctx().current = before.clone();
     rig.view().ui().selected_pane = Some(selected.clone());

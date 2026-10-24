@@ -149,7 +149,7 @@ fn session_focus_without_own_view_is_unseated() {
     snapshot.own_view = None;
     let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
 
-    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), None);
+    assert_eq!(session_focus_baseline(&snapshot, &own), None);
 }
 
 #[test]
@@ -158,18 +158,7 @@ fn session_focus_with_own_view_is_seated() {
     let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
 
     assert_eq!(
-        session_focus_baseline(&snapshot, Some(&own)),
-        snapshot.focused_pane
-    );
-}
-
-#[test]
-fn session_focus_without_own_pane_is_seated() {
-    let mut snapshot = row_snapshot(&workspace(), AgentStatus::Idle, true);
-    snapshot.own_view = None;
-
-    assert_eq!(
-        session_focus_baseline(&snapshot, None),
+        session_focus_baseline(&snapshot, &own),
         snapshot.focused_pane
     );
 }
@@ -193,10 +182,9 @@ fn child_focus_baseline_selects_the_parent_and_requires_own_view() {
     );
     snapshot.focused_pane = Some(child);
     let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
-    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), parent);
+    assert_eq!(session_focus_baseline(&snapshot, &own), parent);
     snapshot.own_view = None;
-    assert_eq!(session_focus_baseline(&snapshot, Some(&own)), None);
-    assert_eq!(session_focus_baseline(&snapshot, None), parent);
+    assert_eq!(session_focus_baseline(&snapshot, &own), None);
 }
 
 fn snapshot_in_group(
@@ -390,7 +378,7 @@ impl ApplyHarness {
         config.instance_id = instance_id.clone();
         config.room.mux = crate::MuxName::Tmux;
         let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
-        config.own_pane = Some(own.clone());
+        config.own_pane = own.clone();
         let socket_path =
             runtime.sidebar_host_wake_socket_path(config.room.mux, &config.room.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);

@@ -310,14 +310,13 @@ impl LoopState {
         &self,
         inspect: impl FnOnce(&ViewState, &ViewContext) -> T,
     ) -> T {
-        self.views
-            .inspect(self.pane.config.own_pane.as_ref(), inspect)
+        self.views.inspect(&self.pane.config.own_pane, inspect)
     }
 
     fn observed_watched(&self) -> bool {
         let (resolved, observed) = self
             .views
-            .visibility(self.pane.config.own_pane.as_ref(), || self.pane.clock.now());
+            .visibility(&self.pane.config.own_pane, || self.pane.clock.now());
         resolved || observed.unwrap_or_else(|| self.pane.watches_snapshot(self.views.mirror()))
     }
 
@@ -459,9 +458,7 @@ impl LoopState {
     }
 
     fn parked(&self, now_ms: u64) -> bool {
-        let Some(pane) = self.pane.config.own_pane.as_ref() else {
-            return false;
-        };
+        let pane = &self.pane.config.own_pane;
         let (sampled, event) = {
             let views = self
                 .views
@@ -505,10 +502,7 @@ impl LoopState {
         let width_control = WidthController::new(
             runtime.clone(),
             config.room.session_name.clone(),
-            clock
-                .effects_enabled()
-                .then(|| config.own_pane.clone())
-                .flatten(),
+            clock.effects_enabled().then(|| config.own_pane.clone()),
             config.room.mux,
             width,
         );
@@ -653,7 +647,7 @@ impl LoopState {
     pub(super) fn seed(&mut self, fold: &WorkspaceFold) {
         let snapshot = Self::project_fold(
             fold,
-            self.pane.config.own_pane.as_ref(),
+            Some(&self.pane.config.own_pane),
             self.pane.config.refresh_ms_override,
         );
         #[cfg(test)]
@@ -707,8 +701,8 @@ impl LoopState {
     }
 
     /// Whether an attached client's focus currently lands in this sidebar's tab.
-    /// Unknown ownership or own-view state reads as watched so uncertainty never
-    /// suppresses motion.
+    /// Unknown own-view state reads as watched so uncertainty never suppresses
+    /// motion.
     fn watched(&self) -> bool {
         // Input and corroborated resize keep a painting view warm between samples.
         if self
@@ -742,7 +736,7 @@ impl LoopState {
             && pending.iter().all(FetchUpdate::is_success)
             && pending
                 .iter()
-                .find_map(|update| update.preview_for(self.pane.config.own_pane.as_ref()))
+                .find_map(|update| update.preview_for(&self.pane.config.own_pane))
                 .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
         if deferred {
             if completed {
@@ -873,7 +867,7 @@ impl LoopState {
             _ => None,
         };
         let visible = update
-            .preview_for(self.pane.config.own_pane.as_ref())
+            .preview_for(&self.pane.config.own_pane)
             .map(|(own_view, viewed)| self.pane.watches_view(own_view.as_ref(), viewed));
         let mut reduction = None;
         let rejected = self.view_transition(false, inputs, visible, |state, v, prepared| {
@@ -895,7 +889,7 @@ impl LoopState {
                     {
                         projections += 1;
                     }
-                    Self::project_fold(fold, config.own_pane.as_ref(), config.refresh_ms_override)
+                    Self::project_fold(fold, Some(&config.own_pane), config.refresh_ms_override)
                 },
                 clock_only,
             );
@@ -940,12 +934,12 @@ impl LoopState {
         }
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
         self.pane.optimistic_watch_until = Some(arrived + FOCUS_RESUME_WATCH_WINDOW);
-        if let Some((pane, source)) = self.pane.config.own_pane.as_ref().zip(push.source_view) {
+        if let Some(source) = push.source_view {
             self.views
                 .registry
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .land(source, pane, self.pane.clock.now());
+                .land(source, &self.pane.config.own_pane, self.pane.clock.now());
             self.views.with(&mut self.pane, Route::READ, |_, v| {
                 v.context.live_focus_source = Some(push.anchor.nonce);
             });
@@ -1076,10 +1070,10 @@ impl LoopState {
                 generation,
                 clients,
             } => {
-                if self.pane.config.own_pane.as_ref() != Some(&pane_id) {
+                if self.pane.config.own_pane != pane_id {
                     trace!(
                         pane = %pane_id,
-                        own_pane = ?self.pane.config.own_pane,
+                        own_pane = %self.pane.config.own_pane,
                         generation,
                         "sidebar ignored foreign strand",
                     );
@@ -1155,7 +1149,7 @@ impl LoopState {
             .latest
             .since(self.pane.own.revision)
             .iter()
-            .find_map(|update| update.preview_for(self.pane.config.own_pane.as_ref()))
+            .find_map(|update| update.preview_for(&self.pane.config.own_pane))
             .map(|(own_view, viewed)| (own_view, viewed.to_vec()))
     }
 
@@ -1245,7 +1239,7 @@ impl LoopState {
                 v.state,
                 &repair.pane_id,
                 &repair.clients,
-                own_pane.as_ref(),
+                &own_pane,
                 repair.sent_at_ms,
                 now_ms,
             )
@@ -1255,7 +1249,7 @@ impl LoopState {
             Err(reason) => {
                 debug!(
                     pane = %repair.pane_id,
-                    own_pane = ?own_pane,
+                    own_pane = %own_pane,
                     generation = repair.generation,
                     evidence = ?repair.clients,
                     own_view = ?self.views.mirror().own_view,
@@ -1351,9 +1345,7 @@ impl LoopState {
     /// Focus landing anywhere on this tab, or a jump to a pane on it, is viewing evidence the
     /// plane's next sample confirms. Ownership reads the latest delivery, as hidden skipping does.
     fn reveals_own_tab(&self, event: &SidebarEvent) -> bool {
-        let Some(own) = self.pane.config.own_pane.as_ref() else {
-            return false;
-        };
+        let own = &self.pane.config.own_pane;
         let targets = match event {
             SidebarEvent::FocusChanged { focused, .. } => focused.as_slice(),
             SidebarEvent::FocusIntent { pane_id, .. } => std::slice::from_ref(pane_id),
@@ -1373,13 +1365,13 @@ impl LoopState {
         // frame. The plane asks the producer to verify topology overlays; this
         // pane asks only for its own reveal. A resize-grow paint hold stays
         // held until a pulled sibling-count verdict releases it.
-        let own = self.pane.config.own_pane.as_ref();
+        let own = &self.pane.config.own_pane;
         let own_focused = self.reveals_own_tab(&event);
         let own_revealed = own_focused && !self.observed_watched();
         let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { focused, unfocused }
-            if own.is_some_and(|own| unfocused.contains(own)
+            if unfocused.contains(own)
                 || (self.views.mirror().client_views.len() == 1
-                    && matches!(focused.as_slice(), [pane] if pane != own))));
+                    && matches!(focused.as_slice(), [pane] if pane != own)));
         if fold {
             self.fold_fused_now();
         }
@@ -1822,7 +1814,7 @@ impl LoopState {
                     room_caps
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .detect(mux, session_name, prev, own_pane.as_ref())
+                        .detect(mux, session_name, prev, &own_pane)
                 },
             );
         }
@@ -2136,11 +2128,11 @@ impl LoopState {
     }
 
     fn focus_push_size_matches(&self, push: &FocusPush, terminal: &Terminal<PaneBackend>) -> bool {
-        let Some(expected) = self.pane.config.own_pane.as_ref().and_then(|pane| {
-            push.expected_panes
-                .as_ref()
-                .and_then(|panes| panes.get(pane))
-        }) else {
+        let Some(expected) = push
+            .expected_panes
+            .as_ref()
+            .and_then(|panes| panes.get(&self.pane.config.own_pane))
+        else {
             return false;
         };
         terminal
@@ -2262,13 +2254,10 @@ impl PaneState {
     }
 
     fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
-        let Some(own_pane) = self.config.own_pane.as_ref() else {
-            return true;
-        };
         let Some(view) = own_view else {
             return true;
         };
-        own_tab_viewed(viewed_panes, view, own_pane)
+        own_tab_viewed(viewed_panes, view, &self.config.own_pane)
     }
 
     /// Whether the next fold equal to the one just applied may arrive as a
@@ -2807,7 +2796,7 @@ impl PaneState {
         let (focused, clear) = v.context.read_receipts(
             v.state,
             &ReadContext {
-                own_pane: self.config.own_pane.as_ref(),
+                own_pane: &self.config.own_pane,
                 marks: &marks,
                 now,
                 at: self.clock.now(),
@@ -2823,14 +2812,9 @@ impl PaneState {
 
     fn prepare_tab_arrival(&mut self, v: &mut ViewBorrow<'_>) {
         let arriving = v.state.viewing_own_tab == Some(false)
-            && v.context
-                .current
-                .own_view
-                .as_ref()
-                .zip(self.config.own_pane.as_ref())
-                .is_some_and(|(view, own)| {
-                    own_tab_viewed(&v.context.current.viewed_panes, view, own)
-                });
+            && v.context.current.own_view.as_ref().is_some_and(|view| {
+                own_tab_viewed(&v.context.current.viewed_panes, view, &self.config.own_pane)
+            });
         if arriving {
             self.next_frame = self.clock.now();
         }
@@ -2850,7 +2834,7 @@ impl PaneState {
             v.state,
             focused_row_id,
             &ReadContext {
-                own_pane: self.config.own_pane.as_ref(),
+                own_pane: &self.config.own_pane,
                 marks,
                 now,
                 at: self.clock.now(),
@@ -2933,7 +2917,7 @@ impl PaneState {
                 snapshot_focused_pane: v.context.current.focused_pane.clone(),
                 fused_event_sent_at_ms,
                 own_view: v.context.current.own_view.is_some(),
-                baseline: session_focus_baseline(&v.context.current, self.config.own_pane.as_ref()),
+                baseline: session_focus_baseline(&v.context.current, &self.config.own_pane),
                 selected_before,
                 selected_after: v.state.selected_pane.clone(),
             });
@@ -2957,7 +2941,7 @@ impl PaneState {
             .is_none()
             .then(|| prepared.anchor.clone())
             .flatten();
-        let own_pane = v.target.shared_id().and(self.config.own_pane.as_ref());
+        let own_pane = v.target.shared_id().map(|_| &self.config.own_pane);
         v.context
             .observe_focus_anchor(&self.config.room.session_name, observed, loaded, own_pane)
     }
@@ -2987,10 +2971,7 @@ impl PaneState {
 
     fn owns_focus_target(&self, snapshot: &SidebarSnapshot, pane: &PaneId) -> bool {
         snapshot.own_view.as_ref().is_some_and(|view| {
-            self.config
-                .own_pane
-                .as_ref()
-                .is_some_and(|own| own_tab_viewed(std::slice::from_ref(pane), view, own))
+            own_tab_viewed(std::slice::from_ref(pane), view, &self.config.own_pane)
         })
     }
 
@@ -3008,12 +2989,7 @@ impl PaneState {
             || !portable_matches
             || push
                 .and_then(|push| push.expected_panes.as_ref())
-                .and_then(|rows| {
-                    self.config
-                        .own_pane
-                        .as_ref()
-                        .and_then(|pane| rows.get(pane))
-                })
+                .and_then(|rows| rows.get(&self.config.own_pane))
                 .is_some_and(|pane| pane.rows != self.painted_height)
         {
             return None;
@@ -3289,10 +3265,14 @@ impl PaneState {
     }
 
     fn parked(&self, v: &ViewBorrow<'_>, now_ms: u64) -> bool {
-        self.config
-            .own_pane
-            .as_ref()
-            .is_some_and(|pane| parked(v.context, &v.events, pane, v.parked, v.focus_event, now_ms))
+        parked(
+            v.context,
+            &v.events,
+            &self.config.own_pane,
+            v.parked,
+            v.focus_event,
+            now_ms,
+        )
     }
 }
 
@@ -3330,13 +3310,10 @@ fn focus_stranded_target(
     ui: &ViewState,
     stranded_pane_id: &PaneId,
     evidence: &[crate::pane::ClientPaneView],
-    own_pane_id: Option<&PaneId>,
+    own_pane_id: &PaneId,
     sent_at_ms: u64,
     now_ms: u64,
 ) -> std::result::Result<PaneId, &'static str> {
-    let Some(own_pane_id) = own_pane_id else {
-        return Err("missing owner pane");
-    };
     if own_pane_id != stranded_pane_id {
         return Err("foreign owner pane");
     }

@@ -469,10 +469,10 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
 }
 
 fn consumer(config: ServeConfig, runtime: RuntimePaths, reader: Replay) -> LoopState {
-    if let Some(own) = &config.own_pane {
+    {
         let mut views = reader.views.lock().unwrap();
-        if views.peek(own).is_none() {
-            let (_, entry) = views.presentation(own, Instant::now(), false);
+        if views.peek(&config.own_pane).is_none() {
+            let (_, entry) = views.presentation(&config.own_pane, Instant::now(), false);
             // These fixtures start independent consumers, not carried client views.
             entry.cursor = Default::default();
         }
@@ -914,7 +914,7 @@ struct Replay {
     views: Arc<Mutex<super::super::views::Views>>,
     cursor: Mutex<super::super::views::Cursor>,
     completion: Arc<AtomicBool>,
-    own_pane: Option<PaneId>,
+    own_pane: PaneId,
 }
 
 impl Replay {
@@ -937,7 +937,7 @@ impl Replay {
             .map(|update| {
                 cursor.replay(
                     update,
-                    |fold| LoopState::project_fold(fold, self.own_pane.as_ref(), None),
+                    |fold| LoopState::project_fold(fold, Some(&self.own_pane), None),
                     true,
                 )
             })
@@ -970,10 +970,13 @@ impl Replay {
     }
 }
 
+/// The single sink's synthetic owner; a producing fixture lists it so the witness is present.
+const SINGLE_SINK_PANE: &str = "sidebar_0";
+
 fn single_sink(host_data: Arc<Mutex<HostData>>, wake: SyncSender<Wakeup>) -> (ResultSink, Replay) {
     let subscriber = Subscriber {
         instance_id: SidebarInstanceId::new(),
-        own_pane: None,
+        own_pane: PaneId::from_parts(MuxName::Zellij, SINGLE_SINK_PANE),
         tick_seconds: 1,
         completion: Arc::default(),
         wake,
@@ -1348,7 +1351,10 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
 
     let now_ms = crate::utils::time::unix_now_ms();
     let frame = crate::sidebar::frame::assemble_frame(
-        vec![pane("terminal_7", "tab_1", false)],
+        vec![
+            pane("terminal_7", "tab_1", false),
+            pane(SINGLE_SINK_PANE, "tab_1", false),
+        ],
         now_ms,
         "rimz-test",
     );
@@ -1617,10 +1623,16 @@ fn test_config(workspace_id: WorkspaceId) -> RoomConfig {
     }
 }
 
+/// A synthetic, non-addressable owner that collides with no fixture pane.
+fn sidebar_pane(instance_id: &SidebarInstanceId) -> PaneId {
+    PaneId::from_parts(MuxName::Zellij, format!("sidebar_{}", instance_id.as_str()))
+}
+
 fn pane_config(room: RoomConfig) -> ServeConfig {
+    let instance_id = SidebarInstanceId::new();
     ServeConfig {
-        instance_id: SidebarInstanceId::new(),
-        own_pane: None,
+        own_pane: sidebar_pane(&instance_id),
+        instance_id,
         tick_seconds: room.tick_seconds,
         refresh_ms_override: None,
         room,
@@ -2161,7 +2173,7 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
 
     for (own, rx) in updates {
         let mut config = pane_config(worker.config.clone());
-        config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
+        config.own_pane = PaneId::from_parts(MuxName::Zellij, own);
         let mut renderer = consumer(config, fixture.runtime.clone(), rx);
         renderer.on_snapshot();
         assert_eq!(
@@ -2489,7 +2501,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         let mut config = pane_config(worker.config.clone());
         config.instance_id = sub.instance_id;
         config.own_pane = sub.own_pane;
-        let own = config.own_pane.clone().unwrap();
+        let own = config.own_pane.clone();
         let mut state = super::super::loop_state::LoopState::new(
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
@@ -2623,7 +2635,7 @@ fn subscriber(
 ) -> (Subscriber, Replay) {
     let subscriber = Subscriber {
         instance_id: SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
-        own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
+        own_pane: PaneId::from_parts(MuxName::Zellij, own),
         tick_seconds,
         completion: Arc::default(),
         wake,

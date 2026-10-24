@@ -241,18 +241,20 @@ impl FetchUpdate {
         }
     }
 
-    pub(super) fn preview_for(
-        &self,
-        pane: Option<&PaneId>,
-    ) -> Option<(Option<SidebarOwnView>, &[PaneId])> {
+    /// The own view and viewed panes this update shows `pane`. A `Snapshot`
+    /// is already local to its pane, a scenario's deliberately absent
+    /// ownership included, so it answers as it stands; only a `Fold` derives
+    /// ownership for the pane.
+    pub(super) fn preview_for(&self, pane: &PaneId) -> Option<(Option<SidebarOwnView>, &[PaneId])> {
         match self {
             Self::Shared { update, .. } => update.preview_for(pane),
             Self::Snapshot { snapshot, .. } => {
                 Some((snapshot.own_view.clone(), &snapshot.viewed_panes))
             }
             Self::Fold { fold, .. } => Some((
-                pane.zip(fold.frame.as_deref())
-                    .and_then(|(own, frame)| SidebarOwnView::from_frame(own, frame)),
+                fold.frame
+                    .as_deref()
+                    .and_then(|frame| SidebarOwnView::from_frame(pane, frame)),
                 &fold.workspace.0.viewed_panes,
             )),
             _ => None,
@@ -524,10 +526,10 @@ impl IdleCycleFixture {
                 instance_id.as_str().to_owned(),
                 Subscriber {
                     instance_id,
-                    own_pane: Some(PaneId::from_parts(
+                    own_pane: PaneId::from_parts(
                         crate::MuxName::Zellij,
                         format!("sidebar_{index}"),
-                    )),
+                    ),
                     tick_seconds: 1,
                     completion: Arc::default(),
                     wake,
@@ -682,7 +684,7 @@ impl IdleCycleFixture {
                     |fold| {
                         super::loop_state::LoopState::project_fold(
                             fold,
-                            subscriber.own_pane.as_ref(),
+                            Some(&subscriber.own_pane),
                             None,
                         )
                     },
@@ -1265,7 +1267,7 @@ impl FetchWindow {
 #[derive(Clone)]
 pub(super) struct Subscriber {
     pub(super) instance_id: SidebarInstanceId,
-    pub(super) own_pane: Option<PaneId>,
+    pub(super) own_pane: PaneId,
     pub(super) tick_seconds: u64,
     pub(super) completion: Arc<AtomicBool>,
     pub(super) wake: SyncSender<Wakeup>,
@@ -1316,9 +1318,7 @@ impl ResultSink {
     }
 
     fn witness(&self) -> Option<PaneId> {
-        self.cycle
-            .first()
-            .and_then(|eldest| eldest.own_pane.clone())
+        self.cycle.first().map(|eldest| eldest.own_pane.clone())
     }
 
     /// Publish content and completion atomically, then wake the frozen cycle members.

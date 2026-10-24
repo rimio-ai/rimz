@@ -121,7 +121,7 @@ impl RoomCaps {
         mux: MuxName,
         session_name: &str,
         prev: PixelRenderCaps,
-        own_pane: Option<&crate::ids::PaneId>,
+        own_pane: &crate::ids::PaneId,
     ) -> PixelRenderCaps {
         self.detect_with(
             mux,
@@ -185,7 +185,7 @@ trait Probe {
 }
 
 pub(in crate::sidebar_pane) fn escalate_own_pane_passthrough(
-    own_pane: Option<&crate::ids::PaneId>,
+    own_pane: &crate::ids::PaneId,
 ) -> io::Result<()> {
     escalate_with(&LiveProbe::for_pane(own_pane))
 }
@@ -312,13 +312,9 @@ impl LiveProbe {
         Self { tmux_pane: None }
     }
 
-    fn for_pane(own_pane: Option<&crate::ids::PaneId>) -> Self {
+    fn for_pane(own_pane: &crate::ids::PaneId) -> Self {
         Self {
-            tmux_pane: Some(
-                own_pane
-                    .filter(|pane| pane.mux() == MuxName::Tmux)
-                    .map(|pane| pane.raw().to_owned()),
-            ),
+            tmux_pane: Some((own_pane.mux() == MuxName::Tmux).then(|| own_pane.raw().to_owned())),
         }
     }
 }

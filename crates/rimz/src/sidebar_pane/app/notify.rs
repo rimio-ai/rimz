@@ -37,7 +37,7 @@ pub(super) fn emit_terminal_notification<B: Backend + Write>(
     {
         // One room reminder carries every scope pane: only the pane on the
         // watched tab writes its banner, as tmux passthrough does.
-        own_tab_watched(snapshot, config.own_pane.as_ref())
+        own_tab_watched(snapshot, &config.own_pane)
     } else {
         desktop_notification_targets_renderer(config.room.mux, snapshot, notice.panes)
     };
@@ -149,14 +149,10 @@ pub(super) fn desktop_notification_targets_renderer(
     }
 }
 
-fn own_tab_watched(snapshot: &SidebarSnapshot, own_pane: Option<&PaneId>) -> bool {
-    snapshot
-        .own_view
-        .as_ref()
-        .zip(own_pane)
-        .is_some_and(|(view, own_pane)| {
-            super::loop_state::own_tab_viewed(&snapshot.viewed_panes, view, own_pane)
-        })
+fn own_tab_watched(snapshot: &SidebarSnapshot, own_pane: &PaneId) -> bool {
+    snapshot.own_view.as_ref().is_some_and(|view| {
+        super::loop_state::own_tab_viewed(&snapshot.viewed_panes, view, own_pane)
+    })
 }
 
 pub(super) fn notification_targets_own_view(snapshot: &SidebarSnapshot, panes: &[PaneId]) -> bool {
