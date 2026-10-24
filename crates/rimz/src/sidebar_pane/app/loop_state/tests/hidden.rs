@@ -255,7 +255,6 @@ fn skipped_final_completes_requests_and_refreshes_backstops() {
     assert!(rig.next_request().is_none());
     let before = Instant::now();
     defer_name(&mut rig, "deferred");
-    assert!(rig.state.pane.fetched_at >= before);
     assert!(rig.state.pane.last_self_close_check >= before);
     rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
@@ -279,29 +278,26 @@ fn skipped_final_completes_requests_and_refreshes_backstops() {
 }
 
 #[test]
-fn retained_hidden_content_does_not_postpone_polling_or_the_watchdog() {
-    for tick_seconds in [1, 60] {
-        let mut rig = hidden_rig();
-        let clock = LoopClock::play(Timestamp::now());
-        rig.state.pane.clock = clock.clone();
-        rig.state.pane.config.tick_seconds = tick_seconds;
-        defer_name(&mut rig, "pending");
-        let projections = rig.state.pane.projections;
-        let deadline = tick_for(tick_seconds).min(SELF_CLOSE_WATCHDOG);
-        clock.advance(deadline / 2);
-        rig.maintenance();
-        assert!(rig.next_request().is_none(), "backstop is not due yet");
-        clock.advance(deadline / 2);
-        rig.maintenance();
-        assert!(
-            rig.next_request().is_some(),
-            "retained content must not suppress the {tick_seconds}s tick's backstop"
-        );
-        assert_eq!(
-            rig.state.pane.projections, projections,
-            "content stays deferred"
-        );
-    }
+fn retained_hidden_content_does_not_postpone_the_watchdog() {
+    let mut rig = hidden_rig();
+    let clock = LoopClock::play(Timestamp::now());
+    rig.state.pane.clock = clock.clone();
+    rig.state.pane.config.tick_seconds = 60;
+    defer_name(&mut rig, "pending");
+    let projections = rig.state.pane.projections;
+    clock.advance(SELF_CLOSE_WATCHDOG / 2);
+    rig.maintenance();
+    assert!(rig.next_request().is_none(), "watchdog is not due yet");
+    clock.advance(SELF_CLOSE_WATCHDOG / 2);
+    rig.maintenance();
+    assert!(
+        rig.next_request().is_some(),
+        "retained content must not suppress the watchdog"
+    );
+    assert_eq!(
+        rig.state.pane.projections, projections,
+        "content stays deferred"
+    );
 }
 
 #[test]

@@ -2665,18 +2665,23 @@ fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
         let mut gap_tx = Some(tx.clone());
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, floor, |request| {
-                cycles.push((Instant::now(), request));
-                if let Some(gap_tx) = gap_tx.take() {
-                    // A start-to-start floor would already have expired.
-                    std::thread::sleep(floor + Duration::from_millis(10));
-                    // Queued before the return, so they merge however late
-                    // either thread is scheduled.
-                    gap_tx.send(FetchRequest::default()).unwrap();
-                    gap_tx.send(queued).unwrap();
-                    finished_tx.send(Instant::now()).unwrap();
-                }
-            });
+            drive(
+                &rx,
+                floor,
+                || None,
+                |request| {
+                    cycles.push((Instant::now(), request));
+                    if let Some(gap_tx) = gap_tx.take() {
+                        // A start-to-start floor would already have expired.
+                        std::thread::sleep(floor + Duration::from_millis(10));
+                        // Queued before the return, so they merge however late
+                        // either thread is scheduled.
+                        gap_tx.send(FetchRequest::default()).unwrap();
+                        gap_tx.send(queued).unwrap();
+                        finished_tx.send(Instant::now()).unwrap();
+                    }
+                },
+            );
             cycles
         });
         let returned_at = finished_rx.recv().unwrap();
@@ -2703,12 +2708,17 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, floor, |request| {
-                cycles.push((Instant::now(), request));
-                if cycles.len() == 1 {
-                    finished_tx.send(()).unwrap();
-                }
-            });
+            drive(
+                &rx,
+                floor,
+                || None,
+                |request| {
+                    cycles.push((Instant::now(), request));
+                    if cycles.len() == 1 {
+                        finished_tx.send(()).unwrap();
+                    }
+                },
+            );
             cycles
         });
         finished_rx.recv().unwrap();
@@ -2737,13 +2747,18 @@ fn fetch_floor_has_no_mode_bypass() {
         let mut sender = Some(tx);
         let mut returned_at = None;
         let mut cycles = Vec::new();
-        drive(&rx, floor, |cycle| {
-            cycles.push((Instant::now(), cycle));
-            if let Some(tx) = sender.take() {
-                tx.send(request).unwrap();
-                returned_at = Some(Instant::now());
-            }
-        });
+        drive(
+            &rx,
+            floor,
+            || None,
+            |cycle| {
+                cycles.push((Instant::now(), cycle));
+                if let Some(tx) = sender.take() {
+                    tx.send(request).unwrap();
+                    returned_at = Some(Instant::now());
+                }
+            },
+        );
         assert_eq!(cycles.len(), 2);
         assert!(
             cycles[1].0.duration_since(returned_at.unwrap()) >= floor,
@@ -2761,12 +2776,17 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, floor, |request| {
-                cycles.push((Instant::now(), request));
-                if cycles.len() == 1 {
-                    finished_tx.send(Instant::now()).unwrap();
-                }
-            });
+            drive(
+                &rx,
+                floor,
+                || None,
+                |request| {
+                    cycles.push((Instant::now(), request));
+                    if cycles.len() == 1 {
+                        finished_tx.send(Instant::now()).unwrap();
+                    }
+                },
+            );
             cycles
         });
         tx.send(FetchRequest::default()).unwrap();
@@ -2783,6 +2803,155 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
         );
         assert!(cycles[1].0.duration_since(returned_at) >= floor);
         assert_eq!(cycles[1].1.mode, FetchMode::HardRefresh);
+    });
+}
+
+#[test]
+fn drive_backstop_runs_an_ordinary_cycle_after_an_idle_tick() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    let mut sender = Some(tx);
+    let mut returned_at = None;
+    let mut cycles = Vec::new();
+    drive(
+        &rx,
+        Duration::ZERO,
+        || Some(tick),
+        |request| {
+            cycles.push((Instant::now(), request));
+            if cycles.len() == 1 {
+                returned_at = Some(Instant::now());
+            } else {
+                drop(sender.take());
+            }
+        },
+    );
+    assert_eq!(cycles.len(), 2);
+    assert_eq!(cycles[1].1.mode, FetchMode::Normal);
+    assert!(cycles[1].0.duration_since(returned_at.unwrap()) >= tick);
+}
+
+#[test]
+fn drive_backstop_waits_without_subscribers() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (started, first) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            first.recv().unwrap();
+            std::thread::sleep(tick * 3);
+            drop(tx);
+        });
+        let mut cycles = 0;
+        drive(
+            &rx,
+            Duration::ZERO,
+            || None,
+            |_| {
+                cycles += 1;
+                if cycles == 1 {
+                    started.send(()).unwrap();
+                }
+            },
+        );
+        assert_eq!(cycles, 1);
+    });
+}
+
+#[test]
+fn drive_backstop_waits_on_an_unrepresentable_tick() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    let mut sender = Some(tx);
+    let mut cycles = 0;
+    drive(
+        &rx,
+        Duration::ZERO,
+        || Some(Duration::MAX),
+        |_| {
+            cycles += 1;
+            drop(sender.take());
+        },
+    );
+    assert_eq!(cycles, 1);
+}
+
+#[test]
+fn drive_backstop_restarts_after_each_cycle() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    let sender = std::cell::RefCell::new(Some(tx));
+    let completed = std::cell::Cell::new(0);
+    let mut sent_during_idle = false;
+    let mut returned_at = None;
+    let mut cycles = Vec::new();
+    drive(
+        &rx,
+        Duration::ZERO,
+        || {
+            if completed.get() == 1 && !sent_during_idle {
+                // Queue inside the injected wait, avoiding a race with a sender thread's scheduler.
+                std::thread::sleep(tick / 2);
+                sender
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .send(FetchRequest::fresh_panes())
+                    .unwrap();
+                sent_during_idle = true;
+            }
+            Some(tick)
+        },
+        |request| {
+            cycles.push((Instant::now(), request));
+            completed.set(cycles.len());
+            if cycles.len() == 2 {
+                returned_at = Some(Instant::now());
+            }
+            if cycles.len() == 3 {
+                drop(sender.borrow_mut().take());
+            }
+        },
+    );
+    assert_eq!(cycles.len(), 3);
+    assert_eq!(cycles[1].1.mode, FetchMode::FreshPanes);
+    assert_eq!(cycles[2].1.mode, FetchMode::Normal);
+    assert!(cycles[2].0.duration_since(returned_at.unwrap()) >= tick);
+}
+
+#[test]
+fn drive_backstop_rereads_membership_after_a_timeout() {
+    let tick = Duration::from_millis(30);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (started, first) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            first.recv().unwrap();
+            std::thread::sleep(tick * 3);
+            drop(tx);
+        });
+        let mut waits = 0;
+        let mut cycles = 0;
+        drive(
+            &rx,
+            Duration::ZERO,
+            || {
+                waits += 1;
+                (waits == 1).then_some(tick)
+            },
+            |_| {
+                cycles += 1;
+                if cycles == 1 {
+                    started.send(()).unwrap();
+                }
+            },
+        );
+        assert_eq!(cycles, 1, "a stale deadline must not fold an empty room");
+        assert!(waits >= 2, "membership is read again at the timeout");
     });
 }
 
