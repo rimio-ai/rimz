@@ -100,11 +100,10 @@ pub struct ServeConfig {
     pub refresh_ms_override: Option<u16>,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
-    /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
-    /// re-read ambiently so the fetch worker stays hermetic: a test (or any
-    /// embedder) folds exactly the panes it published, regardless of the env
-    /// the process inherited.
-    pub own_pane: Option<crate::ids::PaneId>,
+    /// heartbeat's pane claim. Carried here rather than re-read ambiently so
+    /// the fetch worker stays hermetic: a test (or any embedder) folds exactly
+    /// the panes it published, regardless of the env the process inherited.
+    pub own_pane: crate::ids::PaneId,
 }
 
 #[derive(Debug, thiserror::Error)]

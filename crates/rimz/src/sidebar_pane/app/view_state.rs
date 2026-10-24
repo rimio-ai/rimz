@@ -35,7 +35,7 @@ use super::state::{
 use super::timing::frame_clock;
 
 pub(super) struct ReadContext<'a> {
-    pub(super) own_pane: Option<&'a PaneId>,
+    pub(super) own_pane: &'a PaneId,
     pub(super) marks: &'a ReadMarks,
     pub(super) now: Timestamp,
     pub(super) at: Instant,
@@ -440,7 +440,7 @@ impl ViewContext {
             now,
             at,
         } = *context;
-        let (Some(view), Some(own_pane)) = (self.current.own_view.as_ref(), own_pane) else {
+        let Some(view) = self.current.own_view.as_ref() else {
             return;
         };
         let now_viewing = own_tab_viewed(&self.current.viewed_panes, view, own_pane);

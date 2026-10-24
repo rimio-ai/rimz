@@ -208,16 +208,17 @@ fn worktree_kind_name(kind: crate::store::snapshot::SidebarWorktreeKind) -> &'st
     }
 }
 
-/// With an own pane configured, a frame that predates it in the topology names a focus the mux no longer holds for this tab: withhold the baseline until its own view exists.
+/// A frame that predates the own pane in the topology names a focus the mux no
+/// longer holds for this tab: withhold the baseline until its own view exists.
 pub(super) fn session_focus_baseline(
     snapshot: &SidebarSnapshot,
-    own_pane: Option<&crate::ids::PaneId>,
+    own_pane: &crate::ids::PaneId,
 ) -> Option<crate::ids::PaneId> {
     let focused = snapshot
         .focused_pane
         .as_ref()
-        .filter(|_| own_pane.is_none() || snapshot.own_view.is_some())
-        .filter(|pane| own_pane != Some(*pane))?;
+        .filter(|_| snapshot.own_view.is_some())
+        .filter(|pane| own_pane != *pane)?;
     snapshot
         .row_owning_pane(focused)?
         .pane

@@ -82,15 +82,14 @@ impl ViewAccess {
 
     pub(super) fn inspect<T>(
         &self,
-        own_pane: Option<&PaneId>,
+        own_pane: &PaneId,
         inspect: impl FnOnce(&ViewState, &ViewContext) -> T,
     ) -> T {
-        if let Some(pane) = own_pane {
-            let views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some((state, context)) = views.peek(pane) {
-                return inspect(state, context);
-            }
+        let views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((state, context)) = views.peek(own_pane) {
+            return inspect(state, context);
         }
+        drop(views);
         inspect(&self.scratch_state, &self.scratch_context)
     }
 
@@ -100,12 +99,9 @@ impl ViewAccess {
 
     pub(super) fn visibility(
         &self,
-        own_pane: Option<&PaneId>,
+        pane: &PaneId,
         now: impl FnOnce() -> Instant,
     ) -> (bool, Option<bool>) {
-        let Some(pane) = own_pane else {
-            return (false, None);
-        };
         let mut views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
         views.refresh(now());
         (views.resolved(pane), views.observed(pane))
@@ -156,9 +152,7 @@ impl ViewAccess {
                 },
                 |prepared| prepared.events.clone(),
             );
-            let Some(own_pane) = pane.config.own_pane.as_ref() else {
-                return advance(pane, &mut self.scratch(events, false, None));
-            };
+            let own_pane = &pane.config.own_pane;
             let mut views = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
             let now = pane.clock.now();
             views.refresh(now);
@@ -350,13 +344,9 @@ impl ViewAccess {
     }
 
     #[cfg(test)]
-    pub(super) fn rig(
-        &mut self,
-        own_pane: Option<&PaneId>,
-        now: Instant,
-    ) -> super::tests::RigView<'_> {
+    pub(super) fn rig(&mut self, own_pane: &PaneId, now: Instant) -> super::tests::RigView<'_> {
         let views = self.registry.lock().unwrap();
-        let pane = own_pane.filter(|pane| views.peek(pane).is_some()).cloned();
+        let pane = views.peek(own_pane).is_some().then(|| own_pane.clone());
         super::tests::RigView::new(
             views,
             pane,

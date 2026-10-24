@@ -156,7 +156,7 @@ pub(crate) fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 1,
         refresh_ms_override: None,
-        own_pane: None,
+        own_pane: PaneId::from_parts(crate::MuxName::Zellij, "sidebar_test"),
     }
 }
 

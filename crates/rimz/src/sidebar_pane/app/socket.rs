@@ -36,7 +36,7 @@ pub(super) fn write_heartbeat(
         config.room.mux,
         &config.room.session_name,
         socket_path,
-        config.own_pane.clone(),
+        Some(config.own_pane.clone()),
         size,
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))

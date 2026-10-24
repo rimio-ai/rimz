@@ -457,7 +457,7 @@ impl Host {
         }
         debug!(
             instance = %hello.instance_id,
-            pane = ?hello.pane_id,
+            pane = %hello.pane_id,
             supervisor_build = ?hello.supervisor_build,
             "sidebar host attached a pane",
         );

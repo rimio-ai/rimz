@@ -10,7 +10,7 @@ impl Rig {
         snapshot: SidebarSnapshot,
         source: SnapshotSource,
     ) -> FetchUpdate {
-        let own = self.state.pane.config.own_pane.clone().unwrap();
+        let own = self.state.pane.config.own_pane.clone();
         let view = snapshot.own_view.as_ref().unwrap();
         let mut panes = vec![pane(own.raw(), "tab_0", false)];
         panes.extend(
@@ -479,7 +479,7 @@ fn hidden_strand_only_drains_its_owner() {
         defer_name(&mut rig, "pending");
         rig.event(SidebarEvent::FocusStranded {
             pane_id: if own {
-                rig.state.pane.config.own_pane.clone().unwrap()
+                rig.state.pane.config.own_pane.clone()
             } else {
                 PaneId::from_parts(MuxName::Zellij, "terminal_500")
             },
@@ -550,7 +550,7 @@ fn hidden_command_overlay_is_retained_until_reveal() {
     assert_eq!(rig.state.pane.projections, 1);
     assert_ne!(*rig.state.events(), EventStore::default());
     rig.event(SidebarEvent::FocusChanged {
-        focused: vec![rig.state.pane.config.own_pane.clone().unwrap()],
+        focused: vec![rig.state.pane.config.own_pane.clone()],
         unfocused: vec![],
     });
     assert_eq!(rig.view().ctx().current.display_name, "pending");
@@ -636,7 +636,7 @@ fn hidden_dwell_obligation_applies() {
 #[test]
 fn hidden_input_focus_obligation_applies() {
     let mut rig = hidden_rig();
-    rig.view().ctx().pending_input_focus = rig.state.pane.config.own_pane.clone();
+    rig.view().ctx().pending_input_focus = Some(rig.state.pane.config.own_pane.clone());
     assert_hidden_obligation(rig);
 }
 
@@ -644,7 +644,7 @@ fn hidden_input_focus_obligation_applies() {
 fn hidden_repair_obligation_applies() {
     let mut rig = hidden_rig();
     rig.state.pane.pending_focus_repair = Some(PendingFocusRepair {
-        pane_id: rig.state.pane.config.own_pane.clone().unwrap(),
+        pane_id: rig.state.pane.config.own_pane.clone(),
         generation: 1,
         clients: vec![],
         sent_at_ms: rig.state.pane.clock.now_ms(),

@@ -1100,7 +1100,7 @@ fn serve(
         instance_id: rimz::sidebar_pane::supervise::instance_id(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
-        own_pane: Some(own_pane),
+        own_pane,
     };
     rimz::sidebar_pane::supervise::run(config)?;
     Ok(())

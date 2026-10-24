@@ -335,7 +335,7 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
         crate::MuxName::Zellij,
         "rimz-test",
         PixelRenderCaps::default(),
-        None,
+        &PaneId::from_parts(crate::MuxName::Zellij, "sidebar_test"),
     );
     assert_eq!(caps, PixelRenderCaps::default());
 
@@ -362,10 +362,7 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
     let snapshot = rig.state.views.mirror().clone();
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, _) = guard.pair();
         pane.paint.refresh_view(&mut pane.ui, ui, &snapshot, false);
     }

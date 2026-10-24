@@ -23,16 +23,13 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
     let (mut snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
     snapshot.viewed_panes = vec![own.clone()];
     let mut rig = Rig::new();
-    rig.state.pane.config.own_pane = Some(own.clone());
+    rig.state.pane.config.own_pane = own.clone();
     rig.fold(snapshot, SnapshotSource::Produced);
     settle_width(&mut rig);
     rig.state.pane.dirty = false;
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (_, context) = guard.pair();
         pane.ui.theme(&context.current.theme);
     }
@@ -86,10 +83,7 @@ fn frozen_parked_timing_reads_live_overlays_outside_a_borrow() {
         .note_focus_event(std::slice::from_ref(&own), &[], now);
     {
         let pane = &mut rig.state.pane;
-        let mut view = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut view = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = view.pair();
         pane.ui.theme(&context.current.theme);
         layout_freeze::arm_freeze(ui, now as i64 - 6_000);
@@ -120,16 +114,13 @@ fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
     let (mut snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
     snapshot.viewed_panes = vec![own.clone()];
     let mut rig = Rig::new();
-    rig.state.pane.config.own_pane = Some(own);
+    rig.state.pane.config.own_pane = own;
     rig.fold(snapshot, SnapshotSource::Produced);
     settle_width(&mut rig);
     rig.state.pane.dirty = false;
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (_, context) = guard.pair();
         pane.ui.theme(&context.current.theme);
     }
@@ -331,12 +322,6 @@ fn frame_timing_suspends_unwatched_animation() {
 
 #[test]
 fn frame_timing_keeps_unknown_hot_but_holds_hidden_and_detached_dirty() {
-    let mut rig = Rig::without_own_pane();
-    assert!(rig.state.pane.config.own_pane.is_none());
-    rig.view().ctx().current = animating_agent_snapshot(&rig.ws);
-    rig.state.pane.dirty = false;
-    assert!(rig.frame_active(), "an unknown own pane stays hot");
-
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.view().ctx().current = animating_agent_snapshot(&rig.ws);

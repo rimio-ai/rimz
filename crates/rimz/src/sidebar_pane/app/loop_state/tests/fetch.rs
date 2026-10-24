@@ -113,10 +113,7 @@ fn renderer_local_reconciliation_state_forces_full_content() {
             rig.fold(snapshot.clone(), SnapshotSource::Produced);
             {
                 let pane = &mut rig.state.pane;
-                let mut guard = rig
-                    .state
-                    .views
-                    .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+                let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
                 let (ui, view) = guard.pair();
                 hold(pane, ui, view);
             }

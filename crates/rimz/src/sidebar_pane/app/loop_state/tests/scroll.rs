@@ -103,7 +103,7 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
 
     let plane = super::super::super::plane::DataPlane::detached();
     let (mut source, _) = scroll_rig();
-    let own = source.state.pane.config.own_pane.clone().unwrap();
+    let own = source.state.pane.config.own_pane.clone();
     plane.views.lock().unwrap().reconcile(
         &[ClientPaneView {
             client_id: MuxClientId::Zellij(1),
@@ -152,7 +152,7 @@ fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
                 },
             )
         };
-        rig.state.pane.config.own_pane = Some(id(own));
+        rig.state.pane.config.own_pane = id(own);
         let mut snapshot = rig.state.views.mirror().clone();
         for (index, row) in Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
             .iter_mut()
@@ -228,7 +228,7 @@ impl SharedPanes {
         let mux = self.panes[0].state.pane.config.room.mux;
         let mut panes = Vec::new();
         for (index, rig) in self.panes.iter().enumerate() {
-            let own = rig.state.pane.config.own_pane.as_ref().unwrap();
+            let own = &rig.state.pane.config.own_pane;
             let mut sidebar = pane(own.raw(), &format!("tab_{index}"), false);
             sidebar.pane_id = own.clone();
             sidebar.command = Some("rimz-sidebar".into());
@@ -248,13 +248,7 @@ impl SharedPanes {
                     MuxName::Tmux => crate::ids::MuxClientId::Tmux(format!("client-{client}")),
                     MuxName::Zellij => crate::ids::MuxClientId::Zellij(*client),
                 },
-                pane_id: self.panes[*destination]
-                    .state
-                    .pane
-                    .config
-                    .own_pane
-                    .clone()
-                    .unwrap(),
+                pane_id: self.panes[*destination].state.pane.config.own_pane.clone(),
             })
             .collect();
         frame.client_view_fresh = true;
@@ -657,7 +651,7 @@ fn resolved_departure_cancels_old_input_optimism_before_the_client_returns() {
 fn an_unresolved_pane_releases_its_view_when_viewing_evidence_expires() {
     let mut pair = SharedPanes::new(MuxName::Zellij);
     pair.input(1);
-    let pane = pair.panes[1].state.pane.config.own_pane.clone().unwrap();
+    let pane = pair.panes[1].state.pane.config.own_pane.clone();
     assert!(pair.plane.views.lock().unwrap().peek(&pane).is_some());
     pair.clock.advance(Duration::from_secs(3));
     pair.panes[1].state.frame_timing();
@@ -675,7 +669,7 @@ fn tmux_clients_share_a_view_through_focus_overlay_and_detach() {
     let before = pair.view(0).scroll_offset;
     let rig = &mut pair.panes[0];
     rig.event(SidebarEvent::FocusChanged {
-        focused: vec![rig.state.pane.config.own_pane.clone().unwrap()],
+        focused: vec![rig.state.pane.config.own_pane.clone()],
         unfocused: vec![],
     });
     pair.sample(&[(2, 0)]);
@@ -816,10 +810,7 @@ fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
     rig.view().ui().selected_index = Some(19);
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = guard.pair();
         ui.selected_pane = context.current.worktree_groups[0].rows[19]
             .pane
@@ -930,7 +921,7 @@ fn hidden_paints_hide_the_marker_and_own_selection_ends_it() {
 #[test]
 fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
     let (mut source, mut destination, _) = pane_pair(MuxName::Tmux);
-    let own = destination.state.pane.config.own_pane.clone().unwrap();
+    let own = destination.state.pane.config.own_pane.clone();
     // The plane samples one client, on the sidebar.
     let mut sampled = destination.state.views.mirror().clone();
     sampled.client_views = vec![crate::pane::ClientPaneView {
@@ -1409,7 +1400,7 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
     assert_eq!(
         session_focus_baseline(
             destination.state.views.mirror(),
-            destination.state.pane.config.own_pane.as_ref()
+            &destination.state.pane.config.own_pane
         ),
         None
     );
@@ -1743,10 +1734,7 @@ fn shared_placement_captures_the_painted_opening_set() {
     rig.view().ui().selected_index = Some(0);
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = guard.pair();
         ui.selected_pane = context.current.worktree_groups[0].rows[0]
             .pane
@@ -2037,7 +2025,7 @@ fn fitted_grow_hold(resize_first: bool) {
         rig.state.pane.self_close.seen_sibling = true;
         let (mut push, ack) = focus_push(&mut rig, anchor);
         let pane = if own_pane {
-            rig.state.pane.config.own_pane.clone().unwrap()
+            rig.state.pane.config.own_pane.clone()
         } else {
             pane("terminal_100", "tab_0", false).pane_id
         };
@@ -2144,7 +2132,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
     .unwrap();
     let (mut push, ack) = focus_push(&mut rig, anchor);
     push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
-        rig.state.pane.config.own_pane.clone().unwrap(),
+        rig.state.pane.config.own_pane.clone(),
         crate::mux::FittedPane {
             rows: 30,
             cols: None,
@@ -2168,7 +2156,7 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
         let (mut rig, _, anchor) = hidden_destination();
         let (mut push, ack) = focus_push(&mut rig, anchor);
         let pane = if own_rows {
-            rig.state.pane.config.own_pane.clone().unwrap()
+            rig.state.pane.config.own_pane.clone()
         } else {
             pane("terminal_100", "tab_0", false).pane_id
         };
@@ -2384,19 +2372,13 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         paint_at(&mut rig, 0);
         let theme = {
             let pane = &mut rig.state.pane;
-            let mut guard = rig
-                .state
-                .views
-                .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+            let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
             let (_, context) = guard.pair();
             pane.ui.theme(&context.current.theme)
         };
         let frame = {
             let pane = &mut rig.state.pane;
-            let mut guard = rig
-                .state
-                .views
-                .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+            let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
             let (ui, context) = guard.pair();
             render::compose_lines(&context.current, None, ui, &pane.ui, &theme, 80, 24)
         };
@@ -2518,10 +2500,7 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     assert!(!rig.view().ui().scroll_ease.in_flight());
     {
         let pane = &mut rig.state.pane;
-        let mut guard = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = guard.pair();
         assert_eq!(
             render::animation_interval(&context.current, ui, &pane.ui, ui.animation_phase, false),
@@ -2650,10 +2629,7 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
             if bottom {
                 {
                     let pane = &mut rig.state.pane;
-                    let mut guard = rig
-                        .state
-                        .views
-                        .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+                    let mut guard = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
                     let (ui, _) = guard.pair();
                     ui.scroll_offset = pane.ui.drawn_scroll_max.unwrap();
                 }

@@ -31,7 +31,9 @@ fn watch(mut link: HostLink) -> RoundExit {
             baseline_pane: &mut None,
             supervisor_build: None,
             started: Instant::now(),
-            watchdog: &mut None,
+            watchdog: &mut PaneWatchdog::from_config(
+                &crate::sidebar_pane::app::fixtures::serve_config(&workspace),
+            ),
             stopped: &AtomicBool::new(false),
         },
     )

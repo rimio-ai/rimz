@@ -128,8 +128,14 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
         handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(child.clone())
     );
-    snapshot.focused_pane = Some(child);
-    let baseline = crate::sidebar_pane::app::state::session_focus_baseline(&snapshot, None);
+    snapshot.focused_pane = Some(child.clone());
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![child],
+        own_view_is_daemon: false,
+    });
+    let sidebar = PaneId::from_parts(MuxName::Zellij, "sidebar_test");
+    let baseline = crate::sidebar_pane::app::state::session_focus_baseline(&snapshot, &sidebar);
     reconcile_selection(&mut ui, &snapshot, baseline);
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(

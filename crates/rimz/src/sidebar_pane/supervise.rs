@@ -124,8 +124,8 @@ pub fn run(config: ServeConfig) -> Result<()> {
     #[cfg(feature = "testkit")]
     thread::sleep(duration_override(TEST_HOLD_DELAY_MS_ENV, Duration::ZERO));
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
-    if let Some(pane) = &config.own_pane
-        && let Err(error) = crate::mux::backend_for(config.room.mux).close_pane_on_exit(pane)
+    if let Err(error) =
+        crate::mux::backend_for(config.room.mux).close_pane_on_exit(&config.own_pane)
     {
         tracing::warn!(
             session = %config.room.session_name,
@@ -156,10 +156,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             remove_orphan_runtime_files(&config);
             return Ok(());
         }
-        if pane_watchdog
-            .as_mut()
-            .is_some_and(|watchdog| watchdog.probe_if_due(Instant::now()))
-        {
+        if pane_watchdog.probe_if_due(Instant::now()) {
             record_pane_gone(&config, &diag);
             modes.preserve_for_handoff();
             remove_orphan_runtime_files(&config);
@@ -358,7 +355,7 @@ struct HostMonitor<'a> {
     baseline_pane: &'a mut Option<PaneId>,
     supervisor_build: Option<&'a str>,
     started: Instant,
-    watchdog: &'a mut Option<PaneWatchdog>,
+    watchdog: &'a mut PaneWatchdog,
     stopped: &'a AtomicBool,
 }
 
@@ -406,11 +403,7 @@ fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> RoundExit {
         {
             return RoundExit::Reload;
         }
-        if monitor
-            .watchdog
-            .as_mut()
-            .is_some_and(|watchdog| watchdog.probe_if_due(now))
-        {
+        if monitor.watchdog.probe_if_due(now) {
             return RoundExit::OrphanReaped;
         }
     }
@@ -627,16 +620,16 @@ struct PaneWatchdog {
 }
 
 impl PaneWatchdog {
-    fn from_config(config: &ServeConfig) -> Option<Self> {
-        Some(Self {
-            pane: config.own_pane.clone()?,
+    fn from_config(config: &ServeConfig) -> Self {
+        Self {
+            pane: config.own_pane.clone(),
             mux: config.room.mux,
             session_name: config.room.session_name.clone(),
             workspace_id: config.room.workspace_id.clone(),
             next_probe: Instant::now() + pane_probe_interval(),
             strikes: 0,
             last_observed_at_ms: None,
-        })
+        }
     }
 
     fn observe(&mut self, probe: PaneProbe) -> bool {
@@ -795,21 +788,12 @@ fn self_close_verdict(
     }
 }
 
-fn confirm_self_close(
-    config: &ServeConfig,
-    watchdog: &Option<PaneWatchdog>,
-) -> SelfCloseConfirmation {
+fn confirm_self_close(config: &ServeConfig, watchdog: &PaneWatchdog) -> SelfCloseConfirmation {
     #[cfg(feature = "testkit")]
     if let Some(confirmation) = forced_self_close_confirmation() {
         return confirmation;
     }
 
-    let Some(watchdog) = watchdog.as_ref() else {
-        return SelfCloseConfirmation::Keep {
-            siblings: 0,
-            reason: "own pane is unavailable".to_owned(),
-        };
-    };
     let backend = crate::mux::backend_for(watchdog.mux);
     let listing = match backend.list_panes(watchdog.probe_options()) {
         Ok(listing) => listing,
@@ -985,11 +969,7 @@ fn sleep_respawn_backoff(
 
 fn record_pane_gone(config: &ServeConfig, diag: &crate::diag::DiagSink) {
     diag.emit(DiagEvent::SupervisorPaneGone {
-        pane_id: config
-            .own_pane
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
+        pane_id: config.own_pane.to_string(),
     });
 }
 

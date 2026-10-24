@@ -48,7 +48,7 @@ impl Room {
 
     fn attach_carried(&self, pty: &Pty, index: usize, baseline: Option<PaneId>) -> Pane {
         let mut greeting = hello(&SidebarInstanceId::new());
-        greeting.pane_id = Some(sidebar(index));
+        greeting.pane_id = sidebar(index);
         greeting.baseline_pane = baseline;
         self.attach_hello(pty, greeting, self.connect())
     }

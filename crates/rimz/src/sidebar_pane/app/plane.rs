@@ -310,9 +310,7 @@ impl DataPlane {
                 let mut views = lock(&self.views);
                 let frame = views.fold.as_ref().and_then(|fold| fold.frame.clone());
                 let fold = match frame {
-                    None => {
-                        super::fixtures::fold(snapshot, subscriber.own_pane.as_ref(), Vec::new())
-                    }
+                    None => super::fixtures::fold(snapshot, Some(&subscriber.own_pane), Vec::new()),
                     Some(frame) => WorkspaceFold {
                         workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
                         frame: Some(frame),

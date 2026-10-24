@@ -170,7 +170,7 @@ impl Rig {
     /// Access portable fields without advancing, projecting, or painting the view.
     fn view(&mut self) -> RigView<'_> {
         self.state.views.rig(
-            self.state.pane.config.own_pane.as_ref(),
+            &self.state.pane.config.own_pane,
             self.state.pane.clock.now(),
         )
     }
@@ -182,14 +182,6 @@ impl Rig {
 
     fn new() -> Self {
         Self::build(None, BodyLens::default())
-    }
-
-    fn without_own_pane() -> Self {
-        let mut rig = Self::new();
-        rig.state.pane.config.own_pane = None;
-        rig.synthetic_own = false;
-        settle_width(&mut rig);
-        rig
     }
 
     fn with_own_pane(own_pane: PaneId) -> Self {
@@ -229,7 +221,7 @@ impl Rig {
         let instance_id = SidebarInstanceId::new();
         let mut config = serve_config(&ws);
         config.room.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
-        config.own_pane = own_pane.or_else(|| Some(PaneId::from_parts(MuxName::Tmux, "%99")));
+        config.own_pane = own_pane.unwrap_or_else(|| PaneId::from_parts(MuxName::Tmux, "%99"));
         config.instance_id = instance_id;
         config.tick_seconds = 60;
         let socket_path =
@@ -365,12 +357,14 @@ impl Rig {
                 let mut workspace = *snapshot.clone();
                 // A fixture that names no own view leaves visibility unknown, which reads as
                 // watched; the plane observes that through the sidebar's own pane being viewed.
-                if synthesized && let Some(own) = self.state.pane.config.own_pane.clone() {
-                    workspace.viewed_panes.push(own);
+                if synthesized {
+                    workspace
+                        .viewed_panes
+                        .push(self.state.pane.config.own_pane.clone());
                 }
                 Some(Arc::new(super::super::fixtures::fold(
                     workspace,
-                    self.state.pane.config.own_pane.as_ref(),
+                    Some(&self.state.pane.config.own_pane),
                     sidebars,
                 )))
             }
@@ -458,7 +452,9 @@ impl Rig {
         };
         let viewed_panes = &mut Arc::make_mut(fold).workspace.0.viewed_panes;
         viewed_panes.clear();
-        viewed_panes.extend(own.filter(|_| viewed));
+        if viewed {
+            viewed_panes.push(own);
+        }
     }
 
     fn set_pulled(&mut self, snapshot: &SidebarSnapshot) {

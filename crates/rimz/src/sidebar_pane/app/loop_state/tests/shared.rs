@@ -131,10 +131,7 @@ fn outside_decisions_read_the_routed_view_not_scratch() {
     let dwell = clock.now() + Duration::from_millis(200);
     {
         let pane = &mut rig.state.pane;
-        let mut view = rig
-            .state
-            .views
-            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let mut view = rig.state.views.rig(&pane.config.own_pane, pane.clock.now());
         let (ui, context) = view.pair();
         context.current.own_view = Some(own_view());
         pane.ui.theme(&context.current.theme);
@@ -199,7 +196,7 @@ fn lagging_view_keeps_success_before_failure() {
             },
         );
         if newborn {
-            let own = rig.state.pane.config.own_pane.clone().unwrap();
+            let own = rig.state.pane.config.own_pane.clone();
             rig = Rig::with_own_pane(own);
             rig.share_views(views);
         }
