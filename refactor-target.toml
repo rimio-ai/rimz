@@ -266,6 +266,16 @@ reason = "The public account capability distinguishes no attempt, an answered pl
 
 [[verdict]]
 kind = "item"
+key = "agents::account::AccountProfileState"
+reason = "The public ProviderRecord carries the profile attempt and answer through the shared accounts publication."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::AccountProfileAnswer"
+reason = "The public profile state carries an opaque owner, recognised plan and response time to the account worker's resolution."
+
+[[verdict]]
+kind = "item"
 key = "agents::capabilities::AccountCapability::probe_account_profile"
 reason = "The account worker owns cadence and writes while the adapter owns its identity-bound live plan read."
 

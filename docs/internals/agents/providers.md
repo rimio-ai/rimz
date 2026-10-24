@@ -93,6 +93,10 @@ Where both exist, the live session's account wins because it is current. Windows
 
 An adapter with no out-of-band login surface returns `LoggedOut`. The probe itself is a pure read; memoization lives in the producer's `accounts.json` publication. Each provider's mechanics (Claude's `claude auth status`, Codex's and Pi's auth-file read, Antigravity's verified loopback service) are in its adapter page.
 
+After a fresh identity-bearing account probe, a profile-capable adapter can read its live plan in the same worker through `AccountCapability::probe_account_profile`. The lane reads the published machine-wide session start and per-login reset stamps once per batch. A read is due when no answer belongs to the fresh account, its saved-plan basis differs from the fresh auth-status plan after credential refinement, or the answer predates the latest of that session start, the reset stamp, and 24 hours ago; attempts must be at least `ACCOUNTS_TTL` apart. An attempt is stamped with its batch's probe time, the instant the account cadence ages from, so the floor has always expired when the login is next account-due. Equality with a trigger is not due. The account cadence itself is unchanged, so a trigger acts at the next account probe, not in a periodic profile lane. `--refresh` bypasses the profile floor, but `RIMZ_OAUTH_USAGE_OFFLINE` suppresses both usage and profile reads without stamping an attempt.
+
+The optional profile state retains the last attempt time and the last answer's opaque owner, saved-plan basis, recognised plan (or no plan), and response time. The basis is the account's auth-status plan after credential refinement at read time; an older answer without a basis reads it as absent. Every probe outcome carries that state. For `Found`, a recognised answer overrides the fresh saved plan only while its owner equals the fresh account's fingerprint and its basis equals that saved plan; absent identity, an unknown answer, a changed owner, or a changed basis leaves the saved plan in charge. An answered-but-unrecognised read replaces the old answer, ending an override. A failed read changes only its attempt time: login outcome, probe error, TTL, metering, entitlement, windows and credits are untouched, and the last answer stays available. There is no warning or disagreement row.
+
 Every registered adapter also gets a display-only version probe. It locates the declared executable, runs `<binary> --version`, and hands stdout and stderr to the adapter to normalize. The default parser accepts only a conventional numeric version and abstains on banners; Copilot, Amp, and Cursor recognize their branded build strings. Antigravity disables the probe because invoking `agy --version` is unsafe for idle enrichment, and a manifest plugin uses its configured probe command and parser. Account and version subprocesses share a 3-second deadline (`INFORMATIONAL_PROBE_TIMEOUT`), and a timeout counts as `Unavailable`. The version shown is the newest among the probe's and every live context's, so a session still running an older binary never replaces a newer one. A provider whose version is absent re-probes on the retry TTL, never per frame.
 
 ## Producer aggregation
@@ -108,7 +112,7 @@ Each panel field has one source:
 
 | Field | Source |
 | --- | --- |
-| `plan` | the session context with the newest `observed_at`, falling back to the probed account; `format_plan_label` uses the adapter's declared vocabulary (`max_20x` becomes `Claude Max 20x`, Codex `pro` becomes `ChatGPT Pro 200`), with title-case fallback for unknown kinds |
+| `plan` | the session context with the newest `observed_at`, falling back to the resolved probed account (including a bound profile override); Claude contexts supply no account. `format_plan_label` uses the adapter's declared vocabulary (`max_20x` becomes `Claude Max 20x`, Codex `pro` becomes `ChatGPT Pro 200`), with title-case fallback for unknown kinds |
 | `version` | the newest version among the login's session contexts and the probed account, by [`newest_version`](../../../crates/rimz/src/agents/version.rs): a string that parses as a numeric `CliVersion` outranks one that does not, the greater `CliVersion` wins, and the greater string breaks what remains, so the answer does not depend on which session reported last |
 | `metered`, `account_scope` | the same account; a missing `metered` is inferred true when live windows exist or a keyed session owns the panel |
 | `account_key` | the newest-registered keyed session, by `registered_at` then session id |
@@ -147,13 +151,13 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 
 | Cache | Keyed by | Holds |
 | --- | --- | --- |
-| `accounts.json` | `logins` | probed `AgentAccount` per login, and the probe's `login` outcome (`logged_in`, `logged_out`; absent after a failed probe) |
+| `accounts.json` | `logins` | resolved `AgentAccount` per login, the probe's `login` outcome (`logged_in`, `logged_out`; absent after a failed probe), and optional profile attempt/answer state |
 | `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker, optional `reset_spotted_at_ms`; schema gated by `RATE_LIMITS_CACHE_VERSION` (6) |
 | `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, entitlement with its first-seen time, the usage owner identity, and the direct-query claim |
 
 The host publishes all three; CLI readers and the shared fast fold read them without probes. A publication replaces only the probing room's login keys. A cache in an older or kind-keyed shape cold-drops, because every value is rebuildable.
 
-A due account batch runs account-then-version probe chains on up to four workers (`MAX_PARALLEL_ACCOUNT_PROBES`) and joins them into one atomic `accounts.json` publication. A caller that cannot open the coordination lock probes locally without publishing. A caller that times out behind a live producer serves the current cache for that frame, so a fresh room does not repeat the cold subprocess wave.
+A due account batch runs account-then-version probe chains and any due profile read on up to four workers (`MAX_PARALLEL_ACCOUNT_PROBES`) and joins them into one atomic `accounts.json` publication. A caller that cannot open the coordination lock probes locally without publishing and skips profile reads unless forced, since no attempt stamp could persist. A caller that times out behind a live producer serves the current cache for that frame, even with `--refresh`, so a fresh room does not repeat the cold subprocess wave.
 
 ## Window fusion
 
@@ -323,7 +327,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 
 | Provider | Account identity → `AgentAccount` | Balance → `AgentRateLimits` / `ExtraCredits` |
 | --- | --- | --- |
-| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered; same-login credential metadata refines Max subtiers | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
+| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered; same-login credential metadata refines Max subtiers, and a recognised bound live profile overrides the saved plan | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
 | Codex | app-server `planType`, or `$CODEX_HOME/auth.json` | app-server windows and credits, then the OAuth usage query with reset credits ([adapter_codex.md](./adapter_codex.md#account-and-balance)) |
 | Antigravity | statusline, or the running `agy` local service → plan, metered | paired status and quota read on one endpoint → hashed kind-wide owner, authoritative 5h and weekly windows; credits and dollars unknown ([adapter_antigravity.md](./adapter_antigravity.md#account-and-balance)) |
 | Copilot | `$COPILOT_HOME/config.json` non-secret login → metered | internal account query → plan, named monthly `AIC`, `cht`, and `prm` scopes; no paid usage or spend ([adapter_copilot.md](./adapter_copilot.md#account-and-balance)) |
