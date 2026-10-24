@@ -1,4 +1,4 @@
-//! The maintenance sweep's force-folds and watchdogs, and the idle
+//! The maintenance sweep's folds and watchdogs, and the idle
 //! `frame_timing` verdict that decides how long the loop may sleep.
 
 use super::*;

@@ -1,4 +1,4 @@
-//! Off-thread fast folds, pane production, and single-flight request coalescing.
+//! Off-thread fast folds, pane production, and room-owned request cadence.
 //! The host shares one warm rollup cursor across both lanes. Heavy cache
 //! refreshes run separately so render and input never block on production.
 //! Every admitted request publishes a room fold; equal reductions apply only clocks.
@@ -446,7 +446,7 @@ impl TabNameMemo {
     }
 }
 
-/// Owns all state that persists between fetch requests.
+/// Owns all state that persists between fetch cycles.
 struct FetchWorker {
     observer: Option<crate::sidebar::observe::RoomObserver>,
     config: ServeConfig,
@@ -1150,9 +1150,8 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
 }
 
 /// One request to the fetch worker. The mode distinguishes topology freshness
-/// from manual recovery. When a
-/// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
-/// older than the signal that asked for fresh topology.
+/// from manual recovery. A producing lane ignores pane caches older than a
+/// supplied `min_pane_cache_ms` floor.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FetchRequest {
     mode: FetchMode,
