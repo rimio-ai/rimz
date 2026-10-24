@@ -704,6 +704,17 @@ fn clamp_selection_in(ui: &mut ViewState, roster: &VisibleRoster<'_>) {
     }
 }
 
+/// Leave selection behind when a view arrives from another pane before this pane's topology.
+/// Clear the painted and held sources too, so arrival's freeze cannot reopen the old card.
+pub(super) fn unseat_selection(ui: &mut ViewState) {
+    ui.baseline_pane = None;
+    ui.browse = None;
+    ui.selected_pane = None;
+    ui.selected_index = None;
+    ui.drawn_selection = None;
+    ui.held_expansions.clear();
+}
+
 /// Reconcile the highlight after folding a new snapshot. Selection is *derived*
 /// state: the baseline follows the view's agreed working-pane focus, sampled
 /// from the mux and updated by its focus intent between pulls. One transient

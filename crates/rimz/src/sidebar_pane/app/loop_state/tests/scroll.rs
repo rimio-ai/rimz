@@ -225,6 +225,14 @@ impl SharedPanes {
     }
 
     pub(super) fn sample(&mut self, clients: &[(u32, usize)]) {
+        self.sample_with(clients, |_| {});
+    }
+
+    fn sample_with(
+        &mut self,
+        clients: &[(u32, usize)],
+        amend: impl FnOnce(&mut crate::sidebar::frame::PaneFrame),
+    ) {
         let mux = self.panes[0].state.pane.config.room.mux;
         let mut panes = Vec::new();
         for (index, rig) in self.panes.iter().enumerate() {
@@ -252,6 +260,7 @@ impl SharedPanes {
             })
             .collect();
         frame.client_view_fresh = true;
+        amend(&mut frame);
         self.snapshot.viewed_panes = frame
             .client_views
             .iter()
@@ -525,6 +534,220 @@ fn newborn_paints_the_clients_view_and_latest_content_in_its_first_frame() {
         "latest at arrival"
     );
     assert_eq!(pair.view(1).scroll_offset, target);
+}
+
+fn sample_unlisted_tab(pair: &mut SharedPanes, clients: &[(u32, usize)]) {
+    let own = pair.panes[1].state.pane.config.own_pane.clone();
+    let shell = pair.snapshot.rows().last().unwrap().pane.clone().unwrap();
+    pair.sample_with(clients, |frame| {
+        for tab in &mut frame.tabs {
+            tab.panes.retain(|pane| pane.pane_id != own);
+        }
+        for client in &mut frame.client_views {
+            if client.pane_id == own {
+                client.pane_id = shell.pane_id.clone();
+            }
+        }
+    });
+}
+
+fn new_tab_pair(mux: MuxName) -> SharedPanes {
+    let mut pair = SharedPanes::new(mux);
+    // The paired rigs have folded before; a newborn supervisor carries no baseline hint.
+    pair.panes[1].state.pane.baseline_seed = None;
+    pair.snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    pair.snapshot.theme.display.scrollbar = crate::config::ScrollbarMode::Never;
+    let rows = Arc::make_mut(&mut Arc::make_mut(&mut pair.snapshot.worktree_groups)[0].rows);
+    for row in rows.iter_mut() {
+        row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
+    }
+    let mut shell = rows.last().unwrap().pane.clone().unwrap();
+    shell.pane_id = PaneId::from_parts(
+        mux,
+        match mux {
+            MuxName::Tmux => "%20",
+            MuxName::Zellij => "terminal_20",
+        },
+    );
+    let shell_row =
+        snapshot_with_panes(&pair.panes[0].ws, vec![shell]).worktree_groups[0].rows[0].clone();
+    rows.push(shell_row);
+    let focused = rows[0].pane.as_ref().unwrap().pane_id.clone();
+    pair.sample(&[(1, 0)]);
+    pair.fold(0);
+    pair.panes[0].view().ui().baseline_pane = Some(focused);
+    pair.panes[0].input(KeyAction::Down);
+    paint_scrolled(&mut pair.panes[0], 4);
+    super::fetch::enable_focus_trace(&mut pair.panes[1]);
+    pair
+}
+
+fn assert_unseated(view: &ViewState) {
+    assert_eq!(
+        view.selected_pane, None,
+        "arrival leaves the old tab's pick behind"
+    );
+    assert_eq!(view.selected_index, None);
+    assert_eq!(view.baseline_pane, None);
+    assert!(view.browse.is_none());
+    assert!(view.drawn_selection.is_none());
+    assert!(view.held_expansions.is_empty());
+}
+
+#[test]
+fn joined_view_paints_unseated_until_the_new_sidebar_is_listed_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = new_tab_pair(mux);
+        let before = pair.view(0);
+        assert!(before.selected_pane.is_some());
+        assert!(before.baseline_pane.is_some());
+        assert!(before.browse.is_some());
+        assert!(before.drawn_selection.is_some());
+        assert!(before.scroll_offset > 0);
+        assert!(!before.expanded_groups.is_empty());
+        let output = FrameOutput::default();
+        pair.panes[1].terminal = Terminal::with_options(
+            PaneBackend::headless(output.clone()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
+            },
+        )
+        .unwrap();
+        sample_unlisted_tab(&mut pair, &[(1, 1)]);
+        pair.fold(0);
+        let seed = pair.plane.views.lock().unwrap().fold.clone().unwrap();
+        pair.panes[1].state.seed(&seed);
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        for first_paint in [true, false] {
+            if !first_paint {
+                pair.snapshot.display_name = "worker before sidebar".into();
+                sample_unlisted_tab(&mut pair, &[(1, 1)]);
+                pair.fold(1);
+            }
+            assert_unseated(&pair.view(1));
+            pair.paint(1);
+            let arrived = pair.view(1);
+            assert_unseated(&arrived);
+            assert_eq!(arrived.scroll_offset, before.scroll_offset);
+            assert_eq!(arrived.expanded_groups, before.expanded_groups);
+            parser.process(&output.0.lock().unwrap());
+            let screen = parser.screen().contents();
+            assert!(screen.contains("scroll-card-"), "cards painted:\n{screen}");
+            for glyph in ['▌', '▐', '▎', '🮇', '┄'] {
+                assert!(
+                    !screen.contains(glyph),
+                    "no selection glyph {glyph}:\n{screen}"
+                );
+            }
+        }
+        let records = super::fetch::focus_records(&pair.panes[1]);
+        assert!(!records.is_empty(), "the worker fold records its decision");
+        for record in records {
+            assert_eq!(record["own_view"], false);
+            assert!(record.get("baseline").is_none(), "{record}");
+            assert!(record.get("selected_after").is_none(), "{record}");
+        }
+
+        let shell = pair.snapshot.rows().last().unwrap().pane.clone().unwrap();
+        pair.sample_with(&[(1, 1)], |frame| {
+            frame.client_views[0].pane_id = shell.pane_id.clone();
+        });
+        pair.fold(1);
+        pair.paint(1);
+        assert_eq!(pair.view(1).baseline_pane, Some(shell.pane_id.clone()));
+        assert_eq!(pair.view(1).selected_pane, Some(shell.pane_id));
+        assert!(pair.view(1).selected_index.is_some());
+    }
+}
+
+#[test]
+fn forked_view_leaves_its_selection_on_an_unlisted_pane() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = new_tab_pair(mux);
+        let before = pair.view(0);
+        sample_unlisted_tab(&mut pair, &[(1, 0)]);
+        pair.fold(0);
+        let seed = pair.plane.views.lock().unwrap().fold.clone().unwrap();
+        pair.panes[1].state.seed(&seed);
+        assert_unseated(&pair.view(1));
+        pair.paint(1);
+        assert_unseated(&pair.view(1));
+        assert_eq!(pair.view(1).scroll_offset, before.scroll_offset);
+        assert_eq!(pair.view(1).expanded_groups, before.expanded_groups);
+        assert_eq!(pair.view(0).selected_pane, before.selected_pane);
+        assert_eq!(pair.view(0).browse, before.browse);
+    }
+}
+
+#[test]
+fn fused_focus_on_an_unlisted_arrival_has_no_own_view_or_selection() {
+    let mut pair = new_tab_pair(MuxName::Tmux);
+    let previous = pair.view(0).baseline_pane.unwrap();
+    sample_unlisted_tab(&mut pair, &[(1, 0)]);
+    pair.fold(0);
+    pair.panes[1].event(SidebarEvent::FocusChanged {
+        focused: vec![previous],
+        unfocused: vec![],
+    });
+    let records = super::fetch::focus_records(&pair.panes[1]);
+    assert!(!records.is_empty(), "the fused fold records its decision");
+    for record in records {
+        assert_eq!(record["own_view"], false, "{record}");
+        assert!(record.get("baseline").is_none(), "{record}");
+        assert!(record.get("selected_after").is_none(), "{record}");
+        assert!(
+            record["fused_event_sent_at_ms"].as_u64().is_some(),
+            "{record}"
+        );
+    }
+    assert_unseated(&pair.view(1));
+    pair.paint(1);
+    assert_unseated(&pair.view(1));
+}
+
+#[test]
+fn established_pane_holds_selection_across_an_unlisted_resample_on_both_backends() {
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let mut pair = SharedPanes::new(mux);
+        let focused = pair
+            .snapshot
+            .rows()
+            .next()
+            .unwrap()
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone();
+        pair.sample_with(&[(1, 0)], |frame| {
+            frame.client_views[0].pane_id = focused.clone();
+        });
+        pair.fold(0);
+        pair.paint(0);
+        assert_eq!(pair.view(0).baseline_pane, Some(focused.clone()));
+        assert_eq!(pair.view(0).selected_pane, Some(focused.clone()));
+
+        let own = pair.panes[0].state.pane.config.own_pane.clone();
+        pair.sample_with(&[(1, 0)], |frame| {
+            for tab in &mut frame.tabs {
+                tab.panes.retain(|pane| pane.pane_id != own);
+            }
+            frame.client_views[0].pane_id = focused.clone();
+        });
+        pair.fold(0);
+        pair.paint(0);
+        let after = pair.view(0);
+        assert_eq!(
+            after.baseline_pane,
+            Some(focused.clone()),
+            "established baseline holds across a transient missing own view ({mux:?})"
+        );
+        assert_eq!(
+            after.selected_pane,
+            Some(focused),
+            "established selection holds across a transient missing own view ({mux:?})"
+        );
+    }
 }
 
 #[test]
