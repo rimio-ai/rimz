@@ -16,6 +16,27 @@ fn before(text: &str, first: &str, second: &str) -> bool {
 }
 
 #[test]
+fn a_still_player_keeps_width_control_idle() {
+    let scenario = Scenario::parse("still", "scenario still length 8s pets off").unwrap();
+    let mut column = Column::build(&scenario, None, None, Surface::Text).unwrap();
+    column
+        .run_until(&scenario, Duration::from_secs(1), |_| Ok(()))
+        .unwrap();
+
+    let end = Duration::from_secs(6);
+    while column.at < end {
+        let delay = column.next - column.at;
+        assert!(
+            delay > Duration::from_millis(1),
+            "idle player scheduled {delay:?} after {:?}",
+            column.at
+        );
+        let next = column.next.min(column.next_tick).min(end);
+        column.run_until(&scenario, next, |_| Ok(())).unwrap();
+    }
+}
+
+#[test]
 fn cost_beat_key_frame_waits_for_the_money_roll() {
     let scenario = Scenario::parse("money", "scenario money length 4s\nagent @a claude\n0s @a runs \"work\"\n0s @a set cost $1\n1s @a set cost $5").unwrap();
     let mut keys = Vec::new();
