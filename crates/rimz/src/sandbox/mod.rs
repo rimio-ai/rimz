@@ -8,11 +8,15 @@ use crate::config::{Isolation, SkillName};
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
+mod bind_guard;
 #[cfg(target_os = "linux")]
 mod linux;
 mod rewrite;
 mod skills;
 
+#[cfg(target_os = "linux")]
+pub use bind_guard::run_bind_helper;
+pub use bind_guard::{BindGuard, BindGuardErr, BindRestore};
 pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
@@ -145,6 +149,13 @@ pub struct SandboxPlan {
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<PlannedCopy>,
     tmp_dir: PathBuf,
+    guarded_entries: Vec<PathBuf>,
+}
+
+impl SandboxPlan {
+    pub fn guarded_entries(&self) -> &[PathBuf] {
+        &self.guarded_entries
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -425,6 +436,8 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
                 .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(home))
         })
         .collect();
+    let mut guarded_entries = Vec::new();
+    let mut guarded = BTreeSet::new();
     for path in protected_paths(inputs)
         .into_iter()
         .filter(|path| path.exists())
@@ -454,6 +467,9 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
                 source: path.clone(),
                 target: path,
             });
+            if guarded.insert(resolved.clone()) {
+                guarded_entries.push(resolved);
+            }
         }
     }
     if let Some(view) = views.dir {
@@ -506,6 +522,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         skipped: views.skipped,
         copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
+        guarded_entries,
     })
 }
 

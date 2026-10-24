@@ -211,13 +211,14 @@ png = "0.18"
 crc32fast = "1"
 
 # OS integration (cfg(unix))
-nix = { version = "0.31", features = ["feature", "fs", "hostname", "net", "poll", "process", "resource", "signal", "socket", "term", "user"] }
+nix = { version = "0.31", features = ["feature", "fs", "hostname", "inotify", "mount", "net", "poll", "process", "resource", "sched", "signal", "socket", "term", "user"] }
 # Safe FIONREAD wraps the best-effort ignored-stdin hint without admitting
 # unsafe code into the binary; rustix 1.x is already in the dependency tree.
 # `time` compiles nothing of its own here: rustix 1.1's `net` socket options
 # reach its `timespec` module, which only `time` (among others) builds, so a
 # build whose other dependencies enable none of them fails without it.
-rustix = { version = "1", features = ["net", "termios", "time"] }
+# The scoped bind guard uses the safe inotify reader on its inherited fd.
+rustix = { version = "1", features = ["fs", "net", "termios", "time"] }
 # `crossterm` 0.29 (via ratatui) still pulls signal-hook 0.3 beside this one; `deny.toml` skips that copy.
 signal-hook = "0.4"
 

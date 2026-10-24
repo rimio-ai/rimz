@@ -1141,6 +1141,553 @@ fn skill_bind_source(argv: &[String], target: &Path) -> PathBuf {
     PathBuf::from(&args[1])
 }
 
+fn guard_fixture(env: &Env, checkout: &Path) -> Vec<PathBuf> {
+    for args in [
+        vec!["init"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        vec![
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            checkout.to_str().unwrap(),
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .env("HOME", &env.home_root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg("-C")
+            .arg(&env.project_root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut entries = Vec::new();
+    for name in [
+        ".profile",
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".bash_logout",
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".zlogin",
+        ".zlogout",
+        ".config/fish",
+        ".gitconfig",
+        ".ssh",
+        ".config/systemd/user",
+    ] {
+        let path = env.home_root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if [".config/fish", ".ssh", ".config/systemd/user"].contains(&name) {
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("sentinel"), "original").unwrap();
+        } else {
+            std::fs::write(&path, "original").unwrap();
+        }
+        entries.push(path);
+    }
+    let hooks = env.project_root.join(".git/hooks");
+    std::fs::write(hooks.join("sentinel"), "original").unwrap();
+    entries.extend([hooks, env.project_root.join(".git/config")]);
+    for root in [checkout, &env.project_root] {
+        for name in [".claude", ".codex", ".agents", ".mcp.json"] {
+            let path = root.join(name);
+            if name == ".mcp.json" {
+                std::fs::write(&path, "original").unwrap();
+            } else {
+                std::fs::create_dir(&path).unwrap();
+                std::fs::write(path.join("sentinel"), "original").unwrap();
+            }
+            entries.push(path);
+        }
+    }
+    entries
+}
+
+#[test]
+fn sandbox_guarded_entries_follow_protected_identity_binds() {
+    use std::os::unix::fs::symlink;
+
+    let env = Env::new();
+    let checkout = env.home_root.join("linked");
+    let entries = guard_fixture(&env, &checkout);
+    let target = env.home_root.join("startup-target");
+    std::fs::rename(&entries[0], &target).unwrap();
+    symlink(&target, &entries[0]).unwrap();
+    std::fs::remove_file(&entries[1]).unwrap();
+    symlink(&target, &entries[1]).unwrap();
+    let missing = env.home_root.join(".bash_logout");
+    std::fs::remove_file(&missing).unwrap();
+    let provider = checkout.join(".codex");
+    let provider_entry = env.home_root.join(".zshrc");
+    std::fs::remove_file(&provider_entry).unwrap();
+    symlink(provider.join("sentinel"), &provider_entry).unwrap();
+    let overlay = checkout.join(".agents");
+    let skills = overlay.join("skills");
+    std::fs::create_dir(&skills).unwrap();
+    let library = env.rimz_home().join("skills/library");
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::write(library.join("SKILL.md"), "library body").unwrap();
+    let requested = env.home_root.join("requested-ro");
+    std::fs::create_dir(&requested).unwrap();
+    let vars = environment(&env);
+    let state = env.store();
+    let inputs = SandboxInputs {
+        read_only: vec![requested],
+        env: &vars,
+        cwd: &checkout,
+        project_root: &env.project_root,
+        worktree: Some(&checkout),
+        checkout: Some(&checkout),
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: Some(provider.clone()),
+        skills: SkillInputs {
+            kind: "codex",
+            home: Some(skills),
+            manual: ManualSkill::OpenAiPolicy,
+            callable: Some(&[]),
+        },
+    };
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    let mut planned_paths: Vec<_> = entries
+        .into_iter()
+        .filter(|p| p != &missing && p != &provider && p != &provider_entry && p != &overlay)
+        .collect();
+    planned_paths.sort();
+    let mut expected = Vec::new();
+    for path in planned_paths {
+        let canonical = path.canonicalize().unwrap();
+        if !expected.contains(&canonical) {
+            expected.push(canonical);
+        }
+    }
+    assert_eq!(plan.guarded_entries(), expected);
+
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        project_root: &checkout,
+        ..inputs
+    })
+    .unwrap();
+    let mut unique = plan.guarded_entries().to_vec();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        plan.guarded_entries().len(),
+        "duplicate roots or aliases must not duplicate guards"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_guard_restores_replaced_entries_in_a_running_view() {
+    use rimz::sandbox::BindGuard;
+    use std::os::unix::fs::symlink;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let checkout = env.home_root.join("linked");
+    let mut entries = guard_fixture(&env, &checkout);
+    let target = env.home_root.join("startup-target");
+    std::fs::rename(&entries[0], &target).unwrap();
+    symlink("startup-target", &entries[0]).unwrap();
+    entries[0] = target;
+    let provider = env.home_root.join("provider");
+    std::fs::create_dir(&provider).unwrap();
+    let vars = environment(&env);
+    let state = env.store();
+    let unit = state.paths().temp_unit_dir(None);
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
+        env: &vars,
+        cwd: &checkout,
+        project_root: &env.project_root,
+        worktree: Some(&checkout),
+        checkout: Some(&checkout),
+        tmp_dir: &unit,
+        skills_dir: &state.paths().skills_dir,
+        ssh_config_file: &env.home_root.join("missing-ssh-config"),
+        ssh_config_copies_dir: &env.home_root.join("ssh-config-copies"),
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: Some(provider.clone()),
+        skills: SkillInputs {
+            kind: "codex",
+            home: None,
+            manual: ManualSkill::OpenAiPolicy,
+            callable: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    let mut guarded = plan.guarded_entries().to_vec();
+    guarded.sort();
+    let mut fixture = entries.clone();
+    fixture.sort();
+    assert_eq!(guarded, fixture, "the plan must guard every fixture entry");
+    let (tx, rx) = mpsc::channel();
+    let mut guard = BindGuard::arm(plan.guarded_entries(), &env.rimz_bin(), move |outcome| {
+        tx.send(outcome).unwrap();
+    })
+    .unwrap()
+    .unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped).unwrap().unwrap(), &plan.plan, &checkout,
+        &["/bin/sh".into(), "-c".into(), r#"
+            : > /tmp/guard-ready
+            while [ ! -e /tmp/guard-go ]; do sleep 0.01; done
+            provider=$1; shift
+            for path do
+                value=$path
+                if [ -d "$path" ]; then value=$path/sentinel; fi
+                test "$(cat "$value")" = replacement-host || exit 10
+                if (printf bad >> "$value") 2>/dev/null; then exit 11; fi
+                rm -rf /tmp/rename-source
+                if [ -d "$path" ]; then mkdir /tmp/rename-source; else : > /tmp/rename-source; fi
+                if mv -T /tmp/rename-source "$path" 2>/dev/null; then exit 12; fi
+                test "$(awk -v p="$path" '$5 == p { n++ } END { print n+0 }' /proc/self/mountinfo)" = 1 || exit 13
+            done
+            printf writable > checkout-write
+            printf writable > "$provider/provider-write"
+        "#.into(), "guard-test".into(), provider.display().to_string()],
+    );
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .args(&entries)
+        .env("HOME", &env.home_root)
+        .env("RIMZ_HOME", env.rimz_home())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !unit.join("guard-ready").exists() {
+        if child.try_wait().unwrap().is_some() {
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "view exited before readiness: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(Instant::now() < deadline, "view did not signal readiness");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The queue must survive the park handoff even before the first point.
+    let first = &entries[0];
+    std::fs::write(first.with_extension("lock"), "replacement").unwrap();
+    std::fs::rename(first.with_extension("lock"), first).unwrap();
+    let fd_flags: BTreeMap<_, _> = std::fs::read_dir("/proc/self/fdinfo")
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let fd: i32 = entry.file_name().to_str()?.parse().ok()?;
+            let info = std::fs::read_to_string(entry.path()).ok()?;
+            let flags = info
+                .lines()
+                .find_map(|line| line.strip_prefix("flags:\t"))?;
+            Some((fd, i32::from_str_radix(flags, 8).ok()?))
+        })
+        .collect();
+    let fd = guard.prepare_handoff().unwrap();
+    let (tx, handed_rx) = mpsc::channel();
+    let handed = BindGuard::handover(
+        Some(fd),
+        plan.guarded_entries(),
+        &env.rimz_bin(),
+        move |outcome| {
+            tx.send(outcome).unwrap();
+        },
+    )
+    .unwrap();
+    // A real exec discards the old owner without running its destructor.
+    std::mem::forget(guard);
+    let guard = handed.unwrap();
+    guard.point(child.id());
+    let restored = handed_rx.recv_timeout(Duration::from_secs(30));
+    assert!(
+        restored
+            .as_ref()
+            .is_ok_and(|o| o.paths.contains(first) && o.result.is_ok()),
+        "queued replacement must be repaired after handoff: {restored:?}"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "an unpointed guard must retain events"
+    );
+    assert_ne!(
+        fd_flags[&fd] & nix::fcntl::OFlag::O_CLOEXEC.bits(),
+        0,
+        "the armed fd must be CLOEXEC"
+    );
+
+    for path in entries.iter().skip(1).chain(std::iter::once(first)) {
+        if path.is_dir() {
+            std::fs::rename(path, path.with_extension("old")).unwrap();
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("sentinel"), "replacement").unwrap();
+        } else {
+            std::fs::write(path.with_extension("lock"), "replacement").unwrap();
+            std::fs::rename(path.with_extension("lock"), path).unwrap();
+        }
+        let restored = handed_rx.recv_timeout(Duration::from_secs(30));
+        assert!(
+            restored
+                .as_ref()
+                .is_ok_and(|o| o.paths.contains(path) && o.result.is_ok()),
+            "replacement of {path:?} must be repaired: {restored:?}"
+        );
+    }
+    for path in &entries {
+        let value = if path.is_dir() {
+            path.join("sentinel")
+        } else {
+            path.clone()
+        };
+        use std::io::Write;
+        write!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(value)
+                .unwrap(),
+            "-host"
+        )
+        .unwrap();
+    }
+    // A second helper pass must not stack mounts over already repaired entries.
+    let view = rimz::proc::children(child.id())[0];
+    let output = env
+        .rimz()
+        .arg("--scoped-bind-restore")
+        .arg(view.to_string())
+        .args(&entries)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dangling = [
+        env.home_root.join("dangling-one"),
+        env.home_root.join("dangling-two"),
+    ];
+    for path in &dangling {
+        symlink(env.home_root.join("absent-target"), path).unwrap();
+    }
+    let output = env
+        .rimz()
+        .arg("--scoped-bind-restore")
+        .arg(view.to_string())
+        .arg(env.home_root.join("absent-entry"))
+        .args(&dangling)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "the helper must not write to stdout"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        dangling
+            .iter()
+            .map(|path| format!("{path:?}: No such file or directory (os error 2)\n"))
+            .collect::<String>()
+    );
+    std::fs::write(unit.join("guard-go"), "").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "view exit {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut guard = guard;
+    let fd = guard.prepare_handoff().unwrap();
+    drop(guard);
+    assert!(
+        !Path::new(&format!("/proc/self/fd/{fd}")).exists(),
+        "drop must close the guard fd before returning"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("checkout-write")).unwrap(),
+        "writable"
+    );
+    assert_eq!(
+        std::fs::read_to_string(provider.join("provider-write")).unwrap(),
+        "writable"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_guard_refuses_unwatchable_entries_and_empty_sets_need_no_helper() {
+    use rimz::sandbox::{BindGuard, BindGuardErr};
+
+    assert!(
+        BindGuard::arm(&[], Path::new("/no/helper"), |_| {})
+            .unwrap()
+            .is_none()
+    );
+    let env = Env::new();
+    let path = env.home_root.join("missing-parent/entry");
+    let result = BindGuard::arm(&[path], &env.rimz_bin(), |_| {});
+    assert!(
+        matches!(result, Err(BindGuardErr::Watch { .. })),
+        "a missing watched parent must refuse the guard"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_guard_bounds_view_lookup_and_reaps_timed_out_helpers() {
+    use rimz::sandbox::{BindGuard, Mount, MountPlan};
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let path = env.home_root.join(".gitconfig");
+    std::fs::write(&path, "original").unwrap();
+    let helper = env.home_root.join("slow-helper");
+    let helper_pid = helper.with_extension("pid");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\nprintf '%s\\n' $$ >> \"$0.pid\"\nexec sleep 120\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let entries = vec![path.clone()];
+    let (tx, rx) = mpsc::channel();
+    let guard = BindGuard::arm(&entries, &helper, move |outcome| {
+        tx.send(outcome).unwrap();
+    })
+    .unwrap()
+    .unwrap();
+    // A live process in our own namespace must time out, not run the helper.
+    guard.point(std::process::id());
+    std::fs::write(path.with_extension("lock"), "replacement").unwrap();
+    std::fs::rename(path.with_extension("lock"), &path).unwrap();
+    let outcome = rx.recv_timeout(Duration::from_secs(30));
+    assert!(
+        outcome.as_ref().is_ok_and(
+            |o| o.paths == entries && o.result == Err("scoped view lookup timed out".into())
+        ),
+        "a live provider without an assembled view must report its bounded lookup failure: {outcome:?}"
+    );
+    assert!(
+        !helper_pid.exists(),
+        "an unassembled view must not spawn a repair"
+    );
+
+    let ready = env.home_root.join("view-ready");
+    let plan = MountPlan {
+        mounts: vec![Mount::RoBind {
+            source: path.clone(),
+            target: path.clone(),
+        }],
+    };
+    let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Scoped)
+            .unwrap()
+            .unwrap(),
+        &plan,
+        &env.project_root,
+        &[
+            "/bin/sh".into(),
+            "-c".into(),
+            ": > \"$1\"; read answer".into(),
+            "guard-errors".into(),
+            ready.display().to_string(),
+        ],
+    );
+    let mut child = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env("HOME", &env.home_root)
+        .env("RIMZ_HOME", env.rimz_home())
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "view exited before readiness"
+        );
+        assert!(Instant::now() < deadline, "view did not signal readiness");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    guard.point(child.id());
+    std::fs::write(path.with_extension("lock"), "replacement").unwrap();
+    std::fs::rename(path.with_extension("lock"), &path).unwrap();
+    let outcome = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(outcome.paths, entries);
+    assert_eq!(outcome.result, Err("scoped bind helper timed out".into()));
+    drop(guard);
+    let pids: Vec<u32> = std::fs::read_to_string(helper_pid)
+        .unwrap()
+        .lines()
+        .map(|pid| pid.parse().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 1, "one helper per repair batch: {pids:?}");
+    assert!(
+        !rimz::proc::process_is_live(pids[0], None),
+        "timed-out helper must be killed and reaped"
+    );
+    let missing = env.home_root.join("missing-helper");
+    let (tx, rx) = mpsc::channel();
+    let guard = BindGuard::arm(&entries, &missing, move |outcome| {
+        tx.send(outcome).unwrap();
+    })
+    .unwrap()
+    .unwrap();
+    guard.point(child.id());
+    std::fs::write(path.with_extension("lock"), "replacement").unwrap();
+    std::fs::rename(path.with_extension("lock"), &path).unwrap();
+    let outcome = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(outcome.paths, entries);
+    assert_eq!(
+        outcome.result,
+        Err("spawning scoped bind helper: No such file or directory (os error 2)".into())
+    );
+    assert!(!outcome.result.unwrap_err().contains("timed out"));
+    drop(guard);
+    writeln!(child.stdin.take().unwrap(), "done").unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {

@@ -20,6 +20,10 @@ const RENDERED_PANE_LOG_FILTER: &str = "off";
 
 fn main() -> std::process::ExitCode {
     cap_malloc_arenas();
+    #[cfg(target_os = "linux")]
+    if let Some(code) = rimz::sandbox::run_bind_helper() {
+        return code;
+    }
     // Completion runs before observability and build-id startup: every TAB is
     // latency-sensitive, and clap_complete owns stdout for this request.
     cli::complete_env();
