@@ -794,6 +794,30 @@ fn companion_append_display_failure_is_before_spawn() {
 
 #[cfg(unix)]
 #[test]
+fn companion_append_stack_batch_failure_is_before_spawn() {
+    let (temp, result) = companion_append_with_shim(
+        r#"if [ "$4" = set-option ]; then printf 'batch refused\n' >&2; exit 1; fi"#,
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::BeforeSpawn(
+                crate::mux::MuxErr::Command { stderr, .. }
+            )) if stderr.contains("batch refused")
+        ),
+        "{result:?}"
+    );
+    let log = crate::mux::zellij::tests::support::shim_log(&temp);
+    assert_eq!(
+        log.lines().filter(|line| *line == "set-option").count(),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("split-window"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn companion_append_missing_pane_id_is_spawn_error() {
     let (temp, result) = companion_append_with_shim("");
     assert!(
