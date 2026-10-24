@@ -11,6 +11,85 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn resolution_fallback_only_reports_live_or_unknown_sessions() {
+    use crate::common::wait::{agent_wait, register_calling_agent};
+    use rimz::diag::record::DiagEvent;
+
+    let mut results = Vec::new();
+    for mode in ["absent", "live", "unknown", "success"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        register_calling_agent(&env);
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let bin = env.home_root.join("resolution-bin");
+        crate::common::write_path_shim(
+            &bin,
+            "tmux",
+            r#"if [ "$1" = "-S" ]; then shift 3; fi
+printf '%s\n' "$1" >> "$RIMZ_TEST_RESOLUTION_LOG"
+case "$1" in
+    list-panes) printf 'pane read failed\n' >&2; exit 1 ;;
+    list-sessions)
+        case "$RIMZ_TEST_RESOLUTION_MODE" in
+            absent) exit 0 ;;
+            live) printf '%s\n' "$RIMZ_TEST_RESOLUTION_SESSION" ;;
+            unknown) printf 'permission denied\n' >&2; exit 1 ;;
+            *) exit 2 ;;
+        esac ;;
+    *) exit 2 ;;
+esac"#,
+        );
+        let log = env.home_root.join("resolution-calls.log");
+        let mut command = agent_wait(&env);
+        command
+            .args(["--mux", "tmux", "wait", "list"])
+            .env("PATH", &bin)
+            .env("RIMZ_TEST_RESOLUTION_LOG", &log)
+            .env("RIMZ_TEST_RESOLUTION_MODE", mode)
+            .env("RIMZ_TEST_RESOLUTION_SESSION", &session);
+        if mode == "success" {
+            let fixture = env.write_pane_fixture(&[tmux_pane("%1", "claude", &env.project_root)]);
+            command.env("RIMZ_TEST_PANE_LIST", fixture);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "@planner#main · no waits\n",
+            "{mode}"
+        );
+        let records = env.diag_records(&session);
+        let fallbacks = records
+            .iter()
+            .filter(|record| matches!(record.event, DiagEvent::ResolutionFallback { .. }))
+            .count();
+        let rejected = records
+            .iter()
+            .filter(|record| matches!(record.event, DiagEvent::FrameRejected { .. }))
+            .count();
+        results.push((
+            mode,
+            fallbacks,
+            rejected,
+            std::fs::read_to_string(log).unwrap_or_default(),
+        ));
+    }
+    assert_eq!(
+        results,
+        vec![
+            ("absent", 0, 1, "list-panes\nlist-sessions\n".into()),
+            ("live", 1, 1, "list-panes\nlist-sessions\n".into()),
+            ("unknown", 1, 1, "list-panes\nlist-sessions\n".into()),
+            ("success", 0, 0, String::new()),
+        ]
+    );
+}
+
+#[test]
 fn play_refuses_a_pipe_before_terminal_output() {
     let env = Env::new();
     let pilot = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/pilot.scn");
