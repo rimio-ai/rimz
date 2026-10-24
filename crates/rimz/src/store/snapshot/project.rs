@@ -969,7 +969,10 @@ fn inherit_compaction_registration(
 
 /// Carry launch-scoped routing and ancestry across an in-place provider
 /// conversation change. Card naming stays session-scoped, and only an explicit
-/// compaction edge inherits registration primacy.
+/// compaction edge inherits registration primacy. A field that pins a row to
+/// its launch (team, loop task, workflow attempt, channel) is copied here; a
+/// field missing from this list is lost when `/clear` gives the pane a new
+/// conversation row.
 fn inherit_launch_identity(
     map: &BTreeMap<AgentKey, AgentState>,
     launch_identity: &LaunchIdentityIndex,
