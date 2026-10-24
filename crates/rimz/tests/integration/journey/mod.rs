@@ -143,6 +143,8 @@ impl<'a> RoomHarness<'a> {
 
         let mut cmd = CommandBuilder::new(&bin);
         env.pin_pty_command(&mut cmd);
+        cmd.env("TMUX_PANE", "%999999");
+        cmd.env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "present");
         // Pin the renderer to the tempdir workspace root. Left unset, the mux
         // process inherits the suite's cwd — a developer's real RimZ worktree —
         // and the producer's git detection derives that worktree's channel,

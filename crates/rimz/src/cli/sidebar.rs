@@ -1077,11 +1077,16 @@ fn serve(
     tick_seconds: u64,
     refresh_ms: Option<u16>,
 ) -> Result<()> {
-    let (workspace_id, session_name) = resolve_serve_identity(globals, workspace_id, session_name)?;
     let mux = match mux {
         Some(mux) => mux,
         None => rimz::mux::auto_detect_backend(globals.mux)?,
     };
+    let Some(own_pane) = rimz::mux::own_pane_id(mux) else {
+        bail!(
+            "rimz sidebar serve: not inside a {mux} pane; rimz sidebar serve runs only in the sidebar pane the room spawns"
+        );
+    };
+    let (workspace_id, session_name) = resolve_serve_identity(globals, workspace_id, session_name)?;
     let machine_config = rimz::config::MachineConfig::load_lenient();
     let config = rimz::sidebar_pane::app::ServeConfig {
         room: rimz::sidebar_pane::app::RoomConfig {
@@ -1095,7 +1100,7 @@ fn serve(
         instance_id: rimz::sidebar_pane::supervise::instance_id(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
-        own_pane: rimz::mux::own_pane_id(mux),
+        own_pane: Some(own_pane),
     };
     rimz::sidebar_pane::supervise::run(config)?;
     Ok(())

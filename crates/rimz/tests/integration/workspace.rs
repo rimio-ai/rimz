@@ -125,6 +125,7 @@ fn sidebar_supervisor_without_a_room_stops_before_spawning_or_logging() {
     let env = Env::new();
     let output = env
         .rimz()
+        .env("TMUX_PANE", "%11")
         .args([
             "sidebar",
             "serve",

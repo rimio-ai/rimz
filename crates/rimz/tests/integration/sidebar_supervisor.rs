@@ -232,6 +232,34 @@ fn baseline_survives_host_loss_and_can_be_forgotten() {
 }
 
 #[test]
+fn outside_a_pane_refuses_without_spawning_or_binding() {
+    let env = Env::new();
+    let pty = nix::pty::openpty(None, None).unwrap();
+    let mut child = supervisor_command(&env)
+        .env_remove("TMUX_PANE")
+        .env_remove("ZELLIJ_PANE_ID")
+        .stdout(File::from(pty.slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_child(&mut child, WAIT);
+    let output = child.wait_with_output().unwrap();
+    assert!(!status.success(), "running outside a pane must refuse");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "error: rimz sidebar serve: not inside a tmux pane; rimz sidebar serve runs only in the sidebar pane the room spawns"
+    );
+    assert!(!env.rimz_home().join("ws").exists());
+    assert!(!env.runtime_paths().sock_dir.exists());
+    assert!(
+        !rimz::proc::list_processes()
+            .iter()
+            .any(|process| process.cmdline.contains(" sidebar host ")
+                && process.cmdline.contains(env.workspace_id.as_str()))
+    );
+}
+
+#[test]
 fn non_terminal_stdout_refuses_without_spawning_or_binding() {
     let env = Env::new();
     env.record(&env.project_root);
