@@ -188,6 +188,10 @@ expression: value
         "agent": {
           "type": "string"
         },
+        "lifecycle": {
+          "$ref": "#/$defs/StepLifecycle",
+          "default": "turn"
+        },
         "max-visits": {
           "format": "uint64",
           "minimum": 1,
@@ -254,6 +258,13 @@ expression: value
         }
       },
       "type": "object"
+    },
+    "StepLifecycle": {
+      "enum": [
+        "turn",
+        "stay"
+      ],
+      "type": "string"
     },
     "Wake": {
       "anyOf": [

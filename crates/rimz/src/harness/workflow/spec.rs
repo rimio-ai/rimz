@@ -198,6 +198,8 @@ pub(super) const RESERVED_OUTCOMES: [&str; 6] =
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {
     pub agent: String,
+    #[serde(default)]
+    pub lifecycle: crate::store::workflow::StepLifecycle,
     pub prompt_file: String,
     pub window: Option<String>,
     #[serde(default)]

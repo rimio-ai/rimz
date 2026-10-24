@@ -559,6 +559,9 @@ impl Transition<'_> {
             let Some(attempt) = self.record.attempt.as_ref() else {
                 return Ok(None);
             };
+            if !attempt.lifecycle.is_turn() {
+                return Ok(None);
+            }
             (
                 self.spec
                     .steps

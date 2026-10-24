@@ -260,6 +260,14 @@ pub(super) fn waiting(record: &RunRecord) -> Option<String> {
     })
 }
 
+fn with_you(record: &records::RunRecord) -> bool {
+    record.state == records::RunState::Active
+        && record
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| !attempt.lifecycle.is_turn() && attempt.run.is_some())
+}
+
 fn list(json: bool) -> Result<()> {
     let mut rows = Vec::new();
     let mut table = render::Table::new([
@@ -276,6 +284,7 @@ fn list(json: bool) -> Result<()> {
             }
             let detail = waiting(&r)
                 .or_else(|| r.park.as_ref().map(records::Park::label))
+                .or_else(|| with_you(&r).then(|| "with you".into()))
                 .unwrap_or_default();
             rows.push(serde_json::json!({"id":r.id,"workflow":r.workflow,"scope":r.scope.path,"state":r.state,"node":r.node,"since":r.entered_at,"detail":detail}));
             table.row([
@@ -319,6 +328,8 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
     );
     let state = if let Some(park) = &record.park {
         format!("{} ({})", record.state.as_str(), park.label())
+    } else if with_you(&record) {
+        "active (with you)".into()
     } else {
         record.state.as_str().into()
     };

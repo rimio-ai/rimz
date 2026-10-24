@@ -389,6 +389,40 @@ fn successor_inherits_prior_launch_ids() {
 }
 
 #[test]
+fn same_pane_successor_keeps_the_full_workflow_attempt_pin() {
+    let pin = crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 7,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    };
+    let mut launch = launch_payload("primary", "coder-card");
+    launch.launch_id = Some("launch_coder".into());
+    launch.launch.workflow = Some(pin.clone());
+    let events = [
+        launch_event("claude", launch),
+        same_process_registration("primary", "coder-card", 1, "tmux:%1", 41),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({"agent_id":"primary", "signal":{"signal":"ended"}}),
+        ),
+        same_process_registration("cleared", "coder-card", 3, "tmux:%1", 41),
+    ]
+    .map(|mut event| {
+        event.source = "claude".into();
+        event
+    });
+    let agents = reduce_agent_states(&events);
+    let successor = agents
+        .iter()
+        .find(|agent| agent.agent_id == "cleared")
+        .unwrap();
+    assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(successor.workflow, Some(pin));
+    assert!(successor.ended_at.is_none());
+}
+
+#[test]
 fn live_successor_keeps_its_launch_after_predecessor_picker_revive() {
     let mut events = resumed_fork_events("tmux:%1");
     events.push(launch_event(

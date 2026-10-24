@@ -3,6 +3,39 @@ use rimz::agents::PermissionMode;
 use rimz::store::run::RunRecord;
 
 #[test]
+fn workflow_layout_closes_all_cells_and_preserves_unrelated_panes() {
+    require_tmux!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    server
+        .backend
+        .ensure_session(&session_opts(
+            &workspace.session_name,
+            workspace.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((160, 40)),
+        ))
+        .unwrap();
+    let unrelated = list_session_panes(&server, &workspace.session_name)[0]
+        .pane_id
+        .clone();
+    crate::backend::workflow::check_layout(
+        &env,
+        &server.backend,
+        &workspace.session_name,
+        &unrelated,
+        || {
+            let mut command = env.rimz();
+            command.args(["--mux", "tmux"]);
+            command
+        },
+    );
+}
+
+#[test]
 fn terminal_run_closes_only_its_command_pane() {
     check_command_pane(false);
 }

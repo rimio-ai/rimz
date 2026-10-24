@@ -7,7 +7,39 @@ use rimz::mux::{MuxBackend, SplitPaneOptions, SplitPlacement, SplitTarget};
 use rimz::store::run::RunRecord;
 
 use super::support::*;
-use crate::common::Env;
+use crate::common::{Env, ZellijNamespace};
+
+#[test]
+fn workflow_layout_closes_all_cells_and_preserves_unrelated_panes() {
+    require_zellij!();
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let room = LiveZellijSession::from_namespace(ZellijNamespace::new(), workspace.session_name);
+    let mut sidebar = sidebar_opts(room.name(), &env.project_root, env.rimz_bin(), 160);
+    sidebar.workspace_id = workspace.workspace_id;
+    sidebar.runtime =
+        rimz::RuntimePaths::for_state_under(&env.state_path_for(&env.project_root), room.path());
+    sidebar
+        .extra_env
+        .insert("RIMZ_HOME".into(), env.rimz_home().display().to_string());
+    publish_room_bin(room.path(), &sidebar);
+    room.backend().open_sidebar(&sidebar, None).unwrap();
+    let unrelated = wait_for_pane_count(room.path(), room.name(), 2)
+        .into_iter()
+        .find(|pane| pane.title.as_deref() != Some("rimz-sidebar"))
+        .unwrap()
+        .pane_id;
+    let _client = AttachedClient::attach(&room, 160, 40);
+    crate::backend::workflow::check_layout(&env, room.backend(), room.name(), &unrelated, || {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("XDG_RUNTIME_DIR", room.path())
+            .env("XDG_CACHE_HOME", room.path());
+        command
+    });
+}
 
 #[test]
 fn terminal_run_closes_only_its_command_pane() {

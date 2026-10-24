@@ -4,10 +4,10 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use rimz::agents::{AgentState, AskDelivery, AskKind, ProviderCapacity, TurnErrorClass};
-use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use rimz::harness::schedule::takeover::{self, Takeover};
 use rimz::harness::workflow::{self, WorkflowErr};
-use rimz::store::run::{ReportTo, RunRecord};
+use rimz::launcher::{self, LaunchOutcome, Preparation};
+use rimz::store::run::{ReportTo, RunLifecycle, RunRecord};
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::workflow::{
     Asked, AttemptOutcome, AttemptRun, ChildRef, Children, Limited, TeamRef,
@@ -146,47 +146,88 @@ impl workflow::AttemptHost for Host<'_> {
         &self,
         step: workflow::StepLaunch,
     ) -> Result<Result<AttemptRun, workflow::LaunchFailure>, WorkflowErr> {
-        let mut globals = self.globals.clone();
-        globals.root = Some(step.project_root);
-        let mut request = SupervisedRunRequest::new(
-            step.profile,
-            step.prompt,
-            None,
-            rimz::agents::ManagedLaunchState::PendingResolution,
-        );
-        request.cwd = Some(step.cwd);
-        request.background = true;
-        request.self_cleanup_on_completion = true;
-        request.force_new_tab = true;
-        request.report_to = ReportTo::Nobody;
-        request.workflow = Some(step.workflow);
         let result = (|| -> Result<_> {
             let ctx = self.ctx()?;
-            globals.mux = Some(crate::cli::render::room::present_mux_pick(
-                rimz::room::session::pick_mux_for_session(&ctx.workspace.session_name, globals.mux),
-            )?);
-            supervised::run::run_supervised(
-                request,
-                supervised::SupervisedPresentation::text(false),
-                &globals,
-                &mut None,
-            )
+            let mux = crate::cli::render::room::present_mux_pick(
+                rimz::room::session::pick_mux_for_session(
+                    &ctx.workspace.session_name,
+                    self.globals.mux,
+                ),
+            )?;
+            let request = launcher::LayoutRequest {
+                context: launcher::LaunchContext {
+                    workspace: ctx.workspace,
+                    store: ctx.store,
+                    machine: rimz::config::MachineConfig::load_lenient(),
+                    mux: Some(mux),
+                    root: self.globals.root.clone(),
+                    channel: None,
+                },
+                launch: launcher::LayoutLaunch {
+                    spec: Some(step.agent),
+                    prompt: Some(step.prompt),
+                    cwd: Some(step.cwd.clone()),
+                    cohort: launcher::CohortRequest {
+                        bg: true,
+                        new_tab: true,
+                        ..Default::default()
+                    },
+                    report_to: ReportTo::Nobody,
+                    ..Default::default()
+                },
+                cwd: Some(step.cwd),
+                allow_in_place: false,
+                entry: launcher::RoomEntry::Birth,
+                starter: launcher::Starter::Workflow,
+                resident_loop: None,
+                workflow: Some(step.workflow.clone()),
+                leader_run: Some(launcher::LeaderRun {
+                    lifecycle: if step.lifecycle.is_turn() {
+                        RunLifecycle::Turn
+                    } else {
+                        RunLifecycle::Session
+                    },
+                    keep: false,
+                    report_to: ReportTo::Nobody,
+                    timeout: None,
+                    retry_of: None,
+                    cleanup: true,
+                    subagent: false,
+                    warn: Vec::new(),
+                    grace: None,
+                    loop_task: None,
+                    workflow: Some(step.workflow),
+                    reader: None,
+                    response_receipt: false,
+                    completion: launcher::RunCompletion::Detached,
+                }),
+            };
+            let mut interaction = crate::cli::launch_interaction::CliInteraction;
+            match launcher::prepare_layout(request, &mut interaction)? {
+                Preparation::Prepared(prepared) => launcher::execute(*prepared, &mut interaction),
+                Preparation::Handled(outcome) => Ok(outcome),
+            }
         })();
         let (outcome, reason) = match result {
-            Ok(Some(SupervisedRunOutcome::Background {
-                run_id, agent_name, ..
-            })) => {
+            Ok(LaunchOutcome::Opened(opened)) => {
+                let run = opened
+                    .run
+                    .context("workflow launch did not publish its leader run")
+                    .map_err(host_error)?;
+                let name = run
+                    .record
+                    .agent_name
+                    .as_deref()
+                    .context("workflow run has no leader name")
+                    .map_err(host_error)?;
                 return Ok(Ok(AttemptRun {
-                    run_id,
-                    handle: format!("@{agent_name}"),
+                    handle: format!("@{name}"),
+                    run_id: run.record.run_id,
                 }));
             }
-            Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason })) => {
-                (AttemptOutcome::Limited, reason)
-            }
-            Ok(None) => (AttemptOutcome::Died, "workflow launch aborted".into()),
-            Ok(Some(SupervisedRunOutcome::Record(_))) => {
-                unreachable!("background request returns a background identity")
+            Ok(LaunchOutcome::BudgetExceeded { reason }) => (AttemptOutcome::Limited, reason),
+            Ok(LaunchOutcome::Declined | LaunchOutcome::Existing) => {
+                (AttemptOutcome::Died, "workflow launch aborted".into())
             }
             Err(error) => (AttemptOutcome::Died, format!("{error:#}")),
         };
@@ -262,18 +303,55 @@ impl workflow::AttemptHost for Host<'_> {
             let ctx = self.ctx()?;
             let run = rimz::harness::run::load(self.state, &attempt.run_id)?;
             let snapshot = ctx.cached_snapshot()?;
-            let Some(root) = agent(&snapshot, &run) else {
+            let roots = snapshot
+                .agents
+                .iter()
+                .filter(|agent| {
+                    agent.ended_at.is_none()
+                        && run.workflow.is_some()
+                        && agent.workflow == run.workflow
+                })
+                .collect::<Vec<_>>();
+            if roots.is_empty() {
                 supervised::stop_supervised_run(&ctx.workspace, &ctx.store, self.globals, &run)?;
                 return Ok(Children::default());
-            };
-            let stopped = descendants(&snapshot.agents, root);
-            let result = children(&snapshot, root, &stopped);
+            }
+            let mut stopped = Vec::new();
+            let mut result = Children::default();
+            for root in &roots {
+                let tree = descendants(&snapshot.agents, root);
+                result.live.extend(children(&snapshot, root, &tree).live);
+                stopped.extend(tree);
+                if !run.matches_agent(root) {
+                    stopped.push(*root);
+                }
+            }
+            let mut seen = BTreeSet::new();
+            stopped.retain(|agent| seen.insert((&agent.kind, &agent.agent_id)));
             let peers = rimz::address::addressable_agents(&snapshot);
-            let handle = rimz::address::agent_handle(root, &peers, true);
-            agents_cmd::stop_resolved(&ctx, self.globals, &snapshot, &[root])?
-                .remove(0)
-                .into_result(&handle)
-                .context("stopping workflow attempt")?;
+            result.stopped = stopped
+                .iter()
+                .map(|agent| child_ref(agent, &peers))
+                .collect();
+            let mut live = BTreeSet::new();
+            result.live.retain(|agent| {
+                !result
+                    .stopped
+                    .iter()
+                    .any(|stopped| stopped.kind == agent.kind && stopped.handle == agent.handle)
+                    && live.insert((agent.kind.clone(), agent.handle.clone()))
+            });
+            supervised::cancel_supervised_run(&ctx.store, &run)?;
+            for (root, stop) in roots.iter().zip(agents_cmd::stop_resolved(
+                &ctx,
+                self.globals,
+                &snapshot,
+                &roots,
+            )?) {
+                let handle = rimz::address::agent_handle(root, &peers, true);
+                stop.into_result(&handle)
+                    .context("stopping workflow attempt")?;
+            }
             Ok(result)
         })()
         .map_err(host_error)

@@ -317,6 +317,7 @@ impl RebirthPlan {
                     .iter()
                     .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
                     .collect();
+                cancel_unserved_workflow_runs(store, &self.paths);
                 cancel_child_runs(store, &self.paths, &self.crash_roster, &lost);
             }
         }
@@ -581,12 +582,35 @@ fn cancel_child_runs(
         else {
             continue;
         };
-        if agent.parent_agent_id.is_none() && run.workflow.is_none() {
+        if agent.parent_agent_id.is_none() || run.workflow.is_some() {
             continue;
         }
         if let Err(err) = crate::harness::run::cancel_and_wake(store, &run.run_id) {
             tracing::warn!(workspace = %paths.workspace_id, run_id = %run.run_id, error = %err, "rebirth: could not cancel unrecovered child run");
             continue;
+        }
+    }
+}
+
+/// Cancel every open workflow run that nothing serves any more, roster row or
+/// not: a leader that never registered has no row for `cancel_child_runs` to find.
+fn cancel_unserved_workflow_runs(store: &Store, paths: &StatePaths) {
+    let runs = match crate::harness::run::list(paths) {
+        Ok(runs) => runs,
+        Err(err) => {
+            tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth: could not list workflow runs");
+            return;
+        }
+    };
+    for run in runs
+        .iter()
+        .filter(|run| run.workflow.is_some() && !run.status.is_terminal())
+    {
+        if let Err(error) = crate::harness::run::cancel_unserved_workflow_run(store, &run.run_id) {
+            tracing::warn!(
+                %error, run_id = %run.run_id,
+                "rebirth: could not cancel workflow run"
+            );
         }
     }
 }
@@ -1392,6 +1416,7 @@ fn record_boundary_at(
     if let Ok(projection) = store.runtime_projection(crate::RuntimeScope::Audit) {
         let roster = recovery_roster(&paths, &projection.agents);
         let agents = lost_agent_roster(&projection.agents, &roster);
+        cancel_unserved_workflow_runs(&store, &paths);
         cancel_child_runs(&store, &paths, &agents, &roster);
     }
     close_boundary(Some(&store), &paths, session_name);

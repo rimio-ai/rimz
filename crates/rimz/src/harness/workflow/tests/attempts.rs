@@ -341,6 +341,82 @@ fn signs_cannot_read_outside_the_node_writable_work_directory() {
 }
 
 #[test]
+fn stay_survives_live_asks_and_limits_and_records_only_session_end() {
+    use crate::store::workflow::{Asked, Limited};
+    let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
+    let host = FakeHost::new();
+    let live = advance_ok(&state, &record.id, &host);
+    let seq = live.attempt.as_ref().unwrap().seq;
+    for status in [RunStatus::Pending, RunStatus::Running] {
+        let mut observed = host.observed.borrow_mut();
+        observed.status = status;
+        observed.ask = Some(Asked {
+            text: "Which approach?".into(),
+            kind: "question".into(),
+            handle: "@builder".into(),
+        });
+        observed.limited = Some(Limited { reset_at: None });
+        drop(observed);
+        let live = advance_ok(&state, &record.id, &host);
+        assert_eq!(
+            live.state,
+            RunState::Active,
+            "stay must not park on {status:?}"
+        );
+        assert_eq!(live.attempt.as_ref().unwrap().seq, seq);
+        assert!(live.prev_attempt.is_none());
+        assert_eq!(host.stops.get(), 0);
+    }
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let ended = advance_ok(&state, &record.id, &host);
+    let previous = ended.prev_attempt.unwrap();
+    assert_eq!(previous.outcome, AttemptOutcome::Ended);
+    assert!(previous.asked.is_none());
+    assert!(previous.limited.is_none());
+    assert_eq!(host.stops.get(), 1);
+}
+
+#[test]
+fn stay_lifecycle_is_persisted_and_legacy_attempts_remain_turns() {
+    for lifecycle in ["turn", "stay"] {
+        let (_dir, state, record) = setup(&format!("{STEP}lifecycle='{lifecycle}'\n"));
+        let host = FakeHost::new();
+        let live = advance_ok(&state, &record.id, &host);
+        let mut value = serde_json::to_value(live.attempt.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            value.get("lifecycle").cloned(),
+            (lifecycle == "stay").then(|| json!("stay"))
+        );
+        value.as_object_mut().unwrap().remove("lifecycle");
+        let legacy: records::LiveAttempt = serde_json::from_value(value).unwrap();
+        assert!(legacy.lifecycle.is_turn());
+    }
+}
+
+#[test]
+fn stay_deadline_beats_completed_observation_and_cancel_stops() {
+    for cause in ["deadline", "cancel"] {
+        let (_dir, state, record) = setup(&format!("{STEP}lifecycle='stay'\n"));
+        let host = FakeHost::new();
+        let mut live = advance_ok(&state, &record.id, &host);
+        host.observed.borrow_mut().status = RunStatus::Completed;
+        if cause == "cancel" {
+            cancel(&state, &record.id, &host).unwrap();
+        } else {
+            live.deadline = Some("2000-01-01T00:00:00Z".parse().unwrap());
+            update(&state, &live);
+            advance_ok(&state, &record.id, &host);
+        }
+        let ended = records::load(&state.workflow(&record.id)).unwrap();
+        assert_eq!(
+            ended.prev_attempt.unwrap().outcome,
+            AttemptOutcome::Canceled
+        );
+        assert_eq!(host.stops.get(), 1);
+    }
+}
+
+#[test]
 fn terminal_runs_and_live_asks_limits_route_with_full_previous_attempt() {
     use crate::store::workflow::{Asked, ChildRef, Limited};
     for (status, expected) in [

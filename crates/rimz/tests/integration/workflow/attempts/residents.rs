@@ -25,6 +25,58 @@ fn seed(room: &Room, name: &str, pane: u32, launch: LaunchParams, signal: Lifecy
 }
 
 #[test]
+fn stops_pinned_companions_even_without_a_live_leader() {
+    for ended_leader in [false, true] {
+        let room = Room::new("");
+        let (id, run) = room.launch();
+        let launch = LaunchParams {
+            workflow: run.workflow.clone(),
+            ..Default::default()
+        };
+        if ended_leader {
+            seed(
+                &room,
+                "ended-leader",
+                70,
+                launch.clone(),
+                LifecycleSignal::Registered,
+            );
+            seed(
+                &room,
+                "ended-leader",
+                70,
+                launch.clone(),
+                LifecycleSignal::Ended,
+            );
+        }
+        seed(&room, "companion", 71, launch, LifecycleSignal::Registered);
+        seed(
+            &room,
+            "unrelated",
+            72,
+            LaunchParams::default(),
+            LifecycleSignal::Registered,
+        );
+        fs::write(room.env.project_root.join("panes.json"), r#"[{"id":71,"is_plugin":false,"tab_id":1,"title":"companion"},{"id":72,"is_plugin":false,"tab_id":1,"title":"unrelated"}]"#).unwrap();
+        success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+        let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+        let closed: Vec<_> = trace
+            .lines()
+            .filter(|line| line.contains("close-pane"))
+            .filter_map(|line| line.split_whitespace().last())
+            .collect();
+        assert!(
+            closed.contains(&"terminal_71"),
+            "pinned companion must stop: {trace}"
+        );
+        assert!(
+            !closed.contains(&"terminal_72"),
+            "unrelated pane must survive: {trace}"
+        );
+    }
+}
+
+#[test]
 fn takeover_waits_for_a_working_occupant_in_an_omitted_live_tab() {
     let room = Room::new("takeover=true");
     fs::write(room.env.project_root.join("spawn.log"), "").unwrap();

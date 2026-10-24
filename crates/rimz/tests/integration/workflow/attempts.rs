@@ -20,6 +20,395 @@ fn dummy_agent_process() -> std::process::Child {
 }
 
 #[test]
+fn missing_leader_hooks_refuse_before_runs_or_panes() {
+    let room = Room::with_kind("", "claude");
+    fs::remove_file(room.env.agent_config_path("claude")).unwrap();
+    let id = room.start();
+    let value = settled(&room.env, &id, "done");
+    let attempts = events(&value, "attempt");
+    assert_eq!(attempts.len(), 1, "{value:#}");
+    assert_eq!(attempts[0]["outcome"], "died");
+    assert_eq!(
+        attempts[0]["reason"],
+        "`rimz agents -p` requires claude hooks so the supervised turn can report completion; run `rimz hooks install claude`"
+    );
+    assert!(
+        rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
+            .unwrap()
+            .is_empty()
+    );
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
+    assert!(
+        !trace.contains("new-tab") && !trace.contains("new-pane"),
+        "{trace}"
+    );
+}
+
+#[test]
+fn missing_companion_hooks_name_the_workflow_before_runs_or_panes() {
+    let room = Room::with_kind("", "claude");
+    fs::create_dir_all(room.env.agent_config_path("codex").parent().unwrap()).unwrap();
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("agent = 'claude'", "agent = 'claude,codex'"),
+    )
+    .unwrap();
+    let id = room.start();
+    let value = settled(&room.env, &id, "done");
+    let attempts = events(&value, "attempt");
+    assert_eq!(attempts.len(), 1, "{value:#}");
+    assert_eq!(attempts[0]["outcome"], "died");
+    assert_eq!(
+        attempts[0]["reason"],
+        format!(
+            "workflow launch refused: RimZ hooks are missing for codex account `default` at `{}`; run `rimz hooks install codex`",
+            room.env
+                .agent_config_path("codex")
+                .parent()
+                .unwrap()
+                .display()
+        )
+    );
+    assert!(
+        rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
+            .unwrap()
+            .is_empty()
+    );
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap_or_default();
+    assert!(
+        !trace.contains("new-tab") && !trace.contains("new-pane"),
+        "{trace}"
+    );
+}
+
+#[test]
+fn budget_park_leaves_stay_live_but_ends_turn_as_limited() {
+    for stay in [true, false] {
+        let room = Room::new(if stay { "lifecycle='stay'\n" } else { "" });
+        let (id, run) = room.launch();
+        room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+        let state = room.env.state_path_for(&room.env.project_root);
+        let (parked, wrote) =
+            rimz::harness::run::budget_exceeded(&state, &run.run_id, Some(1.25)).unwrap();
+        if stay {
+            assert!(!wrote, "a budget park must not settle a staying run");
+            assert_eq!(parked.status, RunStatus::Running);
+        } else {
+            assert!(wrote);
+            assert_eq!(parked.status, RunStatus::BudgetExceeded);
+        }
+        success(
+            room.command(&["workflow", "advance", &id])
+                .output()
+                .unwrap(),
+        );
+        let value = show(&room.env, &id);
+        if stay {
+            assert!(value["record"]["attempt"].is_object(), "{value:#}");
+            assert!(value["record"]["prev_attempt"].is_null());
+            let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+            assert!(
+                !trace.contains("close-pane"),
+                "a parked stay keeps its cells: {trace}"
+            );
+            success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+        } else {
+            let value = settled(&room.env, &id, "done");
+            assert_eq!(value["record"]["prev_attempt"]["outcome"], "limited");
+        }
+    }
+}
+
+#[test]
+fn stop_includes_a_cleared_companion() {
+    let room = Room::new("lifecycle='stay'\n");
+    room.env.install_agent_hooks("claude");
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("agent = 'codex'", "agent = 'codex,claude'"),
+    )
+    .unwrap();
+    let (id, run) = room.launch();
+    let store = room.env.store();
+    let companion = store
+        .snapshot()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.kind.as_str() == "claude")
+        .unwrap()
+        .clone();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    for (session, signal) in [
+        ("companion-first", rimz::agents::LifecycleSignal::Registered),
+        ("companion-first", rimz::agents::LifecycleSignal::Ended),
+        (
+            "companion-cleared",
+            rimz::agents::LifecycleSignal::Registered,
+        ),
+    ] {
+        let mut observation =
+            rimz::agents::AgentLifecycleObservation::new(Some(session.into()), signal);
+        observation.agent_name.clone_from(&companion.name);
+        observation.pane_id = Some(rimz::PaneId::parse("zellij:terminal_62").unwrap());
+        observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+            rimz::pane::RuntimeOwnerKind::Agent,
+            session,
+            room.env.agent_owner_pid(),
+            rimz::proc::process_start_token(room.env.agent_owner_pid()),
+        ));
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
+    fs::write(room.env.project_root.join("panes.json"), r#"[{"id":62,"is_plugin":false,"tab_id":1,"title":"claude"},{"id":99,"is_plugin":false,"tab_id":1,"title":"unrelated"}]"#).unwrap();
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    let value = settled(&room.env, &id, "canceled");
+    let stopped = value["record"]["prev_attempt"]["children"]["stopped"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        stopped.len(),
+        1,
+        "the cleared companion must be stopped even without a registered leader: {value:#}"
+    );
+    let snapshot = store.snapshot().unwrap();
+    let rows = &snapshot.agents;
+    assert_eq!(
+        rows.iter()
+            .find(|agent| agent.agent_id == "companion-cleared")
+            .unwrap()
+            .workflow,
+        run.workflow
+    );
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    let closed: Vec<_> = trace
+        .lines()
+        .filter(|line| line.contains("close-pane"))
+        .filter_map(|line| line.split_whitespace().last())
+        .collect();
+    assert!(closed.contains(&"terminal_62"), "{trace}");
+    assert!(!closed.contains(&"terminal_99"), "{trace}");
+    assert!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .status
+            .is_terminal()
+    );
+}
+
+#[test]
+fn companion_trust_warns_when_undecided_and_refuses_as_a_workflow() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let mut results = Vec::new();
+    for trust in ["undecided", "restricted", "hooks"] {
+        let room = Room::with_kind("", "claude");
+        crate::common::git::init_repo(&room.env.project_root);
+        success(
+            room.command(&["trust", "grant", "--agents", "claude"])
+                .output()
+                .unwrap(),
+        );
+        room.env.install_agent_hooks("codex");
+        crate::common::write_failing_agent_shim(&room.env, "codex", 1);
+        if trust != "hooks" {
+            trust_codex_preflight_hooks(&room.env);
+        }
+        if trust == "restricted" {
+            trust_codex_project(&room.env, &room.env.project_root);
+            let path = room.env.agent_config_path("codex");
+            let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+            config["projects"][room.env.project_root.to_str().unwrap()]["trust_level"] =
+                "untrusted".into();
+            fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+        }
+        let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+        fs::write(
+            &path,
+            fs::read_to_string(&path)
+                .unwrap()
+                .replace("agent = 'claude'", "agent = 'claude,codex'"),
+        )
+        .unwrap();
+        let receipt = room
+            .command(&["workflow", "run", "review"])
+            .env("RIMZ_BIN", "/bin/true")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&receipt.stderr).into_owned();
+        if !receipt.status.success() {
+            results.push((trust, false, stderr));
+            continue;
+        }
+        let id = String::from_utf8(receipt.stdout)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_owned();
+        let output = room
+            .command(&["workflow", "advance", &id])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let value = show(&room.env, &id);
+        let correct = if trust == "undecided" {
+            value["record"]["attempt"]["run"].is_object()
+                && stderr.contains("has no trust decision")
+        } else {
+            let attempts = events(&value, "attempt");
+            attempts.iter().any(|attempt| {
+                attempt["outcome"] == "died"
+                    && attempt["reason"].as_str().is_some_and(|reason| {
+                        reason.contains("workflow launch refused:")
+                            && reason.contains(if trust == "hooks" {
+                                "untrusted RimZ hooks"
+                            } else {
+                                "saved untrusted"
+                            })
+                    })
+            }) && rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
+                .unwrap()
+                .is_empty()
+        };
+        results.push((trust, correct, format!("{stderr}\n{value:#}")));
+    }
+    assert!(
+        results.iter().all(|(_, correct, _)| *correct),
+        "{results:#?}"
+    );
+}
+
+#[test]
+fn stay_keeps_asks_live_and_renders_with_you_until_session_exit() {
+    let room = Room::new("lifecycle='stay'\n");
+    let (id, run) = room.launch();
+    assert_eq!(run.lifecycle, rimz::store::run::RunLifecycle::Session);
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    for payload in [
+        json!({"hook_event_name":"Stop"}),
+        json!({"hook_event_name":"SessionEnd"}),
+        serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
+    ] {
+        room.hook(&id, &run, payload);
+        success(
+            room.command(&["workflow", "advance", &id])
+                .output()
+                .unwrap(),
+        );
+        let value = show(&room.env, &id);
+        assert_eq!(value["record"]["state"], "active", "{value:#}");
+        assert!(value["record"]["prev_attempt"].is_null());
+        assert_eq!(value["record"]["attempt"]["lifecycle"], "stay");
+    }
+    let list: Value = serde_json::from_str(&success(
+        room.command(&["workflow", "list", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    let value = show(&room.env, &id);
+    assert_eq!(
+        list,
+        json!([{
+            "id":id, "workflow":"review", "scope":room.env.project_root,
+            "state":"active", "node":"build", "since":value["record"]["entered_at"],
+            "detail":"with you"
+        }])
+    );
+    assert!(success(room.command(&["workflow", "list"]).output().unwrap()).contains("with you"));
+    assert!(
+        success(room.command(&["workflow", "show", &id]).output().unwrap())
+            .contains("active (with you)")
+    );
+    rimz::harness::run::settle_session_exit(&room.env.store(), &run.run_id, || None).unwrap();
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let ended = settled(&room.env, &id, "done");
+    assert_eq!(ended["record"]["prev_attempt"]["outcome"], "ended");
+    assert!(ended["record"]["prev_attempt"]["asked"].is_null());
+}
+
+#[test]
+fn turn_layout_pins_every_agent_and_wraps_commands() {
+    let room = Room::new("");
+    room.env.install_agent_hooks("claude");
+    let path = room.env.rimz_home().join("workflows/review/workflow.toml");
+    fs::write(
+        &path,
+        fs::read_to_string(&path)
+            .unwrap()
+            .replace("agent = 'codex'", "agent = 'codex,claude,term'"),
+    )
+    .unwrap();
+    let id = room.start();
+    let value = until(&room.env, &id, |v| {
+        v["record"]["attempt"]["run"].is_object() || v["record"]["state"] != "active"
+    });
+    assert!(
+        value["record"]["attempt"]["run"].is_object(),
+        "layout must launch: {value:#}"
+    );
+    let state = room.env.state_path_for(&room.env.project_root);
+    let runs = rimz::harness::run::list(&state).unwrap();
+    assert_eq!(runs.len(), 1, "only the prompt leader owns a run");
+    assert_eq!(runs[0].permission_mode, rimz::agents::PermissionMode::Auto);
+    let agents = room
+        .env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let pinned: Vec<_> = agents
+        .iter()
+        .filter(|row| {
+            row.workflow
+                .as_ref()
+                .is_some_and(|pin| pin.run.as_str() == id)
+        })
+        .collect();
+    assert_eq!(pinned.len(), 2, "{agents:#?}");
+    assert!(pinned.iter().all(|row| row.parent_agent_id.is_none()));
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    for expected in ["run-command", "run codex"] {
+        assert!(trace.contains(expected), "missing {expected}: {trace}");
+    }
+    let payloads: Vec<_> = trace
+        .split("\"--request\" ")
+        .skip(1)
+        .map(|rest| {
+            serde_json::Deserializer::from_str(rest)
+                .into_iter::<String>()
+                .next()
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(payloads.len(), 2);
+    for (kind, payload) in ["codex", "claude"].into_iter().zip(payloads) {
+        let request = rimz::harness::launch::decode_exec_request(kind, None, &payload).unwrap();
+        assert_eq!(request.identity.params.workflow, runs[0].workflow);
+    }
+}
+
+#[test]
 fn signals_leave_step_waits_and_live_attempts_untouched() {
     let room = Room::new("window='5h.left>=100'\n");
     let id = room.start();
@@ -954,7 +1343,15 @@ fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
     use crate::common::CommandTimeoutExt;
     let room = Room::new("");
     let (id, run) = room.launch();
-    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let mut owner = dummy_agent_process();
+    room.hook_with_owner(
+        &id,
+        &run,
+        owner.id(),
+        json!({"hook_event_name":"SessionStart"}),
+    );
+    owner.kill().unwrap();
+    owner.wait().unwrap();
     rimz::store::live_roster::publish(
         &room.env.state_path_for(&room.env.project_root).live_roster,
         [(run.kind.clone(), "workflow-session".into())].into(),

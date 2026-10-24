@@ -68,7 +68,10 @@ pub(super) fn empty_observation() -> Observed {
     }
 }
 
-fn observed_outcome(observed: &Observed) -> Option<AttemptOutcome> {
+fn observed_outcome(
+    observed: &Observed,
+    lifecycle: crate::store::workflow::StepLifecycle,
+) -> Option<AttemptOutcome> {
     match observed.status {
         RunStatus::Completed => Some(AttemptOutcome::Ended),
         RunStatus::Failed | RunStatus::VerifyFailed | RunStatus::TimedOut => {
@@ -76,10 +79,14 @@ fn observed_outcome(observed: &Observed) -> Option<AttemptOutcome> {
         }
         RunStatus::Canceled => Some(AttemptOutcome::Canceled),
         RunStatus::BudgetExceeded => Some(AttemptOutcome::Limited),
-        RunStatus::Pending | RunStatus::Running if observed.limited.is_some() => {
+        RunStatus::Pending | RunStatus::Running
+            if lifecycle.is_turn() && observed.limited.is_some() =>
+        {
             Some(AttemptOutcome::Limited)
         }
-        RunStatus::Pending | RunStatus::Running if observed.ask.is_some() => {
+        RunStatus::Pending | RunStatus::Running
+            if lifecycle.is_turn() && observed.ask.is_some() =>
+        {
             Some(AttemptOutcome::Asked)
         }
         _ => None,
@@ -133,7 +140,7 @@ pub(super) fn prepare_end(
             cause: EndCause::Timeout,
         })
     } else {
-        observed_outcome(&observed)
+        observed_outcome(&observed, attempt.lifecycle)
             .or_else(|| (attempt.run.is_none() && !host_live).then_some(AttemptOutcome::Canceled))
             .map(|outcome| Ending {
                 outcome,
@@ -178,10 +185,10 @@ pub(super) fn launch(
                     seq: attempt.seq,
                     role: WorkflowAttemptRole::Step,
                 },
-                profile: spec.steps[&record.node].agent.clone(),
+                agent: spec.steps[&record.node].agent.clone(),
+                lifecycle: attempt.lifecycle,
                 prompt,
                 cwd: record.scope.path.clone(),
-                project_root: record.project_root.clone(),
             })
             .unwrap_or_else(|error| {
                 Err(LaunchFailure {

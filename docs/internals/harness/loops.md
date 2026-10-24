@@ -63,7 +63,7 @@ A task is a name, one action, and one trigger. `TaskAction::from_entry` derives 
 | `CheckOnly` | `check` alone | runs the shell command and records its outcome |
 | `Workflow` | `workflow = "<name>"` | starts a run of the named workflow for the fire's checkout, or records `workflow_skipped` when one already holds it ([workflow.md § Loop tasks](./workflow.md#loop-tasks)) |
 
-The combinations are narrow. `agent`, `wait`, and `workflow` conflict, and one of `agent`, `wait`, `workflow`, or `check` is required. A workflow task refuses `stay`, `takeover`, `subscribe`, `check`, and `judge`, which belong to the workflow's nodes. `verify` requires `agent`, because verification re-prompts a supervised run. `max-attempts` requires `verify` and must be at least 1.
+The combinations are narrow. `agent`, `wait`, and `workflow` conflict, and one of `agent`, `wait`, `workflow`, or `check` is required. A workflow task refuses `stay`, `takeover`, `subscribe`, `check`, and `judge`, which belong to the workflow's nodes. Set `lifecycle = "stay"` on a workflow step to keep its layout open across turns; the loop's `stay` flag remains a different, task-level setting. `verify` requires `agent`, because verification re-prompts a supervised run. `max-attempts` requires `verify` and must be at least 1.
 
 A supervised `Spawn` task (without `stay`) names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto` or `codex-yolo`. `rimz loop add` rejects teams, multi-cell layouts, and command cells in this mode, because a supervised task owns exactly one pane.
 

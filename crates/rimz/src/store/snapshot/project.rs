@@ -1004,6 +1004,7 @@ fn inherit_launch_identity(
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);
     successor.loop_task.clone_from(&predecessor.loop_task);
+    successor.workflow.clone_from(&predecessor.workflow);
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;
     successor.molted_from.clone_from(&predecessor.molted_from);

@@ -215,9 +215,9 @@ fn window_wait(
     Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
-fn window_wait_for_profile(
+fn window_wait_for_launch(
     record: &RunRecord,
-    profile: &str,
+    agent: &str,
     raw: &str,
     windows: &WindowReadings<'_>,
 ) -> Result<Option<String>> {
@@ -226,22 +226,55 @@ fn window_wait_for_profile(
         Some(record.project_root.clone()),
     )
     .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    let login = crate::store::writer::LaunchLogin::RoomDefault;
-    let resolved = crate::harness::plan::resolve_single_agent_launch(profile, &workspace, &login)
-        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let state = StatePaths::for_project_root(&record.project_root)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let runtime = crate::disk::paths::RuntimePaths::for_state(&state)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    let login = crate::harness::schedule::runner::task_login(&login, resolved.kind(), &runtime)
-        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    window_wait(
-        raw,
-        &record.scope.path,
-        &crate::ids::AgentKind::new_unchecked(resolved.kind()),
-        login.as_ref().map(|login| login.key().name).as_ref(),
-        windows,
-    )
+    let resolved = (|| -> anyhow::Result<_> {
+        let machine = crate::config::MachineConfig::load_lenient();
+        let mut effective = crate::config::effective::load(&machine, &workspace.project_root)?;
+        let availability = crate::harness::plan::LaunchAvailability::read(
+            &runtime,
+            &state,
+            &machine,
+            Timestamp::now(),
+        );
+        effective.route(
+            &machine.tiers,
+            crate::config::effective::ProfileScope::Agents,
+            Some(agent),
+            None,
+            None,
+            None,
+            |kind, model| availability.unavailable(kind, model),
+        )?;
+        Ok(crate::harness::plan::resolve_launch(
+            &effective,
+            crate::config::effective::ProfileScope::Agents,
+            &machine.agents.commands,
+            Some(agent),
+            None,
+        )?)
+    })()
+    .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    for cell in resolved.layout.agent_cells() {
+        let requested = cell.launch.login.clone().map_or(
+            crate::store::writer::LaunchLogin::RoomDefault,
+            crate::store::writer::LaunchLogin::Pinned,
+        );
+        let login = crate::harness::schedule::runner::task_login(&requested, &cell.kind, &runtime)
+            .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+        if let Some(detail) = window_wait(
+            raw,
+            &record.scope.path,
+            &cell.kind,
+            login.as_ref().map(|login| login.key().name).as_ref(),
+            windows,
+        )? {
+            return Ok(Some(detail));
+        }
+    }
+    Ok(None)
 }
 
 enum Decision {
@@ -444,7 +477,7 @@ fn prepare(
             return Ok(Decision::Again);
         }
         if let Some(raw) = &step.window
-            && let Some(detail) = window_wait_for_profile(&t.record, &step.agent, raw, windows)?
+            && let Some(detail) = window_wait_for_launch(&t.record, &step.agent, raw, windows)?
         {
             t.step_wait("window", Some(detail));
             persist(&t, &guard)?;
@@ -472,7 +505,7 @@ fn prepare(
     } else if spec.checks.contains_key(&t.record.node) {
         let check = &spec.checks[&t.record.node];
         if let (Some(raw), Some(spec::CheckKind::Agent(profile))) = (&check.window, check.kind())
-            && let Some(detail) = window_wait_for_profile(&t.record, profile, raw, windows)?
+            && let Some(detail) = window_wait_for_launch(&t.record, profile, raw, windows)?
         {
             t.step_wait("window", Some(detail));
             persist(&t, &guard)?;
@@ -537,6 +570,7 @@ fn prepare(
     t.record.next_seq += 1;
     t.record.attempt = Some(LiveAttempt {
         kind,
+        lifecycle: step.map(|step| step.lifecycle).unwrap_or_default(),
         seq,
         node: t.record.node.clone(),
         started_at: t.now,
