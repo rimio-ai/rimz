@@ -257,7 +257,8 @@ upward-dependencies = ["address"]
 # BirthLoginErr::repair shares structured account repair text with the overview (+1).
 # AccountCapability::has_quota_surface lets adapters own sub-provider quota expectations (+1).
 # AccountProfileProbe, probe_account_profile and oauth_http_get_once share bounded plan reads (+3).
-surface-budget = 1131
+# INFORMATIONAL_PROBE_TIMEOUT and OAUTH_HTTP_TIMEOUT_SECS share refresh wait deadlines (+2).
+surface-budget = 1133
 
 [[verdict]]
 kind = "item"
@@ -283,6 +284,16 @@ reason = "The account worker owns cadence and writes while the adapter owns its 
 kind = "item"
 key = "agents::credits::oauth_http_get_once"
 reason = "Profile reads share the bounded, redirect-refusing OAuth transport without its transient retry loop."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::INFORMATIONAL_PROBE_TIMEOUT"
+reason = "The account lane derives its forced-producer wait from the same informational subprocess deadline."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::OAUTH_HTTP_TIMEOUT_SECS"
+reason = "The account lane includes the single profile request deadline in its forced-producer wait budget."
 
 [[verdict]]
 kind = "item"

@@ -36,7 +36,7 @@ use crate::ids::LoginKey;
 /// Informational account and CLI-version probes are best-effort enrichment.
 /// Bound every subprocess so one installed but wedged CLI cannot hold the
 /// shared account cache producer indefinitely.
-pub(super) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(test)]
 mod tests;

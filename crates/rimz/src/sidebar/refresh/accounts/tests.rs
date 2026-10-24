@@ -504,6 +504,7 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
             &runtime,
             std::slice::from_ref(&login),
             force,
+            Duration::ZERO,
             |_, _, _, cache, policy| {
                 observed.set(Some(policy));
                 let _ = read_account_profile(
@@ -611,6 +612,170 @@ fn missing_worker_result_preserves_prior_record() {
 }
 
 #[test]
+fn forced_query_waits_for_a_peer_then_probes_and_reads_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_shared_dirs().unwrap();
+    let mut peer_cache = AccountsCache {
+        logins: BTreeMap::from([(
+            key("claude"),
+            record(1, true, Some(profile_account(Some("owner")))),
+        )]),
+    };
+    write_accounts_cache(&runtime.shared_accounts_path(), &peer_cache);
+    peer_cache
+        .logins
+        .get_mut(&key("claude"))
+        .unwrap()
+        .probed_at_ms = 2;
+    let producer = match crate::disk::single_flight::coordinate::<()>(
+        &runtime.shared_accounts_lock(),
+        Duration::ZERO,
+        0,
+        || None,
+    ) {
+        crate::disk::single_flight::Coordination::Produce(guard) => guard,
+        _ => panic!("test must hold the account producer lock"),
+    };
+    let probes = AtomicUsize::new(0);
+    let reads = AtomicUsize::new(0);
+    let login = ProviderLogin::default_for(key("claude").kind);
+    let refreshed = std::thread::scope(|scope| {
+        let runtime = &runtime;
+        let peer_cache = &peer_cache;
+        scope.spawn(move || {
+            std::thread::sleep(ACCOUNTS_WAIT_STEP * (ACCOUNTS_WAIT_STEPS + 5));
+            write_accounts_cache(&runtime.shared_accounts_path(), peer_cache);
+            drop(producer);
+        });
+        query_provider_accounts_with(
+            &empty_snapshot(),
+            runtime,
+            std::slice::from_ref(&login),
+            true,
+            Duration::from_secs(3),
+            |_, _, due, cache, policy| {
+                probes.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(
+                    cache, peer_cache,
+                    "re-read the peer's publication on winning"
+                );
+                assert_eq!(due, &BTreeSet::from([key("claude")]));
+                assert_eq!(policy, ProfileReadPolicy::Forced);
+                let account = profile_account(Some("owner"));
+                let profile = read_account_profile(
+                    &account,
+                    None,
+                    policy,
+                    0,
+                    3,
+                    || {
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        AccountProfileProbe::Answered(Some("pro".into()))
+                    },
+                    || 4,
+                );
+                merge_probe_results(
+                    cache,
+                    &BTreeSet::new(),
+                    3,
+                    [ProviderProbeResult {
+                        profile,
+                        outcome: AccountProbe::Found(account),
+                        ..successful_probe("claude")
+                    }],
+                )
+            },
+        )
+    });
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        refreshed.logins[&key("claude")]
+            .account
+            .as_ref()
+            .unwrap()
+            .plan
+            .as_deref(),
+        Some("pro")
+    );
+    assert_eq!(
+        read_accounts_cache(&runtime.shared_accounts_path()),
+        refreshed
+    );
+}
+
+#[test]
+fn forced_query_serves_cache_when_a_peer_outlives_the_wait_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_shared_dirs().unwrap();
+    let cached = fresh_cache(0);
+    write_accounts_cache(&runtime.shared_accounts_path(), &cached);
+    let _producer = match crate::disk::single_flight::coordinate::<()>(
+        &runtime.shared_accounts_lock(),
+        Duration::ZERO,
+        0,
+        || None,
+    ) {
+        crate::disk::single_flight::Coordination::Produce(guard) => guard,
+        _ => panic!("test must hold the account producer lock"),
+    };
+    let wait_bound = Duration::from_millis(500);
+    let started = Instant::now();
+    let observed = query_provider_accounts_with(
+        &empty_snapshot(),
+        &runtime,
+        &native_logins(),
+        true,
+        wait_bound,
+        |_, _, _, _, _| panic!("a contending query must never probe without the lock"),
+    );
+    assert!(
+        started.elapsed() >= wait_bound,
+        "honor the forced wait bound"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(observed, cached);
+    assert_eq!(read_accounts_cache(&runtime.shared_accounts_path()), cached);
+}
+
+#[test]
+fn unforced_query_keeps_the_short_contention_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_shared_dirs().unwrap();
+    let cached = fresh_cache(0);
+    write_accounts_cache(&runtime.shared_accounts_path(), &cached);
+    let _producer = match crate::disk::single_flight::coordinate::<()>(
+        &runtime.shared_accounts_lock(),
+        Duration::ZERO,
+        0,
+        || None,
+    ) {
+        crate::disk::single_flight::Coordination::Produce(guard) => guard,
+        _ => panic!("test must hold the account producer lock"),
+    };
+    let forced_wait = Duration::from_secs(3);
+    let started = Instant::now();
+    let observed = query_provider_accounts_with(
+        &empty_snapshot(),
+        &runtime,
+        &native_logins(),
+        false,
+        forced_wait,
+        |_, _, _, _, _| panic!("an unforced contender must serve cache without probing"),
+    );
+    assert!(started.elapsed() >= ACCOUNTS_WAIT_STEP * ACCOUNTS_WAIT_STEPS);
+    assert!(started.elapsed() < forced_wait);
+    assert_eq!(observed, cached);
+    assert_eq!(read_accounts_cache(&runtime.shared_accounts_path()), cached);
+}
+
+#[test]
 fn contending_account_caller_serves_cache_without_adapter_probes() {
     let dir = tempfile::tempdir().unwrap();
     let runtime =
@@ -659,6 +824,7 @@ fn provider_query_force_bypasses_ttl_for_every_registered_kind() {
         &runtime,
         &native_logins(),
         true,
+        Duration::ZERO,
         |_, _, kinds, cache, _policy| {
             due.lock().unwrap().push(kinds.clone());
             cache.clone()
@@ -687,6 +853,7 @@ fn provider_query_preserves_normal_per_provider_ttls() {
         &runtime,
         &native_logins(),
         false,
+        Duration::ZERO,
         |_, _, _, cache, _policy| {
             probes.fetch_add(1, Ordering::SeqCst);
             cache.clone()
