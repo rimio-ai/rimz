@@ -329,7 +329,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 | Pi | `~/.pi/agent/auth.json` (oauth → metered, api_key → unmetered) | extension response headers, and the OAuth usage query over the backing token ([adapter_pi.md](./adapter_pi.md#account-and-balance)) |
 | OpenCode | selected OpenCode SQLite database's `credential` table (oauth → metered, key → unmetered, external → unknown) | the OAuth usage query over the backing token ([adapter_opencode.md](./adapter_opencode.md#account-and-balance)) |
 | Qwen | effective JSONC model and provider plus credential source → Alibaba scoped, or direct API unmetered | Alibaba API-key usage → scoped 5h, 7d, and 30d windows, display and `Bound` launch only ([adapter_qwen.md](./adapter_qwen.md#account-and-balance)) |
-| Qoder | none | no integrated login, quota, or Credits source ([adapter_qoder.md](./adapter_qoder.md#account-and-balance)) |
+| Qoder | none | no integrated login, quota, or Credits source ([adapter_qoder.md](./adapter_qoder.md#account-cost-and-history)) |
 | Cursor | CLI `status --format json` and `about --format json` → email, tier, version | none ([adapter_cursor.md](./adapter_cursor.md#account-and-balance)) |
 | Grok | `${GROK_HOME:-~/.grok}/auth.json` metadata → session metered, API key unmetered | none; spend comes from `turn_completed` ([adapter_grok.md](./adapter_grok.md#account-and-balance)) |
 | Amp | `AMP_API_KEY` or `secrets.json` presence → pay-per-use, no identity ([adapter_amp.md](./adapter_amp.md#account-and-balance)) | none |
