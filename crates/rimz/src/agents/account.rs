@@ -1,11 +1,10 @@
 //! Best-effort provider account probe contract.
 //!
 //! Account/plan facts are account-scoped, not session-scoped, and some never
-//! ride the session context: Claude's subscription tier comes from `claude auth
-//! status`, not its statusline. Each adapter probes those out-of-band facts in
-//! its own `account.rs` (`AccountCapability::probe_account`); this module owns the
-//! shared [`AccountProbe`] outcome the sidebar producer folds onto the provider
-//! dashboard.
+//! ride the session context: Claude's saved tier comes from `claude auth status`,
+//! with a bound live profile override, not its statusline. Adapters normalize
+//! these out-of-band facts through account capabilities; this module owns
+//! [`AccountProbe`] and the profile state the producer folds onto the dashboard.
 //!
 //! Producer-only: a probe may fork a subprocess, so the room host runs
 //! it and publishes the result to the shared `accounts.json` cache (TTL'd,
@@ -65,6 +64,38 @@ pub struct ProviderRecord {
     pub login: Option<RecordedLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_error: Option<AccountProbeError>,
+    /// Last profile attempt and answer, independent of account availability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<AccountProfileState>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AccountProfileState {
+    pub attempted_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<AccountProfileAnswer>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccountProfileAnswer {
+    pub owner: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    pub read_at_ms: u64,
+}
+
+impl std::fmt::Debug for AccountProfileAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountProfileAnswer")
+            .field("owner", &"<redacted>")
+            .field("basis", &self.basis)
+            .field("plan", &self.plan)
+            .field("read_at_ms", &self.read_at_ms)
+            .finish()
+    }
 }
 
 /// A confident probe's login outcome as `ProviderRecord` stores it.

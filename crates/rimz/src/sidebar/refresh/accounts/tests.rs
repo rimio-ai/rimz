@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        profile: None,
         probe_error: None,
         login: None,
         probed_at_ms,
@@ -53,6 +54,7 @@ fn empty_snapshot() -> SidebarSnapshot {
 
 fn successful_probe(kind: &str) -> ProviderProbeResult {
     ProviderProbeResult {
+        profile: None,
         key: key(kind),
         outcome: AccountProbe::Found(AgentAccount {
             plan: Some(kind.to_owned()),
@@ -64,6 +66,470 @@ fn successful_probe(kind: &str) -> ProviderProbeResult {
         version_ms: 0,
         total_ms: 1,
     }
+}
+
+fn profile_account(owner: Option<&str>) -> AgentAccount {
+    AgentAccount {
+        profile_fingerprint: owner.map(str::to_owned),
+        plan: Some("max_5x".into()),
+        metered: Some(true),
+        ..Default::default()
+    }
+}
+
+fn profile_state(attempted_at_ms: u64, read_at_ms: u64) -> AccountProfileState {
+    AccountProfileState {
+        attempted_at_ms,
+        answer: Some(AccountProfileAnswer {
+            owner: "owner".into(),
+            basis: Some("max_5x".into()),
+            plan: Some("pro".into()),
+            read_at_ms,
+        }),
+    }
+}
+
+#[test]
+fn profile_answer_records_the_fresh_credential_plan() {
+    let mut account = profile_account(Some("owner"));
+    for basis in [Some("max_20x"), None] {
+        account.plan = basis.map(str::to_owned);
+        let state = read_account_profile(
+            &account,
+            None,
+            ProfileReadPolicy::Forced,
+            0,
+            100,
+            || AccountProfileProbe::Answered(Some("pro".into())),
+            || 200,
+        )
+        .unwrap();
+        let answer = state.answer.unwrap();
+        assert_eq!(answer.basis.as_deref(), basis);
+        assert_eq!(answer.plan.as_deref(), Some("pro"));
+        let encoded = serde_json::to_value(&answer).unwrap();
+        assert_eq!(encoded.get("basis").is_some(), basis.is_some());
+        assert_eq!(
+            serde_json::from_value::<AccountProfileAnswer>(encoded).unwrap(),
+            answer
+        );
+    }
+    let legacy: AccountProfileAnswer = serde_json::from_value(serde_json::json!({
+        "owner": "owner", "plan": "max_5x", "read_at_ms": 1
+    }))
+    .unwrap();
+    assert_eq!(legacy.basis, None);
+}
+
+#[test]
+fn profile_basis_changes_are_due_after_the_attempt_floor() {
+    let floor = ACCOUNTS_TTL.as_millis() as u64;
+    let state = profile_state(100, 100);
+    let mut legacy = state.clone();
+    legacy.answer.as_mut().unwrap().basis = None;
+    for (state, basis, due) in [
+        (&state, Some("pro"), true),
+        (&state, None, true),
+        (&state, Some("max_5x"), false),
+        (&legacy, Some("max_5x"), true),
+        (&legacy, None, false),
+    ] {
+        assert_eq!(
+            profile_read_due(false, 100 + floor, Some(state), Some("owner"), basis, 0),
+            due,
+            "a changed credential plan makes the answer due"
+        );
+        assert!(!profile_read_due(
+            false,
+            100 + floor - 1,
+            Some(state),
+            Some("owner"),
+            basis,
+            0
+        ));
+        assert!(profile_read_due(
+            true,
+            100,
+            Some(state),
+            Some("owner"),
+            basis,
+            0
+        ));
+    }
+}
+
+#[test]
+fn profile_merge_does_not_mask_a_changed_credential_plan() {
+    for (basis, fresh_plan, expected) in [
+        (Some("max_5x"), Some("pro"), Some("pro")),
+        (None, Some("pro"), Some("pro")),
+        (Some("pro"), Some("pro"), Some("max_5x")),
+        (None, None, Some("max_5x")),
+        (Some("max_5x"), None, None),
+    ] {
+        let mut state = profile_state(1, 1);
+        let answer = state.answer.as_mut().unwrap();
+        answer.basis = basis.map(str::to_owned);
+        answer.plan = Some("max_5x".into());
+        let mut old = record(1, true, None);
+        old.profile = Some(state);
+        let previous = AccountsCache {
+            logins: BTreeMap::from([(key("claude"), old)]),
+        };
+        let account = AgentAccount {
+            plan: fresh_plan.map(str::to_owned),
+            ..profile_account(Some("owner"))
+        };
+        let cache = merge_probe_results(
+            &previous,
+            &BTreeSet::new(),
+            20,
+            [ProviderProbeResult {
+                outcome: AccountProbe::Found(account),
+                ..successful_probe("claude")
+            }],
+        );
+        assert_eq!(
+            cache.logins[&key("claude")]
+                .account
+                .as_ref()
+                .unwrap()
+                .plan
+                .as_deref(),
+            expected,
+            "an answer must not override a different credential plan"
+        );
+    }
+}
+
+#[test]
+fn profile_due_rule_has_strict_triggers_and_a_ten_minute_attempt_floor() {
+    let floor = ACCOUNTS_TTL.as_millis() as u64;
+    let day = 86_400_000;
+    let now = 3 * day;
+    let fresh = profile_state(now - floor, now - 5_000);
+    let mut switched = fresh.clone();
+    switched.answer.as_mut().unwrap().owner = "other".into();
+    let cases = [
+        (None, 0, true),
+        (
+            Some(AccountProfileState {
+                attempted_at_ms: now - floor,
+                answer: None,
+            }),
+            0,
+            true,
+        ),
+        (Some(switched), 0, true),
+        (Some(profile_state(now - floor, now - day - 1)), 0, true),
+        (Some(fresh.clone()), now - 1_000, true),
+        (Some(fresh.clone()), now - 2_000, true),
+        (Some(fresh.clone()), 0, false),
+        (Some(fresh.clone()), now - 5_000, false),
+        (Some(profile_state(now - floor, now - day)), 0, false),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (state, trigger, due) in cases {
+        actual.push(profile_read_due(
+            false,
+            now,
+            state.as_ref(),
+            Some("owner"),
+            Some("max_5x"),
+            trigger,
+        ));
+        expected.push(due);
+        let mut recent = state.unwrap_or_default();
+        recent.attempted_at_ms = now - floor + 1;
+        actual.push(profile_read_due(
+            false,
+            now,
+            Some(&recent),
+            Some("owner"),
+            Some("max_5x"),
+            trigger,
+        ));
+        expected.push(false);
+        actual.push(profile_read_due(
+            true,
+            now,
+            Some(&recent),
+            Some("owner"),
+            Some("max_5x"),
+            trigger,
+        ));
+        expected.push(true);
+    }
+    for force in [false, true] {
+        actual.push(profile_read_due(force, now, None, None, None, now));
+        expected.push(false);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn profile_merge_resolves_only_bound_answers_and_carries_state_through_every_outcome() {
+    let mut old = record(1, true, Some(profile_account(Some("owner"))));
+    old.account.as_mut().unwrap().plan = Some("pro".into());
+    old.profile = Some(profile_state(1, 1));
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("claude"), old.clone())]),
+    };
+    let mut actual = Vec::new();
+    for outcome in [
+        AccountProbe::Found(profile_account(Some("owner"))),
+        AccountProbe::Found(profile_account(Some("other"))),
+        AccountProbe::Found(profile_account(None)),
+        AccountProbe::LoggedOut,
+        AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+    ] {
+        let result = ProviderProbeResult {
+            outcome,
+            ..successful_probe("claude")
+        };
+        let cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [result]);
+        let record = &cache.logins[&key("claude")];
+        actual.push((
+            record
+                .account
+                .as_ref()
+                .and_then(|account| account.plan.clone()),
+            record.profile.clone(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            Some("pro"),
+            Some("max_5x"),
+            Some("max_5x"),
+            None,
+            Some("pro")
+        ]
+        .into_iter()
+        .map(|plan| (plan.map(str::to_owned), old.profile.clone()))
+        .collect::<Vec<_>>()
+    );
+    for answer in [
+        None,
+        Some(AccountProfileAnswer {
+            owner: "other".into(),
+            basis: Some("max_5x".into()),
+            plan: Some("pro".into()),
+            read_at_ms: 1,
+        }),
+    ] {
+        let mut previous = previous.clone();
+        previous
+            .logins
+            .get_mut(&key("claude"))
+            .unwrap()
+            .profile
+            .as_mut()
+            .unwrap()
+            .answer = answer;
+        let result = ProviderProbeResult {
+            outcome: AccountProbe::Found(profile_account(Some("owner"))),
+            ..successful_probe("claude")
+        };
+        let cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [result]);
+        assert_eq!(
+            cache.logins[&key("claude")]
+                .account
+                .as_ref()
+                .unwrap()
+                .plan
+                .as_deref(),
+            Some("max_5x")
+        );
+    }
+}
+
+#[test]
+fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_override() {
+    use std::cell::Cell;
+    let account = profile_account(Some("owner"));
+    let state = profile_state(1, 1);
+    let failed = read_account_profile(
+        &account,
+        Some(&state),
+        ProfileReadPolicy::Forced,
+        0,
+        100,
+        || AccountProfileProbe::Failed,
+        || 100,
+    );
+    assert!(
+        failed.is_some(),
+        "a failed profile read must stamp an attempt"
+    );
+    let mut old = record(1, true, Some(account.clone()));
+    old.profile = Some(state.clone());
+    let previous = AccountsCache {
+        logins: BTreeMap::from([(key("claude"), old)]),
+    };
+    let result = || ProviderProbeResult {
+        outcome: AccountProbe::Found(account.clone()),
+        ..successful_probe("claude")
+    };
+    let no_read = merge_probe_results(&previous, &BTreeSet::new(), 20, [result()]);
+    let mut failed_result = result();
+    failed_result.profile = failed;
+    let mut failed_cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [failed_result]);
+    let failed_state = failed_cache
+        .logins
+        .get_mut(&key("claude"))
+        .unwrap()
+        .profile
+        .as_mut()
+        .unwrap();
+    assert_eq!(failed_state.attempted_at_ms, 100);
+    failed_state.attempted_at_ms = state.attempted_at_ms;
+    assert_eq!(failed_cache.logins, no_read.logins);
+    let first_failure = read_account_profile(
+        &account,
+        None,
+        ProfileReadPolicy::Due,
+        0,
+        100,
+        || AccountProfileProbe::Failed,
+        || 1_500,
+    )
+    .unwrap();
+    assert_eq!(
+        first_failure.attempted_at_ms, 100,
+        "the attempt takes the batch stamp, not the clock after the auth probe"
+    );
+    let floor = ACCOUNTS_TTL.as_millis() as u64;
+    let mut cache = AccountsCache::default();
+    cache
+        .logins
+        .insert(key("claude"), record(100, true, Some(account.clone())));
+    assert!(
+        due_provider_logins(&cache, &empty_snapshot(), &native_logins(), 100 + floor + 1)
+            .contains(&key("claude")),
+        "the floor expires no later than the account cadence re-probes the login"
+    );
+    assert!(!profile_read_due(
+        false,
+        100 + floor - 1,
+        Some(&first_failure),
+        Some("owner"),
+        Some("max_5x"),
+        0
+    ));
+    assert!(profile_read_due(
+        false,
+        100 + floor,
+        Some(&first_failure),
+        Some("owner"),
+        Some("max_5x"),
+        0
+    ));
+    let clock = Cell::new(100);
+    let answered = read_account_profile(
+        &account,
+        Some(&state),
+        ProfileReadPolicy::Forced,
+        0,
+        100,
+        || {
+            clock.set(200);
+            AccountProfileProbe::Answered(None)
+        },
+        || clock.get(),
+    )
+    .unwrap();
+    assert_eq!(answered.attempted_at_ms, 100);
+    assert_eq!(answered.answer.as_ref().unwrap().read_at_ms, 200);
+    let mut answered_result = result();
+    answered_result.profile = Some(answered);
+    let cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [answered_result]);
+    assert_eq!(
+        cache.logins[&key("claude")]
+            .account
+            .as_ref()
+            .unwrap()
+            .plan
+            .as_deref(),
+        Some("max_5x")
+    );
+    assert_eq!(
+        read_account_profile(
+            &account,
+            Some(&state),
+            ProfileReadPolicy::Forced,
+            0,
+            100,
+            || AccountProfileProbe::NotAttempted,
+            || 100
+        ),
+        None
+    );
+    for (account, policy) in [
+        (profile_account(None), ProfileReadPolicy::Forced),
+        (account, ProfileReadPolicy::Disabled),
+    ] {
+        assert_eq!(
+            read_account_profile(
+                &account,
+                Some(&state),
+                policy,
+                0,
+                100,
+                || panic!("disabled or unidentified profile reads must not run"),
+                || 100
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn unavailable_coordination_reads_profiles_only_when_forced() {
+    use std::cell::Cell;
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    std::fs::create_dir_all(runtime.shared_accounts_lock()).unwrap();
+    let login = ProviderLogin::default_for(key("claude").kind);
+    let mut actual = Vec::new();
+    for force in [false, true] {
+        let calls = Cell::new(0);
+        let observed = Cell::new(None);
+        query_provider_accounts_with(
+            &empty_snapshot(),
+            &runtime,
+            std::slice::from_ref(&login),
+            force,
+            |_, _, _, cache, policy| {
+                observed.set(Some(policy));
+                let _ = read_account_profile(
+                    &profile_account(Some("owner")),
+                    None,
+                    policy,
+                    0,
+                    100,
+                    || {
+                        calls.set(calls.get() + 1);
+                        AccountProfileProbe::Answered(Some("pro".into()))
+                    },
+                    || 100,
+                );
+                cache.clone()
+            },
+        );
+        actual.push((observed.get(), calls.get()));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (Some(ProfileReadPolicy::Disabled), 0),
+            (Some(ProfileReadPolicy::Forced), 1)
+        ]
+    );
 }
 
 #[test]
@@ -166,7 +632,7 @@ fn contending_account_caller_serves_cache_without_adapter_probes() {
             &empty_snapshot(),
             &runtime,
             &RoomLoginSet::native(),
-            |_, _, _, cache| {
+            |_, _, _, cache, _policy| {
                 probes.fetch_add(1, Ordering::SeqCst);
                 cache.clone()
             }
@@ -193,7 +659,7 @@ fn provider_query_force_bypasses_ttl_for_every_registered_kind() {
         &runtime,
         &native_logins(),
         true,
-        |_, _, kinds, cache| {
+        |_, _, kinds, cache, _policy| {
             due.lock().unwrap().push(kinds.clone());
             cache.clone()
         },
@@ -221,7 +687,7 @@ fn provider_query_preserves_normal_per_provider_ttls() {
         &runtime,
         &native_logins(),
         false,
-        |_, _, _, cache| {
+        |_, _, _, cache, _policy| {
             probes.fetch_add(1, Ordering::SeqCst);
             cache.clone()
         },

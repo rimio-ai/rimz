@@ -1028,7 +1028,7 @@ fn serve_routes(
 
 const STRAY_REQUEST_WINDOW: Duration = Duration::from_millis(500);
 
-fn serve_http_routes(
+pub(super) fn serve_http_routes(
     routes: Vec<(&'static str, u16, String)>,
     count: usize,
 ) -> (String, thread::JoinHandle<Vec<String>>) {

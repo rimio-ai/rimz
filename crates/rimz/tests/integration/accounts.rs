@@ -1562,12 +1562,172 @@ fn write_fake_claude(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
         &provider_bin(env),
         "claude",
         &format!(
-            "case \"$*\" in\n  \"auth status\") echo probe >> '{log}'; . '{answer}';;\n  *) echo 0.0.0;;\nesac",
+            "case \"$*\" in\n  \"auth status\") echo probe >> '{log}'; if [ -f \"${{CLAUDE_CONFIG_DIR:-}}/claude-auth\" ]; then . \"$CLAUDE_CONFIG_DIR/claude-auth\"; else . '{answer}'; fi;;\n  *) echo 0.0.0;;\nesac",
             log = log.display(),
             answer = answer.display()
         ),
     );
     (answer, log)
+}
+
+#[cfg(unix)]
+#[test]
+fn live_profile_corrects_only_its_owner_and_obeys_cache_refresh_failure_and_offline() {
+    let env = Env::new();
+    let (answer, _) = write_fake_claude(&env);
+    std::fs::write(answer, "echo '{\"loggedIn\":false}'\n").unwrap();
+    for name in ["work", "other"] {
+        let home = env.home_root.join(name);
+        succeeded(&accounts(
+            &env,
+            &["add", "claude", name, "--home", home.to_str().unwrap()],
+        ));
+        std::fs::write(
+            home.join(".credentials.json"),
+            json!({"claudeAiOauth": {
+                "accessToken": format!("synthetic-{name}"),
+                "expiresAt": 4102444800000_u64,
+                "scopes": ["user:profile"],
+                "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let auth = json!({
+            "loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max",
+            "email":format!("{name}@example.test"),
+            "orgId":"00000000-0000-0000-0000-000000000001"
+        });
+        std::fs::write(
+            home.join("claude-auth"),
+            format!("printf '%s\\n' '{auth}'\n"),
+        )
+        .unwrap();
+    }
+    let reset = (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
+    let usage = json!({
+        "five_hour":{"utilization":37,"resets_at":reset},
+        "extra_usage":{"is_enabled":true,"used_credits":250,"monthly_limit":5000}
+    })
+    .to_string();
+    let profile = json!({
+        "account":{"email":"work@example.test"},
+        "organization":{
+            "uuid":"00000000-0000-0000-0000-000000000001",
+            "organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"
+        }
+    })
+    .to_string();
+    let query = |args: &[&str], profile_status, offline, profiles: usize| {
+        let (origin, server) = super::oauth_usage::serve_http_routes(
+            vec![
+                ("GET /api/oauth/profile", profile_status, profile.clone()),
+                ("GET /api/oauth/usage", 200, usage.clone()),
+            ],
+            profiles * 2,
+        );
+        let output = hermetic(&env, &mut env.rimz())
+            .arg("accounts")
+            .args(args)
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", if offline { "1" } else { "0" })
+            .env(
+                "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+                format!("{origin}/api/oauth/usage"),
+            )
+            .output()
+            .unwrap();
+        let text = succeeded(&output);
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("GET /api/oauth/profile"))
+                .count(),
+            profiles
+        );
+        assert_eq!(requests.len(), profiles * 2);
+        text
+    };
+    let rows: Value = serde_json::from_str(&query(&["list", "--json"], 200, false, 2)).unwrap();
+    for (name, plan, label) in [
+        ("work", "pro", "Claude Pro"),
+        ("other", "max_5x", "Claude Max 5x"),
+    ] {
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == format!("claude@{name}"))
+            .unwrap();
+        assert_eq!(row["plan"], plan);
+        assert_eq!(row["plan_label"], label);
+        assert_eq!(row["metered"], true);
+        assert!(!row["windows"].as_array().unwrap().is_empty());
+        assert!(!row["extra_credits"].is_null());
+    }
+    let text = query(&["list"], 200, false, 0);
+    assert!(
+        text.contains("Claude Pro") && text.contains("Claude Max 5x"),
+        "{text}"
+    );
+    let show = query(&["show", "claude@work"], 200, false, 0);
+    assert!(
+        show.contains("Claude Pro") && !show.contains("Claude Max"),
+        "{show}"
+    );
+    let refreshed: Value =
+        serde_json::from_str(&query(&["list", "--refresh", "--json"], 200, false, 2)).unwrap();
+    let offline: Value =
+        serde_json::from_str(&query(&["list", "--refresh", "--json"], 200, true, 0)).unwrap();
+    let failed: Value =
+        serde_json::from_str(&query(&["list", "--refresh", "--json"], 500, false, 2)).unwrap();
+    for result in [&refreshed, &offline, &failed] {
+        for original in rows.as_array().unwrap() {
+            let row = result
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["account"] == original["account"])
+                .unwrap();
+            for field in [
+                "plan",
+                "plan_label",
+                "windows",
+                "extra_credits",
+                "reset_credits",
+                "metered",
+                "status",
+            ] {
+                let normalized = |value: &Value| {
+                    let mut value = value.clone();
+                    if field == "windows" {
+                        for window in value.as_array_mut().unwrap() {
+                            if let Some(observed) = window.get_mut("observed_at") {
+                                *observed = json!("<observation>");
+                            }
+                        }
+                    }
+                    value
+                };
+                assert_eq!(
+                    normalized(&row[field]),
+                    normalized(&original[field]),
+                    "{field}"
+                );
+            }
+        }
+    }
+    let cache = std::fs::read_to_string(env.runtime_paths().shared_accounts_path()).unwrap();
+    assert!(
+        !cache.contains("example.test")
+            && !cache.contains("00000000-0000-0000-0000-000000000001")
+            && !cache.contains("synthetic-")
+    );
 }
 
 #[cfg(unix)]

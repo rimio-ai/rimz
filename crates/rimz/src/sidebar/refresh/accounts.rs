@@ -5,8 +5,11 @@ use std::time::Instant;
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    AccountProbe, AccountsCache, ProviderRecord, RecordedLogin, read_accounts_cache,
+    AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache, ProviderRecord,
+    RecordedLogin, read_accounts_cache, read_rate_limits_cache,
 };
+use crate::agents::capabilities::AccountProfileProbe;
+use crate::agents::spending::read_provider_spending_cache;
 use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
@@ -24,6 +27,85 @@ const ACCOUNTS_WAIT_STEPS: u32 = 15;
 
 /// Most independent provider account/version chains probed concurrently.
 const MAX_PARALLEL_ACCOUNT_PROBES: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProfileReadPolicy {
+    Disabled,
+    Due,
+    Forced,
+}
+
+fn profile_read_due(
+    force: bool,
+    now_ms: u64,
+    state: Option<&AccountProfileState>,
+    fingerprint: Option<&str>,
+    basis: Option<&str>,
+    trigger_ms: u64,
+) -> bool {
+    let Some(owner) = fingerprint else {
+        return false;
+    };
+    if force {
+        return true;
+    }
+    if state.is_some_and(|state| {
+        now_ms.saturating_sub(state.attempted_at_ms) < ACCOUNTS_TTL.as_millis() as u64
+    }) {
+        return false;
+    }
+    let trigger_ms = trigger_ms.max(now_ms.saturating_sub(24 * 60 * 60 * 1_000));
+    state
+        .and_then(|state| state.answer.as_ref())
+        .is_none_or(|answer| {
+            answer.owner != owner
+                || answer.basis.as_deref() != basis
+                || answer.read_at_ms < trigger_ms
+        })
+}
+
+/// The attempt takes the batch's `probed_at_ms`, the stamp the account cadence
+/// ages from, so the floor expires exactly when the login is next account-due;
+/// `now` stamps only the answer's read time.
+fn read_account_profile(
+    account: &AgentAccount,
+    previous: Option<&AccountProfileState>,
+    policy: ProfileReadPolicy,
+    trigger_ms: u64,
+    probed_at_ms: u64,
+    read: impl FnOnce() -> AccountProfileProbe,
+    now: impl FnOnce() -> u64,
+) -> Option<AccountProfileState> {
+    if policy == ProfileReadPolicy::Disabled {
+        return None;
+    }
+    let owner = account.profile_fingerprint.as_deref()?;
+    if !profile_read_due(
+        policy == ProfileReadPolicy::Forced,
+        probed_at_ms,
+        previous,
+        Some(owner),
+        account.plan.as_deref(),
+        trigger_ms,
+    ) {
+        return None;
+    }
+    let outcome = read();
+    if outcome == AccountProfileProbe::NotAttempted {
+        return None;
+    }
+    let mut state = previous.cloned().unwrap_or_default();
+    state.attempted_at_ms = probed_at_ms;
+    if let AccountProfileProbe::Answered(plan) = outcome {
+        state.answer = Some(AccountProfileAnswer {
+            owner: owner.to_owned(),
+            basis: account.plan.clone(),
+            plan,
+            read_at_ms: now(),
+        });
+    }
+    Some(state)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProbeOutcomeClass {
@@ -46,6 +128,7 @@ impl ProbeOutcomeClass {
 struct ProviderProbeResult {
     key: LoginKey,
     outcome: AccountProbe,
+    profile: Option<AccountProfileState>,
     outcome_class: ProbeOutcomeClass,
     version: Option<String>,
     account_ms: u64,
@@ -72,8 +155,8 @@ pub(super) fn produce_accounts(
         snapshot,
         runtime,
         logins,
-        |snapshot, runtime, due, cache| {
-            probe_accounts(snapshot, runtime, &selected, logins, due, cache)
+        |snapshot, runtime, due, cache, policy| {
+            probe_accounts(snapshot, runtime, &selected, logins, due, cache, policy)
         },
     )
 }
@@ -87,6 +170,7 @@ fn produce_accounts_with(
         &RuntimePaths,
         &BTreeSet<LoginKey>,
         &AccountsCache,
+        ProfileReadPolicy,
     ) -> AccountsCache,
 ) -> BTreeMap<LoginKey, AgentAccount> {
     let context_versions = context_versions(snapshot);
@@ -119,7 +203,9 @@ pub fn query_provider_accounts(
         runtime,
         logins,
         force,
-        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, logins, set, due, cache),
+        |snapshot, runtime, due, cache, policy| {
+            probe_accounts(snapshot, runtime, logins, set, due, cache, policy)
+        },
     )
 }
 
@@ -133,6 +219,7 @@ fn query_provider_accounts_with(
         &RuntimePaths,
         &BTreeSet<LoginKey>,
         &AccountsCache,
+        ProfileReadPolicy,
     ) -> AccountsCache,
 ) -> AccountsCache {
     let path = runtime.shared_accounts_path();
@@ -169,7 +256,12 @@ fn query_provider_accounts_with(
             if due.is_empty() {
                 return cache;
             }
-            let cache = probe(snapshot, runtime, &due, &cache);
+            let policy = if force {
+                ProfileReadPolicy::Forced
+            } else {
+                ProfileReadPolicy::Due
+            };
+            let cache = probe(snapshot, runtime, &due, &cache, policy);
             write_accounts_cache(&path, &cache);
             cache
         }
@@ -182,7 +274,12 @@ fn query_provider_accounts_with(
             } else {
                 due_provider_logins(&cache, snapshot, logins, unix_now_ms())
             };
-            probe(snapshot, runtime, &due, &cache)
+            let policy = if force {
+                ProfileReadPolicy::Forced
+            } else {
+                ProfileReadPolicy::Disabled
+            };
+            probe(snapshot, runtime, &due, &cache, policy)
         }
         // A live producer still owns publication. Serve current cache truth and
         // let the next tick observe its atomic write instead of duplicating the
@@ -279,16 +376,45 @@ fn probe_accounts(
     set: &RoomLoginSet,
     due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
+    policy: ProfileReadPolicy,
 ) -> AccountsCache {
     let active_version_kinds = active_version_probe_kinds(snapshot);
     let probed_at_ms = unix_now_ms();
+    let session_start_ms = read_provider_spending_cache(&runtime.shared_provider_spending_path())
+        .session_start_secs
+        .map_or(0, |seconds| seconds.saturating_mul(1_000));
+    let rate_limits = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let policy = if crate::agents::credits::oauth_usage_offline() {
+        ProfileReadPolicy::Disabled
+    } else {
+        policy
+    };
     let due: Vec<_> = logins
         .iter()
         .filter(|login| due_keys.contains(&login.key()))
         .cloned()
         .collect();
     let batch = execute_account_probes(&due, &active_version_kinds, |login, active| {
-        probe_one_account(login, set, active)
+        let key = login.key();
+        let trigger_ms = session_start_ms.max(
+            rate_limits
+                .entries
+                .get(&key)
+                .and_then(|entry| entry.reset_spotted_at_ms)
+                .unwrap_or(0),
+        );
+        probe_one_account(
+            login,
+            set,
+            active,
+            previous
+                .logins
+                .get(&key)
+                .and_then(|record| record.profile.as_ref()),
+            policy,
+            trigger_ms,
+            probed_at_ms,
+        )
     });
     let success_count = batch
         .results
@@ -327,6 +453,10 @@ fn probe_one_account(
     login: &ProviderLogin,
     set: &RoomLoginSet,
     active: bool,
+    previous_profile: Option<&AccountProfileState>,
+    policy: ProfileReadPolicy,
+    trigger_ms: u64,
+    probed_at_ms: u64,
 ) -> Option<ProviderProbeResult> {
     let login_env = set.env(login);
     let kind = login.kind().as_str();
@@ -349,7 +479,20 @@ fn probe_one_account(
         _ => None,
     };
     let version_ms = duration_ms(version_started.elapsed());
+    let profile = match &outcome {
+        AccountProbe::Found(account) => read_account_profile(
+            account,
+            previous_profile,
+            policy,
+            trigger_ms,
+            probed_at_ms,
+            || adapter.probe_account_profile(&login_env, account),
+            unix_now_ms,
+        ),
+        _ => None,
+    };
     Some(ProviderProbeResult {
+        profile,
         key: login.key(),
         outcome,
         outcome_class,
@@ -400,6 +543,7 @@ fn merge_probe_results(
         let ProviderProbeResult {
             key,
             outcome,
+            profile,
             version: probed_version,
             ..
         } = result;
@@ -415,12 +559,24 @@ fn merge_probe_results(
             AccountProbe::Unavailable(_) => None,
         };
         let previous_record = previous.logins.get(&key);
+        let profile = profile.or_else(|| previous_record.and_then(|record| record.profile.clone()));
         let account = match outcome {
             AccountProbe::Found(mut account) => {
                 if account_version(Some(&account)).is_none() {
                     account.version = probed_version.or_else(|| {
                         previous_record.and_then(|record| account_version(record.account.as_ref()))
                     });
+                }
+                if let Some(plan) = profile
+                    .as_ref()
+                    .and_then(|state| state.answer.as_ref())
+                    .filter(|answer| {
+                        account.profile_fingerprint.as_deref() == Some(answer.owner.as_str())
+                            && account.plan == answer.basis
+                    })
+                    .and_then(|answer| answer.plan.clone())
+                {
+                    account.plan = Some(plan);
                 }
                 Some(account)
             }
@@ -448,6 +604,7 @@ fn merge_probe_results(
         logins.insert(
             key,
             ProviderRecord {
+                profile,
                 probe_error,
                 probed_at_ms,
                 ok,
@@ -477,6 +634,7 @@ fn probe_accounts_with(
             AccountProbe::Unavailable(_) => ProbeOutcomeClass::Unavailable,
         };
         Some(ProviderProbeResult {
+            profile: None,
             key: key.clone(),
             outcome,
             outcome_class,

@@ -2465,6 +2465,7 @@ fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
     let work =
         crate::ids::LoginKey::new(AgentKind::new_unchecked("codex"), "work".parse().unwrap());
     let record = |ok| crate::agents::account::ProviderRecord {
+        profile: None,
         probe_error: None,
         login: None,
         probed_at_ms: 1,
@@ -2510,6 +2511,7 @@ fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
         cache.logins.insert(
             work.clone(),
             crate::agents::account::ProviderRecord {
+                profile: None,
                 probe_error: None,
                 login,
                 probed_at_ms: 1,

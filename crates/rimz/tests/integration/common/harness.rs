@@ -83,6 +83,7 @@ impl Harness {
                     (
                         rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
                         rimz::agents::account::ProviderRecord {
+                            profile: None,
                             probe_error: None,
                             login: None,
                             probed_at_ms: now_ms,
