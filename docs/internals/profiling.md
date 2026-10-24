@@ -6,53 +6,55 @@ Work through the sections in order. Each step costs less than the one after it, 
 
 ## Start with what RimZ already published
 
-The producer writes its caches with freshness stamps in them, so a stale or looping lane is visible without a profiler. Read these first.
+The host writes its caches with freshness stamps in them, so a stale or looping lane is visible without a profiler. Read these first. The cadence each stamp should follow is in [state.md → Cadences](./sidebar/state.md#cadences).
 
 | File | Question it answers |
 | --- | --- |
-| `$XDG_RUNTIME_DIR/rimz/ws/<name>/pr-state.json` | Is the forge probe looping? Each origin repository has a `repos` entry; one with `"ok": false`, a rising `consecutive_failures`, and an advancing `refreshed_at_ms` is climbing its failure backoff. Which links are pinned instead of re-probed is [state.md → PR state](./sidebar/state.md#pr-state). |
-| `$XDG_RUNTIME_DIR/rimz/ws/<name>/diff-stats.json` | How big is the git sweep? The root count is its input size, and the per-root `refreshed_at_ms` stamps show which roots are on the hot TTL, which on the idle one, and which have settled to the 5-minute tier (clean and landed). |
-| `~/.rimz/cache/providers/credits.json` | Is an account probe failing? The file-level `refreshed_at_ms` and each login entry's `observed_at_ms` give the usage cadence. An entry at `"ok": false` with `auth_settled: false` retries on `OAUTH_USAGE_TTL` (5 minutes); with `auth_settled: true` it waits `OAUTH_USAGE_SETTLED_TTL` (1 hour) and is not looping ([providers.md → Refresh cadences](./agents/providers.md#refresh-cadences)). |
-| `~/.rimz/cache/providers/pricing-cache.json` | Is the pricing fetch or the unpriced-model chase busy? `fetched_at_secs` shows the weekly baseline; `unknown_backoff_secs` and `unknown_seen` show the chase. |
-| `~/.rimz/ws/<name>/diag.log.jsonl` | Did RimZ already notice? A `tick_budget_breach` record separates `mux_wait_ms` from in-process time, and its `spawns_by_step` names the refresh step that forked ([diagnostics.md](./diagnostics.md)). |
+| `$XDG_RUNTIME_DIR/rimz/ws/<name>/lanes/pr-state.json` | Is the forge probe looping? Each origin repository has a `repos` entry. One with `"ok": false`, a rising `consecutive_failures`, and an advancing `refreshed_at_ms` is climbing its failure backoff. Which links are pinned instead of re-probed is [state.md → PR state](./sidebar/state.md#pr-state). |
+| `$XDG_RUNTIME_DIR/rimz/ws/<name>/lanes/diff-stats.json` | How busy is the git sweep? Each worktree root carries `refreshed_at_ms` for its local facts and `commit_refreshed_at_ms` for its commit facts. Compare their age against the root's tier. The file keeps entries for roots the sweep no longer reads, so its root count is an upper bound on the sweep's input. |
+| `~/.rimz/cache/providers/credits.json` | Is an account usage probe failing? Each login entry's `oauth_read_at_ms` is the last direct usage read, the stamp the probe cadence keys on. `refreshed_at_ms` and `observed_at_ms` also move on realtime publication, so they do not show the probe cadence. An entry at `"ok": false` with `auth_settled: false` retries on `OAUTH_USAGE_TTL` (5 minutes). With `auth_settled: true` it waits `OAUTH_USAGE_SETTLED_TTL` (1 hour) and is not looping ([providers.md → Refresh cadences](./agents/providers.md#refresh-cadences)). |
+| `~/.rimz/cache/providers/pricing-cache.json` | Is the pricing fetch or the unpriced-model chase busy? `fetched_at_secs` shows the weekly baseline. `unknown_backoff_secs` and `unknown_seen` show the chase. |
+| `~/.rimz/ws/<name>/audit/diag.log.jsonl` | Did RimZ already notice? A `tick_budget_breach` record separates `mux_wait_ms` from in-process time. On a cache-refresh breach, its `spawns_by_step` names the refresh step that forked ([diagnostics.md](./diagnostics.md)). |
 
-`rimz sidebar snapshot --json --no-produce` prints the live folded view and the room's shape. `--no-produce` reads the published frame and forks neither the multiplexer nor git, so the inspection does not perturb the room:
+`rimz sidebar snapshot --json --no-produce` prints the live folded view and the room's shape. With `--no-produce` it reads the host's publications through `PublishedSnapshotReader` and forks neither the multiplexer nor git, so the inspection does not perturb the room. This holds only when the command resolves the room's session: run it from inside the room, or pass `--session-name`. Without a session, `crates/rimz/src/cli/sidebar.rs::try_emit_consumer_snapshot` returns false and the command produces a fresh snapshot, forks included.
 
 ```console
 $ rimz sidebar snapshot --json --no-produce | jq '{agents:(.agents|length), panes:(.agent_panes|length), roots:(.worktree_roots|length), groups:(.worktree_groups|length)}'
 {
-  "agents": 12,
-  "panes": 12,
-  "roots": 15,
-  "groups": 13
+  "agents": 185,
+  "panes": 157,
+  "roots": 160,
+  "groups": 125
 }
 ```
 
 ## Find the host
 
-One room host owns the shared reads and every pane's renderer ([performance.md](./performance.md#one-host-many-panes)).
+One room host per mux session owns the shared reads and paints every sidebar pane ([performance.md → One host, many panes](./performance.md#one-host-many-panes)). Profile that process for rendering and data-plane work.
 
-A large heartbeat count in a many-tab room is expected: every tab has its own attachment, but one host paints the session's panes and runs their shared data plane.
-
-Find the session's processes by their subcommands. Each tab's `rimz sidebar serve` is its supervisor, not its painter. The `rimz sidebar host` for the same `--workspace-id` and `--session-name` folds, paints, and writes every attachment's heartbeat; select that PID to profile rendering and data-plane work:
+Find it by its subcommand. Each sidebar pane runs a `rimz sidebar serve` supervisor, which holds the pane's tty and paints nothing. The `rimz sidebar host` with the same `--workspace-id` and `--session-name` folds, paints, and writes every attachment's heartbeat:
 
 ```sh
 ps -C rimz -o pid,ppid,rss,args
 ```
 
-Inspect the actual subcommand, not a substring in an agent's prompt. The host deliberately has no pane or sidebar-instance environment pin, so a heartbeat's instance identifies an attachment, not a separate painter process. All attachments share that host's external-read cost; one held room per workspace admits no second consumer host.
+Match the subcommand in `args`, never a substring that could come from an agent's prompt. Room processes run from the staged build under `~/.rimz/builds/<build>/rimz`, so the path in `args` is not `~/.cargo/bin/rimz`.
+
+A large heartbeat count in a many-tab room is expected. Each heartbeat identifies one attachment, and the host has no pane or sidebar-instance environment pin of its own, so a hundred heartbeats still mean one painter. Every attachment shares that host's external-read cost.
 
 ## Measure the process
 
 Take CPU, memory, and IO from `/proc` first. These readings need no tool beyond the shell and are the numbers the rest of the page compares against.
 
+From an agent pane in scoped isolation, `/proc/<pid>/stat` of the room host reads normally, but `/proc/<pid>/smaps_rollup` and `/proc/<pid>/io` fail with `Permission denied`: the host runs outside the sandbox's user namespace. Take memory and IO from a user shell.
+
 ### CPU
 
-Measure CPU from the scheduler's own counters: take `utime + stime` (fields 14 and 15 of `/proc/<pid>/stat`) at both ends of a fixed window, and divide the delta by `getconf CLK_TCK` and the window length. Sampling tools cannot skew this figure:
+Measure CPU from the kernel's own accounting: take `utime + stime` (fields 14 and 15 of `/proc/<pid>/stat`) at both ends of a fixed window, and divide the delta by `getconf CLK_TCK` and the window length. The figure needs no profiler attached. This capture took the host and one of its supervisors:
 
 ```console
 $ cat cpu.sh
-pids="2662924 2662907"; secs=12; hz=$(getconf CLK_TCK)
+pids="1815887 2081995"; secs=12; hz=$(getconf CLK_TCK)
 declare -A before
 for pid in $pids; do before[$pid]=$(awk '{print $14 + $15}' /proc/$pid/stat); done
 sleep $secs
@@ -62,67 +64,70 @@ for pid in $pids; do
     'BEGIN { printf "pid %s  %.3f core\n", p, d / hz / s }'
 done
 $ bash cpu.sh
-pid 2662924  0.043 core
-pid 2662907  0.008 core
+pid 1815887  0.386 core
+pid 2081995  0.000 core
 ```
 
-The sample above predates host-only painting. Measure the current host's full process, not a producer/consumer comparison: both shared reads and all pane painting belong to that PID.
+The host carries the room's whole cost, and a supervisor reads near zero. Compare one host against another host, never against a supervisor.
 
-`pidstat` needs `-t` to be useful here. Its per-process row reports the main thread only and understates a multi-threaded renderer: one producer read 2.4% as a process row and 38% summed over its `-t` thread rows. Parse its columns by header name, because a 12-hour locale inserts an AM/PM column and shifts the rest.
+`pidstat -t` splits the host's CPU by thread, and one of its rows misleads. The row with TID `-` is the process total. The thread row whose TID equals the PID is the main thread alone: one host capture read 71.71% on the process row and 0.00% on that thread row. Run it as `LC_ALL=C pidstat -u -t -p <pid> 5 1`, or parse its columns by header name, because a 12-hour locale inserts an AM/PM column and shifts the rest.
 
 ### Memory
 
-Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the renderer family double-counts shared mappings. Compare only newly started hosts with the same attachment count, and only after at least two producer refresh cycles, because glibc arenas keep earlier high-water allocations resident. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
+Read memory from `/proc/<pid>/smaps_rollup`: report `Pss`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Summing RSS across the host and its supervisors double-counts shared mappings. Compare only newly started hosts with the same attachment count, and only after at least two host refresh cycles, because glibc arenas keep earlier high-water allocations resident. A rising resident set has its own procedure under [memory growth against allocator high-water](#memory-growth-against-allocator-high-water).
 
 ### IO
 
-Take the delta of `read_bytes` and `write_bytes` in `/proc/<pid>/io` over a fixed window. The hot runtime caches live in `$XDG_RUNTIME_DIR`, which is tmpfs, so their churn is memory traffic; sustained disk bytes point at durable state or transcripts.
+Take the delta of `read_bytes` and `write_bytes` in `/proc/<pid>/io` over a fixed window. The hot runtime caches live under `$XDG_RUNTIME_DIR`, normally a tmpfs, so their churn is memory traffic. Sustained disk bytes point at durable state or transcripts.
 
 ### Comparing hosts across a setting
 
-To compare an allocator or other startup setting, give each configuration at least six fresh hosts, interleave the configurations so machine load drifts across all of them, and compare per-run mean CPU. Three hosts per configuration on a loaded machine left the arena-cap comparison in [performance.md](./performance.md#anti-patterns) undecided and forced a second round. glibc fixes its arena limit at first contention, so set a different cap by rebuilding or by an `LD_PRELOAD` shim over `mallopt`, never on a running host.
+To compare an allocator or other startup setting, give each configuration at least six fresh hosts, interleave the configurations so machine load drifts across all of them, and compare per-run mean CPU. Three hosts per configuration on a loaded machine left the arena-cap comparison in [performance.md → Anti-patterns](./performance.md#anti-patterns) undecided. The arena cap is set once, before any thread starts, by `crates/rimz/src/main.rs::malloc_arena_cap`. To try another cap, rebuild, or load an `LD_PRELOAD` shim over `mallopt`. A running host cannot change it.
 
-A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` in `crates/rimz/src/sidebar_pane/supervise.rs`. Each shorter run doubles the backoff, and once it exceeds the host's `UNATTACHED_GRACE` in `crates/rimz/src/sidebar_pane/host.rs` (10 s), the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
+A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` (60 s) in `crates/rimz/src/sidebar_pane/supervise.rs`, and each shorter run doubles the backoff. Once the backoff exceeds the host's `UNATTACHED_GRACE` (10 s) in `crates/rimz/src/sidebar_pane/host.rs`, the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
 
 ### Peak RSS of a CLI read
 
 A one-shot CLI fold over a large carryover is measured on the carryover bench fixtures ([performance.md → Fixtures](./performance.md#fixtures)), in a scratch home that holds nothing else.
 
 1. Export the fixtures. Set `RIMZ_CARRYOVER_FIXTURE_DIR` to a scratch directory and run `cargo xtask perf --bench hotpath -- carryover_fold`. Outside timing, the benches write `carryover-3300.json`, `carryover-13200.json`, and the matching `rebirth-<rows>.log.jsonl` files there.
-2. Build with `cargo build --release -p rimz --bin rimz`, and resolve this checkout's binary as `$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/rimz`.
-3. From a managed room, keep its `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`. Create a scratch `RIMZ_HOME` that holds only the room's copied `ws/<directory>/workspace.json`.
+2. Build with `cargo build --release -p rimz --bin rimz`, and set `carryover_binary="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/rimz"`.
+3. From a shell inside a managed room, keep its `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`. Set `carryover_rss_home` to a scratch directory, and copy the room's `ws/<directory>/workspace.json` into the same relative path under it. The scratch home holds nothing else.
 4. For each size, put the exported carryover at that workspace's `records/agents-carryover.json` and its rebirth log at `log/events.log.jsonl`, with no snapshot checkpoints.
 5. Time each invocation with `env RIMZ_HOME="$carryover_rss_home" /usr/bin/time -f '%M %e %U %S' "$carryover_binary" agents list --json > /dev/null`.
 
-To compare two builds, verify both binaries' versions, then alternate three runs per binary and size in one session on the same scratch home and fixtures. Report minimum wall time and maximum peak RSS. If the installed binary is not the intended base, build that revision in a separate scratch worktree and target directory, then remove the worktree. Peak RSS includes transient raw parsing and allocator pages, so it is not a retained-heap measurement, and the CLI still pays the room's live-mux and runtime-cache overhead. On 2026-10-07 a release build peaked at 82,332 KiB in 0.25 s at 3,300 rows and 302,124 KiB in 0.51 s at 13,200 rows, on the loaded host named in [performance.md → Benchmarks](./performance.md#benchmarks).
+To compare two builds, verify both binaries' versions, then alternate three runs per binary and size in one session on the same scratch home and fixtures. Report minimum wall time and maximum peak RSS. If the installed binary is not the intended base, build that revision in a separate scratch worktree and target directory, then remove the worktree. Peak RSS includes transient raw parsing and allocator pages, so it is not a retained-heap measurement, and the CLI still pays the room's live-mux and runtime-cache overhead.
+
+On 2026-10-07 a release build peaked at 82,332 KiB in 0.25 s at 3,300 rows and 302,124 KiB in 0.51 s at 13,200 rows, on the loaded host named in [performance.md → Benchmarks](./performance.md#benchmarks).
 
 ## Build a profilable binary
 
-Profile a binary built with the `profiling` Cargo profile. `perf` and `samply` need frame pointers and line tables, and the release profile strips symbols.
+Profile a binary built with the `profiling` Cargo profile. `perf` and `samply` need frame pointers and line tables to unwind and attribute samples, and the release profile strips symbols.
 
 ```sh
-cargo xtask profile-build     # writes target/profiling/rimz
-target/profiling/rimz --version
+cargo xtask profile-build
+profiling_binary="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/profiling/rimz"
+"$profiling_binary" --version
 ```
 
-The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`; xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS`. `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([rust-conventions.md](../contributing/rust-conventions.md)).
+`profile-build` prints the artifact's path. It sits under the Cargo target directory, which `CARGO_TARGET_DIR` may move out of the checkout, so resolve it through `cargo metadata` rather than `target/`. The profile inherits `release` and adds `debug = "line-tables-only"` and `strip = "none"`. xtask adds frame pointers and v0 symbol mangling through `RUSTFLAGS` (`xtask/src/build.rs::PROFILING_RUSTFLAGS`). `cargo xtask install-dev` installs the same profile, with the `sentry` feature, to `~/.cargo/bin`, so a dogfooding binary is directly profilable ([rust-conventions.md](../contributing/rust-conventions.md)).
 
-Check which build is running before trusting absolute numbers. Frames such as `core::ub_checks::*` or `precondition_check` mark a debug build, whose absolute CPU overstates release by roughly 5x. Ratios and rates (forks per second, folds per second, shared data work versus per-pane rendering) stay valid across builds.
+Check which build is running before trusting absolute numbers. Frames such as `core::ub_checks::*` or `precondition_check` mark a debug build, whose absolute CPU does not compare with a release build. Ratios and rates (forks per second, folds per second, shared data work against per-pane rendering) carry across builds.
 
 ## Pick the tool by the question
 
-Start with `strace -f -c -p <pid>` when a process is busy for no clear reason. It shows syscall shape, fork and exec storms, lock contention, and IO without rebuilding or restarting anything. The costliest faults this subsystem has had (a `git` fork storm, a forge-probe retry loop, exec failures against a replaced binary) all show in syscall counts; a CPU profile confirms the shape once `strace` has found it.
+Start with `strace -f -c -p <pid>` when a process is busy for no clear reason. It shows syscall shape, fork and exec storms, lock contention, and IO without rebuilding or restarting anything. A fork storm, a probe retry loop, and failed execs all show in syscall counts, and a CPU profile confirms the shape once `strace` has found it.
 
 | Question | Tool |
 | --- | --- |
-| Which binaries fork, how often, and do they succeed? | `strace -f -e trace=execve -p <pid>`. A repeating `ENOENT` on a RimZ path is a stale self-exec after a reinstall ([symbols from a replaced binary](#symbols-from-a-replaced-binary)). |
+| Which binaries fork, how often, and do they succeed? | `strace -f -e trace=execve -p <pid>`. A repeating `ENOENT` on a RimZ binary path is an exec of a binary that no longer exists ([symbols from a replaced binary](#symbols-from-a-replaced-binary)). |
 | Where is CPU going by function? | `samply record -p <pid>` for a Firefox Profiler call tree, or `perf record --call-graph fp -p <pid> -- sleep 10` then `perf report --stdio` for flat self-time. |
 | Which allocations churn? | `heaptrack` or DHAT for ownership. The `malloc`, `memmove`, and `clone` share of a `perf` profile is the first-pass signal. |
-| What goes out on the network? | `strace -f -e trace=%network -p <pid>` for the producer's own calls, `ss -tanp` for established peers, and the published cache stamps for cadence. |
-| How much does each pane render, and what does SSH carry? | `rimz pane bandwidth`, run on the host serving the room. Its per-pane rows are each pane's write rate; its `WIRE(ssh)` row is the payload on the room's SSH socket, usually far below the per-pane sum, and is absent for a local room. |
-| What does an account refresh cost? | Set `RIMZ_ACCOUNT_REFRESH_TRACE` to a file path, or to `1` or `true` for `account_refresh_trace.jsonl` in `~/.rimz/cache/providers/`. The trace (`sidebar/refresh/trace.rs`) appends one JSON line per provider probe, probe batch, cache contention, claim, helper spawn, and usage-helper run, with outcomes and durations and no commands, paths, identities, tokens, URLs, or bodies. It rotates at 1 MiB. |
+| What goes out on the network? | `strace -f -e trace=%network -p <pid>` for the host's own calls, `ss -tanp` for established peers, and the published cache stamps for cadence. |
+| How much does each pane render, and what does SSH carry? | `rimz pane bandwidth`, run on the host serving the room. Its per-pane rows are each pane's write rate. Its `WIRE(ssh↑)` and `WIRE(ssh↓)` rows are the payload each way on the room's SSH socket, usually far below the per-pane sum, and are absent for a local room ([reference](../reference/cli/pane.md#bandwidth)). |
+| What does an account refresh cost? | Set `RIMZ_ACCOUNT_REFRESH_TRACE` to a file path, or to `1`, `true`, or an empty value for `account_refresh_trace.jsonl` in `~/.rimz/cache/providers/`. The trace (`crates/rimz/src/sidebar/refresh/trace.rs`) appends one JSON line per provider probe, probe batch, cache contention, claim, helper spawn, and usage-helper run, with outcomes and durations and no commands, paths, identities, tokens, URLs, or bodies. It rotates at 1 MiB. |
 
-To profile without a live room, run the profiling binary on the path under test: `samply record target/profiling/rimz sidebar snapshot --json`, with `--no-produce` added when the question is the read-only path. `samply record -- cargo xtask perf` covers the benchmarks.
+To profile one command instead of a running process, run the profiling binary on the path under test: `samply record "$profiling_binary" sidebar snapshot --json`, with `--no-produce` added when the question is the read-only path. `samply record -- cargo xtask perf` covers the benchmarks.
 
 Check host policy before attaching, because it limits these tools more than RimZ does. Read `kernel.perf_event_paranoid` and `kernel.yama.ptrace_scope`: `perf` needs `sudo` or a lower `perf_event_paranoid` when the value is 3 or higher. Hardware LBR call graphs may be unavailable under virtualization, so use `--call-graph fp`. Keep `strace` windows to a few seconds, because syscall tracing slows the process it observes. A failed attach is a failed measurement: record it instead of silently substituting another tool.
 
@@ -130,46 +135,46 @@ Treat captures as sensitive. Traces and argv contain project paths and command t
 
 ## What to look at, in order
 
-Check these signals in order; the earlier ones find more for less effort.
+Check these signals in order. The earlier ones find more for less effort.
 
-1. Fork and exec rate, and outcome. A steady exec rate at idle is a retry loop or a cache that never goes fresh, and failed execs matter as much as the rate. `strace -e trace=execve` together with the published caches locates it.
-2. Refold rate against event rate. Compare the store's events per second with the host fetch worker's fold rate. Pane requests should coalesce through the shared worker rather than multiply the fold rate by tab count.
-3. The host's thread split. Sum thread-level CPU: fetch and refresher cost points at shared reads; attachment-heavy cost points at rendering multiplied by pane count.
-4. Allocation share. `malloc`, `memmove`, and `clone` frames above 10 to 15% of samples in fold or enrich paths mean deep clones on a hot path, the cost the `Arc` handles from `disk/parse_cache.rs` remove.
-5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Zellij's server-side `ps` runs and scrollback footprint are upstream costs that RimZ bounds but does not own ([performance.md](./performance.md#deferred-and-rejected)).
+1. Fork and exec rate, and outcome. At idle the host still runs git on each root's tier ([state.md → Cadences](./sidebar/state.md#cadences)): every 60 s for an idle root and every 5 minutes for a settled one. An exec rate above those tiers at idle is a retry loop or a cache that never goes fresh, and failed execs matter as much as the rate. `strace -e trace=execve` together with the published caches locates it.
+2. Refold rate against event rate. Compare the store's events per second with the host fetch worker's fold rate. Pane requests coalesce through the shared worker, so the fold rate must not grow with tab count.
+3. The host's thread split. Sum thread-level CPU: fetch and refresher cost points at shared reads, and attachment-heavy cost points at rendering multiplied by pane count.
+4. Allocation share. A large share of `malloc`, `memmove`, and `clone` frames in fold or enrich paths means deep clones on a hot path, the cost the `Arc` handles from `crates/rimz/src/disk/parse_cache.rs` remove.
+5. Multiplexer server cost. Attribute the multiplexer's own children and resident set separately. Zellij's compact-bar instances and scrollback footprint are upstream costs that RimZ bounds but does not own ([performance.md → Deferred and rejected](./performance.md#deferred-and-rejected)).
 
 ## Two hard cases
 
 ### Symbols from a replaced binary
 
-An atomic reinstall leaves every long-lived process executing a deleted inode. `/proc/<pid>/exe` then reads `.../rimz (deleted)`, and `perf report` resolves no RimZ symbols because no file exists at the recorded path. Recover them from the inode:
+A process whose binary file was removed keeps running from the deleted inode. `/proc/<pid>/exe` then reads `<path> (deleted)`, and `perf report` resolves no RimZ symbols because no file exists at the recorded path. Two paths reach this state: an atomic reinstall replaces `~/.cargo/bin/rimz` under a process that runs it, and `crates/rimz/src/reload.rs::sweep_unreferenced_builds` removes a staged build under `~/.rimz/builds/` once no workspace record names it. Recover the symbols from the inode, with `pid` set to the process you profiled:
 
 ```sh
-cp /proc/<pid>/exe /tmp/prof/rimz-old
-mkdir -p /tmp/prof/symfs/home/<user>/.cargo/bin
-cp /tmp/prof/rimz-old "/tmp/prof/symfs/home/<user>/.cargo/bin/rimz (deleted)"
+exe=$(readlink "/proc/$pid/exe")
+mkdir -p "/tmp/prof/symfs$(dirname "$exe")"
+cp "/proc/$pid/exe" "/tmp/prof/symfs$exe"
 perf report --symfs /tmp/prof/symfs --stdio | rustfilt
 ```
 
-The symfs tree mirrors the original install path, and the file name keeps the literal ` (deleted)` suffix because that is the mapping name `perf` recorded; `perf buildid-cache -a` alone does not resolve it. Pipe reports through `rustfilt` whenever v0-mangled `_R…` names survive perf's own demangler.
+The symfs tree mirrors the original path, and the file name keeps the literal ` (deleted)` suffix because that is the mapping name `perf` recorded. Pipe reports through `rustfilt` whenever v0-mangled `_R…` names survive perf's own demangler.
 
 ### Memory growth against allocator high-water
 
 Classify a rising resident set before changing allocation policy: it is usually retained state or allocator high-water, and seldom a leak.
 
-1. Sample one host at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate; a flat plateau after an attachment change is retained state or high-water.
+1. Sample one host at a fixed cadence. A resident set that keeps rising while the room is idle is a leak candidate. A flat plateau after an attachment change is retained state or high-water.
 2. Compare attachment counts, pets disabled, and cell pets enabled. A step tied to one attachment or feature names the owner even when the allocator keeps freed pages resident.
-3. Attach `heaptrack`. Outstanding Rust allocations that grow cycle over cycle are a leak; bounded freed pages in the one owner are high-water.
-4. The process-start glibc arena cap (2, or 16 for the sidebar host) is the one allocator setting in force. For everything else, fix the owning feature before tuning malloc: remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
+3. Attach `heaptrack`. Outstanding Rust allocations that grow cycle over cycle are a leak. Bounded freed pages in the one owner are high-water.
+4. Fix the owning feature before tuning malloc. The process-start glibc arena cap (2, or 16 for the sidebar host) is the one allocator setting in force. Remove duplicate owners or compact the retained representation first, and revisit allocator policy only when a single correct owner is still a material cost.
 
 ## Turn a finding into a guard
 
-Pin every fix with a deterministic test, because a wall-clock profile proves it only once. Subprocess counts go through `proc::testkit::spawn_count` and the `git-trace` shim tests; syscall and size budgets through the fsync and byte counter gates; cache behaviour through the parse-cache and TTL-stamp tests; wall-clock and allocation medians through `cargo xtask perf` ([performance.md → Guarding it](./performance.md#guarding-it)).
+Pin every fix with a deterministic test, because a wall-clock profile proves it only once. Subprocess counts go through `proc::testkit::spawn_count` and the `git-trace` shim tests, syscall and size budgets through the fsync and byte counter gates, cache behaviour through the parse-cache and TTL-stamp tests, and wall-clock and allocation medians through `cargo xtask perf` ([performance.md → Guarding it](./performance.md#guarding-it)).
 
 Record what the capture taught in [performance.md](./performance.md): a changed cost updates the cost map, a mistake joins the [anti-patterns](./performance.md#anti-patterns), and a win not taken is ranked under [deferred and rejected](./performance.md#deferred-and-rejected).
 
 ## The release baseline
 
-Reproduce this capture with the steps above and compare against it before each release. Machine-specific figures (absolute core counts, syscall totals, build ids, workspace ids) belong in a change's report; this section holds the shape a healthy room keeps.
+Reproduce this capture with the steps above and compare against it before each release. Machine-specific figures (syscall totals, build ids, workspace ids) belong in a change's report. This section holds the shape a healthy room keeps.
 
-On July 20, 2026, a live Zellij room on `xlab-term` held 12 agents across 12 panes, 15 worktree roots, 13 groups, and 14 renderers in one workspace. Scheduler CPU over a 12-second window put the host at 0.043 core and a representative consumer at 0.008 core, well inside the `<0.3 core` busy target for a whole room ([performance.md → Overhead at fleet scale](./performance.md#overhead-at-fleet-scale)). This historical measurement predates host-only painting; do not use its producer/consumer ratio as a current architecture check.
+On 2026-10-23, a live tmux room on `xlab-term` running `rimz 0.4.3+g500e4eb8f61c` held 185 agent cards (77 live), 157 agent panes, 160 worktree roots, and 125 groups, with 140 sidebar attachments on one host of 291 threads. Over three 12-second windows the host used 0.386, 0.730, and 0.590 core, and a supervisor 0.000 core in each. That room is larger than the 100-agent column of [performance.md → Overhead at fleet scale](./performance.md#overhead-at-fleet-scale), and its host sat inside that column's 0.5 to 1.5 core busy estimate or below it.
