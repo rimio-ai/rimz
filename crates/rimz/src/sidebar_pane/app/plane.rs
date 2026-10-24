@@ -47,6 +47,7 @@ pub(in crate::sidebar_pane) struct RoomEvents {
     views: Arc<Mutex<super::views::Views>>,
     events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     subscribers: Subscribers,
+    requests: Sender<FetchRequest>,
 }
 
 impl RoomEvents {
@@ -55,12 +56,14 @@ impl RoomEvents {
         views: Arc<Mutex<super::views::Views>>,
         events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
         subscribers: Subscribers,
+        requests: Sender<FetchRequest>,
     ) -> Self {
         Self {
             runtime: runtime.clone(),
             views,
             events,
             subscribers,
+            requests,
         }
     }
 
@@ -75,10 +78,26 @@ impl RoomEvents {
 
     pub(in crate::sidebar_pane) fn dispatch(&self, envelope: SidebarEventEnvelope) {
         self.record(&envelope, unix_now_ms());
+        if let Some(request) = fold_request(&envelope.event) {
+            let _ = self.requests.send(request);
+        }
         for subscriber in lock(&self.subscribers).values() {
             let _ = subscriber.wake.try_send(Wakeup::Event(envelope.clone()));
         }
         crate::harness::hibernate::wake_focused(&self.runtime, &envelope.event);
+    }
+}
+
+fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
+    match event {
+        event if event.requests_producer_verification() => Some(FetchRequest::fresh_panes()),
+        SidebarEvent::WidthTargetChanged
+        | SidebarEvent::BodyFilterChanged
+        | SidebarEvent::Notify { .. }
+        | SidebarEvent::FocusStranded { .. }
+        | SidebarEvent::FocusIntent { .. } => None,
+        event if event.is_overlay() => None,
+        _ => Some(FetchRequest::default()),
     }
 }
 
@@ -89,6 +108,7 @@ impl DataPlane {
             self.views.clone(),
             self.events.clone(),
             self.subscribers.clone(),
+            self.request_tx.clone(),
         )
     }
 
@@ -163,8 +183,8 @@ impl DataPlane {
                         .map(|eldest| data_tick(Some(eldest), &template))
                 },
             );
-            // tmux fast path: record control-mode events once and fan out in memory. Panes ask
-            // the producer to verify structural changes; the poll stays the presence backstop.
+            // tmux fast path: record control-mode events once and fan out in memory. The plane
+            // asks the producer to verify structural changes; the poll stays the presence backstop.
             // Zellij reaches the room socket through its presence plugin.
             if let Some((sweep, rx)) = hidden {
                 hidden_views::spawn(rx, config.session_name.clone(), diag, runtime.clone());

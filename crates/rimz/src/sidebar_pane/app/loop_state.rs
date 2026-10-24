@@ -1030,7 +1030,6 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         envelope: SidebarEventEnvelope,
     ) {
-        let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
         let fold = self.event_needs_fold(&envelope.event);
         if matches!(
@@ -1146,14 +1145,7 @@ impl LoopState {
                 }
                 self.handle_overlay_event(event, fold);
             }
-            // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
-            _ => {
-                self.pane.fetch.request(if requests_verification {
-                    FetchRequest::fresh_panes()
-                } else {
-                    FetchRequest::default()
-                });
-            }
+            _ => {}
         }
     }
 
@@ -1380,10 +1372,9 @@ impl LoopState {
 
     fn handle_overlay_event(&mut self, event: SidebarEvent, fold: bool) {
         // A relevant overlay fuses into the in-memory state and paints this
-        // frame. Every topology overlay asks the producer to verify with a
-        // real pull, which supersedes the overlay once its fresh frame
-        // folds in. A resize-grow paint hold stays held until a pulled
-        // sibling-count verdict releases it.
+        // frame. The plane asks the producer to verify topology overlays; this
+        // pane asks only for its own reveal. A resize-grow paint hold stays
+        // held until a pulled sibling-count verdict releases it.
         let own = self.pane.config.own_pane.as_ref();
         let own_focused = self.reveals_own_tab(&event);
         let own_revealed = own_focused && !self.observed_watched();
@@ -1391,11 +1382,10 @@ impl LoopState {
             if own.is_some_and(|own| unfocused.contains(own)
                 || (self.views.mirror().client_views.len() == 1
                     && matches!(focused.as_slice(), [pane] if pane != own))));
-        let requests_verification = event.requests_producer_verification();
         if fold {
             self.fold_fused_now();
         }
-        if !self.pane.should_exit && (requests_verification || own_revealed) {
+        if !self.pane.should_exit && own_revealed {
             self.pane.fetch.request(FetchRequest::fresh_panes());
         }
         if own_focused {

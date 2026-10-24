@@ -1205,6 +1205,11 @@ impl FetchRequest {
         matches!(self.mode, FetchMode::FreshPanes)
     }
 
+    #[cfg(test)]
+    pub(super) fn mode(self) -> FetchMode {
+        self.mode
+    }
+
     pub(super) fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
         self.min_pane_cache_ms = self.min_pane_cache_ms.max(other.min_pane_cache_ms);
