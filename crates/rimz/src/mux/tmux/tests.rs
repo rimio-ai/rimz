@@ -708,6 +708,123 @@ fn birth_cwd_read_count(temp: &tempfile::TempDir) -> usize {
 }
 
 #[cfg(unix)]
+fn companion_append_with_shim(
+    response: &str,
+) -> (
+    tempfile::TempDir,
+    std::result::Result<crate::mux::CompanionPaneAppend, crate::mux::CompanionAppendErr>,
+) {
+    let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$4" >> "$dir/zellij.log"
+{response}
+case "$4" in
+  list-panes) printf '%%7 0 120 0 80|0|0|0|sleep||sleep 600\n' ;;
+  display-message) printf '%%7|\n' ;;
+esac
+"#
+    ));
+    let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+    backend.program = Some(shim);
+    let result = backend.append_companion_pane(crate::mux::SplitPaneOptions {
+        target: crate::mux::SplitTarget::SessionPane {
+            session_name: "rimz-test".into(),
+            pane_id: crate::PaneId::from_parts(MuxName::Tmux, "%7"),
+        },
+        command: Some(vec!["sleep".into(), "600".into()]),
+        ..Default::default()
+    });
+    (temp, result)
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_geometry_timeout_is_before_spawn() {
+    let (temp, result) =
+        companion_append_with_shim(r#"if [ "$4" = list-panes ]; then exec sleep 3; fi"#);
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::BeforeSpawn(
+                crate::mux::MuxErr::Timeout { seconds: 2, .. }
+            ))
+        ),
+        "{result:?}"
+    );
+    let log = crate::mux::zellij::tests::support::shim_log(&temp);
+    assert_eq!(
+        log.lines().filter(|line| *line == "list-panes").count(),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("split-window"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_display_failure_is_before_spawn() {
+    let (temp, result) = companion_append_with_shim(
+        r#"if [ "$4" = display-message ]; then printf 'pane disappeared\n' >&2; exit 1; fi"#,
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::BeforeSpawn(
+                crate::mux::MuxErr::Command { stderr, .. }
+            )) if stderr.contains("pane disappeared")
+        ),
+        "{result:?}"
+    );
+    let log = crate::mux::zellij::tests::support::shim_log(&temp);
+    assert_eq!(
+        log.lines().filter(|line| *line == "list-panes").count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        log.lines()
+            .filter(|line| *line == "display-message")
+            .count(),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("split-window"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_missing_pane_id_is_spawn_error() {
+    let (temp, result) = companion_append_with_shim("");
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::Spawn(crate::mux::MuxErr::Output { reason, .. }))
+                if reason == "split-window did not print a pane id"
+        ),
+        "{result:?}"
+    );
+    let log = crate::mux::zellij::tests::support::shim_log(&temp);
+    assert_eq!(
+        log.lines().filter(|line| *line == "list-panes").count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        log.lines()
+            .filter(|line| *line == "display-message")
+            .count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        log.lines().filter(|line| *line == "split-window").count(),
+        1,
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn birth_cwd_raced_reads_pass_once_the_path_settles() {
     let (temp, backend) =

@@ -14,8 +14,9 @@ use rimz::diag::record::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
-    CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, PaneReadConsistency,
-    SidebarPaneOptions, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    CompanionAppendErr, CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions,
+    PaneReadConsistency, SidebarPaneOptions, SplitDirection, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions,
 };
 use rimz::pane::PaneRef;
 use rimz::store::run::RunRecord;
@@ -431,7 +432,11 @@ pub(in crate::cli) fn split_into_subagent_zone(
                 }) {
                     Ok(CompanionPaneAppend::Opened) => return SubagentZoneOpen::Opened,
                     Ok(CompanionPaneAppend::Full) => continue,
-                    Err(err) => {
+                    Err(CompanionAppendErr::BeforeSpawn(err)) => {
+                        lookup_failed(SubagentZoneLookup::CompanionStack, format!("{err:#}"));
+                        return open_companion(title, after);
+                    }
+                    Err(CompanionAppendErr::Spawn(err)) => {
                         // A spawn timeout may have opened the pane. Never launch
                         // the same durable run twice after an ambiguous result.
                         tracing::warn!(error = %err, "subagent stack append failed");
