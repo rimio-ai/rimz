@@ -21,7 +21,6 @@ use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::mount::{MsFlags, mount};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sched::{CloneFlags, setns};
-use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
 use nix::sys::socket::{ControlMessage, MsgFlags, sendmsg};
 use nix::sys::statvfs::{FsFlags, statvfs};
 use rustix::fs::inotify;
@@ -52,9 +51,9 @@ impl Guard {
         helper: &Path,
         sink: impl Fn(BindRestore) + Send + 'static,
     ) -> Result<Self, BindGuardErr> {
-        let source = Inotify::init(InitFlags::IN_CLOEXEC | InitFlags::IN_NONBLOCK)
+        let source = inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)
             .map_err(|error| BindGuardErr::Init(error.into()))?;
-        Self::start(source.into(), entries, helper, sink)
+        Self::start(source, entries, helper, sink)
     }
 
     pub(super) fn handover(
@@ -172,7 +171,7 @@ impl Drop for Guard {
 
 fn adopt(inherited: i32) -> io::Result<OwnedFd> {
     // SCM_RIGHTS supplies an IO-safe owner of the same inotify instance and queue.
-    // nix's Inotify::from_owned_fd would require an additional unsafe site.
+    // Owning the raw inherited number directly would need an additional unsafe site.
     let result = (|| {
         let (sender, receiver) = UnixStream::pair()?;
         sendmsg::<()>(
@@ -295,7 +294,7 @@ fn read_batch(source: &OwnedFd, entries: &[(i32, PathBuf)]) -> io::Result<Vec<Pa
         affected.extend(event_paths(
             entries,
             event.wd(),
-            AddWatchFlags::from_bits_retain(event.events().bits()),
+            event.events(),
             event
                 .file_name()
                 .map(|name| OsStr::from_bytes(name.to_bytes())),
@@ -314,11 +313,11 @@ fn read_batch(source: &OwnedFd, entries: &[(i32, PathBuf)]) -> io::Result<Vec<Pa
 fn event_paths(
     entries: &[(i32, PathBuf)],
     wd: i32,
-    mask: AddWatchFlags,
+    mask: inotify::ReadFlags,
     name: Option<&OsStr>,
 ) -> Vec<PathBuf> {
-    let overflow = mask.contains(AddWatchFlags::IN_Q_OVERFLOW);
-    if !overflow && !mask.intersects(AddWatchFlags::IN_CREATE | AddWatchFlags::IN_MOVED_TO) {
+    let overflow = mask.contains(inotify::ReadFlags::QUEUE_OVERFLOW);
+    if !overflow && !mask.intersects(inotify::ReadFlags::CREATE | inotify::ReadFlags::MOVED_TO) {
         return Vec::new();
     }
     entries
@@ -538,19 +537,23 @@ mod tests {
         let cases = [
             (
                 1,
-                AddWatchFlags::IN_MOVED_TO,
+                inotify::ReadFlags::MOVED_TO,
                 Some(OsStr::new(".gitconfig")),
             ),
-            (2, AddWatchFlags::IN_CREATE, Some(OsStr::new("config"))),
-            (1, AddWatchFlags::IN_CREATE, Some(OsStr::new("config"))),
-            (1, AddWatchFlags::IN_MODIFY, Some(OsStr::new(".gitconfig"))),
+            (2, inotify::ReadFlags::CREATE, Some(OsStr::new("config"))),
+            (1, inotify::ReadFlags::CREATE, Some(OsStr::new("config"))),
             (
                 1,
-                AddWatchFlags::IN_MOVED_FROM,
+                inotify::ReadFlags::MODIFY,
                 Some(OsStr::new(".gitconfig")),
             ),
-            (1, AddWatchFlags::IN_CREATE, None),
-            (-1, AddWatchFlags::IN_Q_OVERFLOW, None),
+            (
+                1,
+                inotify::ReadFlags::MOVED_FROM,
+                Some(OsStr::new(".gitconfig")),
+            ),
+            (1, inotify::ReadFlags::CREATE, None),
+            (-1, inotify::ReadFlags::QUEUE_OVERFLOW, None),
         ];
         let actual: Vec<_> = cases
             .into_iter()
