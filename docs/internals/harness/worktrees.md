@@ -231,7 +231,7 @@ Paths are normalized lexically (`.` and `..` folded) before comparison, so `/rep
 
 | Caller | Occupancy | Own pane exempt | Loop tasks | Team boards | Missing facts |
 | --- | --- | --- | --- | --- | --- |
-| `worktree remove`, `worktree merge` (`for_explicit_removal`) | `ProvenLive` | Yes | Ignored | Ignored | Best-effort: an unreadable roster or mux protects nothing. |
+| `worktree remove`, `worktree merge`, a launch's `remove` answer (`for_explicit_removal`, over the room of each root it is given: on a cross-repository launch, the launch's room and the tree owner's) | `ProvenLive` | Yes | Ignored | Ignored | Best-effort: an unreadable roster or mux protects nothing. |
 | Wrapper cleanup, `worktree cleanup PATH`, supervised retry (`for_wrapper_cleanup`) | `Unproven` | Yes | Required | Read at PATH | Roster and mux best-effort; task-source failure keeps the tree. No tree enumeration. |
 | `worktree list` (`for_listing`) | `Unproven` | No | Best-effort | Read at every owned tree | An unreadable task source contributes no loop holders; a failed owned-tree listing contributes no team holders. |
 | `worktree sweep`, `rimz gc` (`for_automatic_gc`) | `Unproven` | No | Required | Read at every owned tree | Roster, task-source, or owned-tree listing failure fails the gather. `gc` skips its worktree area (`list_failed` for listing); `worktree sweep` exits 1 under its protection-facts context. |
@@ -257,7 +257,7 @@ Sweep reads one protection snapshot before removing candidates. A task booked or
 
 The domain owns every refusal: `worktree::remove` returns `WorktreeErr::InUse`, `Dirty`, `Unlanded`, or `Unproven` for the first reason, and `--force` skips refusal. The CLI renders holders from the same protection set. Sweep groups by the first reason and shows additional reasons; `gc` lists all reasons and holders. Both serialize the domain sweep records, with `reasons` arrays rather than a single `reason`.
 
-Cohort relaunch assesses against an empty protection set, because it has already established that the cohort's panes are closed; a live cohort instead receives its prompt or is focused without one. The offers, `--fresh`, and what each choice does are [fleet.md § Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation); only the `remove` choice enters the removal path below.
+Cohort relaunch separates its offers using Git state, because it has already established that the cohort's panes are closed; a live cohort instead receives its prompt or is focused without one. The `remove` answer then gathers the same explicit-removal protections as `rimz worktree remove`, after the prompt, so another live agent or an open pane refuses removal with `in use` and `nothing removed`. Successful removal retires sessions and archives channel messages before recreating. The offers, `--fresh`, and what each choice does are [fleet.md § Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation); only the `remove` choice enters the removal path below.
 
 ### Branch deletion and retirement
 

@@ -59,6 +59,7 @@ mod web;
 mod workflow;
 mod workspace;
 mod worktree;
+mod worktree_entry;
 mod worktree_protection;
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};

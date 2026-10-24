@@ -483,7 +483,8 @@ fn remove_worktree(
     force: bool,
 ) -> Result<()> {
     let store = require_existing_store(workspace)?;
-    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
+    let guard =
+        super::worktree_protection::for_explicit_removal(&[&workspace.project_root], globals);
     let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
     if force && guard.protections.protects(&path) {
         writeln!(
@@ -834,7 +835,8 @@ fn merge_worktree(
             return Ok(());
         }
     }
-    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
+    let guard =
+        super::worktree_protection::for_explicit_removal(&[&workspace.project_root], globals);
     let memo = rimz::worktree::LandedMemo::load(&workspace.project_root);
     let result = rimz::worktree::land(&plan, &guard.protections, &memo);
     memo.save();
