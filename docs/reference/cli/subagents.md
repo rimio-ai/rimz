@@ -294,7 +294,7 @@ rimz subagents profiles --json --path
 
 `profiles` lists what a child can launch from as compact cards: child definitions with their agent, model, effort, and description, and `[agents.commands]` commands. It works from any shell. `--path` adds each entry's defining file.
 
-Agent kinds are launchable directly but are not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
+A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under its kind's name, since a child can launch from it. An agent kind with no kind base is launchable directly but is not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
 `--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
 
