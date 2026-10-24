@@ -330,7 +330,7 @@ fn prepare_supervised(
         crate::cli::require_worktree_config(&machine_config)?;
     }
     let mode = request.permission_mode.unwrap_or(PermissionMode::Auto);
-    let store = crate::cli::open_store(&workspace)?;
+    let store = rimz::launcher::checkout::open_launch_store(&workspace)?;
     let cwd = crate::cli::resolve_launch_cwd(request.cwd.as_deref(), store.paths())?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
     // does for an interactive launch: in `#forge`, `reviewer` means
