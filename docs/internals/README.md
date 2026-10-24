@@ -72,8 +72,8 @@ These two pages cut across every subsystem above.
 
 | Page | What it owns |
 | --- | --- |
-| [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, the tick budget, CI counter gates and benchmarks, fleet overhead, anti-patterns, deferred and rejected work, and how to make a performance change. |
-| [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the host, profiling the process, and turning a finding into a guard. |
+| [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, fleet overhead, what is optimized, anti-patterns, deferred and rejected work, the guards (tick budget, counter gates, client-byte guard, benchmark ceilings and reference figures), and how to make a performance change. |
+| [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the host, profiling the process, a CLI read's peak RSS on bench fixtures, and turning a finding into a guard. |
 
 ## From a source tree to its page
 

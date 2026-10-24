@@ -84,6 +84,18 @@ To compare an allocator or other startup setting, give each configuration at lea
 
 A hand-relaunched host (supervisors paused with `SIGSTOP`, the host replaced, the supervisors resumed) must stay up at least 60 s after its supervisors attach. A supervisor resets its respawn backoff only after a host outlives `RESPAWN_STABLE_RUN` in `crates/rimz/src/sidebar_pane/supervise.rs`. Each shorter run doubles the backoff, and once it exceeds the host's `UNATTACHED_GRACE` in `crates/rimz/src/sidebar_pane/host.rs` (10 s), the next host exits cleanly before any pane attaches. That looks like a crash of the configuration under test.
 
+### Peak RSS of a CLI read
+
+A one-shot CLI fold over a large carryover is measured on the carryover bench fixtures ([performance.md → Fixtures](./performance.md#fixtures)), in a scratch home that holds nothing else.
+
+1. Export the fixtures. Set `RIMZ_CARRYOVER_FIXTURE_DIR` to a scratch directory and run `cargo xtask perf --bench hotpath -- carryover_fold`. Outside timing, the benches write `carryover-3300.json`, `carryover-13200.json`, and the matching `rebirth-<rows>.log.jsonl` files there.
+2. Build with `cargo build --release -p rimz --bin rimz`, and resolve this checkout's binary as `$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/rimz`.
+3. From a managed room, keep its `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`. Create a scratch `RIMZ_HOME` that holds only the room's copied `ws/<directory>/workspace.json`.
+4. For each size, put the exported carryover at that workspace's `records/agents-carryover.json` and its rebirth log at `log/events.log.jsonl`, with no snapshot checkpoints.
+5. Time each invocation with `env RIMZ_HOME="$carryover_rss_home" /usr/bin/time -f '%M %e %U %S' "$carryover_binary" agents list --json > /dev/null`.
+
+To compare two builds, verify both binaries' versions, then alternate three runs per binary and size in one session on the same scratch home and fixtures. Report minimum wall time and maximum peak RSS. If the installed binary is not the intended base, build that revision in a separate scratch worktree and target directory, then remove the worktree. Peak RSS includes transient raw parsing and allocator pages, so it is not a retained-heap measurement, and the CLI still pays the room's live-mux and runtime-cache overhead. On 2026-10-07 a release build peaked at 82,332 KiB in 0.25 s at 3,300 rows and 302,124 KiB in 0.51 s at 13,200 rows, on the loaded host named in [performance.md → Benchmarks](./performance.md#benchmarks).
+
 ## Build a profilable binary
 
 Profile a binary built with the `profiling` Cargo profile. `perf` and `samply` need frame pointers and line tables, and the release profile strips symbols.
