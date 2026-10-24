@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Receiver;
@@ -41,7 +42,7 @@ use tracing::{debug, trace, warn};
 use super::backend::{BufferedFrame, PaneBackend};
 use super::clock::LoopClock;
 use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource, WorkspaceFold,
+    FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource, WorkspaceFold,
 };
 use super::focus::{FocusRepairDispatch, spawn_pane_focus};
 #[cfg(test)]
@@ -188,7 +189,6 @@ pub(super) struct PaneState {
     runtime: RuntimePaths,
     host_wake_path: PathBuf,
     diag: crate::diag::DiagSink,
-    pub(super) completion: Arc<AtomicBool>,
     own: super::views::Cursor,
     pending_focus_push: Option<FocusPush>,
     painted_focus_anchor_ms: u64,
@@ -486,7 +486,6 @@ impl LoopState {
         runtime: RuntimePaths,
         host_wake_path: PathBuf,
         diag: crate::diag::DiagSink,
-        completion: Arc<AtomicBool>,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
@@ -538,7 +537,6 @@ impl LoopState {
                 runtime,
                 host_wake_path,
                 diag,
-                completion,
                 own: super::views::Cursor::default(),
                 fold_effects: FoldEffects::default(),
                 baseline_seed: None,
@@ -588,7 +586,7 @@ impl LoopState {
     pub(super) fn step(
         &mut self,
         inbox: &mut WakeupInbox,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.report_baseline();
@@ -601,7 +599,7 @@ impl LoopState {
     pub(super) fn advance(
         &mut self,
         inbox: &mut WakeupInbox,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<(bool, Instant)> {
         let paints = self.pane.paints;
@@ -722,11 +720,11 @@ impl LoopState {
         self.observed_watched()
     }
 
-    pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
+    pub(super) fn on_snapshot(&mut self, fetch: &mut FetchHandle) {
         self.drain_snapshot(fetch, true);
     }
 
-    fn drain_snapshot(&mut self, fetch: &mut FetchDispatcher, allow_defer: bool) {
+    fn drain_snapshot(&mut self, fetch: &mut FetchHandle, allow_defer: bool) {
         let (pending, revision, completed) = {
             let views = self
                 .views
@@ -736,7 +734,7 @@ impl LoopState {
             (
                 views.latest.since(self.pane.own.revision),
                 views.revision,
-                self.pane.completion.swap(false, Ordering::Relaxed),
+                fetch.completed(),
             )
         };
         let deferred = allow_defer
@@ -755,9 +753,6 @@ impl LoopState {
                 self.apply_latest_snapshot(update);
             }
             self.pane.own.revision = revision;
-        }
-        if completed {
-            fetch.complete(!self.pane.should_exit);
         }
     }
 
@@ -802,7 +797,7 @@ impl LoopState {
 
     pub(super) fn on_wakeup(
         &mut self,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         wakeup: Wakeup,
     ) -> Result<()> {
@@ -932,7 +927,7 @@ impl LoopState {
     fn on_focus_push(
         &mut self,
         mut push: FocusPush,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         let arrived = self.pane.clock.now();
@@ -1033,7 +1028,7 @@ impl LoopState {
 
     pub(super) fn on_event(
         &mut self,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         envelope: SidebarEventEnvelope,
     ) {
@@ -1109,7 +1104,7 @@ impl LoopState {
                             "superseded by a newer strand",
                         );
                     }
-                    fetch.request(FetchRequest::fresh_panes(), true);
+                    fetch.request(FetchRequest::fresh_panes());
                 }
             }
             SidebarEvent::FocusIntent { nonce, .. } => {
@@ -1155,14 +1150,11 @@ impl LoopState {
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
             _ => {
-                fetch.request(
-                    if requests_verification {
-                        FetchRequest::fresh_panes()
-                    } else {
-                        FetchRequest::default()
-                    },
-                    true,
-                );
+                fetch.request(if requests_verification {
+                    FetchRequest::fresh_panes()
+                } else {
+                    FetchRequest::default()
+                });
             }
         }
     }
@@ -1211,7 +1203,7 @@ impl LoopState {
         }
     }
 
-    fn prepare_action(&mut self, fetch: &mut FetchDispatcher) {
+    fn prepare_action(&mut self, fetch: &mut FetchHandle) {
         // Require content before flushing, then invalidate reuse again:
         // the action can change renderer state after the drain.
         self.pane.own.accepted = None;
@@ -1388,12 +1380,7 @@ impl LoopState {
         targets.contains(own) || own_view.is_some_and(|view| own_tab_viewed(targets, view, own))
     }
 
-    fn handle_overlay_event(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        event: SidebarEvent,
-        fold: bool,
-    ) {
+    fn handle_overlay_event(&mut self, fetch: &mut FetchHandle, event: SidebarEvent, fold: bool) {
         // A relevant overlay fuses into the in-memory state and paints this
         // frame. Every topology overlay asks the producer to verify with a
         // real pull, which supersedes the overlay once its fresh frame
@@ -1411,7 +1398,7 @@ impl LoopState {
             self.fold_fused_now();
         }
         if !self.pane.should_exit && (requests_verification || own_revealed) {
-            fetch.request(FetchRequest::fresh_panes(), true);
+            fetch.request(FetchRequest::fresh_panes());
         }
         if own_focused {
             self.pane.optimistic_watch_until =
@@ -1432,7 +1419,7 @@ impl LoopState {
     /// probed once at the dispatch site so tests can drive the feedback path.
     pub(super) fn on_resize(
         &mut self,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         settled_width: Option<u16>,
     ) -> Result<()> {
@@ -1487,7 +1474,7 @@ impl LoopState {
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the host and require a cache produced after
         // this signal.
-        fetch.request(FetchRequest::fresh_panes(), true);
+        fetch.request(FetchRequest::fresh_panes());
         Ok(())
     }
 
@@ -1565,7 +1552,7 @@ impl LoopState {
         &mut self,
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
     ) -> Result<()> {
         self.on_inputs([wakeup], terminal, fetch)
     }
@@ -1574,7 +1561,7 @@ impl LoopState {
         &mut self,
         wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
     ) -> Result<()> {
         self.prepare_action(fetch);
         let applied = match self.apply_input(wakeups, terminal) {
@@ -1744,7 +1731,7 @@ impl LoopState {
     /// room so the host prunes the episode and peer tabs converge, and refetch
     /// so the receipt lands in the pulled snapshot. A no-op when the row is
     /// already read.
-    fn mark_row_read(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
+    fn mark_row_read(&mut self, fetch: &mut FetchHandle, row_id: &str) {
         let now = self.pane.clock.timestamp();
         let marks = ReadMarks::load(&self.pane.runtime);
         let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
@@ -1766,7 +1753,7 @@ impl LoopState {
         &mut self,
         clear: ReadClear,
         now: jiff::Timestamp,
-        fetch: &mut FetchDispatcher,
+        fetch: &mut FetchHandle,
     ) {
         if clear.ids.is_empty() {
             return;
@@ -1787,7 +1774,7 @@ impl LoopState {
     /// Mark every readable row read without jumping (`M`): write room receipts
     /// for every unread or needs-a-look row, clear local unread bits, and refetch
     /// so peers converge through the producer.
-    fn mark_all_read(&mut self, fetch: &mut FetchDispatcher) {
+    fn mark_all_read(&mut self, fetch: &mut FetchHandle) {
         let now = self.pane.clock.timestamp();
         let marks = ReadMarks::load(&self.pane.runtime);
         let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
@@ -1801,7 +1788,7 @@ impl LoopState {
     /// episode through the shared mark-unread path, set the row locally for an
     /// instant repaint, trace the open, wake the room, and refetch so the episode
     /// lands in the pulled snapshot. A no-op when the row has left the room.
-    fn mark_row_unread(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
+    fn mark_row_unread(&mut self, fetch: &mut FetchHandle, row_id: &str) {
         let Some(row) = self
             .views
             .mirror()
@@ -1833,20 +1820,16 @@ impl LoopState {
         self.commit_local_mark(fetch);
     }
 
-    fn commit_local_mark(&mut self, fetch: &mut FetchDispatcher) {
+    fn commit_local_mark(&mut self, fetch: &mut FetchHandle) {
         if self.pane.clock.effects_enabled() {
             wake_room(&self.pane.runtime);
         }
         self.pane.dirty = true;
         self.pane.next_frame = self.pane.clock.now();
-        fetch.request(FetchRequest::default(), true);
+        fetch.request(FetchRequest::default());
     }
 
-    fn run_maintenance(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        terminal: &mut Terminal<PaneBackend>,
-    ) {
+    fn run_maintenance(&mut self, fetch: &mut FetchHandle, terminal: &mut Terminal<PaneBackend>) {
         let own_pane = self.pane.config.own_pane.clone();
         let room_caps = self.pane.room_caps.clone();
         if self.pane.clock.effects_enabled() {
@@ -1882,14 +1865,14 @@ impl LoopState {
             )
         });
         if gate_due {
-            fetch.request(FetchRequest::default(), false);
+            fetch.request_if_idle(FetchRequest::default());
         }
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
         // a fold so the normal clear path sweeps the unread siblings. The fold
         // disarms the deadline, so this fires at most a fetch or two.
         if dwell_due && self.watched() {
-            fetch.request(FetchRequest::default(), false);
+            fetch.request_if_idle(FetchRequest::default());
         }
 
         // Data backstop: catch pane/git drift no store delta announced. It is
@@ -1902,7 +1885,7 @@ impl LoopState {
             .saturating_duration_since(self.pane.fetched_at)
             >= tick_for(self.pane.config.tick_seconds)
         {
-            fetch.request(FetchRequest::default(), false);
+            fetch.request_if_idle(FetchRequest::default());
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
@@ -1941,7 +1924,7 @@ impl LoopState {
             } else {
                 FetchRequest::default()
             };
-            fetch.request(request, false);
+            fetch.request_if_idle(request);
         }
         if !self.inspect_view(|ui, _| ui.freeze.is_some()) {
             return;
@@ -1954,7 +1937,7 @@ impl LoopState {
                 })
             })
         {
-            fetch.request(FetchRequest::default(), false);
+            fetch.request_if_idle(FetchRequest::default());
         }
     }
 
@@ -2353,7 +2336,6 @@ impl PaneState {
             runtime: _,
             host_wake_path: _,
             diag: _,
-            completion: _,
             own: _,
             observe_tx: _,
             wake: _,

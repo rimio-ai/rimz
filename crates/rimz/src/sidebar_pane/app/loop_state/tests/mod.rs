@@ -98,7 +98,8 @@ struct Rig {
     ws: WorkspaceId,
     runtime: RuntimePaths,
     state: LoopState,
-    fetch: FetchDispatcher,
+    fetch: FetchHandle,
+    completion: Arc<AtomicBool>,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
     focus_plane: super::super::plane::DataPlane,
@@ -235,6 +236,7 @@ impl Rig {
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
+        let completion: Arc<AtomicBool> = Arc::default();
         let views = Arc::new(Mutex::new(super::super::views::Views::default()));
         let mut rig = Self {
             state: LoopState::new(
@@ -244,13 +246,13 @@ impl Rig {
                 runtime.clone(),
                 socket_path,
                 crate::diag::DiagSink::disabled(),
-                Arc::default(),
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
                 Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
-            fetch: FetchDispatcher::for_plane(request_tx),
+            fetch: FetchHandle::new(request_tx, completion.clone()),
+            completion,
             requests,
             terminal: terminal_with_width(80),
             focus_plane: super::super::plane::DataPlane::detached(),
@@ -385,7 +387,7 @@ impl Rig {
         let mut views = self.views.lock().unwrap();
         views.publish(update);
         if completed {
-            self.state.pane.completion.store(true, Ordering::Relaxed);
+            self.completion.store(true, Ordering::Relaxed);
         }
     }
 

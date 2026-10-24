@@ -15,7 +15,7 @@ use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps};
 use crate::{MuxName, RuntimePaths};
 
 use super::backend::PaneBackend;
-use super::fetch::{FetchDispatcher, FetchRequest};
+use super::fetch::{FetchHandle, FetchRequest};
 use super::inbox::WakeupInbox;
 use super::input::Wakeup;
 use super::loop_state::{BaselineReporter, LoopState};
@@ -163,7 +163,6 @@ impl Attachment {
             runtime.clone(),
             host_wake_path.clone(),
             diag.clone(),
-            subscription.completion,
             initial_width,
             subscription.observe,
             pet_render_caps,
@@ -197,7 +196,7 @@ impl Attachment {
         // produce can never queue more than one extra run. The fetch worker
         // posts `Wakeup::Snapshot` when a result is ready; the frame/tick path
         // also drains the result channel so that wakeup stays a latency hint.
-        let mut fetch = FetchDispatcher::for_plane(subscription.requests);
+        let mut fetch = FetchHandle::new(subscription.requests, subscription.completion);
 
         // Write the heartbeat immediately so the freshness gate never sees a gap.
         // Errors are non-fatal; the gate re-probes after the TTL.
@@ -221,7 +220,7 @@ impl Attachment {
         // The plane's last fold renders while the correction is in flight; a
         // host with no fold yet starts with the placeholder. Every request
         // runs a cycle, even when the shared worker has nothing new to fold.
-        fetch.request(FetchRequest::default(), false);
+        fetch.request(FetchRequest::default());
 
         // One fixed-timestep event loop. Events fold into the in-process model and
         // mark the frame dirty; the loop paints at most once per configured base

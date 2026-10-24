@@ -3311,8 +3311,8 @@ reason = "Actuator steps, explicit width intent, and settled-resize attribution 
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::app::fetch::FetchDispatcher"
-reason = "Owns single-flight coalescing while on_snapshot retains pane gate deferral and completion-driven follow-up dispatch (732161ced, 8b904eff2, 187f9f16c, a70ba54fc; pass 11)."
+key = "sidebar_pane::app::fetch::FetchHandle"
+reason = "A pane's send end and completion latch: pane-observed changes send at once, and level-triggered view deadlines send only while none of the pane's requests awaits a completed cycle (732161ced, 8c02a0b7a; room-cadence)."
 
 [[verdict]]
 kind = "item"

@@ -68,7 +68,7 @@ fn publish(rig: &mut Rig, update: FetchUpdate) {
     let completed = update.is_final();
     views.publish(update);
     if completed {
-        rig.state.pane.completion.store(true, Ordering::Relaxed);
+        rig.completion.store(true, Ordering::Relaxed);
     }
 }
 

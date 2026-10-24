@@ -278,7 +278,7 @@ impl SharedPanes {
             source: SnapshotSource::Produced,
         });
         for rig in &self.panes {
-            rig.state.pane.completion.store(true, Ordering::Relaxed);
+            rig.completion.store(true, Ordering::Relaxed);
         }
     }
 

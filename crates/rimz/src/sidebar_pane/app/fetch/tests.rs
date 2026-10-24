@@ -473,7 +473,7 @@ fn consumer(
     config: ServeConfig,
     runtime: RuntimePaths,
     reader: Replay,
-) -> (LoopState, FetchDispatcher) {
+) -> (LoopState, FetchHandle) {
     if let Some(own) = &config.own_pane {
         let mut views = reader.views.lock().unwrap();
         if views.peek(own).is_none() {
@@ -489,7 +489,6 @@ fn consumer(
         runtime,
         PathBuf::new(),
         crate::diag::DiagSink::disabled(),
-        reader.completion,
         None,
         std::sync::mpsc::sync_channel(1).0,
         Default::default(),
@@ -498,11 +497,11 @@ fn consumer(
     state.share_views(reader.views, reader.cursor.lock().unwrap().revision);
     (
         state,
-        FetchDispatcher::for_plane(std::sync::mpsc::channel().0),
+        FetchHandle::new(std::sync::mpsc::channel().0, reader.completion),
     )
 }
 
-fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchDispatcher)> {
+fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchHandle)> {
     cycles.sink.begin_cycle();
     cycles.cursors.clear();
     cycles
@@ -2114,65 +2113,31 @@ fn fast_fold_miss_posts_the_rollup_error_as_the_final_outcome() {
 }
 
 #[test]
-fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
+fn fetch_handle_holds_due_deadlines_until_completion() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    let request = FetchRequest::fresh_panes();
+    let completion: Arc<AtomicBool> = Arc::default();
+    let mut handle = FetchHandle::new(tx, Arc::clone(&completion));
+    handle.request_if_idle(FetchRequest::default());
+    assert!(rx.try_recv().is_ok());
+    assert!(!handle.completed());
+    handle.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rx.try_recv().is_err());
+    handle.request(FetchRequest::fresh_panes());
+    assert!(rx.try_recv().unwrap().is_fresh_panes());
 
-    dispatcher.request(request, true);
-
-    assert!(dispatcher.in_flight);
-    assert_eq!(rx.try_recv().unwrap().mode, FetchMode::FreshPanes);
-    assert!(dispatcher.pending_refetch.is_none());
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    dispatcher.request(FetchRequest::default(), false);
-    dispatcher.request(FetchRequest::default(), true);
-    let request = FetchRequest::fresh_panes();
-    let min_pane_cache_ms = request.min_pane_cache_ms;
-
-    dispatcher.request(request, true);
-
-    rx.try_recv().expect("initial request");
-    dispatcher.complete(true);
-    let pending = rx.try_recv().expect("pending refetch");
-    assert_eq!(pending.mode, FetchMode::FreshPanes);
-    assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
+    completion.store(true, Ordering::Relaxed);
+    assert!(handle.completed());
+    assert!(!handle.completed());
+    handle.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rx.try_recv().unwrap().is_fresh_panes());
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    dispatcher.request(FetchRequest::default(), false);
-    dispatcher.request(FetchRequest::fresh_panes(), true);
-    let request = FetchRequest::hard_refresh();
-
-    dispatcher.request(request, true);
-
-    assert!(dispatcher.in_flight);
-    rx.try_recv().expect("initial request");
-    dispatcher.complete(true);
-    let pending = rx.try_recv().expect("pending refetch");
-    assert_eq!(pending.mode, FetchMode::HardRefresh);
-    assert!(pending.min_pane_cache_ms.is_some());
-}
-
-#[test]
-fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::for_plane(tx);
-    dispatcher.request(FetchRequest::default(), false);
-    rx.try_recv().expect("initial request");
-    dispatcher.request(FetchRequest::fresh_panes(), true);
-    assert!(
-        rx.try_recv().is_err(),
-        "follow-up remains coalesced in flight"
-    );
-    dispatcher.complete(true);
-    let follow_up = rx
-        .try_recv()
-        .expect("one follow-up dispatches on completion");
-    assert!(follow_up.is_fresh_panes());
-    assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
+    drop(rx);
+    let mut closed = FetchHandle::new(tx, Arc::default());
+    closed.request(FetchRequest::default());
+    assert!(!closed.awaiting);
+    closed.request_if_idle(FetchRequest::fresh_panes());
+    assert!(!closed.awaiting);
 }
 
 #[test]
@@ -2537,7 +2502,6 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             fixture.runtime.clone(),
             PathBuf::from("missing.sock"),
             crate::diag::DiagSink::disabled(),
-            Arc::default(),
             None,
             tx.clone(),
             crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -2616,7 +2580,6 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
                 runtime,
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),
-                Arc::default(),
                 None,
                 std::sync::mpsc::sync_channel(64).0,
                 crate::sidebar_pane::pixel::PixelRenderCaps::default(),

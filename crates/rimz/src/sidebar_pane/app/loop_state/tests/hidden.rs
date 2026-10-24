@@ -67,8 +67,10 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
         rig.state.pane.projections, 1,
         "the initial fold projects on take"
     );
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     for name in ["first", "latest"] {
         defer_name(&mut rig, name);
     }
@@ -76,8 +78,11 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
         rig.state.pane.projections, 1,
         "deferred folds never project"
     );
-    rig.fetch.request(FetchRequest::default(), false);
-    assert!(rig.next_request().is_some(), "deferred final completes");
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(
+        rig.next_request().unwrap().is_fresh_panes(),
+        "deferred final clears the latch"
+    );
     rig.event(SidebarEvent::FocusChanged {
         focused: rig
             .state
@@ -248,16 +253,18 @@ fn one_watched_of_fifty_seven_folds_across_data_ticks() {
 #[test]
 fn skipped_final_completes_requests_and_refreshes_backstops() {
     let mut rig = hidden_rig();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     let before = Instant::now();
     defer_name(&mut rig, "deferred");
     assert!(rig.state.pane.fetched_at >= before);
     assert!(rig.state.pane.last_self_close_check >= before);
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
     assert!(
-        rig.next_request().is_some(),
-        "deferred final releases single-flight"
+        rig.next_request().unwrap().is_fresh_panes(),
+        "deferred final clears the latch"
     );
     assert!(rig.state.frame_timing().1 > FRAME_MIN_TIMEOUT);
     rig.event(SidebarEvent::FocusChanged {
