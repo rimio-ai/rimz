@@ -3,6 +3,7 @@
 //! Domain removal policy stays in `rimz::worktree::ProtectionSet`; this module
 //! preserves each CLI caller's fact-gathering and failure semantics.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -69,12 +70,34 @@ pub(super) fn for_listing(
     protection
 }
 
-/// Best-effort facts for a user-requested removal.
+/// Best-effort facts for a user-requested removal, from the room of each repository root.
 ///
 /// Stale records do not block an explicit decision, and the command's own pane
 /// is excluded so invoking removal from inside a checkout can proceed.
-pub(super) fn for_explicit_removal(repo_root: &Path, globals: &GlobalFlags) -> RuntimeProtection {
-    best_effort(repo_root, globals, rimz::worktree::Occupancy::ProvenLive)
+pub(super) fn for_explicit_removal(
+    repo_roots: &[&Path],
+    globals: &GlobalFlags,
+) -> RuntimeProtection {
+    let mut workspace_ids = HashSet::new();
+    let workspaces = repo_roots
+        .iter()
+        .filter_map(
+            |repo_root| match WorkspaceResolver::resolve(repo_root, globals.root.clone()) {
+                Ok(workspace) => workspace_ids
+                    .insert(workspace.workspace_id.clone())
+                    .then_some(workspace),
+                Err(err) => {
+                    tracing::debug!(
+                        path = %repo_root.display(),
+                        error = %err,
+                        "could not resolve workspace while gathering worktree protection facts",
+                    );
+                    None
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    best_effort_workspaces(&workspaces, globals, rimz::worktree::Occupancy::ProvenLive)
 }
 
 /// Best-effort occupancy, required loop-task facts, and the cleanup path's team board.
@@ -85,8 +108,11 @@ pub(super) fn for_wrapper_cleanup(
     path: &Path,
     globals: &GlobalFlags,
 ) -> Result<RuntimeProtection> {
-    let mut protection =
-        best_effort_workspace(workspace, globals, rimz::worktree::Occupancy::Unproven);
+    let mut protection = best_effort_workspaces(
+        std::slice::from_ref(workspace),
+        globals,
+        rimz::worktree::Occupancy::Unproven,
+    );
     add_loop_tasks(&mut protection)?;
     add_team_board(&mut protection, path);
     Ok(protection)
@@ -112,42 +138,26 @@ pub(super) fn for_automatic_gc(
     Ok(protection)
 }
 
-fn best_effort(
-    repo_root: &Path,
+fn best_effort_workspaces(
+    workspaces: &[ResolvedWorkspace],
     globals: &GlobalFlags,
     occupancy: rimz::worktree::Occupancy,
 ) -> RuntimeProtection {
-    let workspace = match WorkspaceResolver::resolve(repo_root, globals.root.clone()) {
-        Ok(workspace) => Some(workspace),
-        Err(err) => {
-            tracing::debug!(
-                path = %repo_root.display(),
-                error = %err,
-                "could not resolve workspace while gathering worktree protection facts",
-            );
-            None
-        }
-    };
-    let Some(workspace) = workspace.as_ref() else {
-        return RuntimeProtection {
-            protections: rimz::worktree::ProtectionSet::default(),
-        };
-    };
-    best_effort_workspace(workspace, globals, occupancy)
-}
-
-fn best_effort_workspace(
-    workspace: &ResolvedWorkspace,
-    globals: &GlobalFlags,
-    occupancy: rimz::worktree::Occupancy,
-) -> RuntimeProtection {
-    let (mux, panes) = list_panes(Some(workspace), globals);
-    let own_pane = mux.and_then(rimz::mux::own_pane_id);
-    let agents = open_existing_store(workspace)
-        .ok()
-        .flatten()
-        .and_then(|store| alive_agents(workspace, &store).ok())
-        .unwrap_or_default();
+    let mut panes = Vec::new();
+    let mut agents = Vec::new();
+    let mut own_pane = None;
+    for workspace in workspaces {
+        let (mux, room_panes) = list_panes(Some(workspace), globals);
+        own_pane = own_pane.or_else(|| mux.and_then(rimz::mux::own_pane_id));
+        panes.extend(room_panes);
+        agents.extend(
+            open_existing_store(workspace)
+                .ok()
+                .flatten()
+                .and_then(|store| alive_agents(workspace, &store).ok())
+                .unwrap_or_default(),
+        );
+    }
     assemble(&panes, agents, own_pane.as_ref(), occupancy)
 }
 

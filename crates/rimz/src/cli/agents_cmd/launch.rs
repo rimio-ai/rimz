@@ -650,6 +650,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
             match reconcile::reconcile_cohort_launch(
                 workspace,
                 &machine_config,
+                globals,
                 backend,
                 store,
                 &name,
@@ -716,7 +717,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                     )
                     .map(|()| None);
                 }
-                reconcile::Reconciled::Continue => {}
+                reconcile::Reconciled::Absent | reconcile::Reconciled::Continue => {}
                 reconcile::Reconciled::Removed => checkout = None,
             }
         }
