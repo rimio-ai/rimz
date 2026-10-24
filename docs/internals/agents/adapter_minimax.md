@@ -37,7 +37,7 @@ Upstream's `~/.minimax-<profile>` directories are outside the verified launch su
 
 The manifest keeps to the pinned source's strict field set. mcode discovers the package as `rimz@local`, enabled by default, so install has no enable step.
 
-Ownership is structural (`install.rs::check_package`), with no marker field. Every operation first refuses a package directory, `hooks/`, or `.minimax-plugin/` that is a symlink or a file. With a manifest present, the package is RimZ's only when the manifest names `rimz` with author `RimZ`. Without one, the directory is RimZ's only when it holds nothing beyond the three file paths and their two directories, which lets an interrupted install resume. A foreign package refuses install, preview, and uninstall with an instruction to move it aside.
+Ownership is structural (`crates/rimz/src/agents/adapters/minimax/install.rs::check_package`), with no marker field. Every operation first refuses a package directory, `hooks/`, or `.minimax-plugin/` that is a symlink or a file. With a manifest present, the package is RimZ's only when the manifest names `rimz` with author `RimZ`. Without one, the directory is RimZ's only when it holds nothing beyond the three file paths and their two directories, which lets an interrupted install resume. A foreign package refuses install, preview, and uninstall with an instruction to move it aside.
 
 | Operation | Behaviour |
 | --- | --- |
@@ -82,7 +82,7 @@ The declared process names are `minimax-code` and the shared runtime name `node`
 | `PostCompact` | `CompactionEnded` | `trigger` sets the automatic flag. |
 | `SessionEnd` | `Ended` | Resume and clear end the old session before the new SessionStart. |
 
-SessionStart can repeat inside one session, and that repeat is not harmless. Upstream reports a plugin activation as source `startup`, so an activation mid-turn re-registers the card, and `lifecycle.rs::map_status` resets it to idle, dropping a compaction or permission wait until the next signal. Whether a package rewrite's hot reload reactivates the plugin is unverified.
+SessionStart can repeat inside one session, and that repeat is not harmless. Upstream reports a plugin activation as source `startup`, so an activation mid-turn re-registers the card, and `crates/rimz/src/agents/lifecycle.rs::map_status` resets it to idle, dropping a compaction or permission wait until the next signal. Whether a package rewrite's hot reload reactivates the plugin is unverified.
 
 A permission wait clears at the next tool or settle signal. Native questions and plan approvals have no verified hook, so they never mark the card waiting. Automatic compaction sends PostCompact, then SessionStart with source `compact`, and the lifecycle fold absorbs the duplicate end.
 
@@ -104,7 +104,7 @@ Forking and importing an unrecorded session are unsupported. No effort, fast-mod
 
 The `--` separator lets a prompt start with a dash: logged-out 0.6.12 reached the TUI with `mcode -- -probe`, while `mcode -probe` failed. It does not stop Commander's subcommand dispatch, so `mcode -- exec` still runs headless. A prompt equal to one of the subcommand words above has no verified positional form. Authenticated submission, other prompt forms, and native resume eligibility are unverified.
 
-Launch reminders go through `--append-system-prompt` (`SystemTextChannel::TextFlag`). mcode gives the inline flag and `--append-system-prompt-file` one slot, so when raw args already hold the file form, `harness/launch.rs::merge_appended_system_text` reads the file, appends the reminder text, and emits a single inline argument. A profile's `system-prompt-file` maps to `--append-system-prompt-file`: on MiniMax it adds to the native system prompt, where most adapters replace it. The replacing `--system-prompt` and `--system-prompt-file` flags are recognised in raw args and pass through.
+Launch reminders go through `--append-system-prompt` (`SystemTextChannel::TextFlag`). mcode gives the inline flag and `--append-system-prompt-file` one slot, so when raw args already hold the file form, `crates/rimz/src/harness/launch.rs::merge_appended_system_text` reads the file, appends the reminder text, and emits a single inline argument. A profile's `system-prompt-file` maps to `--append-system-prompt-file`: on MiniMax it adds to the native system prompt, where most adapters replace it. The replacing `--system-prompt` and `--system-prompt-file` flags are recognised in raw args and pass through.
 
 Every permission mode's argument vector is empty. The TUI has no `--permission` or `--config` switch, and RimZ does not edit the global `config.yaml` to impose a per-launch mode. The user picks the mode with `permissionMode` in `<dataDir>/config.yaml` (default `auto`), `/permission`, or Alt+M. Plan Mode is separate and has no verified launch flag.
 

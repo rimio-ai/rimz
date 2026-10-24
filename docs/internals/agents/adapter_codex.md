@@ -216,9 +216,9 @@ An Undecided message names both fixes: `rimz trust grant --agents codex`, or ans
 
 | Launcher | Undecided | Restricted | Check |
 | --- | --- | --- | --- |
-| human `rimz agents` command | warns | warns | `cli/folder_trust.rs::preflight` |
-| team command, resident loop | warns | refuses | `cli/folder_trust.rs::preflight` |
-| fresh agent-started launch | refuses, asking the user to grant or name a trusted directory to relaunch in | refuses, asking the user to trust the folder in Codex or relaunch from a trusted directory, since no pane opens | `cli/folder_trust.rs::preflight` |
+| human `rimz agents` command | warns | warns | `crates/rimz/src/cli/folder_trust.rs::preflight` |
+| team command, resident loop | warns | refuses | `crates/rimz/src/cli/folder_trust.rs::preflight` |
+| fresh agent-started launch | refuses, asking the user to grant or name a trusted directory to relaunch in | refuses, asking the user to trust the folder in Codex or relaunch from a trusted directory, since no pane opens | `crates/rimz/src/cli/folder_trust.rs::preflight` |
 | supervised `rimz agents -p` launch, subagent resume | refuses | refuses | `agents::preflight_launch_dir`, `LaunchDirMode::Supervised` |
 | headless loop or workflow judge | refuses | passes, because `codex exec` has no folder screen | `agents::preflight_launch_dir`, `LaunchDirMode::Headless` |
 
@@ -343,7 +343,7 @@ The client accepts the broker only when it proves it serves the login. Every suc
 
 The daemon socket is the login's own, under its Codex home, and the cold spawn runs under the login's env, so neither needs the confirmation. `RIMZ_CODEX_APP_SERVER_SOCK` is an explicit user override naming a socket tied to no login, which the account-link gate ignores and this ladder honors.
 
-`RIMZ_CODEX_BIN` names the codex binary for every codex process RimZ starts on its own behalf: the broker's app-server, the cold spawn, and the `codex login status` probe (`app_server/transport.rs::codex_bin`). Set and non-empty, it is the binary, with no fallback to `codex`. Unset or empty, the binary is the first `codex` on `PATH`. Codex counts as installed only when that name resolves to an executable (`installed_codex_bin`), and without it the room opens no broker pane, at birth or at repair. Agent launch, hook install, setup, and doctor do not read the variable: they find the `codex` a user launches through `PATH`.
+`RIMZ_CODEX_BIN` names the codex binary for every codex process RimZ starts on its own behalf: the broker's app-server, the cold spawn, and the `codex login status` probe (`crates/rimz/src/agents/adapters/codex/app_server/transport.rs::codex_bin`). Set and non-empty, it is the binary, with no fallback to `codex`. Unset or empty, the binary is the first `codex` on `PATH`. Codex counts as installed only when that name resolves to an executable (`installed_codex_bin`), and without it the room opens no broker pane, at birth or at repair. Agent launch, hook install, setup, and doctor do not read the variable: they find the `codex` a user launches through `PATH`.
 
 ### Resting-turn markers
 
@@ -418,7 +418,7 @@ Codex has two account sources, and both normalize through [`account.rs`](../../.
 | Direct OAuth usage endpoint ([`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs)) | plan (`plan_type`), windows, credits, reset credits | on each account usage refresh, after the realtime read for the room-default login and alone for other logins, for a file-backed token, unless `RIMZ_OAUTH_USAGE_OFFLINE` is on |
 | Account probe | login state and metering | out of band ([providers.md](./providers.md#the-out-of-band-probe)) |
 
-The `rimz agents refresh-usage` helper runs for a metered Codex login whether or not a session is live, at the cadences in [refresh cadences](./providers.md#refresh-cadences) (every 5 minutes, `OAUTH_USAGE_TTL`, for a login in use). It claims the read in `credits.json`, publishes the realtime read when it made one, then runs the direct probe with the `tokens.account_id` it read (`sidebar/refresh/usage.rs::refresh_claimed_account_usage_with`). An account id change drops the cached windows and refetches. A present realtime plan wins, and an absent one keeps the cached OAuth plan for idle and keyring-backed display.
+The `rimz agents refresh-usage` helper runs for a metered Codex login whether or not a session is live, at the cadences in [refresh cadences](./providers.md#refresh-cadences) (every 5 minutes, `OAUTH_USAGE_TTL`, for a login in use). It claims the read in `credits.json`, publishes the realtime read when it made one, then runs the direct probe with the `tokens.account_id` it read (`crates/rimz/src/sidebar/refresh/usage.rs::refresh_claimed_account_usage_with`). An account id change drops the cached windows and refetches. A present realtime plan wins, and an absent one keeps the cached OAuth plan for idle and keyring-backed display.
 
 The spec's plan-label table maps raw `prolite`, `pro`, and `promax` to `ChatGPT Pro 100`, `ChatGPT Pro 200`, and `ChatGPT Pro 500`, matching [Codex 0.163.0's subscription labels](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/subscription.rs#L10-L37). Other values keep the `ChatGPT` prefix with a title-case fallback. The mapping is display only, and the raw plan strings stay unchanged.
 
