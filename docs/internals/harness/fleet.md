@@ -212,9 +212,12 @@ The login health check is one such rule, and it also covers the relaunch paths t
 - `crates/rimz/src/cli/agents_cmd/launch.rs::preflight_cell` (fresh launch and cohort resume, per cell)
 - `crates/rimz/src/cli/agents_cmd/restart.rs::restart_resolved` (restart, and `rimz teams restart` per member)
 - `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane` (per planned kind, on the room's login for it)
-- `crates/rimz/src/cli/agents_cmd/resume.rs::resume_agent` (single-agent resume)
+- `crates/rimz/src/cli/agents_cmd/resume.rs::resume_selected` (single-session resume, from both `resume_agent` and `resume_provider`)
 - `crates/rimz/src/cli/agents_cmd/fork.rs::run_fork`
+- `crates/rimz/src/cli/agents_cmd/molt.rs::run_molt` (the successor, always judged agent-started)
 - `crates/rimz/src/cli/subagents/resume.rs::resume_resolved`
+
+Rebirth runs the same check once per planned kind in `crates/rimz/src/harness/rebirth.rs::plan_recovery`, without `preflight_hooks`: a failing kind's sessions are skipped as `account unavailable`, with the login error as the reason. Untrusted hooks the user can trust get a reason naming the trust command to run from their own shell.
 
 A supervised run keeps its own stricter gate, `crates/rimz/src/cli/supervised.rs::preflight_agent`. `rimz agents explain` runs none of this, so it still renders a plan for an agent whose hooks are gone. Room birth and account switching call `ProviderLogin::preflight`, which skips `default`. A process plugin declares no config home, so `health` passes it.
 
