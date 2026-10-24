@@ -530,6 +530,24 @@ fn prepare_supervised(
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);
     }
+    if !harness_owned
+        && request.from_pr.is_none()
+        && let Some(name) = request.worktree.as_deref().filter(|name| !name.is_empty())
+    {
+        let name = rimz::worktree::parse_requested_name(name)?.name;
+        crate::cli::worktree_entry::check(
+            &workspace,
+            &machine_config,
+            globals,
+            &store,
+            &name,
+            &request.spec,
+            team_name.as_deref(),
+            None,
+            request.fresh,
+            presentation.worktree_fresh_command.as_deref(),
+        )?;
+    }
     let Some(mut launch) = crate::cli::resolve_launch_checkout(
         &workspace,
         &machine_config,

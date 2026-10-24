@@ -327,7 +327,7 @@ The caller supplies the named worktree path without creating it, or the PR branc
 
 | History in that worktree | Outcome |
 | --- | --- |
-| none | continue into the ordinary launch path |
+| none | check entry into an existing unoccupied managed tree, then continue with a fresh launch |
 | live members | with a prompt, dispatch to the live leader at the Done boundary and print the shared message receipt; without one, focus the newest bound member. `LaunchFocus::Keep` suppresses either focus jump. A missing leader refuses without sending |
 | closed, with dirty or unproven work | offer resume / fresh / cancel, default resume |
 | closed, clean and content-landed | offer remove / fresh / cancel, default cancel |
@@ -338,11 +338,13 @@ The shared CLI module [`worktree_entry.rs`](../../../crates/rimz/src/cli/worktre
 
 Both offers read one line through `cli::choose`, which takes the default on Enter and returns `None` for an ambiguous prefix, an unknown word, or EOF. The caller maps `None` and an explicit `cancel` to an error with `canceled; nothing launched` and exit 1. Without a terminal on stdin neither offer prompts, and both refuse with exit 1, including the facts. The shared `relaunch_commands` builds shell-quoted, prompt-preserving resume and `--fresh` spellings for teams (`team#lane`) and inline layouts, and the remove offer also prints `rimz worktree remove <name>`.
 
-Named-team reconciliation considers every member of that team in the target worktree, including sibling roles when a single-role spec relaunches. Inline membership matches by launch group, then ordinal, then kind and role, with a final kind-only fallback for records that carry no role. Ended and confirmed-dead members both count as closed. A worktree holding only non-live launch placeholders has no cohort, by the same admission rule resume uses, and proceeds to a fresh launch.
+Named-team reconciliation considers every member of that team in the target worktree, including sibling roles when a single-role spec relaunches. Inline membership matches by launch group, then ordinal, then kind and role, with a final kind-only fallback for records that carry no role. Ended and confirmed-dead members both count as closed. A worktree holding only non-live launch placeholders has no cohort, by the same admission rule resume uses, and returns `Reconciled::Absent` for the entry check.
+
+`crates/rimz/src/cli/worktree_entry.rs::check` is shared by `launch_resolved` and supervised `prepare_supervised`, after cross-repository consent and before checkout resolution. It checks only explicit nonempty names, and returns without an offer for missing, unmanaged, or occupied trees. Occupancy comes from `schedule::takeover::read` over `cli::alive_snapshot`, not the Audit projection used for history. Single-agent launches reach it directly; cohorts reach it only after `Absent`, so Closed never prompts twice. Loop tasks, `--from-pr`, `--continue`, and `--resume` are exempt. The [reference entry table](../../reference/cli/agents.md#relaunch-into-a-named-worktree) owns the choices and exits, including exit `2` for supervised entry refusals.
 
 The fresh outcome is `Reconciled::Continue`. Launch then resolves the checkout with `reuse_existing`: no worktree or branch is removed or recreated. The remove answer gathers `worktree_protection::for_explicit_removal` after the prompt, from this room and, on a cross-repository launch, the room of the repository that owns the tree, and calls non-force `worktree::remove`; a live agent or plain pane can refuse removal even when the cohort is closed. `retire_removal` (session retirement plus channel message archival) fires only after successful removal. Prior rows stay unchanged with their names reserved on fresh launches, and the fresh members mint new petnames in the same channel. Orphan message archival stays with `rimz gc`.
 
-`--fresh` on `CohortLaunchArgs` takes the fresh outcome without prompting. The `Closed` arm returns `Continue` before the Git assessment, so it works on a dirty tree and a clean landed one alike, and leaves a clean landed tree standing. `Present` is checked first, so `--fresh` cannot duplicate a live cohort. `launch_layout` requires an explicit worktree name before it opens the store. The check lives there because the fused `team#lane` spelling fills `worktree` only after clap parsing, so a clap `requires` would reject it.
+`--fresh` on `CohortLaunchArgs` takes the fresh outcome without prompting. The `Closed` arm returns `Continue` before the Git assessment, so it works on a dirty tree and a clean landed one alike, and leaves a clean landed tree standing. `Present` is checked first, so `--fresh` cannot duplicate a live cohort. `CohortLaunchArgs::validate_fresh_worktree` requires an explicit name in both `launch_layout` and `into_supervised_request`. Validation follows the fused `team#lane` expansion, which fills `worktree` after clap parsing, so a clap `requires` would reject it.
 
 ## The address
 
@@ -384,7 +386,7 @@ An address resolves against a fresh snapshot to zero, one, or many agents.
 
 Fan-out delivers to every match, prefixes each delivery with the addressed handle (`@all,`, `@claude,`), and skips a blocked agent while the rest send. Resolution itself is caller-agnostic; message dispatch then removes a RimZ-launched caller from an intrinsic `@all`, so an agent never messages itself.
 
-`--create` launches a missing agent straight from its address. `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design` with the text as its first prompt. With `--worktree feat/x` it creates or reuses that worktree instead.
+`--create` launches a missing agent straight from its address. `rimz message --steer @planner#design --create "draft the API"` opens a `planner` in `#design` with the text as its first prompt. With `--worktree feat/x` it selects that worktree instead, including the [named-worktree entry check](../../reference/cli/agents.md#relaunch-into-a-named-worktree); its refusal prints an agents fresh command carrying the message text.
 
 Resolution has two sources and one matcher set over both: rollup sessions (`&AgentState`, used by management commands and parked message records) and the live agent panes the producer bound (`&PaneAgent`, used by `--steer` and send-now messages). Each command chooses its source. Pane binding then joins a match to exact lifecycle state, a same-channel provisional launch card, or a sessionless lazy target, so an agent is addressable before its first turn registers.
 

@@ -655,7 +655,7 @@ Explicit lanes and RimZ-owned worktrees share one namespace, and `channel.rs` ow
 
 Commands run inside a stamped pane inherit `RIMZ_CHANNEL`, so `@claude` resolves within that lane. Without that stamp, an agent uses its stored card channel, even from the main checkout. Bare `message clear` therefore clears that channel's messages. A human shell in a bare directory room has no lane and reaches the whole room; `message list` treats that as the main-lane inbox, and `--all` widens it. See [channel resolution](fleet.md#the-address) for the shared precedence.
 
-`--worktree` and `--channel` are separate launch intents. A worktree launch creates or reuses a Git checkout; a named-channel launch stays in the room root and records only the lane. Inline `#design` and `--channel design` reconcile through the same target parser, so a mismatch fails before delivery.
+`--worktree` and `--channel` are separate launch intents. A worktree launch creates or reuses a Git checkout, subject to the [named-worktree entry check](../../reference/cli/agents.md#relaunch-into-a-named-worktree); this includes `message --create`. A named-channel launch stays in the room root and records only the lane. Inline `#design` and `--channel design` reconcile through the same target parser, so a mismatch fails before delivery.
 
 ## Hazards
 

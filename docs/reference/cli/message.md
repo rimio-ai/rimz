@@ -129,6 +129,8 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
 | `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` launches into that lane, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
 
+When `--create --worktree NAME` finds an existing unoccupied RimZ-owned tree, it uses the [worktree entry check](./agents.md#relaunch-into-a-named-worktree). Without a terminal it refuses with the facts and a `rimz agents <spec> -w NAME --fresh` command carrying the message text; use that command to enter without asking.
+
 ## Delivery options
 
 | Flag | Effect |

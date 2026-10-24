@@ -2347,6 +2347,352 @@ fn agents_existing_unmanaged_worktree_requires_consent_and_preserves_checkout() 
 }
 
 #[test]
+fn existing_managed_dirty_worktree_enter_launches_fresh() {
+    require_tmux!();
+    if !git_missing() {
+        managed_worktree_prompt(true, "\n", true, false, false);
+    }
+}
+
+#[test]
+fn existing_managed_clean_worktree_enter_cancels() {
+    require_tmux!();
+    if !git_missing() {
+        managed_worktree_prompt(false, "\n", false, false, false);
+    }
+}
+
+#[test]
+fn existing_managed_clean_worktree_remove_recreates() {
+    require_tmux!();
+    if !git_missing() {
+        managed_worktree_prompt(false, "remove\n", true, true, false);
+    }
+}
+
+#[test]
+fn existing_managed_clean_worktree_remove_refuses_a_pane_holder() {
+    require_tmux!();
+    if !git_missing() {
+        managed_worktree_prompt(false, "remove\n", false, false, true);
+    }
+}
+
+#[test]
+fn existing_managed_cross_repo_worktree_remove_refuses_owning_room_holder() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let current_root = env.home_root.join("current");
+    std::fs::create_dir_all(&current_root).unwrap();
+    for root in [&env.project_root, &current_root] {
+        init_repo(root);
+        env.record(root);
+    }
+    env.install_agent_hooks("claude");
+    env.rimz()
+        .current_dir(&current_root)
+        .args(["worktree", "new", "demo"])
+        .assert_success_within_timeout("create cross-repo tree");
+    let tree = env.home_root.join("current-worktrees/demo");
+    crate::common::trust_claude_project(&env, &tree);
+    let created_at = rimz::worktree::read_marker_for_worktree(&tree)
+        .unwrap()
+        .unwrap()
+        .created_at;
+    let room = env.resolve_workspace(&env.project_root);
+    let owning_room = env.resolve_workspace(&current_root);
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let mut command = env.rimz();
+    command
+        .current_dir(&current_root)
+        .args(["--mux", "tmux", "agents", "claude", "-w", "demo"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+        );
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    for workspace in [&room, &owning_room] {
+        let mut options = session_opts(
+            &workspace.session_name,
+            workspace.workspace_id.clone(),
+            &workspace.project_root,
+            &workspace.worktree_root,
+            Some((160, 40)),
+        );
+        options
+            .extra_env
+            .extend(command.get_envs().filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            }));
+        server.backend.ensure_session(&options).unwrap();
+    }
+    server.tmux(&[
+        "new-window",
+        "-d",
+        "-t",
+        &owning_room.session_name,
+        "-n",
+        "holder",
+        "-c",
+        tree.to_str().unwrap(),
+        "sleep 60",
+    ]);
+    command
+        .env(
+            rimz::workspace::ENV_WORKSPACE_ID,
+            room.workspace_id.as_str(),
+        )
+        .env(rimz::workspace::ENV_PROJECT_ROOT, &room.project_root);
+    let (status, output) = worktree_prompt_output(&env, &command, "y\nremove\n");
+    let marker = rimz::worktree::read_marker_for_worktree(&tree).unwrap();
+    assert!(
+        status == Some(false)
+            && output.contains("(remove/fresh/cancel) [cancel]")
+            && output.contains("worktree `demo` is in use by")
+            && output.contains("nothing removed; nothing launched")
+            && marker.as_ref().map(|marker| marker.created_at) == Some(created_at),
+        "status: {status:?}, original created_at: {created_at}, \
+         marker: {marker:?}, output: {output}"
+    );
+}
+
+#[test]
+fn supervised_fresh_enters_existing_worktree() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert_success_within_timeout("create tree");
+    let tree = env.home_root.join("project-worktrees/demo");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    std::fs::write(tree.join("unfinished.txt"), "keep this\n").unwrap();
+    let marker = rimz::worktree::read_marker_for_worktree(&tree)
+        .unwrap()
+        .unwrap();
+    let created_at = marker.created_at;
+    let workspace = env.resolve_workspace(&env.project_root);
+    let bin = write_failing_agent_shim(&env, "claude", 7);
+    let mut command = env.rimz();
+    command
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "claude",
+            "ship",
+            "-p",
+            "-w",
+            "demo",
+            "--fresh",
+            "--output-format",
+            "json",
+            "--timeout",
+            "5s",
+        ])
+        .env("PATH", path_with_front(&bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+        );
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let mut options = session_opts(
+        &workspace.session_name,
+        workspace.workspace_id.clone(),
+        &workspace.project_root,
+        &workspace.worktree_root,
+        Some((160, 40)),
+    );
+    options
+        .extra_env
+        .extend(command.get_envs().filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        }));
+    server.backend.ensure_session(&options).unwrap();
+    let output = command
+        .stdin(std::process::Stdio::null())
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let record = serde_json::from_slice::<rimz::store::run::RunRecord>(&output.stdout).ok();
+    assert!(
+        record.is_some_and(
+            |record| Path::new(&record.worktree_path).canonicalize().unwrap()
+                == tree.canonicalize().unwrap()
+        ) && stderr.contains("launching `claude` fresh in worktree `demo`"),
+        "{output:?}"
+    );
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&tree)
+            .unwrap()
+            .unwrap()
+            .created_at,
+        created_at
+    );
+}
+
+fn managed_worktree_prompt(dirty: bool, answer: &str, success: bool, recreated: bool, held: bool) {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert_success_within_timeout("create tree");
+    let tree = env.home_root.join("project-worktrees/demo");
+    crate::common::trust_claude_project(&env, &tree);
+    if dirty {
+        std::fs::write(tree.join("unfinished.txt"), "keep this\n").unwrap();
+    }
+    let created_at = rimz::worktree::read_marker_for_worktree(&tree)
+        .unwrap()
+        .unwrap()
+        .created_at;
+    let workspace = env.resolve_workspace(&env.project_root);
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "tmux", "agents", "claude", "-w", "demo"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+        );
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let mut options = session_opts(
+        &workspace.session_name,
+        workspace.workspace_id.clone(),
+        &workspace.project_root,
+        &workspace.worktree_root,
+        Some((160, 40)),
+    );
+    options
+        .extra_env
+        .extend(command.get_envs().filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        }));
+    server.backend.ensure_session(&options).unwrap();
+    if held {
+        server.tmux(&[
+            "new-window",
+            "-d",
+            "-t",
+            &workspace.session_name,
+            "-n",
+            "holder",
+            "-c",
+            tree.to_str().unwrap(),
+            "sleep 60",
+        ]);
+    }
+    let (status, output) = worktree_prompt_output(&env, &command, answer);
+    let marker = rimz::worktree::read_marker_for_worktree(&tree)
+        .unwrap()
+        .unwrap();
+    let rows = env.store().snapshot_cached().unwrap().agents;
+    assert!(
+        status == Some(success)
+            && output.contains(if dirty {
+                "(fresh/cancel) [fresh]"
+            } else {
+                "(remove/fresh/cancel) [cancel]"
+            })
+            && output.contains(if held {
+                "nothing removed"
+            } else if recreated {
+                "removed worktree `demo`; recreating `claude`"
+            } else if success {
+                "launching `claude`"
+            } else {
+                "canceled; nothing launched"
+            })
+            && (marker.created_at != created_at) == recreated
+            && rows.is_empty() != success,
+        "status: {status:?}, marker: {marker:?}, rows: {rows:?}, output: {output}"
+    );
+    if dirty {
+        assert_eq!(
+            std::fs::read_to_string(tree.join("unfinished.txt")).unwrap(),
+            "keep this\n"
+        );
+    }
+}
+
+fn worktree_prompt_output(env: &Env, command: &Command, answer: &str) -> (Option<bool>, String) {
+    use std::io::{Read, Write};
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 160,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(command.get_args());
+    cmd.cwd(command.get_current_dir().unwrap());
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        }
+    }
+    let mut child = pair.slave.spawn_command(cmd).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+    let mut writer = pair.master.take_writer().unwrap();
+    writer.write_all(answer.as_bytes()).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status.success());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    drop(pair.master);
+    let output = String::from_utf8_lossy(&output.join().unwrap()).into_owned();
+    (status, output)
+}
+
+#[test]
 fn teams_existing_unmanaged_worktree_requires_consent_and_preserves_checkout() {
     require_tmux!();
     if git_missing() {

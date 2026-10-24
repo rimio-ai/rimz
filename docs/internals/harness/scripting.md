@@ -200,6 +200,8 @@ A run launches through the same layout resolution and finalization as an interac
 - The layout must resolve to exactly one agent cell and no other cells.
 - `--fresh` accepts a named worktree (`-w NAME`); `--json` is refused, and JSON output is `--output-format json`.
 
+Named-worktree entry uses the [shared launch check](../../reference/cli/agents.md#relaunch-into-a-named-worktree) before checkout resolution. An unattended existing-tree refusal exits `2` without a run record. Its fresh command keeps `-p`, the positional prompt, and the stdin mode, but never includes stdin content. Harness-owned loop and workflow runs skip this check.
+
 The per-kind argv mappings live in the adapter pages indexed under [the agent layer](../README.md#the-agent-layer).
 
 ## Background runs and joining

@@ -645,6 +645,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 }
             }
         }
+        let mut check_entry = cohort_target.is_none();
         if let Some((name, path)) = cohort_target {
             let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
             match reconcile::reconcile_cohort_launch(
@@ -717,9 +718,30 @@ pub(in crate::cli) fn launch_resolved<'a>(
                     )
                     .map(|()| None);
                 }
-                reconcile::Reconciled::Absent | reconcile::Reconciled::Continue => {}
+                reconcile::Reconciled::Absent => check_entry = true,
+                reconcile::Reconciled::Continue => {}
                 reconcile::Reconciled::Removed => checkout = None,
             }
+        }
+
+        if check_entry
+            && loop_task.is_none()
+            && args.launch.cohort.from_pr.is_none()
+            && args.launch.resume.is_none()
+            && let Some(name) = explicit_worktree_name.as_deref()
+        {
+            crate::cli::worktree_entry::check(
+                workspace,
+                &machine_config,
+                globals,
+                store,
+                name,
+                args.launch.spec.as_deref().unwrap_or("<spec>"),
+                team_name.as_deref(),
+                prompt,
+                args.launch.cohort.fresh,
+                None,
+            )?;
         }
 
         let launch = match checkout {

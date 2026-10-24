@@ -812,7 +812,11 @@ fn different_team_board_hold_refuses_launch() {
 
 #[test]
 fn different_team_done_board_allows_launch() {
-    assert_launch_focus(&["teams", "solo", "-w", "review"], true, "hold-done");
+    assert_launch_focus(
+        &["teams", "solo", "-w", "review", "--fresh"],
+        true,
+        "hold-done",
+    );
 }
 
 #[test]
@@ -5297,7 +5301,7 @@ fn worktree_launch_checks_the_dashed_lane_name() {
 #[test]
 fn worktree_launch_reuses_an_existing_tree_despite_a_live_lane() {
     assert_worktree_launch_lane_admission(
-        &["agents", "claude", "-p", "hi", "-w", "demo"],
+        &["agents", "claude", "-p", "hi", "-w", "demo", "--fresh"],
         "demo",
         true,
     );
@@ -5431,6 +5435,11 @@ fn team_worktree_launch_env() -> Env {
 fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
     let shim = write_env_dump_shim(env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
+    );
     env.rimz().args(["--mux", "zellij"]).args(args)
         .env("SHELL", write_fake_login_shell(env, "rimz-test-sh", &[]))
         .env("ZELLIJ_PANE_ID", "1")
@@ -5447,6 +5456,205 @@ fn launch_team_worktree(env: &Env, args: &[&str]) -> std::process::Output {
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_worktree_entry_refusals_leave_checkout_and_roster_untouched() {
+    let cases = [
+        (
+            vec!["agents", "claude", "-w", "demo"],
+            1,
+            "rimz agents claude -w demo --fresh",
+            false,
+        ),
+        (
+            vec!["agents", "claude", "-w", "demo"],
+            1,
+            "rimz agents claude -w demo --fresh",
+            true,
+        ),
+        (
+            vec![
+                "agents",
+                "claude",
+                "-p",
+                "ship",
+                "-w",
+                "demo",
+                "--timeout",
+                "1s",
+            ],
+            2,
+            "rimz agents claude -p -w demo --fresh ship",
+            false,
+        ),
+        (
+            vec!["teams", "solo#demo"],
+            1,
+            "rimz teams 'solo#demo' --fresh",
+            false,
+        ),
+        (
+            vec![
+                "message",
+                "@claude",
+                "ship",
+                "--create",
+                "--worktree",
+                "demo",
+            ],
+            1,
+            "rimz agents claude -w demo --fresh ship",
+            false,
+        ),
+    ];
+    let observed = cases.map(|(args, exit, command, dirty)| {
+        let env = team_worktree_launch_env();
+        env.rimz()
+            .args(["worktree", "new", "demo"])
+            .assert()
+            .success();
+        let tree = env.home_root.join("project-worktrees/demo");
+        crate::common::trust_claude_project(&env, &tree);
+        if dirty {
+            std::fs::write(tree.join("unfinished.txt"), "keep this\n").unwrap();
+        }
+        let before = rimz::worktree::read_marker_for_worktree(&tree)
+            .unwrap()
+            .unwrap();
+        let output = launch_team_worktree(&env, &args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let after = rimz::worktree::read_marker_for_worktree(&tree).unwrap();
+        let correct = output.status.code() == Some(exit)
+            && stderr.contains(command)
+            && stderr.contains("worktree `demo`")
+            && stderr.contains("created ")
+            && stderr.contains("last agent activity: none recorded")
+            && stderr.contains(&format!("{} uncommitted file(s)", u8::from(dirty)))
+            && stderr.contains("landed on main")
+            && stderr.contains("rimz worktree remove demo") != dirty
+            && env.store().snapshot_cached().unwrap().agents.is_empty()
+            && after.is_some_and(|after| after.created_at == before.created_at)
+            && (!dirty
+                || std::fs::read_to_string(tree.join("unfinished.txt")).unwrap() == "keep this\n");
+        (correct, stderr.into_owned())
+    });
+    assert!(
+        observed.iter().all(|(correct, _)| *correct),
+        "{observed:#?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_fresh_enters_existing_worktree_without_reseeding() {
+    let env = team_worktree_launch_env();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let tree = env.home_root.join("project-worktrees/demo");
+    crate::common::trust_claude_project(&env, &tree);
+    std::fs::write(tree.join("unfinished.txt"), "keep this\n").unwrap();
+    let before = rimz::worktree::read_marker_for_worktree(&tree)
+        .unwrap()
+        .unwrap();
+    let output = launch_team_worktree(&env, &["agents", "claude", "-w", "demo", "--fresh"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("launching `claude` fresh in worktree `demo`"),
+        "{stderr}"
+    );
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&tree)
+            .unwrap()
+            .unwrap()
+            .created_at,
+        before.created_at
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.join("unfinished.txt")).unwrap(),
+        "keep this\n"
+    );
+    assert!(!env.store().snapshot_cached().unwrap().agents.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_occupied_worktree_still_launches_without_an_entry_prompt() {
+    let env = team_worktree_launch_env();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let tree = env.home_root.join("project-worktrees/demo");
+    std::fs::create_dir(tree.join("src")).unwrap();
+    crate::common::trust_claude_project(&env, &tree);
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "test",
+            &AgentLifecycleObservation {
+                pane_id: Some(rimz::ids::PaneId::from_parts(
+                    rimz::ids::MuxName::Zellij,
+                    "terminal_3",
+                )),
+                runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "occupant",
+                    std::process::id(),
+                    None,
+                )),
+                worktree_path: Some(tree.join("src").display().to_string()),
+                ..AgentLifecycleObservation::new(
+                    Some("occupant".into()),
+                    LifecycleSignal::Registered,
+                )
+            },
+        ))
+        .unwrap();
+    let output = launch_team_worktree(&env, &["agents", "claude", "-w", "demo"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("--fresh"), "{stderr}");
+    assert_eq!(env.store().snapshot_cached().unwrap().agents.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_existing_worktree_status_refuses_before_launching() {
+    let env = team_worktree_launch_env();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let tree = env.home_root.join("project-worktrees/demo");
+    crate::common::trust_claude_project(&env, &tree);
+    let bin = write_env_dump_shim(&env, "claude");
+    let git = which::which("git").unwrap();
+    crate::common::write_path_shim(
+        &bin,
+        "git",
+        &format!(
+            "for entry_arg in \"$@\"; do\n if [ \"$entry_arg\" = status ]; then echo 'entry status failed' >&2; exit 1; fi\ndone\nexec {} \"$@\"",
+            shlex::try_quote(git.to_str().unwrap()).unwrap()
+        ),
+    );
+    let output = launch_team_worktree(&env, &["agents", "claude", "-w", "demo"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && stderr.contains("status --porcelain")
+            && stderr.contains("entry status failed"),
+        "{stderr}"
+    );
+    assert!(env.store().snapshot_cached().unwrap().agents.is_empty());
+    assert!(tree.exists());
 }
 
 #[cfg(unix)]

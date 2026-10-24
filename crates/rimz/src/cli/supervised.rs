@@ -37,6 +37,7 @@ pub(in crate::cli) enum OutputFormat {
 pub(in crate::cli) struct SupervisedPresentation {
     pub(in crate::cli) output_format: OutputFormat,
     pub(in crate::cli) stream_text: bool,
+    pub(in crate::cli) worktree_fresh_command: Option<String>,
 }
 
 impl SupervisedPresentation {
@@ -44,6 +45,7 @@ impl SupervisedPresentation {
         Self {
             output_format: OutputFormat::Text,
             stream_text,
+            worktree_fresh_command: None,
         }
     }
 }
