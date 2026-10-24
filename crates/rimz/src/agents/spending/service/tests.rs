@@ -321,6 +321,7 @@ fn framed_service_matches_direct_global_and_workspace_aggregation() {
 
     assert_eq!(actual.provider.spending, direct.provider.spending);
     assert_eq!(actual.provider.days, direct.provider.days);
+    assert_eq!(actual.provider.chart, direct.provider.chart);
     assert_eq!(actual.workspace.tally, direct.workspace.tally);
     assert!((actual.workspace.tally.year.usd - 2.5).abs() < 1e-9);
 }
@@ -475,6 +476,11 @@ fn concurrent_clients_elect_one_private_socket_owner() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: super::super::ChartSpend {
+                today: (super::super::unix_secs_now() / 86_400) as i64,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );
@@ -626,6 +632,11 @@ fn fresh_publication_bypasses_busy_walker() {
                 None,
             )
             .unwrap(),
+            timezone: "UTC".into(),
+            chart: super::super::ChartSpend {
+                today: (super::super::unix_secs_now() / 86_400) as i64,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );

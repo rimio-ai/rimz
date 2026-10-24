@@ -1,13 +1,14 @@
 //! `rimz stats` — account-global spend, local-day activity, and model,
 //! provider, solo-profile, team, and subagent-profile breakdowns, readable in or out
 //! of a room or project.
-//! The wordmark and activity insights remain in the held dashboard.
+//! The held dashboard adds a model spend chart and compact activity summary.
 //! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
 //! available. A standalone first launch takes the same shared spending election
 //! as the sidebar producer, publishes the same provider-spending rollups, and
-//! then subsequent runs return from a cache aggregated for the same local day.
+//! then subsequent runs return from a cache aggregated for the same day in its
+//! published history zone.
 //!
 //! Windows: the heatmap always reads the full available history (the cache spans
 //! the trailing year). `--window` scopes model, provider, and profile breakdowns
@@ -55,16 +56,8 @@ const MAX_WEEKS: usize = 52;
 const MIN_WEEKS: usize = 4;
 /// Left weekday-label column width (`"  Wed "`).
 const GUTTER: usize = 6;
-/// Breakdown rows shown before the tail folds into the final "Other" row.
-const MAX_MODELS: usize = 6;
-const MAX_SPEND_ROWS: usize = 6;
-/// A named breakdown row must carry at least one percent of its section's
-/// dollars or work tokens (input plus output, excluding cache reads).
-const MIN_BREAKDOWN_SHARE: f64 = 0.01;
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
-const MIN_SHARE_BAR_WIDTH: usize = 10;
-const STAT_GUTTER: usize = 3;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const EMPTY_REFRESH_RETRY: Duration = Duration::from_secs(5);
 const REFRESH_POLL_TICK: Duration = Duration::from_millis(100);
@@ -318,6 +311,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 mod assists;
+mod dashboard;
 mod fmt;
 mod hold;
 mod json;
@@ -333,13 +327,13 @@ use {assists::*, fmt::*, hold::*, panel::*};
 struct Stats {
     timezone: String,
     refreshed_at_ms: u64,
-    day_cutoff_secs: u64,
     agents: BTreeMap<String, RoleTally>,
     teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
     subagents: BTreeMap<String, RoleTally>,
     recorded_since_secs: Option<u64>,
     effort_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
+    chart: rimz::agents::spending::ChartSpend,
     by_model: BTreeMap<String, ModelTally>,
     by_provider: BTreeMap<String, SpendTally>,
     total: SpendTally,
@@ -353,8 +347,8 @@ impl Stats {
             spending,
             timezone,
             refreshed_at_ms,
-            day_cutoff_secs,
             roles,
+            chart,
             ..
         } = cache;
         let Spending {
@@ -363,13 +357,13 @@ impl Stats {
         Stats {
             timezone,
             refreshed_at_ms,
-            day_cutoff_secs,
             agents: roles.agents,
             teams: roles.teams,
             subagents: roles.subagents,
             recorded_since_secs: roles.recorded_since_secs,
             effort_since_secs: roles.effort_since_secs,
             by_day: days,
+            chart,
             by_model: models,
             by_provider,
             total,
@@ -384,10 +378,6 @@ impl Stats {
         Timestamp::from_millisecond(self.refreshed_at_ms as i64)
             .unwrap_or(Timestamp::UNIX_EPOCH)
             .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
-    }
-
-    fn published_today(&self) -> bool {
-        self.today_day(self.day_cutoff_secs) == self.today_day(unix_secs_now())
     }
 
     fn recorded_since(&self) -> Option<jiff::Zoned> {
@@ -432,7 +422,14 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<Stats> {
 }
 
 fn load_today_stats(paths: &RuntimePaths) -> Option<Stats> {
-    load_published_stats(paths).filter(Stats::published_today)
+    today_stats(read_provider_spending_cache(
+        &paths.shared_provider_spending_path(),
+    ))
+}
+
+fn today_stats(cache: ProviderSpendingCache) -> Option<Stats> {
+    (cache.is_current_version() && cache.is_from_today(unix_secs_now()))
+        .then(|| Stats::from_provider(cache))
 }
 
 fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
@@ -455,15 +452,11 @@ fn load_or_refresh_stats(
     } else {
         refresh_global_spending_direct(paths, &spec, &mut |_| {})
     };
-    provider
-        .is_current_version()
-        .then(|| Stats::from_provider(provider))
-        .filter(Stats::published_today)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
-            )
-        })
+    today_stats(provider).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
+        )
+    })
 }
 
 fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {

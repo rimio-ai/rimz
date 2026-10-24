@@ -1,30 +1,30 @@
 # The stats panel
 
-`rimz stats` renders account-global token and dollar history: a heatmap of daily use, totals for four windows, spend by model, provider, and profile, and the assists RimZ performed for the user. It runs in or out of a room and in or out of a project, and it touches no agent and no session. Stats itself writes only the shared state directories (`RuntimePaths::ensure_shared_dirs`), and it never opens a workspace tree. A walk that stats triggers writes what any spending walk writes: the spending publication, the shared price table (`pricing-cache.json`) when its price load refreshes, and the [effort ledger](./agents/spending.md#session-effort-ledger) maintenance.
+`rimz stats` renders account-global token and dollar history as a spend-first report or a held dashboard: a model spend chart, a token heatmap, totals for four windows, spend by model, provider, and profile, a compact activity summary, and the assists RimZ performed for the user. It runs in or out of a room and in or out of a project, and it touches no agent and no session. Stats itself writes only the shared state directories (`RuntimePaths::ensure_shared_dirs`), and it never opens a workspace tree. A walk that stats triggers writes what any spending walk writes: the spending publication, the shared price table (`pricing-cache.json`) when its price load refreshes, and the [effort ledger](./agents/spending.md#session-effort-ledger) maintenance.
 
 The command has three surfaces, and most rules on this page differ between them:
 
 | Surface | Command | Renderer |
 | --- | --- | --- |
 | One-shot report | `rimz stats`, or one of `--agents`, `--teams`, `--subagents` for an explicit view | `panel::render_spend`, printed once as a scrollable report |
-| Held dashboard | `rimz stats --refresh` | `panel::render_panel`, repainted on the alternate screen, and the default middle-column content of the [`rimzd` view](./rimzd.md#what-the-view-contains) |
+| Held dashboard | `rimz stats --refresh` | `dashboard::Dashboard`, repainted on the alternate screen, and the default middle-column content of the [`rimzd` view](./rimzd.md#what-the-view-contains) |
 | JSON | `--json`, alone or with an explicit view, and `--assists --json` | `json.rs`, and `assists.rs` for the assist timeline |
 
 The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.rs). What every figure means for someone using RimZ is the [Token Insight guide](../guide/insight.md). Every flag and JSON field is in the [stats CLI reference](../reference/cli/stats.md).
 
 ## Where the figures come from
 
-Stats owns no pricing and no session placement. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes ([spending.md](./agents/spending.md#what-reads-the-totals)). `crates/rimz/src/cli/stats/mod.rs::Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `spending.by_provider` become `by_day`, `by_model`, and `by_provider`, and the solo, team, and subagent `RoleTally` maps keep their published spend and effort together. The two first-retained times (`recorded_since_secs` for roles, `effort_since_secs` for effort), the timezone, the publication time, and the aggregation cutoff travel with them. Team totals are computed on read: `RoleView::rows` merges each team's role windows, and no second team total is stored.
+Stats owns no pricing and no session placement. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes ([spending.md](./agents/spending.md#what-reads-the-totals)). `crates/rimz/src/cli/stats/mod.rs::Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `spending.by_provider` become `by_day`, `by_model`, and `by_provider`, `chart` keeps model dollars for 30 local days and 52 seven-day blocks, and the solo, team, and subagent `RoleTally` maps keep their published spend and effort together. The two first-retained times (`recorded_since_secs` for roles, `effort_since_secs` for effort), the timezone, and the publication time travel with them. Team totals are computed on read: `RoleView::rows` merges each team's role windows, and no second team total is stored.
 
 Three load paths answer a run:
 
 | Path | Runs when | What happens |
 | --- | --- | --- |
 | Published cache | a one-shot or JSON run finds a current-version cache aggregated today | read and render, with no walk |
-| Cold walk | a one-shot or JSON run finds the cache missing, on another schema version, or aggregated on another local day | `refresh_global_spending_direct` walks with a fresh `SpendingWalker`, coalescing on `shared_spending_lock` |
+| Cold walk | a one-shot or JSON run finds the cache missing, on another schema version, or aggregated on another history day | `refresh_global_spending_direct` walks with a fresh `SpendingWalker`, coalescing on `shared_spending_lock` |
 | Elected service | every refresh cycle of the held dashboard | `spending::service::request` with `SpendingServiceStartup::HostEligible`, so the dashboard process can host the warm walker ([spending.md](./agents/spending.md#one-walk-per-namespace)) |
 
-"Aggregated today" compares local days in the cache's timezone: `Stats::published_today` takes the day of `day_cutoff_secs`, the walk's aggregation time, and never `refreshed_at_ms`, which can land after midnight when a walk straddles it. The producer's TTL and timeout grace use the same day rule. After a cold walk, `load_or_refresh_stats` checks the version and day again and fails with `Spending refresh unavailable: ...` when the result still does not cover today: a non-authoritative empty discovery can preserve an old nonzero publication, and the one-shot report refuses to print it as today's. Within one day, the one-shot figures are as fresh as the last walk that a sidebar producer, a held dashboard, or a cold run published.
+"Aggregated today" compares `chart.today` with today's local epoch day in the cache's published timezone. `crates/rimz/src/agents/spending/publish.rs::ProviderSpendingCache::is_from_today` owns this rule for one-shot loaders and the producer's TTL and timeout grace. The history day comes from the walk's aggregation time, never `refreshed_at_ms`, which can land after midnight when a walk straddles it. The account-day `day_cutoff_secs` belongs to the configured/system zone and is not read through the history zone. After a cold walk, `load_or_refresh_stats` checks the version and history day again and fails with `Spending refresh unavailable: ...` when the result still does not cover today: a non-authoritative empty discovery can preserve an old nonzero publication, and the one-shot report refuses to print it as today's. Within one history day, the one-shot figures are as fresh as the last walk that a sidebar producer, a held dashboard, or a cold run published.
 
 The cold walk's single flight is short. A process that finds the lock held polls up to 15 steps of 20 ms (`SPENDING_WAIT_STEPS` and `SPENDING_WAIT_STEP` in `crates/rimz/src/agents/spending/engine.rs`) and serves a fresh publication that lands meanwhile. When none lands, it walks locally without publishing (`compute_fleet_spending`). Only the lock holder writes the cache, so concurrent cold runs that outwait the poll each pay a full walk.
 
@@ -41,7 +41,7 @@ Two token measures appear on the panel, and the difference is a trap:
 | Measure | Definition | Used for |
 | --- | --- | --- |
 | Display tokens | `SpendWindow::display_tokens`: input (cache writes included) plus output plus cache reads | every token total printed, and the heatmap (`DaySpend.tokens` holds the same sum) |
-| Work tokens | `SpendWindow::tokens`: input (cache writes included) plus output, without cache reads | row admission, ranking, and folding significance |
+| Work tokens | `SpendWindow::tokens`: input (cache writes included) plus output, without cache reads | row admission and ranking; held folding thresholds use dollars |
 
 A day is active when its `DaySpend.tokens` is above zero, priced or not.
 
@@ -57,11 +57,11 @@ Shading is relative to the visible grid (`Grid::build`, `shade`, and `level` in 
 
 Under `--dollars` the value is dollars, so a token-active day with no priced usage reads `·` although it counts as active everywhere else.
 
-The month row groups the columns by the month of each column's Monday and labels a group only when it spans at least two columns. A month that begins midweek is therefore labelled one column late, and a one-column fragment at either edge goes unlabelled. The `Less · ░ ▒ ▓ █ More` key closes the block.
+The month row groups the columns by the month of each column's Monday and labels a group only when it spans at least two columns. A month that begins midweek is therefore labelled one column late, and a one-column fragment at either edge goes unlabelled. The `Less · ░ ▒ ▓ █ More` key closes the block beside the activity count, current full-history streak, and busiest date. One-shot spacing keeps blank lines inside the heatmap, and the held dashboard removes them.
 
 ## The breakdowns
 
-Five sections break the selected window down: Models, Providers, Agents (solo profiles), Teams, and Subagents (delegated profiles). Providers carries all provider spend. The three profile sections are subsets of it, not a partition, and role semantics and native-child attribution belong to [spending.md](./agents/spending.md#session-role-provenance). Every share on every surface divides by the selected window's fleet dollars, and a share against zero dollars is zero.
+Five sections break the selected window down: Models, Providers, Agents (solo profiles), Teams, and Subagents (delegated profiles). Providers carries all provider spend. The three profile sections are subsets of it, not a partition, and role semantics and native-child attribution belong to [spending.md](./agents/spending.md#session-role-provenance). One-shot and JSON shares divide by the selected window's fleet dollars. Held model and provider shares do too, while held role shares divide by their own section's dollars. A share against zero dollars is zero.
 
 ### Which rows enter
 
@@ -70,13 +70,13 @@ Five sections break the selected window down: Models, Providers, Agents (solo pr
 | One-shot report | dollars | dollars or recorded effort |
 | Held dashboard and JSON | dollars or work tokens | dollars, work tokens, or recorded effort |
 
-Effort is any active-time or message counter, sender-only credit included. A section with no admitted rows is omitted, and unpriced tokens still count toward the window totals and the heatmap.
+Effort is any active-time or message counter, sender-only credit included. A section with no admitted rows is omitted, and unpriced tokens still count toward the window totals and the heatmap. The held dashboard also hides Teams without team spend.
 
-The Agents section hides on the one-shot report and the held dashboard unless it would list a profile that is not named for a provider. `panel::show_agents` is the one predicate, called with the asking surface's admission rule: it shows Agents when an admitted selected-window profile has a key absent from `by_provider`. Once Agents shows, its provider-named rows stay in it. Teams and Subagents hide only when empty. Explicit views and JSON never apply the predicate.
+The one-shot Agents section hides unless it would list a profile that is not named for a provider. `panel::show_agents` shows it when an admitted selected-window profile has a key absent from `by_provider`. Once Agents shows, its provider-named rows stay in it. One-shot Teams and Subagents hide only when empty. The held dashboard, explicit views, and JSON never apply the predicate.
 
 ### The one-shot report
 
-The one-shot report opens with a Spend row of dollars and display tokens for all four windows. Its Today column reads the `by_day` bucket for today, while Week, Month, and Year read the `SpendTally` windows. The breakdowns follow, then the recorded-since notes, the heatmap, and `as of HH:MM` (with the date when the publication is from another day). An explicit view prints only its own section, with the notes, and no Spend row or heatmap.
+The one-shot report opens with a Spend row of dollars, display tokens, and spend per active day for all four windows. Its Today column reads the `by_day` bucket for today, while Week, Month, and Year read the `SpendTally` windows. The breakdowns follow, with the [coverage line](#recorded-since-notes) above the first role section, then unassigned dollars, the heatmap, and `as of HH:MM` (with the date when the publication is from another day). An explicit view prints only its own section, with the coverage line, and no Spend row or heatmap. With no daily history and no selected-window role usage, the full report prints the fresh-machine copy and publication time instead.
 
 Each section ranks by dollars, then name, keeps three rows, and merges the rest into a counted tail named for the section (`2 other models`). Explicit views are unfolded. Column choice follows the typed `SpendSection`, never its display label:
 
@@ -84,63 +84,68 @@ Each section ranks by dollars, then name, keeps three rows, and merges the rest 
 | --- | --- |
 | Models | INPUT, OUTPUT, CACHED, HIT |
 | Providers | SESSIONS, TOKENS, HIT, TOK/S |
-| Agents, Teams, Subagents (compact) | SESSIONS (RUNS for Subagents), ACTIVE, MESSAGES for Teams, TOKENS, HIT, TOK/S |
-| Explicit view | INPUT, OUTPUT, CACHED, HIT, SESSIONS or RUNS, ACTIVE, MESSAGES for Teams |
+| Agents, Teams, Subagents (compact) | SESSIONS (RUNS for Subagents), AGENT-TIME, MESSAGES for Teams, TOKENS, HIT, TOK/S |
+| Explicit view | INPUT, OUTPUT, CACHED, HIT, SESSIONS or RUNS, AGENT-TIME, MESSAGES for Teams |
 
-ACTIVE formats seconds with `theme::fmt::active_duration`, the formatter attribution uses. MESSAGES is incoming human prompts plus received agent messages, with the human count in parentheses when nonzero (`12 (3 you)`). Outgoing messages stay in role-level JSON and do not inflate it. A zero effort cell reads `-`. No surface unfolds a team into its roles except JSON.
+AGENT-TIME formats seconds with `theme::fmt::active_duration`, the formatter attribution uses. MESSAGES is incoming human prompts plus received agent messages, with the human count in parentheses when nonzero (`12 (3 you)`). Outgoing messages stay in role-level JSON and do not inflate it. A zero effort cell reads `-`. No surface unfolds a team into its roles except JSON. Session and run counts use grouped thousands.
+
+After the role sections, the full report prints `No role recorded` as `max(0, fleet - agents - teams - subagents)` and its fleet share, hiding values below one cent (`panel::render_spend`). The footer takes sessions from the selected fleet window, labels them `today`, `this week`, `this month`, or `this year`, and divides window dollars by sessions with two decimal places. Zero sessions omit that clause. Explicit views omit both unassigned dollars and the footer's session clause.
 
 ### Held dashboard rows
 
-The held dashboard has no Spend row. Its windows row is a tab bar of display tokens for all four windows, with the selected tab highlighted, and the five sections follow, one line per row, each with a dollar share and an optional share bar. It has no ACTIVE or MESSAGES columns. Provider names come from provider descriptors and model names from `model_display::display_model`, both painted in provider identity colours, a model taking the colour of its published producing kind. `Other`, the empty model id, and every profile and team name and bullet are muted.
+The held dashboard has no Spend row. Its windows row is a tab bar of dollars for all four windows, with the selected tab highlighted, followed by the spend chart, heatmap, and breakdowns (`crates/rimz/src/cli/stats/dashboard.rs::Dashboard`). Models is full-width, Providers sits beside Where it went, Agents beside Subagents, then Teams full-width. Models has HIT, TOK/S, and TOKENS, and Teams has AGENT-TIME, MESSAGES, and TOKENS. Provider names come from provider descriptors and model names from `model_display::display_model`, with `Unknown model` for an empty id. Model markers and chart segments use `crates/rimz/src/cli/render/palette.rs::model_shade`, ranked within the published producing kind by Year dollars, then work tokens, then id. `Other` is muted.
 
-Folding is measured against each section's own admitted rows, not fleet totals. `panel::fold_breakdown` keeps a row named while it holds at least 1% (`MIN_BREAKDOWN_SHARE`) of the section's dollars or of its work tokens, and it merges the rest into a muted `Other` row last, with its share of fleet dollars computed like any row's. The empty model id always folds. When the row cap requires more folding, the least significant named rows fold first, ranked by the greater of their two shares, and ties fold the later display row first. Display order is dollars, then work tokens, then key. `panel::natural_size` runs the same fold with no cap, and its count is the section's weight in [`fit`](#fitting-the-terminal).
+Folding is measured against each section's own admitted dollars, not fleet totals. `dashboard::fold` ranks rows by dollars, then work tokens, then key. Models and role sections keep named rows at 1% of their own section's dollars, and providers skip the threshold. The limit is four named rows, or two from fit step 5, plus `Other`. A single-entry tail keeps its name. `RoleWindow::merge` preserves spend, agent-time, and messages through folding. Where it went splits Teams, Subagents, Agents, and `max(0, fleet - roles)` as No role, normalizing that bar and its percentages to the parts' sum.
+
+The chart stacks the drawn period's four largest models, largest at the bottom, plus Other (`dashboard::Dashboard::chart_lines`). Daily bars span 30 days; weekly bars span the newest 52 blocks that fit, anchored to the publication's `chart.today` so a midnight repaint or an unnamed system zone cannot shift their seven-day keys. Positive spend gets at least one cell. A daily dashed line averages the preceding 30 fleet days, missing days as zero, and the y ceiling rounds up over both that mean and the tallest bar. Bar stride reserves room only for the line's `┄ $X` tail: a caption too wide for the frame drops `typical`, and the bars never narrow for it. Days outside the selected window are muted, and the final axis label is accented.
 
 The HIT column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up, and absent for a zero denominator. `CacheHealth::classify` colours it green at 90% and above, yellow from 70% to 89%, and red below.
 
-The rate column is `SpendWindow::tokens_per_sec`: `timed_output * 1000 / timed_ms` for the selected window, rounded half up. The held dashboard prints it on Models and Providers rows, and omits it from profile sections. An untimed row shows `-`, and a section whose every row is untimed drops the column. `SpendWindow::merge` sums both counters, so `Other` carries the ratio of sums. Timing boundaries and filters belong to [spending.md](./agents/spending.md#response-timing).
+The rate column is `SpendWindow::tokens_per_sec`: `timed_output * 1000 / timed_ms` for the selected window, rounded half up. One-shot Providers and compact profile rows print it, with `-` for an untimed row. `SpendWindow::merge` sums both counters, so one-shot tails carry the ratio of sums. Held Models always keeps TOK/S, but `Other` prints a U+2013 placeholder. Held Providers and role rows omit the rate. Timing boundaries and filters belong to [spending.md](./agents/spending.md#response-timing).
 
-All five held sections share one column layout (`panel::stat_section_layout`), chosen by what fits the panel width:
-
-1. The full left column, the percentage, and a share bar of at least 10 cells.
-2. The full left column and the percentage, with no bar.
-3. The compact left column: models keep only dollars, and provider and profile rows drop the HIT and rate columns.
-
-Glyphs come from `panel::resolve_panel_glyphs`, which resolves the token, session, and meter-bar glyph roles through the machine theme. A Nerd Font glyph set swaps `◎ ◇ ↘ ↗ ◌` and the bar characters, while colours stay on the CLI palette ([theme.md](./theme.md#glyphs)). Every dollar figure on every text surface uses `fmt::fmt_usd`: whole dollars with thousands grouped from $10 up, and cents below (`$0.12`), so a small fleet never reads `$0`.
+Held share bars use `panel::resolve_panel_glyphs` to resolve the filled and track meter roles through the machine theme, while colours stay on the CLI palette ([theme.md](./theme.md#glyphs)). Chart stacks use solid cells, and Where it went and the heatmap keep their density glyphs. Dollar totals use `fmt::fmt_usd`: whole dollars with thousands grouped from $10 up, and cents below (`$0.12`), so a small fleet never reads `$0`. Cost per session always keeps cents. Token units are uppercase.
 
 ### Recorded-since notes
 
-A profile section can cover a window that starts before RimZ recorded roles or effort, and a muted note says so. Each of the two notes shows independently when the selected window starts before its first-retained time: `roles recorded since <date>; earlier spend shows under Providers only` for `recorded_since_secs`, and `active time and messages recorded since <date>` for `effort_since_secs`. The window start is `Window::assist_since` at publication time: local midnight for Today, and publication time minus 7, 30, or 365 days for the others.
+A profile section can cover a window that starts before RimZ recorded roles or effort, and a muted coverage line says so. Each clause shows independently when the selected window starts before its first-retained time: `roles recorded since DATE, earlier spend counts as No role` for `recorded_since_secs`, and `agent-time and messages recorded since DATE` for `effort_since_secs`. After a roles clause and a middle dot, the effort clause shortens to `agent-time and messages since DATE`. The window start is `Window::assist_since` at publication time: local midnight for Today, and publication time minus 7, 30, or 365 days for the others.
 
-The notes print below the last profile section, and only when a profile section is visible. An explicit view prints them even with no rows, after a `No <noun> spend recorded (<window>).` line. The held dashboard's empty-history frame shows neither. Effort-only history still renders the profile sections when there are no spend-day buckets.
+The one-shot coverage line prints above the first visible profile section, and a report without a visible profile section omits it. An explicit view keeps the window rule even with no rows and prints a `No <noun> spend recorded (<window>).` line. The held dashboard puts the applicable roles date in Where it went and emits no effort-recording note. Effort-only history still renders profile sections when there are no spend-day buckets.
 
 ## Insights
 
-The held dashboard closes with two columns of activity figures for the selected window (`panel::insights_lines`, `panel::Activity::of`):
+Activity comes from `panel::Activity::of`, and the heatmap key carries the compact summary:
 
 | Figure | Today and Year | Week and Month |
 | --- | --- | --- |
-| Sessions, Cost/session, Spend | the selected window | the selected window |
 | Active days | active days of the last 28 (`RECENT_ACTIVITY_DAYS`) | active days in the window |
-| Most active day, Longest streak, Current streak | the whole cached history | days in the window |
-| Daily avg | trailing-year dollars over the trailing year's active days | window dollars over the window's active days |
+| Busiest date | the whole cached history | days in the window |
+| Current streak on both text surfaces | the whole cached history | the whole cached history |
 | Spend trend | none | the change against the preceding equal span, when that span has dollars |
 
 The current streak counts back from today, or from yesterday when today has no activity yet, so a quiet morning does not break a streak.
 
+Both text surfaces use `panel::per_active_day`: dollars and days with tokens cover the same last 7, 30, or 365 local calendar days, today included. The one-shot average prints a U+2013 placeholder for Today. Chart titles compare Today with yesterday and show the shared average for Week, Month, and Year. One-shot Spend figures right-align to fixed column edges, so Week and Month trends run into the next column's padding without moving any figure. `panel::trend_label` caps changes above 999% as `↑999%+` so they fit those slots. Today and Year have no spend trend.
+
 ## Fitting the terminal
 
-The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` writes it with one shared left pad. crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text.
+The dashboard is a pure string renderer over published stats, per-tab assists, the active tab, and supplied terminal dimensions (`dashboard::Dashboard::frame`). crossterm appears only at the held loop's terminal edge (`tui::TerminalModeGuard`, `tui::replace_frame`, and key events), and the sidebar pane's ratatui widget stack is not on this path, so tests assert on rendered text.
 
-`PanelGeometry::current` reads the terminal size on every render. The week count fixes the panel width (`6 + 2 × weeks`), and the panel centres in the terminal. Rows are read only when stdout is a terminal, so a pipe carries `None` and always gets the full panel.
+Width is `min(cols, 113)`, centred independently of the heatmap week count. Below 112 columns pairs stack and bars shrink. Every line is clipped by display width while preserving ANSI styles. The final frame joins lines without a trailing newline, so replacing a frame of exactly the terminal height cannot scroll its first row offscreen.
 
-`fit` spends the row budget (terminal rows minus one) after the fixed rows, the section chrome, and the assist rows, and it keeps data ahead of chrome:
+The fitter renders all four tabs at each cumulative step and picks the first whose tallest frame fits. All tabs share that step:
 
-1. With room for everything, each breakdown gets its natural row count (named rows plus `Other` when present), capped at 6.
-2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
-3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
-4. When the 1-row sections still do not fit, Subagents drops, then Agents, then Teams. Models and Providers keep their rows.
+1. Full layout (step 0).
+2. Drop the wordmark (step 1).
+3. Collapse Assists (step 2).
+4. Reduce the chart from 12 to 8 rows (step 3).
+5. Drop Agents and Subagents (step 4).
+6. Reduce the named-row limit from four to two (step 5).
+7. Reduce the chart to 6 rows (step 6).
+8. Drop Teams (step 7).
+9. Reduce the chart to 4 rows (step 8).
+10. Drop the heatmap (step 9).
 
-The recorded-since notes reserve enough rows to wrap at the panel width while any profile section remains, and drop with the last one. Only the held dashboard fits: the one-shot report scrolls and has no row budget.
+Beyond the last step, the bottom is clipped to terminal height. An unknown row count uses the full layout. Empty history keeps the wordmark while it fits, then the fresh-machine copy and any assists. Sections have one blank separator and no bottom padding. Only the held dashboard fits: the one-shot report scrolls and has no row budget.
 
 ## The held dashboard
 
@@ -158,7 +163,7 @@ Each repaint picks one of three frames:
 | no frame yet, a refresh failed | the wordmark and a centred `Spending refresh unavailable - retrying. <cause>`, ellipsized to the panel width |
 | no outcome yet | nothing is written |
 
-A history with no usage and no profile activity paints the wordmark, `No token usage recorded yet - run an agent and check back.`, and any assist categories. A resize repaints the current frame, and the first successful refresh replaces the unavailable frame in place. Every repaint rereads the assist log for the selected window, and the frames are the same under `--hold`.
+A history with no usage and no profile activity paints the wordmark while it fits, `No agent sessions recorded on this machine yet.`, the explanation that spend appears after the first session and comes from each agent's session files, and any assist categories. A resize repaints the current frame, and the first successful refresh replaces the unavailable frame in place. Each repaint reads `assist_log::recent(root, None)` once, and `dashboard::TabAssists::from_records` folds a sorted suffix for each tab. The earliest retained record dates the Assists header only when later than the selected window's start. A tab switch does not reread spending, and the frames are the same under `--hold`.
 
 | Key | Outcome |
 | --- | --- |
@@ -194,7 +199,7 @@ Every array is present even when empty, and every `share` is a fleet-dollar shar
 
 ### The assist rollup
 
-The rollup counts only assists that took effect, and the held dashboard prints its nonzero categories. In the held dashboard and in `--json`, the records start where the selected window starts (`Window::assist_since` at the time of the read). `AssistEvent::took_effect` is the one predicate for the rollup and the default timeline:
+The rollup counts only assists that took effect. In the held dashboard and in `--json`, the records start where the selected window starts (`Window::assist_since` at the time of the read), with Today at local midnight in the publication's timezone. One retained-log read supplies all four dashboard suffixes per repaint. `AssistEvent::took_effect` is the one predicate for the rollup and the default timeline:
 
 | Assist | Takes effect when |
 | --- | --- |
@@ -207,9 +212,11 @@ The rollup counts only assists that took effect, and the held dashboard prints i
 | GC and temp eviction | it has no top-level error, so a partial sweep counts |
 | molt, idle-stop withdrawal, judge decline, workflow transitions, resident launch, model alias, tier fallback, compact command, room resume | always: each counts as recorded |
 
-An attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), and the panel prints it beside that count: `Auto-compact: N (M held)`. Four projections are easy to get wrong:
+`crates/rimz/src/cli/stats/assists.rs::category_entries` takes a `CategoryMode`: Dashboard omits held-attempt detail, counts Auto-compact requests as `compacts + held["compacts"]`, and hides zero-count categories. Timeline keeps effective counts and held detail. Both modes group counts by thousands and describe Auto-continue's duration as `(after 5.1h parked)`, not time saved. These are text projections, not changes to the rollup or timeline predicate.
 
-- A temp eviction increments `tmp_evictions`, never `sweeps`, and the `Temp evictions:` row is separate from `Auto-gc:`. Its bytes join `reclaimed_bytes`, so the `Auto-gc:` byte detail is the combined GC and temp-eviction total.
+An attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), and the timeline header prints it beside that count: `Auto-compact: N (M held)`. Four projections are easy to get wrong:
+
+- A temp eviction increments `tmp_evictions`, never `sweeps`, and the timeline header's `Temp evictions:` row is separate from `Auto-gc:` and carries its held attempts. Its bytes join `reclaimed_bytes`, so the `Auto-gc:` byte detail is the combined GC and temp-eviction total. The timeline keeps the handle, workspace, allocated reclaimed bytes, optional latest owner end, measured free bytes, and floor. Temp-unit bytes count hardlinks once per tree, measured free space can lag removal, and snapshots can retain the blocks. Ordinary GC bytes are apparent sizes.
 - Only a freeze increments `hibernations`. A deepening step takes effect without one, and `hibernate_reclaimed_bytes` sums the per-step deltas of both, kept apart from GC bytes. Hibernate hold reasons enter `hibernate_holds` whether or not the record took effect.
 - `redeems` includes manual redemptions, which also count in `manual_redeems`. The `Auto-redeem:` row subtracts them, and no row prints manual redemptions, so their held attempts (`held.manual_redeems`) reach JSON only.
 - The five workflow counts print as one `Workflow:` row, and the molts print as `Molts:`.
@@ -221,16 +228,17 @@ The durable records, their fields, and rotation belong to the [assist log](./har
 | File | Owns |
 | --- | --- |
 | `mod.rs` | `StatsArgs`, `Window`, `RoleView`, `Stats`, the three load paths, the shared constants, and the wordmark |
-| `panel.rs` | geometry, `fit`, the heatmap, the windows row, all five breakdowns, the insights, the unavailable and empty frames, and `emit` |
+| `panel.rs` | one-shot breakdowns, shared heatmap and formatting helpers, the unavailable frame, and `emit` |
+| `dashboard.rs` | the pure held frame, chart, folding, geometry and measured fit ladder, and per-tab assist projection |
 | `hold.rs` | the `--refresh` loop, key handling, the reload signal and re-exec, and the cold-walk spinner |
 | `assists.rs` | the assist fold, its panel rows, and the `--assists` timeline |
 | `json.rs` | the `--json` documents |
 | `fmt.rs` | token, dollar, and day formatting, display names, and `weeks_for_terminal` |
-| `tests.rs`, `assists/tests.rs` | the unit suites |
+| `tests.rs`, `tests/held.rs`, `assists/tests.rs` | the unit suites and held-frame snapshots |
 
 ## Tests
 
-`tests.rs` holds unit tests over rendered strings, with no `.snap` files. `assists/tests.rs` covers the fold and the timeline lines, with one inline snapshot. The load paths run against temporary `RuntimePaths`: a published cache served without a walk, and a cold refresh publishing the rollups the sidebar reads. Panel tests strip ANSI with `strip_ansi` and assert layout, ranking, folding, and the `fit` ladder. The held loop is driven through `key_outcome` and `HeldStats` without a terminal.
+`tests.rs` and its `tests/held.rs` child cover rendered strings. Held snapshots cover all four tabs at 119×76 and 119×40 plus empty history. A geometry matrix covers widths 60 to 160 and heights 10 to 90, checking line count, display width, a common fit step, and no final newline. One-shot assertions cover active-day averages, trend alignment, independent coverage dates and placement, agent-time columns, clamped unassigned spend, grouped sessions, footer scope, activity, and fresh-machine copy. `assists/tests.rs` covers the fold and timeline lines, with one inline snapshot. The load paths run against temporary `RuntimePaths`: a published cache served without a walk, and a cold refresh publishing the rollups the sidebar reads. The held loop is driven through `key_outcome` and `HeldStats` without a terminal.
 
 ```sh
 cargo xtask test 'cli::stats'

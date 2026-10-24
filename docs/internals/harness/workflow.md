@@ -79,7 +79,7 @@ A condition's cases are ordered `[[checks.<name>.cases]]` tables:
 
 ### Steps
 
-`[steps.<name>]` requires `agent`, `prompt-file`, and `then`. `then` names a check, never a step or a special target. The optional fields are `window`, `takeover`, `timeout`, `max-visits` (at least 1), `on.asked`, and `on.cap`. Both step edges default to `@user`, neither may target `@wait`, and `on.cap` may not target its own step.
+`[steps.<name>]` requires `agent`, `prompt-file`, and `then`. `then` names a check, never a step or a special target. The optional fields are `window`, `takeover`, `timeout`, `max-visits` and `max-visits-per-key` (each at least 1), `on.asked`, and `on.cap` (`crates/rimz/src/harness/workflow/spec.rs::Step`). When both visit bounds are set, `max-visits-per-key` must be below `max-visits`, since the total cap trips first. Per-key counts accumulate for the run, and unkeyed visits share one count. Both step edges default to `@user`, neither may target `@wait`, and `on.cap` may not target its own step.
 
 ### Edges and the graph
 
@@ -90,7 +90,7 @@ An edge names another node, `@wait`, `@done`, `@failed`, or `@user`. Checks and 
 | `timeout`, `invalid`, `cap`, `deadline`, `unknown`, and `hold` are reserved (`spec.rs::RESERVED_OUTCOMES`). No case or `else` uses one, and no check answers one, except a condition's `unknown`. | The engine produces them for its own routes. |
 | `on.timeout` cannot be `@wait`. | The timeout clock has already expired. |
 | A check with any resolved `@wait` edge needs a `timeout`. | Otherwise a wait never ends. |
-| A cycle through steps needs a `max-visits` on one of them. | The cap is the only bound on relaunching. |
+| A cycle through steps needs a `max-visits` on one of them. | A per-key cap alone cannot bound a check that names a new key every time. |
 | A check-only cycle needs a wait edge. A hold is not an edge and does not count. | Otherwise one advance would loop without pause. |
 
 Validation warns, without refusing, about a step whose adapter does not report background work (`do_background`, which every row carries), a judge sharing its target step's profile, and every agent node while machine auto-continue is off.
@@ -119,7 +119,7 @@ Step 1 runs before anything is read, so a held run wins over a broken definition
 
 `cancel` takes the workspace lock and returns false on a terminal record, so the first terminal write wins. It kills a hosted check's child and ends the run `canceled`. For a step it stages a `canceled` end with cause `Cancel` and stops the attempt ([Stopping an attempt](#stopping-an-attempt)). While a live host is mid-launch or already ending the attempt, cancel leaves the stop to that host.
 
-`resume` refuses a terminal run, and on an active run it accepts only `--extend`. A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry. `--extend visits=+N` adds a run-wide `visit_grant` to every step's cap, and `--extend deadline=<when>` replaces the deadline and re-arms it.
+`resume` refuses a terminal run, and on an active run it accepts only `--extend`. A parked run re-enters its current node, or `--at <node>`, with a fresh `entered_at` (so a fresh timeout clock) and a cleared judge retry. `--extend visits=+N` adds a run-wide `visit_grant` to every step's `max-visits` and `max-visits-per-key`, for every key, and `--extend deadline=<when>` replaces the deadline and re-arms it.
 
 ## Storage and isolation boundary
 
@@ -202,7 +202,7 @@ Every advance checks bounds before anything else. The engine routes a bound with
 | Deadline | Once, when the unfired deadline passes. It stops gating until `--extend deadline` re-arms it. | `{outcome: deadline, deadline: T}` | `on.deadline` |
 | Check timeout | The check's `timeout` after `entered_at`. It spans every evaluation and wait at the node. | `{outcome: timeout, node: C, timeout: S}` | `on.timeout` |
 | Step timeout | The step's `timeout` after the attempt started. | The run's routed input | Ends the attempt as `timeout`, then `then`. |
-| Visit cap | A launch would exceed `max-visits + visit_grant`, counted over the step's total visits across every key. Nothing launches. | `{outcome: cap, step: S, visits: N, max: M}` | `on.cap` |
+| Visit caps | Before launch, the total visits reach `max-visits + visit_grant`, or the current key's visits reach `max-visits-per-key + visit_grant`. Total is checked first. Nothing launches, and no visit or sequence is consumed. | `{outcome: cap, step: S, bound: "max-visits" or "max-visits-per-key", visits: N, max: M}`. `visits` and `max` belong to the tripped bound, with the grant included in `max`. | `on.cap` |
 
 ## Agent attempts
 
@@ -210,7 +210,7 @@ A step launches a detached root supervised run, never a child of the advancing a
 
 ### Admission
 
-Admission checks, in order, bounds, the visit cap, the provider window, and checkout occupancy. Each blocked check merges a wait that keeps the routed input and key and spends no visit:
+Admission checks, in order, bounds, the visit caps (total first, then the current key, whose count is zero when absent), the provider window, and checkout occupancy. Each blocked window or occupancy check merges a wait that keeps the routed input and key and spends no visit:
 
 | Blocker | Wait |
 | --- | --- |

@@ -5,7 +5,11 @@ use std::collections::BTreeMap;
 use crate::agents::{EmblemTint, emblem_for, spec_by_kind};
 use crate::config::{ColorDepth, PaletteRole, ThemeColor, ThemeProviderStyle, nearest_xterm_index};
 
-use super::{Palette, Tone};
+use super::{Palette, Tone, oklab, palette::emitted_rgb};
+
+/// The least OKLab lightness between neighbouring model shades of one provider, so its
+/// models read apart in a stacked bar.
+const MODEL_SHADE_STRIDE: f32 = 0.1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProviderIdentity {
@@ -64,6 +68,38 @@ impl BrandColor {
                 ColorDepth::Truecolor => Tone::Rgb(rgb.0, rgb.1, rgb.2),
             },
         }
+    }
+
+    /// Provider-relative model tone; step zero preserves the authored identity.
+    /// Each later rank blends toward the farther of black and white until its emitted
+    /// colour sits `MODEL_SHADE_STRIDE` past the previous rank's. Ranks past the
+    /// finite ladder retain its final tone.
+    pub fn shade(self, palette: &Palette, step: usize) -> Tone {
+        let mut tone = self.tone(palette);
+        let base = emitted_rgb(tone);
+        let mut last = oklab::lightness(base);
+        // Blending, unlike a bare lightness drop, keeps a saturated brand inside the gamut
+        // on its way to black, so the emitted lightness keeps falling.
+        let (direction, extreme) = if last < 0.5 {
+            (1.0, (0xff, 0xff, 0xff))
+        } else {
+            (-1.0, (0x00, 0x00, 0x00))
+        };
+        let mut taken = 0;
+        for offset in 1..=100 {
+            if taken == step {
+                break;
+            }
+            let candidate = palette.rgb_tone(oklab::blend(base, extreme, offset as f32 / 100.0));
+            let lightness = oklab::lightness(emitted_rgb(candidate));
+            if direction * (lightness - last) < MODEL_SHADE_STRIDE {
+                continue;
+            }
+            last = lightness;
+            tone = candidate;
+            taken += 1;
+        }
+        tone
     }
 
     pub(crate) fn indexed(self) -> u8 {
@@ -207,5 +243,86 @@ mod tests {
         assert_ne!(nearest_xterm_index(0xff, 0xff, 0xff), 15);
         assert_eq!(grok.tone(&indexed), Tone::Indexed(15));
         assert_eq!(grok.tone(&rgb), Tone::Rgb(0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn model_shades_preserve_identity_and_emit_distinct_colours_at_each_depth() {
+        let mut brands: Vec<_> = crate::agents::known_kinds()
+            .map(|kind| (kind, resolve_provider_brand(kind, &BTreeMap::new())))
+            .collect();
+        for (label, color) in [
+            ("RGB override", ThemeColor::Rgb(1, 2, 3)),
+            ("Indexed override", ThemeColor::Indexed(15)),
+            ("Role override", ThemeColor::Role(PaletteRole::Green)),
+        ] {
+            let styles = BTreeMap::from([(
+                "grok".to_owned(),
+                ThemeProviderStyle {
+                    color: Some(color),
+                    ..Default::default()
+                },
+            )]);
+            brands.push((label, resolve_provider_brand("grok", &styles)));
+        }
+        for depth in [ColorDepth::Indexed, ColorDepth::Truecolor] {
+            let palette = Palette::resolve(&ThemeConfig::default(), depth);
+            for (kind, brand) in &brands {
+                assert_eq!(
+                    brand.shade(&palette, 0),
+                    brand.tone(&palette),
+                    "{kind} {depth:?}"
+                );
+                let tones: Vec<_> = (0..=3).map(|step| brand.shade(&palette, step)).collect();
+                let emitted: Vec<_> = tones.iter().copied().map(emitted_rgb).collect();
+                for step in 1..=3 {
+                    assert!(
+                        !emitted[..step].contains(&emitted[step]),
+                        "{kind} {depth:?} step {step}: {emitted:?}"
+                    );
+                    let stride = (oklab::lightness(emitted[step])
+                        - oklab::lightness(emitted[step - 1]))
+                    .abs();
+                    assert!(
+                        stride >= MODEL_SHADE_STRIDE,
+                        "{kind} {depth:?} step {step} moves {stride} lightness: {emitted:?}"
+                    );
+                    assert!(matches!(
+                        (depth, tones[step]),
+                        (ColorDepth::Indexed, Tone::Indexed(_))
+                            | (ColorDepth::Truecolor, Tone::Rgb(..))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn model_shades_darken_white_and_lighten_black() {
+        for depth in [ColorDepth::Indexed, ColorDepth::Truecolor] {
+            let palette = Palette::resolve(&ThemeConfig::default(), depth);
+            for (brand, lighter) in [
+                (BrandColor::Indexed(15), false),
+                (BrandColor::Rgb(0, 0, 0), true),
+            ] {
+                assert_ne!(
+                    brand.shade(&palette, 1),
+                    brand.tone(&palette),
+                    "{brand:?} {depth:?} must move away from the identity tone"
+                );
+                let mut previous = emitted_rgb(brand.tone(&palette));
+                for step in 1..=3 {
+                    let next = emitted_rgb(brand.shade(&palette, step));
+                    assert!(
+                        if lighter {
+                            next > previous
+                        } else {
+                            next < previous
+                        },
+                        "{brand:?} {depth:?} step {step}: {previous:?} -> {next:?}"
+                    );
+                    previous = next;
+                }
+            }
+        }
     }
 }

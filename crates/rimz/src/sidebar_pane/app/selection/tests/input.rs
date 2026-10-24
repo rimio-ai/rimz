@@ -3,12 +3,13 @@ use crate::mux::WidthAdjust;
 
 fn assert_no_selection_move(action: KeyAction, target: usize) {
     let snapshot = clickable_block_snapshot(&workspace());
-    let mut ui = UiState {
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState {
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
     assert_eq!(
-        handle_key(action, &mut ui, &snapshot),
+        handle_key(action, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, target)));
@@ -71,17 +72,18 @@ fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
             row.last_activity = snapshot.now + std::time::Duration::from_secs(index as u64);
         }
     }
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     assert_eq!(
-        handle_key(KeyAction::MarkToggle, &mut ui, &snapshot),
+        handle_key(KeyAction::MarkToggle, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::default()
     );
     assert_eq!(
-        handle_key(KeyAction::InboxNext, &mut ui, &snapshot),
+        handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(pane_of(&snapshot, 0))
     );
     assert_eq!(
-        handle_key(KeyAction::InboxPrev, &mut ui, &snapshot),
+        handle_key(KeyAction::InboxPrev, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::focus(pane_of(&snapshot, 2))
     );
     assert_eq!(ui.selected_pane, None);
@@ -91,8 +93,9 @@ fn no_selection_mark_is_a_noop_and_inbox_enters_at_the_ends() {
 #[test]
 fn search_draft_seats_the_first_match_without_a_baseline() {
     let mut snapshot = clickable_block_snapshot(&workspace());
-    let mut ui = UiState::default();
-    handle_key(KeyAction::Search, &mut ui, &snapshot);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    handle_key(KeyAction::Search, &mut ui, &mut pane_ui, &snapshot);
     assert!(ui.search_draft.is_some());
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
     assert_eq!(ui.selected_index, Some(0));
@@ -101,8 +104,9 @@ fn search_draft_seats_the_first_match_without_a_baseline() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .pane = None;
-    let mut ui = UiState::default();
-    handle_key(KeyAction::Search, &mut ui, &snapshot);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    handle_key(KeyAction::Search, &mut ui, &mut pane_ui, &snapshot);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(ui.selected_pane, None);
@@ -154,17 +158,15 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     let parent = pane_of(&snapshot, 0);
     let other = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_pane: Some(other.clone()),
-            selected_index: Some(1),
-            delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_pane: Some(other.clone()),
+        selected_index: Some(1),
+        delegation_overrides: std::collections::BTreeMap::from([(row_id, true)]),
+        ..Default::default()
     };
-    let theme = ui.theme(&snapshot.theme);
-    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     let first = composed
         .lines
         .iter()
@@ -176,12 +178,12 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         .iter()
         .position(|line| line.to_string().contains("old-child"))
         .unwrap();
-    ui.interactions = composed.interactions;
-    remember_roster(&mut ui, &snapshot);
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
     for line in [first, first + 1] {
         for column in [0, 53] {
             assert_eq!(
-                handle_mouse_click(column, line as u16, &mut ui, &snapshot),
+                handle_mouse_click(column, line as u16, &mut ui, &mut pane_ui, &snapshot),
                 InputOutcome {
                     redraw: true,
                     effects: vec![InputEffect::Focus(child.clone())]
@@ -193,7 +195,7 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         }
     }
     assert_eq!(
-        handle_mouse_click(10, native as u16, &mut ui, &snapshot),
+        handle_mouse_click(10, native as u16, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(parent.clone())]
@@ -206,18 +208,18 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     .unwrap();
     card.sub_agents[0].pane = None;
     card.sub_agents[0].status = crate::agents::AgentStatus::Success;
-    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     let closed = composed
         .lines
         .iter()
         .position(|line| line.to_string().contains("live-child"))
         .unwrap();
     assert!(composed.lines[closed + 1].to_string().contains("Haiku"));
-    ui.interactions = composed.interactions;
-    remember_roster(&mut ui, &snapshot);
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
     for line in [closed, closed + 1] {
         assert_eq!(
-            handle_mouse_click(10, line as u16, &mut ui, &snapshot),
+            handle_mouse_click(10, line as u16, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome {
                 redraw: true,
                 effects: vec![InputEffect::Focus(parent.clone())]
@@ -243,30 +245,28 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
     own_card.pane = Some(pane("terminal_child", "tab_0", false));
     own_card.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
     rows.push(own_card);
-    let mut ui = UiState {
-        view: render::ViewState {
-            make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
-            delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+        delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     assert!(
         ui.visible_roster(&snapshot)
             .ordinal_of_id("child-own-card")
             .is_none()
     );
-    let theme = ui.theme(&snapshot.theme);
-    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     let line = composed
         .lines
         .iter()
         .position(|line| line.to_string().contains("live-child"))
         .unwrap();
-    ui.interactions = composed.interactions;
-    remember_roster(&mut ui, &snapshot);
+    pane_ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
-        handle_mouse_click(1, line as u16, &mut ui, &snapshot),
+        handle_mouse_click(1, line as u16, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(child)]
@@ -291,20 +291,21 @@ fn shows(lines: &[ratatui::text::Line<'_>], text: &str) -> bool {
 /// Click the delegation header of `row_id`, which must be painted with the
 /// target that sets `open`.
 fn click_delegation_header(
-    ui: &mut UiState,
+    ui: &mut ViewState,
+    pane_ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     interactions: render::FrameInteractions,
     row_id: &str,
     open: bool,
 ) {
-    ui.interactions = interactions;
+    pane_ui.interactions = interactions;
     let target = HitTarget::ToggleDelegation {
         row: row_id.to_owned(),
         open,
     };
-    let (_, line) = ui.interactions.line_for_target(&target).unwrap();
+    let (_, line) = pane_ui.interactions.line_for_target(&target).unwrap();
     assert_eq!(
-        handle_mouse_click(10, line, ui, snapshot),
+        handle_mouse_click(10, line, ui, pane_ui, snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(pane_of(snapshot, 0))],
@@ -319,64 +320,96 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     let snapshot = delegation_snapshot();
     let other = pane_of(&snapshot, 1);
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
-    let theme = ui.theme(&snapshot.theme);
-    let compose = |ui: &UiState| render::compose_lines(&snapshot, None, ui, theme.as_ref(), 54, 64);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let compose = |ui: &ViewState, pane_ui: &UiState| {
+        render::compose_lines(&snapshot, None, ui, pane_ui, theme.as_ref(), 54, 64)
+    };
 
-    let collapsed = compose(&ui);
+    let collapsed = compose(&ui, &pane_ui);
     assert!(!shows(&collapsed.lines, "live-child"));
-    click_delegation_header(&mut ui, &snapshot, collapsed.interactions, &row_id, true);
+    click_delegation_header(
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+        collapsed.interactions,
+        &row_id,
+        true,
+    );
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(
         ui.browse.as_ref().map(|browse| &browse.pane),
         ui.selected_pane.as_ref()
     );
-    let opened = compose(&ui);
+    let opened = compose(&ui, &pane_ui);
     assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
     assert!(shows(&opened.lines, "+1 older"));
     assert!(!shows(&opened.lines, "old-child"));
-    click_delegation_header(&mut ui, &snapshot, opened.interactions, &row_id, false);
-    assert!(!shows(&compose(&ui).lines, "live-child"));
+    click_delegation_header(
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+        opened.interactions,
+        &row_id,
+        false,
+    );
+    assert!(!shows(&compose(&ui, &pane_ui).lines, "live-child"));
 
     // Selection opens by default, but a header click closes a selected card's
     // entries too, and the choice survives selection moving away and back.
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
-    let selected = compose(&ui);
+    let selected = compose(&ui, &pane_ui);
     assert!(shows(&selected.lines, "live-child"));
-    click_delegation_header(&mut ui, &snapshot, selected.interactions, &row_id, false);
-    assert!(!shows(&compose(&ui).lines, "live-child"));
+    click_delegation_header(
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+        selected.interactions,
+        &row_id,
+        false,
+    );
+    assert!(!shows(&compose(&ui, &pane_ui).lines, "live-child"));
     reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
     reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
-    let closed = compose(&ui);
+    let closed = compose(&ui, &pane_ui);
     assert!(!shows(&closed.lines, "live-child"));
     assert!(!shows(&closed.lines, "+1 older"));
 
-    click_delegation_header(&mut ui, &snapshot, closed.interactions, &row_id, true);
-    let reopened = compose(&ui);
+    click_delegation_header(
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+        closed.interactions,
+        &row_id,
+        true,
+    );
+    let reopened = compose(&ui, &pane_ui);
     let tail = reopened
         .lines
         .iter()
         .position(|line| line.to_string().contains("+1 older"))
         .unwrap();
-    ui.interactions = reopened.interactions;
+    pane_ui.interactions = reopened.interactions;
     assert_eq!(
-        ui.interactions.target_at(10, tail as u16),
+        pane_ui.interactions.target_at(10, tail as u16),
         Some(HitTarget::ToggleDelegationHistory(row_id.clone()))
     );
     reconcile_selection(&mut ui, &snapshot, Some(other));
     assert_eq!(
-        handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
+        handle_mouse_click(10, tail as u16, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(pane_of(&snapshot, 0))],
         }
     );
     assert_eq!(ui.selected_pane, Some(pane_of(&snapshot, 0)));
-    let history = compose(&ui);
+    let history = compose(&ui, &pane_ui);
     assert!(shows(&history.lines, "live-child"));
     assert!(shows(&history.lines, "old-child"));
     assert!(!shows(&history.lines, "+1 older"));
@@ -387,7 +420,14 @@ fn delegation_line_click_toggles_entries_and_focuses_parent() {
     assert_eq!(ordinals, vec![0, 1]);
 
     // Closing the section folds the history, so reopening starts from the bands.
-    click_delegation_header(&mut ui, &snapshot, history.interactions, &row_id, false);
+    click_delegation_header(
+        &mut ui,
+        &mut pane_ui,
+        &snapshot,
+        history.interactions,
+        &row_id,
+        false,
+    );
     assert!(!ui.delegation_history.contains_key(&row_id));
 }
 
@@ -407,14 +447,15 @@ fn delegation_click_without_a_parent_pane_only_toggles() {
         },
         HitTarget::ToggleDelegationHistory(row_id.clone()),
     ] {
-        let mut ui = UiState::default();
+        let mut ui = ViewState::default();
+        let mut pane_ui = UiState::default();
         reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
-        ui.interactions = render::FrameInteractions::from_parts(
+        pane_ui.interactions = render::FrameInteractions::from_parts(
             Vec::new(),
             vec![render::HitRegion::whole_line(0, target.clone())],
         );
         assert_eq!(
-            handle_mouse_click(1, 0, &mut ui, &snapshot),
+            handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome::redraw()
         );
         assert_eq!(ui.selected_pane, Some(other.clone()));
@@ -431,11 +472,12 @@ fn delegation_click_without_a_parent_pane_only_toggles() {
 fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stays() {
     let mut snapshot = delegation_snapshot();
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert!(ui.delegation_history.contains_key(&row_id));
     std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -443,8 +485,8 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
     .as_agent_mut()
     .unwrap()
     .user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
-    let theme = ui.theme(&snapshot.theme);
-    let stale = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let stale = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     assert!(
         !stale
             .lines
@@ -452,13 +494,13 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
             .any(|line| line.to_string().contains("old-child")),
         "stale history is inert before pruning"
     );
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true));
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
         .remove(0);
-    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert!(!ui.delegation_overrides.contains_key(&row_id));
 }
@@ -466,14 +508,15 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
 #[test]
 fn width_keys_dispatch_without_redrawing() {
     let snapshot = snapshot(&workspace());
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
 
     assert_eq!(
-        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).effects,
+        handle_key(KeyAction::WidthNarrower, &mut ui, &mut pane_ui, &snapshot).effects,
         vec![InputEffect::Width(WidthAdjust::Narrower)],
     );
     assert_eq!(
-        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).effects,
+        handle_key(KeyAction::WidthWider, &mut ui, &mut pane_ui, &snapshot).effects,
         vec![InputEffect::Width(WidthAdjust::Wider)],
     );
 }
@@ -506,12 +549,12 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
 
     // No content line of the agent block is missed: every map slot routes
     // through the hit-test to exactly the row it was tagged with.
-    let ui = UiState {
+    let pane_ui = UiState {
         interactions: interactions.clone(),
         ..UiState::default()
     };
     for i in 0..interactions.line_count() {
-        let got = row_index_at_screen_position(&ui, screen_row_for(i));
+        let got = row_index_at_screen_position(&pane_ui, screen_row_for(i));
         assert_eq!(
             got,
             interactions.row_at_line(i),
@@ -530,30 +573,30 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
     // row 0 is not clickable, the worktree header routes to its first row,
     // the process row beneath it follows, and the section gap just above the
     // header is inert.
-    let header = ui.interactions.line_for_row(0).unwrap();
+    let header = pane_ui.interactions.line_for_row(0).unwrap();
     let row_below_header = header + 1;
-    let process_row = ui.interactions.line_for_row(1).unwrap();
+    let process_row = pane_ui.interactions.line_for_row(1).unwrap();
     assert_eq!(
-        row_index_at_screen_position(&ui, 0),
+        row_index_at_screen_position(&pane_ui, 0),
         None,
         "the title line is not clickable content"
     );
     assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(header)),
+        row_index_at_screen_position(&pane_ui, screen_row_for(header)),
         Some(0),
         "the worktree header jumps into its first row"
     );
     assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(row_below_header)),
+        row_index_at_screen_position(&pane_ui, screen_row_for(row_below_header)),
         Some(0),
         "the agent card line below the header still routes to row 0"
     );
     assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(process_row)),
+        row_index_at_screen_position(&pane_ui, screen_row_for(process_row)),
         Some(1)
     );
     assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(header - 1)),
+        row_index_at_screen_position(&pane_ui, screen_row_for(header - 1)),
         None,
         "the section gap is not a row"
     );
@@ -608,16 +651,14 @@ fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
 #[test]
 fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals() {
     let (snapshot, selected) = landed_click_snapshot(6);
-    let mut ui = UiState {
-        view: render::ViewState {
-            scroll_offset: usize::MAX,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        scroll_offset: usize::MAX,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
-    paint(&mut ui, &snapshot, 24);
+    paint(&mut ui, &mut pane_ui, &snapshot, 24);
     let offset = ui.scroll_offset;
     assert!(offset > 0);
     let selection = ui.selected_index;
@@ -629,22 +670,23 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
         .collect::<Vec<_>>();
     let selected_pane = ui.selected_pane.clone();
     for open in [true, false] {
-        let (column, line) = ui
+        let (column, line) = pane_ui
             .interactions
             .line_for_target(&HitTarget::ToggleLanded)
             .expect("landed chip click");
         assert_eq!(
-            handle_mouse_click(column, line, &mut ui, &snapshot),
+            handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot),
             InputOutcome::redraw()
         );
         assert_eq!(ui.landed_open, open);
-        paint(&mut ui, &snapshot, 24);
+        paint(&mut ui, &mut pane_ui, &snapshot, 24);
         assert_eq!(ui.scroll_offset, offset + if open { 4 } else { 0 });
-        assert_eq!(Some(ui.scroll_offset), ui.drawn_scroll_max);
+        assert_eq!(Some(ui.scroll_offset), pane_ui.drawn_scroll_max);
         assert_eq!(ui.selected_index, selection);
         assert_eq!(ui.selected_pane, selected_pane);
         assert!(
-            ui.interactions
+            pane_ui
+                .interactions
                 .line_for_target(&HitTarget::ToggleLanded)
                 .is_some(),
             "the chip stays on screen"
@@ -661,8 +703,8 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
     ui.landed_open = true;
     ui.scroll_offset = usize::MAX;
     ui.offset_authoritative = true;
-    paint(&mut ui, &snapshot, 24);
-    let (_, header) = ui
+    paint(&mut ui, &mut pane_ui, &snapshot, 24);
+    let (_, header) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ExpandGroup {
             key: "landed".into(),
@@ -670,7 +712,7 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
         })
         .expect("singleton header/receipt hit");
     assert_eq!(
-        handle_mouse_click(0, header, &mut ui, &snapshot),
+        handle_mouse_click(0, header, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(PaneId::from_parts(
@@ -680,12 +722,12 @@ fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals()
         }
     );
     assert!(ui.expanded_groups.contains("landed"));
-    paint(&mut ui, &snapshot, 24);
-    let (_, header) = ui
+    paint(&mut ui, &mut pane_ui, &snapshot, 24);
+    let (_, header) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup("landed".to_owned()))
         .unwrap();
-    handle_mouse_click(0, header, &mut ui, &snapshot);
+    handle_mouse_click(0, header, &mut ui, &mut pane_ui, &snapshot);
     assert!(!ui.expanded_groups.contains("landed"));
 }
 
@@ -711,30 +753,35 @@ fn folded_finished_header_and_receipt_lines_expand_and_focus_first_member() {
     let (snapshot, selected) = finished_click_snapshot(0);
     let mut results = Vec::new();
     for line_offset in 0..3 {
-        let mut ui = UiState {
-            view: render::ViewState {
-                landed_open: true,
-                ..Default::default()
-            },
-            ..UiState::default()
+        let mut ui = render::ViewState {
+            landed_open: true,
+            ..Default::default()
         };
+        let mut pane_ui = UiState::default();
         reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
         assert!(ui.visible_roster(&snapshot).ordinal_of_id("done").is_none());
-        let theme = ui.theme(&snapshot.theme);
-        let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+        let theme = pane_ui.theme(&snapshot.theme);
+        let composed =
+            render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
         let header = composed
             .lines
             .iter()
             .position(|line| line.to_string().contains("finished-click"))
             .unwrap();
-        ui.interactions = composed.interactions;
-        remember_roster(&mut ui, &snapshot);
-        let outcome = handle_mouse_click(0, (header + line_offset) as u16, &mut ui, &snapshot);
+        pane_ui.interactions = composed.interactions;
+        remember_roster(&mut ui, &mut pane_ui, &snapshot);
+        let outcome = handle_mouse_click(
+            0,
+            (header + line_offset) as u16,
+            &mut ui,
+            &mut pane_ui,
+            &snapshot,
+        );
         assert!(ui.expanded_groups.contains("landed"));
         results.push((
             outcome,
             ui.selected_pane.clone(),
-            ui.view.browse.map(|browse| browse.pane),
+            ui.browse.map(|browse| browse.pane),
         ));
     }
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_done");
@@ -764,15 +811,13 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
             .rows,
     )[0]
     .pane = None;
-    let mut ui = UiState {
-        view: render::ViewState {
-            landed_open: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        landed_open: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
-    ui.interactions = render::FrameInteractions::from_parts(
+    pane_ui.interactions = render::FrameInteractions::from_parts(
         Vec::new(),
         vec![render::HitRegion::whole_line(
             0,
@@ -783,7 +828,7 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
         )],
     );
     assert_eq!(
-        handle_mouse_click(1, 0, &mut ui, &snapshot),
+        handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
     assert!(ui.expanded_groups.contains("landed"));
@@ -794,11 +839,11 @@ fn folded_finished_click_without_first_members_pane_expands_without_focus() {
 #[test]
 fn stale_folded_target_keeps_an_already_expanded_group_open() {
     let (snapshot, _) = finished_click_snapshot(0);
-    let mut ui = UiState {
-        view: render::ViewState {
-            expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        expanded_groups: std::collections::BTreeSet::from(["landed".into()]),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: render::FrameInteractions::from_parts(
             Vec::new(),
             vec![render::HitRegion::whole_line(
@@ -812,7 +857,7 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
         ..Default::default()
     };
     assert_eq!(
-        handle_mouse_click(1, 0, &mut ui, &snapshot),
+        handle_mouse_click(1, 0, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome {
             redraw: true,
             effects: vec![InputEffect::Focus(PaneId::from_parts(
@@ -827,30 +872,28 @@ fn stale_folded_target_keeps_an_already_expanded_group_open() {
 #[test]
 fn folded_header_on_viewports_last_line_reveals_focused_member() {
     let (snapshot, selected) = finished_click_snapshot(6);
-    let mut ui = UiState {
-        view: render::ViewState {
-            landed_open: true,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        landed_open: true,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
-    let theme = ui.theme(&snapshot.theme);
-    let full = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 128);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let full = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 128);
     let header = full
         .lines
         .iter()
         .position(|line| line.to_string().contains("finished-click"))
         .unwrap();
     let height = (header + 1 + full.bottom_height) as u16;
-    paint(&mut ui, &snapshot, height);
-    assert!(ui.interactions.target_at(0, header as u16).is_some());
-    handle_mouse_click(0, header as u16, &mut ui, &snapshot);
-    paint(&mut ui, &snapshot, height);
+    paint(&mut ui, &mut pane_ui, &snapshot, height);
+    assert!(pane_ui.interactions.target_at(0, header as u16).is_some());
+    handle_mouse_click(0, header as u16, &mut ui, &mut pane_ui, &snapshot);
+    paint(&mut ui, &mut pane_ui, &snapshot, height);
     let member = ui.visible_roster(&snapshot).ordinal_of_id("done").unwrap();
     assert!(
-        ui.interactions.line_for_row(member).is_some(),
+        pane_ui.interactions.line_for_row(member).is_some(),
         "the focused card must enter the viewport after unfolding"
     );
 }
@@ -859,25 +902,25 @@ fn folded_header_on_viewports_last_line_reveals_focused_member() {
 fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
     let (mut snapshot, _) = landed_click_snapshot(0);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
-    let mut ui = UiState {
-        view: render::ViewState {
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        offset_authoritative: true,
+        ..Default::default()
     };
-    paint(&mut ui, &snapshot, 24);
+    let mut pane_ui = UiState::default();
+    paint(&mut ui, &mut pane_ui, &snapshot, 24);
     assert_eq!(ui.scroll_offset, 0);
-    let (column, line) = ui
+    let (column, line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleLanded)
         .unwrap();
-    handle_mouse_click(column, line, &mut ui, &snapshot);
-    paint(&mut ui, &snapshot, 24);
+    handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot);
+    paint(&mut ui, &mut pane_ui, &snapshot, 24);
     assert_eq!(ui.scroll_offset, 0);
-    assert_eq!(ui.drawn_scroll_max, Some(0));
+    assert_eq!(pane_ui.drawn_scroll_max, Some(0));
     assert_eq!(
-        ui.interactions.line_for_target(&HitTarget::ToggleLanded),
+        pane_ui
+            .interactions
+            .line_for_target(&HitTarget::ToggleLanded),
         Some((column, line))
     );
 }
@@ -885,31 +928,29 @@ fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
 #[test]
 fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
     let (snapshot, selected) = landed_click_snapshot(6);
-    let mut ui = UiState {
-        view: render::ViewState {
-            scroll_offset: usize::MAX,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        scroll_offset: usize::MAX,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected));
-    let theme = ui.theme(&snapshot.theme);
-    let frame = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 24);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let frame = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 24);
     let height = (frame.top_height + frame.bottom_height + 4) as u16;
-    paint(&mut ui, &snapshot, height);
-    let (column, line) = ui
+    paint(&mut ui, &mut pane_ui, &snapshot, height);
+    let (column, line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleLanded)
         .unwrap();
-    handle_mouse_click(column, line, &mut ui, &snapshot);
-    paint(&mut ui, &snapshot, height);
-    let (_, chip) = ui
+    handle_mouse_click(column, line, &mut ui, &mut pane_ui, &snapshot);
+    paint(&mut ui, &mut pane_ui, &snapshot, height);
+    let (_, chip) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleLanded)
         .unwrap();
-    assert_eq!(usize::from(chip), ui.scroll_zone_top);
-    let painted = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, height);
+    assert_eq!(usize::from(chip), pane_ui.scroll_zone_top);
+    let painted = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, height);
     assert_eq!(
         painted.top_height + painted.bottom_height + 4,
         usize::from(height),
@@ -925,21 +966,22 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
-    let mut ui = UiState::default();
-    let theme = ui.theme(&snapshot.theme);
-    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    ui.interactions = composed.interactions;
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
+    pane_ui.interactions = composed.interactions;
     assert_eq!(
         roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
         6,
         "collapsed body exposes the capped row ordinals"
     );
-    let (_, more_line) = ui
+    let (_, more_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
         .expect("more hit");
 
-    let outcome = handle_mouse_click(0, more_line, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(0, more_line, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(ui.expanded_groups.contains(&group_key));
@@ -950,20 +992,20 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
         "expanded body exposes every row ordinal"
     );
 
-    let theme = ui.theme(&snapshot.theme);
-    let expanded = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let expanded = render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64);
     let mut ordinals = (0..expanded.interactions.line_count())
         .filter_map(|line| expanded.interactions.row_at_line(line))
         .collect::<Vec<_>>();
     ordinals.dedup();
     assert_eq!(ordinals, (0..9).collect::<Vec<_>>());
 
-    ui.interactions = expanded.interactions;
-    let (_, less_line) = ui
+    pane_ui.interactions = expanded.interactions;
+    let (_, less_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
         .expect("less hit");
-    let outcome = handle_mouse_click(0, less_line, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(0, less_line, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(!ui.expanded_groups.contains(&group_key));
 }
@@ -977,23 +1019,24 @@ fn group_toggle_preserves_the_wheel_offset() {
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
-    let theme = ui.theme(&snapshot.theme);
-    ui.interactions =
-        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
-    handle_scroll(true, &mut ui);
+    let theme = pane_ui.theme(&snapshot.theme);
+    pane_ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64).interactions;
+    handle_scroll(true, &mut ui, &mut pane_ui);
     let offset = ui.scroll_offset;
-    let (_, more_line) = ui
+    let (_, more_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
         .expect("more hit");
 
-    handle_mouse_click(0, more_line, &mut ui, &snapshot);
+    handle_mouse_click(0, more_line, &mut ui, &mut pane_ui, &snapshot);
 
     assert!(ui.expanded_groups.contains(&group_key));
     assert_eq!(ui.scroll_offset, offset);
-    paint(&mut ui, &snapshot, 13);
+    paint(&mut ui, &mut pane_ui, &snapshot, 13);
     assert_eq!(
         ui.scroll_offset, offset,
         "the selection above does not pull the toggle viewport"
@@ -1010,22 +1053,23 @@ fn group_toggle_preserves_the_viewport_through_a_selection_fold() {
         .collect::<Vec<_>>();
     let snapshot = snapshot_with_panes(&ws, panes);
     let group_key = snapshot.worktree_groups[0].key.clone();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
-    let theme = ui.theme(&snapshot.theme);
-    ui.interactions =
-        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
-    let (_, more_line) = ui
+    let theme = pane_ui.theme(&snapshot.theme);
+    pane_ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64).interactions;
+    let (_, more_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key))
         .expect("more hit");
 
-    handle_mouse_click(0, more_line, &mut ui, &snapshot);
+    handle_mouse_click(0, more_line, &mut ui, &mut pane_ui, &snapshot);
 
-    paint(&mut ui, &snapshot, 64);
+    paint(&mut ui, &mut pane_ui, &snapshot, 64);
     assert_eq!(ui.scroll_offset, 0);
     reconcile_selection(&mut ui, &snapshot, Some(next));
-    paint(&mut ui, &snapshot, 64);
+    paint(&mut ui, &mut pane_ui, &snapshot, 64);
     assert_eq!(ui.scroll_offset, 0);
 }
 
@@ -1047,37 +1091,35 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     }
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
     let group_key = snapshot.worktree_groups[0].key.clone();
-    let mut ui = UiState {
-        view: render::ViewState {
-            baseline_pane: Some(selected.clone()),
-            browse: Some(browse(&selected, Some(&selected))),
-            expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        baseline_pane: Some(selected.clone()),
+        browse: Some(browse(&selected, Some(&selected))),
+        expanded_groups: std::collections::BTreeSet::from([group_key.clone()]),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
     assert_eq!(ui.selected_pane, Some(selected.clone()));
-    let theme = ui.theme(&snapshot.theme);
-    ui.interactions =
-        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
-    let (_, header_line) = ui
+    let theme = pane_ui.theme(&snapshot.theme);
+    pane_ui.interactions =
+        render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 54, 64).interactions;
+    let (_, header_line) = pane_ui
         .interactions
         .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
         .expect("finished group header hit");
 
     assert_eq!(
-        handle_mouse_click(0, header_line, &mut ui, &snapshot),
+        handle_mouse_click(0, header_line, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
 
     assert!(!ui.expanded_groups.contains(&group_key));
     assert_eq!(ui.selected_pane, None);
-    paint(&mut ui, &snapshot, 64);
+    paint(&mut ui, &mut pane_ui, &snapshot, 64);
     assert_eq!(ui.scroll_offset, 0);
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     assert_eq!(ui.selected_pane, None);
-    paint(&mut ui, &snapshot, 64);
+    paint(&mut ui, &mut pane_ui, &snapshot, 64);
     assert_eq!(ui.scroll_offset, 0);
 }
 
@@ -1093,19 +1135,19 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
         ],
     );
 
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        help_visible: false,
+        animation_phase: 0,
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
-    remember_roster(&mut ui, &snapshot);
-    let row1 = ui.interactions.line_for_row(1).unwrap();
-    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
+    remember_roster(&mut ui, &mut pane_ui, &snapshot);
+    let row1 = pane_ui.interactions.line_for_row(1).unwrap();
+    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &mut pane_ui, &snapshot);
     assert!(outcome.redraw, "the click itself paints the new selection");
     assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
     assert_eq!(ui.selected_index, Some(1));
@@ -1126,28 +1168,27 @@ fn focus_keys_fire_without_mutating_selection() {
     );
 
     // A digit ordinal jumps to the second pane without moving the selection.
-    let mut ui = UiState::default();
-    let outcome = handle_key(KeyAction::Digit(2), &mut ui, &snapshot);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let outcome = handle_key(KeyAction::Digit(2), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, None, "the digit moves no selection");
     assert_eq!(ui.selected_pane, None);
 
     // An out-of-range ordinal resolves no pane and does nothing.
-    let outcome = handle_key(KeyAction::Digit(9), &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Digit(9), &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
     // Enter focuses the selected pane and reads, never writes, the selection.
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            selected_pane: Some(target.clone()),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        selected_pane: Some(target.clone()),
+        help_visible: false,
+        animation_phase: 0,
+        ..Default::default()
     };
-    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+    let mut pane_ui = UiState::default();
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, Some(1));
     assert_eq!(
@@ -1159,7 +1200,7 @@ fn focus_keys_fire_without_mutating_selection() {
     // With nothing selected there is no target and nothing happens.
     ui.selected_pane = None;
     ui.selected_index = None;
-    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
     // The inbox keys triage to the next attention row, firing focus without
@@ -1186,13 +1227,14 @@ fn focus_keys_fire_without_mutating_selection() {
             ..crate::store::snapshot::AgentCard::default()
         },
     ));
-    let mut ui = UiState::default();
-    let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    let outcome = handle_key(KeyAction::InboxNext, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, None, "the triage key moves no selection");
     assert_eq!(ui.selected_pane, None);
 
-    let outcome = handle_key(KeyAction::InboxPrev, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::InboxPrev, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         outcome,
         InputOutcome::focus(target),
@@ -1213,17 +1255,15 @@ fn arrow_key_reports_immediate_ui_change() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            help_visible: false,
-            animation_phase: 0,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        help_visible: false,
+        animation_phase: 0,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::Down, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Down, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(1));
@@ -1235,28 +1275,26 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
     let snapshot = filterable_snapshot(&ws);
     let feature = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let main = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            selected_pane: Some(main.clone()),
-            baseline_pane: Some(main.clone()),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        selected_pane: Some(main.clone()),
+        baseline_pane: Some(main.clone()),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(2));
     assert_eq!(ui.selected_pane, Some(feature));
     assert!(ui.browse.is_some(), "a worktree jump is a browse pick");
 
-    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::WorktreeDown, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default(), "no wrap at the end");
     assert_eq!(ui.selected_index, Some(2));
 
-    let outcome = handle_key(KeyAction::WorktreeUp, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::WorktreeUp, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(0));
     assert_eq!(ui.selected_pane, Some(main));
@@ -1265,9 +1303,10 @@ fn worktree_keys_browse_to_neighboring_worktree_heads() {
 fn dismiss_key_requests_alert_dismissal() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::Dismiss, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Dismiss, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::dismiss());
     assert_eq!(outcome.effects, vec![InputEffect::DismissAlert]);
@@ -1278,24 +1317,26 @@ fn dismiss_key_requests_alert_dismissal() {
 
 #[test]
 fn wheel_scroll_clamps_to_the_drawn_range_before_reversing() {
-    let mut ui = UiState {
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState {
         drawn_scroll_max: Some(5),
         ..Default::default()
     };
     for _ in 0..4 {
-        handle_scroll(true, &mut ui);
+        handle_scroll(true, &mut ui, &mut pane_ui);
         assert!(ui.scroll_offset <= 5);
     }
     assert_eq!(ui.scroll_offset, 5);
-    handle_scroll(false, &mut ui);
+    handle_scroll(false, &mut ui, &mut pane_ui);
     assert_eq!(ui.scroll_offset, 5 - SCROLL_STEP);
 }
 
 #[test]
 fn wheel_scroll_steps_the_offset_without_moving_selection() {
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_scroll(true, &mut ui);
+    let outcome = handle_scroll(true, &mut ui, &mut pane_ui);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.scroll_offset, SCROLL_STEP);
@@ -1304,13 +1345,13 @@ fn wheel_scroll_steps_the_offset_without_moving_selection() {
         "the wheel never moves the selection"
     );
 
-    handle_scroll(true, &mut ui);
+    handle_scroll(true, &mut ui, &mut pane_ui);
     assert_eq!(ui.scroll_offset, 2 * SCROLL_STEP);
 
     // Scrolling back above the top clamps at zero rather than wrapping.
-    handle_scroll(false, &mut ui);
-    handle_scroll(false, &mut ui);
-    handle_scroll(false, &mut ui);
+    handle_scroll(false, &mut ui, &mut pane_ui);
+    handle_scroll(false, &mut ui, &mut pane_ui);
+    handle_scroll(false, &mut ui, &mut pane_ui);
     assert_eq!(ui.scroll_offset, 0);
 }
 
@@ -1319,12 +1360,12 @@ fn banner_without_a_lead_falls_back_to_top_without_focusing() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
-    let mut ui = UiState {
-        view: render::ViewState {
-            scroll_offset: 42,
-            selected_pane: Some(target),
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        scroll_offset: 42,
+        selected_pane: Some(target),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: render::FrameInteractions::from_parts(
             vec![None; 3],
             vec![render::HitRegion::whole_line(2, HitTarget::UnreadBanner)],
@@ -1332,11 +1373,11 @@ fn banner_without_a_lead_falls_back_to_top_without_focusing() {
         ..Default::default()
     };
 
-    let outcome = handle_mouse_click(0, 2, &mut ui, &snapshot);
+    let outcome = handle_mouse_click(0, 2, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.scroll_offset, 0);
-    paint(&mut ui, &snapshot, 20);
+    paint(&mut ui, &mut pane_ui, &snapshot, 20);
     assert_eq!(ui.scroll_offset, 0);
     assert_eq!(outcome.effects, Vec::new());
 }
@@ -1359,32 +1400,30 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     rows[18].as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
     rows[18].unread = true;
     let selected = pane_of(&snapshot, 0);
-    let mut ui = UiState {
-        view: render::ViewState {
-            freeze: Some(render::LayoutFreeze {
-                frozen: Default::default(),
-                armed_ms: 1,
-            }),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        freeze: Some(render::LayoutFreeze {
+            frozen: Default::default(),
+            armed_ms: 1,
+        }),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     ui.expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
-    paint(&mut ui, &snapshot, 18);
-    assert!(ui.interactions.line_for_row(18).is_none());
-    let (column, row) = ui
+    paint(&mut ui, &mut pane_ui, &snapshot, 18);
+    assert!(pane_ui.interactions.line_for_row(18).is_none());
+    let (column, row) = pane_ui
         .interactions
         .line_for_target(&HitTarget::UnreadBanner)
         .unwrap();
     assert_eq!(
-        handle_mouse_click(column, row, &mut ui, &snapshot),
+        handle_mouse_click(column, row, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
-    paint(&mut ui, &snapshot, 18);
+    paint(&mut ui, &mut pane_ui, &snapshot, 18);
     assert!(
-        ui.interactions.line_for_row(18).is_some(),
+        pane_ui.interactions.line_for_row(18).is_some(),
         "reveal the lead, not producer rank zero"
     );
     assert!(ui.scroll_offset > 0);
@@ -1392,14 +1431,14 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     assert_eq!(ui.reveal_row, None, "one draw consumes the reveal");
 
     ui.make_up_filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running));
-    paint(&mut ui, &snapshot, 18);
-    let (column, row) = ui
+    paint(&mut ui, &mut pane_ui, &snapshot, 18);
+    let (column, row) = pane_ui
         .interactions
         .line_for_target(&HitTarget::UnreadBanner)
         .unwrap();
     ui.scroll_offset = 42;
     assert_eq!(
-        handle_mouse_click(column, row, &mut ui, &snapshot),
+        handle_mouse_click(column, row, &mut ui, &mut pane_ui, &snapshot),
         InputOutcome::redraw()
     );
     assert_eq!(
@@ -1407,7 +1446,7 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
         "a filter-hidden full-roster lead falls back to top"
     );
     assert_eq!(ui.selected_pane, Some(selected));
-    paint(&mut ui, &snapshot, 18);
+    paint(&mut ui, &mut pane_ui, &snapshot, 18);
     assert_eq!(ui.reveal_row, None);
 }
 #[test]
@@ -1421,36 +1460,37 @@ fn only_own_input_ends_the_wheel_peek_on_selection_change() {
             .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
             .collect(),
     );
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
     ui.expanded_groups
         .insert(snapshot.worktree_groups[0].key.clone());
     reconcile_selection(&mut ui, &snapshot, Some(first.clone()));
-    paint(&mut ui, &snapshot, 14);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
     for _ in 0..4 {
-        handle_scroll(true, &mut ui);
+        handle_scroll(true, &mut ui, &mut pane_ui);
     }
-    paint(&mut ui, &snapshot, 14);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
     ui.frame_ms += 100;
-    paint(&mut ui, &snapshot, 14);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
     let offset = ui.scroll_offset;
 
     // An unchanged selection keeps the peek.
     reconcile_selection(&mut ui, &snapshot, Some(first));
-    paint(&mut ui, &snapshot, 14);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
     assert_eq!(
         ui.scroll_offset, offset,
         "unchanged selection leaves the peek alone"
     );
 
     // A native focus move keeps the peek; only this sidebar's input reveals.
-    let peek = ui.painted_rows.clone();
+    let peek = pane_ui.painted_rows.clone();
     reconcile_selection(&mut ui, &snapshot, Some(second));
-    paint(&mut ui, &snapshot, 14);
-    assert_eq!(ui.painted_rows, peek);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
+    assert_eq!(pane_ui.painted_rows, peek);
     ui.own_input_reveal = true;
-    paint(&mut ui, &snapshot, 14);
+    paint(&mut ui, &mut pane_ui, &snapshot, 14);
     assert!(ui.scroll_offset < offset);
-    assert!(ui.interactions.line_for_row(1).is_some());
+    assert!(pane_ui.interactions.line_for_row(1).is_some());
 }
 #[test]
 fn arrow_browse_reveals_an_offscreen_pick() {
@@ -1462,14 +1502,16 @@ fn arrow_browse_reveals_an_offscreen_pick() {
             pane("terminal_2", "tab_0", false),
         ],
     );
-    let mut ui = UiState::default();
-    handle_scroll(true, &mut ui);
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
+    handle_scroll(true, &mut ui, &mut pane_ui);
 
-    handle_key(KeyAction::Down, &mut ui, &snapshot);
+    handle_key(KeyAction::Down, &mut ui, &mut pane_ui, &snapshot);
 
-    paint(&mut ui, &snapshot, 20);
+    paint(&mut ui, &mut pane_ui, &snapshot, 20);
     assert!(
-        ui.interactions
+        pane_ui
+            .interactions
             .line_for_row(ui.selected_index.unwrap())
             .is_some()
     );
@@ -1478,16 +1520,14 @@ fn arrow_browse_reveals_an_offscreen_pick() {
 fn help_key_opens_without_touching_the_viewport() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
-    let mut ui = UiState {
-        view: render::ViewState {
-            scroll_offset: 6,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        scroll_offset: 6,
+        offset_authoritative: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
-    handle_key(KeyAction::Help, &mut ui, &snapshot);
+    handle_key(KeyAction::Help, &mut ui, &mut pane_ui, &snapshot);
 
     assert!(ui.help_visible);
     assert_eq!(ui.scroll_offset, 6);
@@ -1497,16 +1537,14 @@ fn help_key_opens_without_touching_the_viewport() {
 fn other_key_is_noop_when_help_is_closed() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            scroll_offset: 6,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        scroll_offset: 6,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::Other, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Other, &mut ui, &mut pane_ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::default());
     assert_eq!(ui.selected_index, Some(1));
@@ -1524,21 +1562,22 @@ fn top_and_bottom_keys_browse_to_the_ends() {
             pane("terminal_3", "tab_0", false),
         ],
     );
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
+    let mut pane_ui = UiState::default();
 
     // G jumps to the last visible row as a browse pick — selection only.
-    let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Bottom, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(2));
     assert_eq!(outcome.effects, Vec::new(), "the end jump never focuses");
     assert!(ui.browse.is_some(), "G begins a browse pick");
 
     // G again at the bottom is a no-op.
-    let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Bottom, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
     // g jumps back to the first row.
-    let outcome = handle_key(KeyAction::Top, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Top, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(0));
 }
@@ -1556,11 +1595,11 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
             pane("terminal_5", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(2),
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        selected_index: Some(2),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -1568,7 +1607,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
         ..Default::default()
     };
 
-    let outcome = handle_key(KeyAction::ScreenTop, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::ScreenTop, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(1));
     assert_eq!(
@@ -1577,7 +1616,7 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
     );
     assert!(ui.browse.is_some(), "screen-edge jump is a browse pick");
 
-    let outcome = handle_key(KeyAction::ScreenBottom, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::ScreenBottom, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(3));
     assert_eq!(
@@ -1600,11 +1639,11 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
             pane("terminal_6", "tab_0", false),
         ],
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            ..Default::default()
-        },
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        ..Default::default()
+    };
+    let mut pane_ui = UiState {
         interactions: render::FrameInteractions::from_parts(
             vec![None, Some(1), Some(2), Some(3), None],
             Vec::new(),
@@ -1612,7 +1651,7 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         ..Default::default()
     };
 
-    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(4));
     assert_eq!(
@@ -1620,12 +1659,12 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_5"))
     );
 
-    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(1));
 
     ui.selected_index = Some(4);
-    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         ui.selected_index,
@@ -1633,14 +1672,14 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
         "page down clamps at the last row"
     );
 
-    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default(), "already at bottom");
 
-    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, Some(2));
 
-    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         ui.selected_index,
@@ -1659,14 +1698,12 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
         KeyAction::ScreenTop,
         KeyAction::ScreenBottom,
     ] {
-        let mut ui = UiState {
-            view: render::ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        let mut ui = render::ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         };
-        let outcome = handle_key(action, &mut ui, &snapshot);
+        let mut pane_ui = UiState::default();
+        let outcome = handle_key(action, &mut ui, &mut pane_ui, &snapshot);
         assert_eq!(outcome, InputOutcome::default(), "{action:?}");
         assert_eq!(ui.selected_index, Some(0));
     }
@@ -1681,16 +1718,14 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
     let ws = workspace();
     let mut snapshot = filterable_snapshot(&ws);
     // Index 0 is the running `claude` agent row (the inbox participant).
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(0),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
 
-    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(
         outcome.effects,
         vec![InputEffect::MarkUnread(row_id.clone())]
@@ -1706,7 +1741,7 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .unread = true;
-    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::MarkRead(row_id.clone())]);
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(
@@ -1715,7 +1750,7 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
         "marking read moves no selection"
     );
 
-    let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::MarkAllRead]);
 }
 
@@ -1732,15 +1767,13 @@ fn mark_keys_ignore_process_rows() {
         snapshot.worktree_groups[0].rows[1].status().is_none(),
         "fixture index 1 is the statusless process row",
     );
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(1),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = render::ViewState {
+        selected_index: Some(1),
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &mut pane_ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 }
 #[test]
@@ -1801,17 +1834,15 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
 
     // Selecting the last row keeps it visible in the short viewport while the
     // fresh unread lead stays reachable through the jump banner.
-    let mut ui = UiState {
-        view: render::ViewState {
-            selected_index: Some(9),
-            own_input_reveal: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = render::ViewState {
+        selected_index: Some(9),
+        own_input_reveal: true,
+        ..Default::default()
     };
-    let theme = ui.theme(&snapshot.theme);
+    let mut pane_ui = UiState::default();
+    let theme = pane_ui.theme(&snapshot.theme);
     let following =
-        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
+        render::compose_lines(&snapshot, None, &ui, &pane_ui, theme.as_ref(), 40, 15).scroll_offset;
     assert!(
         following > 0,
         "a fresh unread lead must not displace the bottom selection",

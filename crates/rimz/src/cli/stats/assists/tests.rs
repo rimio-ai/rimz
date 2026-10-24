@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn category_modes_distinguish_requests_from_effects_and_label_parked_time() {
+    let rollup = AssistRollup {
+        resumes: 16,
+        recovered_secs: 18_360,
+        hibernations: 3_646,
+        hibernate_reclaimed_bytes: 4_096,
+        redeems: 1_002,
+        resets: 1_001,
+        restores: 2,
+        restored_sessions: 1_240,
+        held: [("compacts", 66), ("keepalives", 7), ("hibernations", 1_234)].into(),
+        ..Default::default()
+    };
+    let dashboard: BTreeMap<_, _> = category_entries(&rollup, CategoryMode::Dashboard)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        dashboard["Auto-compact:"], "66",
+        "the dashboard counts compact requests"
+    );
+    assert!(
+        !dashboard.contains_key("Keepalive:"),
+        "held-only kinds have no dashboard row"
+    );
+    assert!(dashboard.values().all(|value| !value.contains("held")));
+    assert!(dashboard["Hibernate:"].starts_with("3,646 ("));
+    assert_eq!(dashboard["Auto-continue:"], "16 (after 5.1h parked)");
+    assert_eq!(dashboard["Auto-redeem:"], "1,002 (1,001 resets)");
+    assert_eq!(dashboard["Auto-resume:"], "2 (1,240 agents)");
+
+    let timeline: BTreeMap<_, _> = category_entries(&rollup, CategoryMode::Timeline)
+        .into_iter()
+        .collect();
+    assert_eq!(timeline["Auto-compact:"], "0 (66 held)");
+    assert_eq!(timeline["Keepalive:"], "0 (7 held)");
+    assert!(timeline["Hibernate:"].starts_with("3,646 ("));
+    assert!(timeline["Hibernate:"].ends_with(", 1,234 held)"));
+    assert_eq!(timeline["Auto-continue:"], "16 (after 5.1h parked)");
+    assert_eq!(timeline["Auto-redeem:"], "1,002 (1,001 resets)");
+    assert_eq!(timeline["Auto-resume:"], "2 (1,240 agents)");
+
+    let stats = AssistStats {
+        rollup,
+        ..Default::default()
+    };
+    let mut lines = Vec::new();
+    panel_lines(&mut lines, &stats, 113, "Assists");
+    assert!(
+        !lines.join("\n").contains("held"),
+        "the held panel selects dashboard copy"
+    );
+}
+
+#[test]
 fn tmp_evictions_count_successes_and_render_failures() {
     let workspace = rimz::WorkspaceId::from_project_root(Path::new("/project"));
     let records = [None, Some("permission denied")].map(|error| {
@@ -20,7 +74,7 @@ fn tmp_evictions_count_successes_and_render_failures() {
     assert_eq!(rollup["held"]["tmp_evictions"], 1);
     assert!(rollup["held"].get("sweeps").is_none());
     assert!(
-        category_entries(&stats.rollup)
+        category_entries(&stats.rollup, CategoryMode::Timeline)
             .iter()
             .any(|(label, value)| { *label == "Temp evictions:" && value == "1 (1 held)" })
     );
@@ -94,7 +148,7 @@ fn molts_count_and_render_both_agents_and_the_inherited_generation() {
     assert_eq!(serde_json::to_value(&stats.rollup).unwrap()["molts"], 1);
     assert_effect_counts(&stats);
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .iter()
             .any(|row| row.contains("Molts:"))
     );
@@ -166,7 +220,7 @@ fn model_alias_moves_fold_and_render() {
     let stats = AssistStats::from_records("all", vec![record]);
     assert_effect_counts(&stats);
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .iter()
             .any(|row| row.contains("Model aliases:"))
     );
@@ -193,7 +247,7 @@ fn resident_launch_assists_roll_up_and_render() {
         serde_json::json!(["@coder", "@sweep"])
     );
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .join(" ")
             .contains("Resident launches:")
     );
@@ -231,7 +285,7 @@ fn check_decline_assists_roll_up_and_render_reason_and_cost() {
     assert_eq!(json["rollup"]["judge_declines"], 1);
     assert_eq!(json["events"][0]["cost_usd"], 0.01);
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .join(" ")
             .contains("Judge declines:")
     );
@@ -289,8 +343,11 @@ fn launch_retries_count_relaunches_and_preserve_spawn_failures() {
         json["events"][0]["run_id"],
         "run_0123456789abcdef0123456789abcdef"
     );
-    assert_eq!(category_rows(&stats.rollup).len(), 1);
-    assert!(category_rows(&stats.rollup)[0].contains("Launch retry:"));
+    assert_eq!(
+        category_rows(&stats.rollup, CategoryMode::Timeline).len(),
+        1
+    );
+    assert!(category_rows(&stats.rollup, CategoryMode::Timeline)[0].contains("Launch retry:"));
     let lines = stats
         .events
         .iter()
@@ -367,7 +424,9 @@ fn idle_stop_withdrawals_are_recorded_and_name_the_request() {
     assert!(json["rollup"].get("held").is_none());
     assert_eq!(json["events"][0]["assist"], "idle_stop_withdrawn");
     assert_eq!(json["events"][0]["requested_at"], "2026-01-01T00:00:00Z");
-    assert!(category_rows(&stats.rollup)[0].contains("Idle stop withdrawn:"));
+    assert!(
+        category_rows(&stats.rollup, CategoryMode::Timeline)[0].contains("Idle stop withdrawn:")
+    );
     let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
     assert!(
         line.contains("↶ @coder idle stop withdrawn (threshold 3m) — requested by @lead"),
@@ -396,8 +455,11 @@ fn idle_stop_stats_count_stops_and_preserve_failures() {
     assert_eq!(json["rollup"]["idle_stops"], 1);
     assert_eq!(json["events"][0]["assist"], "idle_stop");
     assert_eq!(json["events"][0]["requested_by"], "@lead");
-    assert_eq!(category_rows(&stats.rollup).len(), 1);
-    assert!(category_rows(&stats.rollup)[0].contains("Idle stop:"));
+    assert_eq!(
+        category_rows(&stats.rollup, CategoryMode::Timeline).len(),
+        1
+    );
+    assert!(category_rows(&stats.rollup, CategoryMode::Timeline)[0].contains("Idle stop:"));
     let lines = stats
         .events
         .iter()
@@ -467,7 +529,7 @@ fn hibernation_stats_sum_reclaim_and_keep_the_last_hold_per_agent() {
         "{lines}"
     );
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .iter()
             .any(|row| row.contains("Hibernate:"))
     );
@@ -507,7 +569,7 @@ fn keepalive_stats_count_deliveries_and_preserve_failures() {
     assert_eq!(capped.iter().filter(|value| **value == true).count(), 1);
     assert_eq!(capped.iter().filter(|value| **value == false).count(), 2);
     assert!(
-        category_rows(&stats.rollup)
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .join(" ")
             .contains("Keepalive:")
     );
@@ -599,7 +661,13 @@ fn flip_compaction_fold_and_render_preserve_skipped_attempts() {
     assert_eq!(stats.rollup.held.get("compacts"), Some(&1));
     assert_eq!(stats.timeline(0, true).0.len(), 2);
     assert!(
-        category_rows(&stats.rollup)
+        category_entries(&stats.rollup, CategoryMode::Dashboard)
+            .iter()
+            .any(|(label, value)| { *label == "Auto-compact:" && value == "2" }),
+        "undelivered flip compacts are still requests"
+    );
+    assert!(
+        category_rows(&stats.rollup, CategoryMode::Timeline)
             .join("\n")
             .contains("1 (1 held)")
     );

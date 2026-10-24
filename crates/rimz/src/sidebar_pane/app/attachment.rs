@@ -169,16 +169,16 @@ impl Attachment {
             pet_render_caps,
             pixel_lease.as_ref().map(|lease| lease.slot),
         );
-        state.titled = titled;
-        state.room_caps = plane.caps.clone();
+        state.pane.titled = titled;
+        state.pane.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
-        state.events = plane.events.clone();
+        state.views.events = plane.events.clone();
         state.room_events = Some(plane.room_events(&runtime));
         state.share_views(plane.views.clone(), subscription.revision);
-        state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
-        state.wake = Some(wake);
-        state.request_reload = request_reload;
-        state.baseline_changed = baseline_changed;
+        state.pane.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
+        state.pane.wake = Some(wake);
+        state.pane.request_reload = request_reload;
+        state.pane.baseline_changed = baseline_changed;
         state.set_probed_aspect(terminal.backend().cell_aspect());
         if let Some(seed) = subscription.seed {
             state.seed(&seed);
@@ -242,7 +242,7 @@ impl Attachment {
         // off-thread.
         let mut inbox = WakeupInbox::new(inbox).with_input(input);
         let loop_result: Result<()> = (|| {
-            while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
+            while !state.pane.should_exit && !close_requested.load(Ordering::SeqCst) {
                 state.step(&mut inbox, &mut fetch, &mut terminal)?;
             }
             Ok(())
@@ -250,7 +250,7 @@ impl Attachment {
         state.report_baseline();
         state.clear_pixel(&mut terminal);
         loop_result?;
-        if state.should_exit {
+        if state.pane.should_exit {
             debug!(
                 session = %config.session_name,
                 "sidebar tab emptied; exiting so the pane closes itself",

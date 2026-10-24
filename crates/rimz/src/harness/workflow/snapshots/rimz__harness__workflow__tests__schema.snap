@@ -196,6 +196,14 @@ expression: value
             "null"
           ]
         },
+        "max-visits-per-key": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "on": {
           "$ref": "#/$defs/StepEdges"
         },

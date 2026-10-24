@@ -63,6 +63,9 @@ pub enum ControlLine {
         session: String,
         window: String,
     },
+    ClientSessionChanged {
+        session: String,
+    },
     Nudge,
     Ignore,
 }
@@ -90,6 +93,7 @@ pub struct PresenceWatch {
     /// EOF, which doubles as the no-leak guarantee — if this process dies, the
     /// pipe closes and tmux reaps the client.
     _stdin: std::process::ChildStdin,
+    session: String,
 }
 
 impl PresenceWatch {
@@ -151,6 +155,7 @@ impl PresenceWatch {
             child,
             lines: std::io::BufReader::new(stdout).lines(),
             _stdin: stdin,
+            session: session.to_owned(),
         })
     }
 
@@ -161,6 +166,11 @@ impl PresenceWatch {
         loop {
             let line = self.lines.next()?.ok()?;
             let classified = classify_control_line(&line);
+            if matches!(&classified, ControlLine::ClientSessionChanged { session }
+                if session != &self.session)
+            {
+                continue;
+            }
             if classified != ControlLine::Ignore {
                 return Some(classified);
             }
@@ -200,6 +210,9 @@ fn classify_control_line(line: &str) -> ControlLine {
         "%window-pane-changed" => parse_window_pane_changed(line).unwrap_or(ControlLine::Ignore),
         "%session-window-changed" => {
             parse_session_window_changed(line).unwrap_or(ControlLine::Ignore)
+        }
+        "%client-session-changed" => {
+            parse_client_session_changed(line).unwrap_or(ControlLine::Ignore)
         }
         "%window-add" | "%unlinked-window-add" => ControlLine::WindowAdded,
         "%sessions-changed" => ControlLine::Nudge,
@@ -243,6 +256,17 @@ fn parse_subscription(line: &str) -> Option<ControlLine> {
 fn nonempty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn parse_client_session_changed(line: &str) -> Option<ControlLine> {
+    let mut fields = line.splitn(4, ' ');
+    (fields.next()? == "%client-session-changed").then_some(())?;
+    fields.next()?;
+    fields.next().filter(|value| value.starts_with('$'))?;
+    let session = fields.next().filter(|value| !value.is_empty())?;
+    Some(ControlLine::ClientSessionChanged {
+        session: session.to_owned(),
+    })
 }
 
 fn parse_session_window_changed(line: &str) -> Option<ControlLine> {
@@ -395,8 +419,17 @@ mod tests {
             ("%output %1 aGVsbG8=", ControlLine::Ignore),
             (
                 "%client-session-changed /dev/pts/3 $1 main",
-                ControlLine::Ignore,
+                ControlLine::ClientSessionChanged {
+                    session: "main".to_owned(),
+                },
             ),
+            (
+                "%client-session-changed /dev/pts/3 $1 two words",
+                ControlLine::ClientSessionChanged {
+                    session: "two words".to_owned(),
+                },
+            ),
+            ("%client-session-changed /dev/pts/3 $1", ControlLine::Ignore),
             ("%pane-mode-changed %2", ControlLine::Ignore),
             ("%window-renamed @1 build", ControlLine::Ignore),
             ("", ControlLine::Ignore),

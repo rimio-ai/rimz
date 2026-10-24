@@ -58,8 +58,8 @@ pub fn register_agent(
                 agent_id: AgentSessionId::from(session_id),
                 launch_id: Some(AgentSessionId::from(launch_id)),
                 agent_name: name.to_owned(),
-                agent_name_explicit: true,
-                launch,
+                agent_name_explicit: launch.parent_agent_id.is_none(),
+                launch: launch.clone(),
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,
@@ -75,7 +75,8 @@ pub fn register_agent(
         Some(AgentSessionId::from(session_id)),
         LifecycleSignal::Registered,
     );
-    observation.agent_name = Some(name.to_owned());
+    observation.agent_name = launch.parent_agent_id.is_none().then(|| name.to_owned());
+    observation.launch = launch;
     store
         .append_agent_lifecycle(AgentLifecycleIntent {
             session_name: "rimz-test",

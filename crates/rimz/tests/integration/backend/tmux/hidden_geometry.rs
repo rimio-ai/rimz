@@ -1,6 +1,115 @@
 use super::support::*;
 use rimz::ids::ViewId;
-use rimz::mux::ViewSize;
+use rimz::mux::{ViewFit, ViewSize};
+
+#[test]
+fn fit_views_batches_250_windows_preserving_order_options_and_zoom() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "many-hidden";
+    server.ensure_with_shell(session);
+    server.tmux(&["set-option", "-t", session, "status", "off"]);
+    let current = server.display(session, "#{window_id}");
+    let mut script = String::new();
+    for index in 0..250 {
+        let target = format!("{session}:hidden-{index}");
+        script.push_str(&format!(
+            "new-window -d -t {session} -n hidden-{index} 'sleep 120' ; split-window -d -h -t {target} 'sleep 120' ; select-pane -t {target}.0 -T rimz-sidebar\n"
+        ));
+        if index % 2 == 0 {
+            script.push_str(&format!(
+                "set-window-option -t {target} window-size largest\n"
+            ));
+        }
+    }
+    let setup = server._tempdir.path().join("hidden-setup.tmux");
+    std::fs::write(&setup, script).unwrap();
+    server.tmux(&["source-file", setup.to_str().unwrap()]);
+    let hidden: Vec<_> = server
+        .stdout(&["list-windows", "-t", session, "-F", "#{window_id}"])
+        .lines()
+        .filter(|view| *view != current)
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(hidden.len(), 250);
+    for view in [&hidden[1], &hidden[2], &current] {
+        server.tmux(&["select-window", "-t", view]);
+    }
+    let _client = AttachedTmuxClient::attach(&server.socket, session, 240, 65);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display(&current, "#{window_width} #{window_height}") != "240 65" {
+        assert!(Instant::now() < deadline, "current window did not grow");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let lag = server.backend.lagging_views(session).unwrap().unwrap();
+    assert_eq!(lag.views.len(), 250);
+    assert_eq!(lag.views[0].as_str(), hidden[2]);
+    assert_eq!(lag.views[1].as_str(), hidden[1]);
+    assert!(!lag.views.iter().any(|view| view.as_str() == current));
+    let gone = lag.views[125].clone();
+    server.tmux(&["kill-window", "-t", gone.as_str()]);
+    let cols = std::num::NonZeroU16::new(60).unwrap();
+    let before = rimz::testkit::spawn_count();
+    let outcomes = server
+        .backend
+        .fit_views(&lag.views, lag.target, cols)
+        .unwrap();
+    let spawns = rimz::testkit::spawn_count() - before;
+    assert_eq!(outcomes.len(), lag.views.len());
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|fit| matches!(fit, ViewFit::Fitted(_)))
+            .count(),
+        249
+    );
+    assert_eq!(
+        spawns, 2,
+        "all reads and all fits each use one stdin script"
+    );
+    for (view, outcome) in lag.views.iter().zip(outcomes) {
+        if *view == gone {
+            assert_eq!(outcome, ViewFit::Failed);
+            continue;
+        }
+        let ViewFit::Fitted(rows) = outcome else {
+            panic!("{view}: {outcome:?}")
+        };
+        assert_eq!(rows.len(), 2);
+        assert!(rows.values().all(|pane| pane.rows == 65));
+        assert_eq!(
+            rows.values().filter(|pane| pane.cols == Some(60)).count(),
+            1
+        );
+        assert_eq!(
+            server.display(view.as_str(), "#{window_width} #{window_height}"),
+            "240 65"
+        );
+        let index = hidden.iter().position(|id| id == view.as_str()).unwrap();
+        assert_eq!(
+            server.stdout(&["show-options", "-wqv", "-t", view.as_str(), "window-size"]),
+            if index % 2 == 0 { "largest" } else { "" },
+            "{view}: preserve local policy and inheritance"
+        );
+        assert_eq!(
+            server.display(&format!("{}.0", view.as_str()), "#{pane_width}"),
+            "60"
+        );
+    }
+    let fitted = &lag.views[0];
+    server.tmux(&["resize-pane", "-Z", "-t", fitted.as_str()]);
+    assert_eq!(
+        server
+            .backend
+            .fit_views(std::slice::from_ref(fitted), lag.target, cols)
+            .unwrap(),
+        [ViewFit::Skipped]
+    );
+    assert_eq!(
+        server.display(fitted.as_str(), "#{window_zoomed_flag}"),
+        "1"
+    );
+}
 
 #[test]
 fn widening_fit_preserves_sidebar_width_and_delivers_one_final_pty_resize() {
@@ -67,18 +176,20 @@ fn widening_fit_preserves_sidebar_width_and_delivers_one_final_pty_resize() {
         // Drain the setup's resize throttle before measuring the fit's queue.
         thread::sleep(Duration::from_millis(350));
         std::fs::write(&log, "").unwrap();
-        let rows = server
+        let outcomes = server
             .backend
-            .fit_view(
-                &view,
+            .fit_views(
+                std::slice::from_ref(&view),
                 ViewSize {
                     cols: 240,
                     rows: 65,
                 },
                 std::num::NonZeroU16::new(if shape == "clamped" { 300 } else { 60 }).unwrap(),
             )
-            .unwrap()
             .unwrap();
+        let ViewFit::Fitted(rows) = &outcomes[0] else {
+            panic!("expected fitted rows: {outcomes:?}");
+        };
         assert_eq!(
             server.display(view.as_str(), "#{window_width} #{window_height}"),
             "240 65"
@@ -145,8 +256,8 @@ fn ineligible_fit_reports_skipped_without_live_rows() {
     };
     let cols = std::num::NonZeroU16::new(60).unwrap();
     assert_eq!(
-        server.backend.fit_view(&current, target, cols).unwrap(),
-        None,
+        server.backend.fit_views(&[current], target, cols).unwrap(),
+        [ViewFit::Skipped],
         "a selected view is skipped, not fitted"
     );
     let hidden = ViewId::new_unchecked(server.stdout(&[
@@ -166,8 +277,11 @@ fn ineligible_fit_reports_skipped_without_live_rows() {
         "manual",
     ]);
     assert_eq!(
-        server.backend.fit_view(&hidden, target, cols).unwrap(),
-        None
+        server
+            .backend
+            .fit_views(std::slice::from_ref(&hidden), target, cols)
+            .unwrap(),
+        [ViewFit::Skipped]
     );
     server.tmux(&[
         "set-window-option",
@@ -178,8 +292,8 @@ fn ineligible_fit_reports_skipped_without_live_rows() {
     ]);
     drop(client);
     assert_eq!(
-        server.backend.fit_view(&hidden, target, cols).unwrap(),
-        None
+        server.backend.fit_views(&[hidden], target, cols).unwrap(),
+        [ViewFit::Skipped]
     );
 }
 
@@ -259,15 +373,17 @@ fn hidden_views_fit_to_current_size_preserving_options_and_pty_rows() {
                 .as_str(),
             view
         );
-        let rows = server
+        let outcomes = server
             .backend
-            .fit_view(
-                &ViewId::new_unchecked(view),
+            .fit_views(
+                &[ViewId::new_unchecked(view)],
                 lag.target,
                 std::num::NonZeroU16::new(60).unwrap(),
             )
-            .unwrap()
             .unwrap();
+        let ViewFit::Fitted(rows) = &outcomes[0] else {
+            panic!("expected fitted rows: {outcomes:?}");
+        };
         assert_eq!(
             server.display(view, "#{window_width} #{window_height}"),
             "220 65"

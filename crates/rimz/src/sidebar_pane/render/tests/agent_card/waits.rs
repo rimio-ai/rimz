@@ -37,13 +37,11 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
     let screen = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            ..Default::default()
         },
+        &UiState::default(),
         64,
         30,
     );
@@ -267,13 +265,11 @@ fn pending_waits_line_counts_armed_waits() {
         snapshot_to_screen_with_alert_and_ui(
             &snapshot,
             None,
-            &UiState {
-                view: ViewState {
-                    selected_index: Some(usize::MAX),
-                    ..Default::default()
-                },
-                ..UiState::default()
+            &ViewState {
+                selected_index: Some(usize::MAX),
+                ..Default::default()
             },
+            &UiState::default(),
             54,
             23,
         ),

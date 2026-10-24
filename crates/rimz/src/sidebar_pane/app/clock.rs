@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
     use crate::sidebar_pane::app::layout_freeze::{apply_freeze, arm_freeze};
-    use crate::sidebar_pane::render::UiState;
+    use crate::sidebar_pane::render::ViewState;
 
     #[test]
     fn skewed_wall_epoch_arms_and_expires_the_same_freeze() {
@@ -124,7 +124,7 @@ mod tests {
             if skew < 0 {
                 clock.epoch -= Duration::from_secs(7_200);
             }
-            let mut ui = UiState::default();
+            let mut ui = ViewState::default();
             let mut snapshot = snapshot(&workspace());
             arm_freeze(&mut ui, clock.timestamp_at(clock.now()).as_millisecond());
             apply_freeze(&mut ui, &mut snapshot, false, clock.now_ms() as i64, false);

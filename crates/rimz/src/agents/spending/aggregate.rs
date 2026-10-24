@@ -13,7 +13,9 @@ use crate::agents::definition::ThreadKey;
 
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
-use super::{ModelTally, RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult};
+use super::{
+    ChartSpend, ModelTally, RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult,
+};
 use crate::ids::LoginKey;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
@@ -253,6 +255,7 @@ pub(crate) fn aggregate_counted_rollups(
     let mut workspace_session_totals = FastHashMap::<SessionKey<'_>, (u64, f64)>::default();
     let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
+    let mut chart = ChartSpend::default();
     let mut models = BTreeMap::<&str, (SpendTally, BTreeMap<&str, SpendWindow>)>::new();
     let mut roles = RoleTallies {
         recorded_since_secs: history_roles.and_then(|index| index.recorded_since_secs),
@@ -276,6 +279,8 @@ pub(crate) fn aggregate_counted_rollups(
         FastHashMap::default()
     };
     let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
+    let today = local_day_index(now_secs, Some(&timezone)).unwrap_or((now_secs / 86_400) as i64);
+    chart.today = today;
     let history_day_cutoff = local_day_start_secs(now_secs, Some(&timezone))
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
     let day_boundaries = if history_roles.is_some() {
@@ -372,9 +377,28 @@ pub(crate) fn aggregate_counted_rollups(
             cell.usd += entry.cost_usd;
             cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
 
-            let (tally, producers) = models
-                .entry(entry.model.as_deref().unwrap_or_default())
-                .or_default();
+            let model = entry.model.as_deref().unwrap_or_default();
+            let age = today - day;
+            if entry.cost_usd != 0.0 {
+                if (0..30).contains(&age) {
+                    *chart
+                        .days
+                        .entry(day)
+                        .or_default()
+                        .entry(model.to_owned())
+                        .or_default() += entry.cost_usd;
+                }
+                if (0..364).contains(&age) {
+                    let end = today - (age / 7) * 7;
+                    *chart
+                        .weeks
+                        .entry(end)
+                        .or_default()
+                        .entry(model.to_owned())
+                        .or_default() += entry.cost_usd;
+                }
+            }
+            let (tally, producers) = models.entry(model).or_default();
             accum(tally, entry, now_secs, u64::MAX, history_day_cutoff);
             let producer = producers.entry(provider).or_default();
             if within_widest_window(entry.ts_secs, now_secs) {
@@ -472,6 +496,7 @@ pub(crate) fn aggregate_counted_rollups(
         login_day,
         day_cutoff_secs,
         days,
+        chart,
         timezone,
         models: if history_roles.is_some() {
             models

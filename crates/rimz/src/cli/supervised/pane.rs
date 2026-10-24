@@ -14,9 +14,8 @@ use rimz::diag::record::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
-    COMPANION_PANE_LIMIT, CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions,
-    PaneReadConsistency, SidebarPaneOptions, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions,
+    CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, PaneReadConsistency,
+    SidebarPaneOptions, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
 };
 use rimz::pane::PaneRef;
 use rimz::store::run::RunRecord;
@@ -101,7 +100,7 @@ pub(super) enum SubagentZoneStrategy {
     CompanionTab {
         title: String,
     },
-    CompanionGrid {
+    CompanionStack {
         anchors: Vec<(String, PaneId)>,
         title: String,
     },
@@ -122,7 +121,7 @@ pub(super) fn select_subagent_zone_strategy(
     base: &str,
 ) -> Option<SubagentZoneStrategy> {
     let team = caller.team.as_deref().filter(|team| !team.is_empty());
-    if let Some(strategy) = companion_grid_strategy(live_panes, fallback_session, theme, base) {
+    if let Some(strategy) = companion_stack_strategy(live_panes, fallback_session, theme, base) {
         return Some(strategy);
     }
     if team.is_some() {
@@ -171,7 +170,7 @@ pub(super) fn select_subagent_zone_strategy(
     })
 }
 
-fn companion_grid_strategy(
+fn companion_stack_strategy(
     live_panes: &[PaneRef],
     fallback_session: &str,
     theme: &rimz::config::ThemeConfig,
@@ -216,9 +215,6 @@ fn companion_grid_strategy(
                 .iter()
                 .filter(|pane| !pane.is_rimz_sidebar())
                 .collect::<Vec<_>>();
-            if work.len() >= COMPANION_PANE_LIMIT {
-                return None;
-            }
             // A sidebar-only listing may hide retained terminals on Zellij.
             // Always let the backend inspect physical occupancy before birth.
             work.first()
@@ -230,7 +226,7 @@ fn companion_grid_strategy(
     if anchors.is_empty() {
         Some(SubagentZoneStrategy::CompanionTab { title })
     } else {
-        Some(SubagentZoneStrategy::CompanionGrid { anchors, title })
+        Some(SubagentZoneStrategy::CompanionStack { anchors, title })
     }
 }
 
@@ -408,11 +404,10 @@ pub(in crate::cli) fn split_into_subagent_zone(
                 error = &err as &dyn std::error::Error,
                 "subagent zone split failed",
             );
-            match err {
-                rimz::mux::MuxErr::Timeout { .. } | rimz::mux::MuxErr::Output { .. } => {
-                    SubagentZoneOpen::Failed(err)
-                }
-                _ => open_companion(title.clone(), after.clone()),
+            if ambiguous_pane_open(&err) {
+                SubagentZoneOpen::Failed(err)
+            } else {
+                open_companion(title.clone(), after.clone())
             }
         }
     };
@@ -423,7 +418,7 @@ pub(in crate::cli) fn split_into_subagent_zone(
             placement,
         } => split(session_name, pane_id, placement),
         SubagentZoneStrategy::CompanionTab { title } => open_companion(title, after),
-        SubagentZoneStrategy::CompanionGrid { anchors, title } => {
+        SubagentZoneStrategy::CompanionStack { anchors, title } => {
             for (session_name, pane_id) in anchors {
                 match backend.append_companion_pane(SplitPaneOptions {
                     target: SplitTarget::SessionPane {
@@ -439,14 +434,23 @@ pub(in crate::cli) fn split_into_subagent_zone(
                     Err(err) => {
                         // A spawn timeout may have opened the pane. Never launch
                         // the same durable run twice after an ambiguous result.
-                        tracing::warn!(error = %err, "subagent grid append could not be confirmed");
-                        return SubagentZoneOpen::Failed(err);
+                        tracing::warn!(error = %err, "subagent stack append failed");
+                        if ambiguous_pane_open(&err) {
+                            return SubagentZoneOpen::Failed(err);
+                        }
                     }
                 }
             }
             open_companion(title, after)
         }
     }
+}
+
+fn ambiguous_pane_open(error: &rimz::mux::MuxErr) -> bool {
+    matches!(
+        error,
+        rimz::mux::MuxErr::Timeout { .. } | rimz::mux::MuxErr::Output { .. }
+    )
 }
 
 fn list_subagent_zone_panes(
@@ -578,7 +582,7 @@ pub(crate) fn capture_failure_tail(
     session_name: &str,
 ) -> Option<String> {
     // rimz-invariant: run-failure-capture
-    let capture = match backend.capture_pane(pane_id, session_name, None, false) {
+    let capture = match backend.capture_pane(pane_id, session_name, Some(60), false) {
         Ok(capture) => capture,
         Err(err) => {
             tracing::debug!(

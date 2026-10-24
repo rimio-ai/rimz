@@ -13,7 +13,7 @@ rimz wait --file build.log --grep 'READY'    # a new matching line
 rimz wait --run 'gh run watch --exit-status' # a watched command
 rimz wait --on fail --run 'cargo test'       # deliver only if the command fails
 rimz wait --check-in 1h --run 'cargo build'  # request a check-in after 1h
-rimz wait list                               # pending waits (bare `rimz wait` does the same)
+rimz wait list                               # your waits; whole room from a user shell
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
 ```
@@ -42,17 +42,17 @@ Durations take `s`, `m`, `h`, or `d` units (`90s`, `30m`, `1h`).
 
 While an agent rests with waits pending, even when its card displays working, RimZ sends a facts-only prompt-cache keepalive shortly before its provider TTL expires. One ping lists every pending wait, subagent, and launched team, including elapsed times when known. Pings recur after each completed ping turn, without instructions, while each would start less than `harness.cache_keepalive_max` (default `6h`, `off` for no limit) after the agent's last request of its own. The last one adds `Keepalive limit 6h reached: this is the last ping until your next turn.`, and none follow until the agent's next turn of any other kind, which restarts the clock. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake. A ping missed in its window (no running sidebar, a suspended machine) is skipped, and no further pings come until the agent's next turn. With a known TTL and no `--check-in`, a wait on a command that never exits therefore stays silent; pass `--check-in` to get a check-in.
 
-Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
+Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then shows the caller's self waits, with other subscriptions summarized separately:
 
 ```console
 $ rimz wait --run 'cargo test'
 armed wait-solid-pixel: watch: cargo test → @coder (check-in 30m)
-NAME              TYPE   STATE     TARGET  ELAPSED  CHECK-IN  TRIGGER
-wait-bold-comet   timer  pending   @coder  2m       30m       once at 14:32
-wait-solid-pixel  watch  watching  @coder  0s       30m       cargo test
+@coder · 2 waits
+  wait-bold-comet   pending · fires in 28m         once at 14:32
+  wait-solid-pixel  watching 0s · check-in in 30m  cargo test
 ```
 
-The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(check-in <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints, with separate types and bare trigger subjects.
+The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(check-in <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is exactly the array [`rimz wait list --json`](#list-pending-waits) prints, including subscriptions, with separate types, bare trigger subjects, `owner`, and `parent`.
 
 Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during argument parsing):
 
@@ -170,11 +170,11 @@ Another check-in: rimz wait --in 30m
 | `still not met after <ELAPSED>` | A PID, check, or file check-in. |
 | `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
 
-A silent command reads `· no output` after its verdict and names no file. A `--pid` wait captures no output of its process, so it shows no segment at all unless the watcher itself wrote an error. The token count is an estimate from OpenAI's public `o200k_base` tokenizer (`<1k`, `~1.2k`, `~22k`, `~1.2M`); Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB the count is scaled from that sample. A command longer than 120 characters is shortened in the middle in the message, receipt, and list; the stored command and the logs keep it whole.
+A silent command reads `· no output` after its verdict and names no file. A `--pid` wait captures no output of its process, so it shows no segment at all unless the watcher itself wrote an error. The token count is an estimate from OpenAI's public `o200k_base` tokenizer (`<1k`, `~1.2k`, `~22k`, `~1.2M`); Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB the count is scaled from that sample. A command longer than 120 characters is shortened in the middle in the message, receipt, and list. A trailing shell output redirect, including its path and `2>&1`, stays whole even when that makes the preview longer than 120 characters; quoted or escaped `>` is not a redirect. If the redirect leaves no room for a command tail, the command prefix ends at the ellipsis. The stored command and the logs keep it whole.
 
 ### The output file
 
-The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors, where `<reader>` is the handle of the agent that armed the wait. A check truncates it before each run; a file pattern watch writes its matched line. The message shows that host path in every isolation.
+The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors, where `<reader>` is the name of the agent that armed the wait (a petname for a launched child). A check truncates it before each run; a file pattern watch writes its matched line. The message shows that host path in every isolation.
 
 Closing the room keeps the file. `rimz gc` removes it once no watcher runs and the file has not been written for 7 days; `rimz reset --hard` removes it at once. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 
@@ -188,25 +188,30 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 
 ## List pending waits
 
-`rimz wait list` (alias `ls`, or bare `rimz wait`) lists pending delivery rows for the current project. From an agent it shows rows targeting that agent's session, including `rimz loop add --wait` deliveries and team subscriptions. From a user shell it shows every delivery row in the project, read-only. With nothing pending it prints `no pending waits`.
+`rimz wait list` (alias `ls`, or bare `rimz wait`) shows your own waits from an agent pane. Its header is `<handle> · N waits`, or `<handle> · no waits`. Each self wait has its name, state, and trigger, without terminal-width clipping. Lost watches come first, then watches past check-in, then longest elapsed first, with names breaking ties. A label replaces the watch's subject; otherwise the trigger is the PID, command, check, or file subject, or `once at HH:MM` for a timer. A worktree suffix (`· in <worktree>`) appears only when the row belongs to a different checkout from the reading command.
 
-| Column | Values |
+| Row | Displayed state |
 | --- | --- |
-| `NAME` | The wait or task name. |
-| `TYPE` | `timer`, `watch` (command), `check`, `pid`, `file`, `signal`, or `schedule` (loop clock). |
-| `STATE` | `pending` for a timer; `waiting` for a signal or loop clock; `watching` or `lost` for a command, PID, check, or file row; `disabled` or `paused` for a held row. A check-in leaves the state `watching`. |
-| `TARGET` | The target agent's handle. |
-| `ELAPSED` | Time since the self wait was armed, including lost watches; `-` for signal and loop clock rows. |
-| `CHECK-IN` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
-| `TRIGGER` | `once at HH:MM` for a timer, `<PID>`, `<command>[ every <DURATION>][ on fail]`, `<path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A labelled watch uses its label instead of the subject. A watch row armed from a linked worktree adds `· in <dir>`. A paused row ends with `· resumes in <DURATION>`. |
+| Live watcher | `watching 12m`, adding `· check-in in 38m` when a limit is ahead, or `· past check-in at 30m` once it has passed. |
+| Watcher not started | `starting` through 30 seconds after arming. |
+| Missing watcher after grace | `lost · armed 41m ago`; this is the arm age, not when the watcher vanished. |
+| Timer | `pending · fires in 28m`. Timer firing rounds up to the minute. |
+| Paused | `paused · resumes in 2h`. |
+| Disabled | `disabled`. |
 
-`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `label`, optional `dir`, `elapsed`, `elapsed_s`, `check_in`, `check_in_s`, and optional `watcher_pid`. Elapsed and check-in values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
+Loop and team subscriptions targeting your session are not wait lines. They appear on `also woken by <triggers>[ in <worktree>] (loop <name> or team <name>)`, grouped by owner. That line follows your waits, or joins the header when you have none. A plain `loop add --wait` row is a loop subscription named after itself.
+
+From a user shell, text is read-only and starts with `<home-relative project root> · whole room · N waits · M subscriptions`, omitting zero count parts. With no rows it ends in `no waits` and prints no body. Otherwise a blank line separates the header from the same room body as [`loop list --all`'s WAKE-UPS](./loop.md#loop-list): self-wait cards, children nested under their ancestors with their petnames, followed by team and loop owner summaries. A missing agent row falls back to the recorded target handle. Hand-written configuration deliveries appear in the room view too.
+
+`--json` keeps every instance delivery targeting the caller's session, including loop and team subscriptions, or from a user shell the room view's rows. Keys remain in order: `name`, `type`, `state`, `target`, `trigger`, optional `label`, optional `dir`, `elapsed`, `elapsed_s`, `check_in`, `check_in_s`, optional `watcher_pid`, then always `owner` and `parent`. `type` is `timer`, `watch`, `check`, `pid`, `file`, `signal`, `condition`, or `schedule`; `state` is `pending`, `waiting`, `watching`, `starting`, `lost`, `disabled`, or `paused`. Elapsed and check-in values are labels plus integer seconds, always present and `null` when not applicable; a timer's check-in value is its requested delay. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` remains the recorded home-relative path, including for timers and signals. Watch JSON triggers retain the directory suffix; paused JSON triggers retain the resume suffix.
+
+`owner` is `self`, `loop:<task>`, or `team:<team instance>`. `parent` is the target's launched parent's full handle, or `null` for a root agent or an unavailable parent. The arm and cancel receipts' `pending` arrays equal this JSON list.
 
 ## Cancel a wait
 
-`rimz wait cancel <name>` cancels one pending row targeting the caller, and `rimz wait cancel --all` cancels all of them, loop and team deliveries included. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``).
+`rimz wait cancel <name>` cancels any one pending wait or subscription targeting the caller. `rimz wait cancel --all` cancels only waits you armed with `rimz wait`, leaving loop and team subscriptions intact. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``).
 
-Cancel removes each row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. It prints `canceled <name>, ...` and the remaining pending rows, or only `no pending waits` when `--all` found nothing. `--json` prints `{"canceled": [...], "pending": [...]}`.
+Cancel removes each selected row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. It prints `canceled <name>, ...` followed by your self view. The canceled line is omitted when `--all` found no self waits. `--json` prints `{"canceled": [...], "pending": [...]}` with all remaining instance deliveries, including subscriptions.
 
 ## What a wait writes on your machine
 

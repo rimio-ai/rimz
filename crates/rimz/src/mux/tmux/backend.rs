@@ -13,10 +13,9 @@ use super::options::{
     window_option_argv,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
-use super::window::{SplitAxis, TmuxPaneGeometry, companion_tmux_layout, sanitize_window_name};
+use super::window::{SplitAxis, TmuxPaneGeometry, sanitize_window_name};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
-use crate::mux::companion_layout::{balance, plan_append};
 use crate::mux::tab_name::TabNameIntent;
 use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
@@ -257,13 +256,13 @@ impl MuxBackend for TmuxBackend {
         self.read_lagging_view(session, pane)
     }
 
-    fn fit_view(
+    fn fit_views(
         &self,
-        view: &crate::ids::ViewId,
+        views: &[crate::ids::ViewId],
         target: crate::mux::ViewSize,
         sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<HashMap<PaneId, crate::mux::FittedPane>>> {
-        self.fit_hidden_view(view, target, sidebar_cols)
+    ) -> Result<Vec<crate::mux::ViewFit>> {
+        self.fit_hidden_views(views, target, sidebar_cols)
     }
 
     fn pane_content_size(
@@ -607,7 +606,7 @@ impl MuxBackend for TmuxBackend {
             }
         }
         if let Some(stack) = stack {
-            let members = if beside.is_some() {
+            let members = if beside.is_some() || !mark.is_empty() {
                 self.stack_members(&pane_id, &stack)
             } else {
                 Ok(members)
@@ -638,53 +637,13 @@ impl MuxBackend for TmuxBackend {
         else {
             return Ok(CompanionPaneAppend::Full);
         };
-        let anchor = anchor.clone();
-        let Some((panes, chrome)) = self.companion_geometry(&anchor)? else {
+        let Some(target) = self.companion_append_target(anchor)? else {
             return Ok(CompanionPaneAppend::Full);
         };
-        let Some(split) = plan_append(&panes, 1) else {
-            return Ok(CompanionPaneAppend::Full);
-        };
-        // Check the post-split minimums before launching the payload, not after.
-        let mut projected = panes.clone();
-        let Some(target) = projected
-            .iter_mut()
-            .find(|pane| pane.pane_id == split.pane_id)
-        else {
-            return Ok(CompanionPaneAppend::Full);
-        };
-        let mut added = target.clone();
-        match split.direction {
-            SplitDirection::Down => {
-                target.rows = (target.rows - 1) / 2;
-                added.y += target.rows + 1;
-                added.rows -= target.rows + 1;
-            }
-            SplitDirection::Right => {
-                target.cols = (target.cols - 1) / 2;
-                added.x += target.cols + 1;
-                added.cols -= target.cols + 1;
-            }
-        }
-        projected.push(added);
-        if balance(&projected, 1)
-            .and_then(|targets| companion_tmux_layout(&targets, &chrome))
-            .is_none()
-        {
-            return Ok(CompanionPaneAppend::Full);
-        }
-        opts.target = SplitTarget::Pane(split.pane_id);
-        opts.placement = SplitPlacement::Directional(split.direction);
+        opts.target = SplitTarget::Pane(target);
+        opts.placement = SplitPlacement::Stacked;
         opts.focus = false;
         self.split_pane(opts)?;
-        if let Err(err) = self.balance_companion_grid(&anchor, &panes, &chrome) {
-            tracing::warn!(
-                pane = %anchor,
-                tags.operation = "tmux.companion.balance",
-                error = &err as &dyn std::error::Error,
-                "companion pane opened; grid balancing failed",
-            );
-        }
         Ok(CompanionPaneAppend::Opened)
     }
 

@@ -127,11 +127,11 @@ fn tab_injects_env_into_every_column_and_row() {
 }
 
 #[test]
-fn companion_grid_preserves_processes_sidebar_and_focus() {
+fn companion_stack_preserves_processes_sidebar_and_focus_until_full() {
     use rimz::mux::{CompanionPaneAppend, SplitPaneOptions, SplitTarget};
 
     require_zellij!();
-    let room = LiveZellijSession::new("companion-grid");
+    let room = LiveZellijSession::new("companion-stack");
     let backend = room.backend();
     let version = backend.version().expect("zellij version");
     let minor = version
@@ -170,7 +170,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
     publish_room_bin(room.path(), &sidebar);
     backend.open_sidebar(&sidebar, None).expect("sidebar");
     wait_for_pane_count(room.path(), room.name(), 2);
-    let mut client = AttachedClient::attach(&room, 300, 100);
+    let mut client = AttachedClient::attach(&room, 180, 28);
     let source = expect_list_panes(room.path(), room.name())
         .panes
         .into_iter()
@@ -182,8 +182,8 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
         vec![
             "sh".to_owned(),
             "-c".to_owned(),
-            "printf '%s\\n' \"$$\" > \"$1\"; exec sleep 600".to_owned(),
-            "grid".to_owned(),
+            "printf '%s\\n' \"$$\" > \"$1\"; sleep 600; :".to_owned(),
+            "stack".to_owned(),
             cwd.path()
                 .join(format!("pid-{index}"))
                 .display()
@@ -218,22 +218,59 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
         .collect::<Vec<_>>();
     let mut identities = Vec::new();
     let mut ids = vec![first.id];
-    for count in 1_usize..=8 {
+    for count in 1_usize..=64 {
         if count > 1 {
-            assert_eq!(
-                backend
-                    .append_companion_pane(SplitPaneOptions {
-                        target: SplitTarget::SessionPane {
-                            session_name: room.name().to_owned(),
-                            pane_id: anchor.clone()
-                        },
-                        command: Some(command(count)),
-                        ..Default::default()
+            let outcome = backend
+                .append_companion_pane(SplitPaneOptions {
+                    target: SplitTarget::SessionPane {
+                        session_name: room.name().to_owned(),
+                        pane_id: anchor.clone(),
+                    },
+                    command: Some(command(count)),
+                    ..Default::default()
+                })
+                .expect("append companion");
+            if outcome == CompanionPaneAppend::Full {
+                let listed = expect_list_panes(room.path(), room.name());
+                let work = listed
+                    .panes
+                    .iter()
+                    .filter(|pane| {
+                        pane.tab_id == first.tab_id
+                            && !pane.is_plugin
+                            && !pane.is_sidebar()
+                            && !pane.is_floating
                     })
-                    .expect("append companion"),
-                CompanionPaneAppend::Opened,
-                "pane {count}"
-            );
+                    .collect::<Vec<_>>();
+                assert_eq!(work.len(), count - 1, "Full must not create a hidden child");
+                assert!(count > 9, "no fixed eight-pane cap");
+                client.assert_input_reaches(&source, "source after Full");
+                assert!(
+                    !cwd.path().join(format!("pid-{count}")).exists(),
+                    "Full must not run the payload"
+                );
+                let marker = format!("{}/pid-", cwd.path().display());
+                assert_eq!(
+                    rimz::proc::list_processes()
+                        .iter()
+                        .filter(|process| process.cmdline.contains(&marker))
+                        .count(),
+                    count - 1,
+                    "no invisible payload process"
+                );
+                let open_rows = work
+                    .iter()
+                    .map(|pane| pane.pane_content_rows)
+                    .max()
+                    .unwrap();
+                assert!(open_rows >= 10);
+                println!(
+                    "companion stack: {} children before Full, {open_rows} open content rows",
+                    count - 1
+                );
+                return;
+            }
+            assert_eq!(outcome, CompanionPaneAppend::Opened);
         }
         let panes = wait_for_named_work_pane_count(room.path(), room.name(), "companion", count);
         assert!(ids.iter().all(|id| panes.iter().any(|pane| pane.id == *id)));
@@ -268,57 +305,93 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
                 "process {pid} replaced"
             );
         }
-        let mut bands = std::collections::BTreeMap::<u64, Vec<&PaneGeometry>>::new();
-        for pane in &panes {
-            bands.entry(pane.x).or_default().push(pane);
-        }
         assert!(
-            bands.len() == count.min(2)
-                && bands.values().all(|band| band.len() <= count.div_ceil(2)),
-            "grid bounds at {count} panes: {panes:?}"
+            panes
+                .iter()
+                .all(|pane| (pane.x, pane.columns) == (first.x, first.columns)),
+            "one stack column: {panes:?}"
         );
-        let spread = |sizes: &[u64]| {
-            sizes.iter().max().expect("max size") - sizes.iter().min().expect("min size")
-        };
-        let widths = bands
-            .values()
-            .map(|band| band[0].columns)
-            .collect::<Vec<_>>();
-        assert!(
-            spread(&widths) <= 1,
-            "equal column widths at {count} panes: {panes:?}"
+        assert_eq!(
+            panes.iter().filter(|pane| pane.rows > 1).count(),
+            1,
+            "one expanded member: {panes:?}"
         );
-        for band in bands.values() {
-            let rows = band.iter().map(|pane| pane.rows).collect::<Vec<_>>();
-            // Native resizes move 5% of the tab, so rows settle within one step.
-            let step = rows.iter().sum::<u64>().div_ceil(20);
-            assert!(
-                spread(&rows) <= step,
-                "equal heights within one native step at {count} panes: {panes:?}"
-            );
-        }
-        if count == 8 {
-            assert!(bands.values().all(|band| band.len() == 4));
-        }
+        assert_eq!(
+            panes.iter().max_by_key(|pane| pane.y).unwrap().id,
+            *ids.last().unwrap(),
+            "launch order"
+        );
         client.assert_input_reaches(&source, "source while appending companion");
     }
-    assert_eq!(
-        backend
-            .append_companion_pane(SplitPaneOptions {
-                target: SplitTarget::SessionPane {
-                    session_name: room.name().to_owned(),
-                    pane_id: anchor
-                },
-                command: Some(command(9)),
-                ..Default::default()
-            })
-            .expect("full companion"),
-        CompanionPaneAppend::Full
+    panic!("a short companion tab must fill");
+}
+
+#[test]
+fn collapsed_stack_member_counted_capture_keeps_earlier_output() {
+    use rimz::mux::{SplitPaneOptions, SplitPlacement, SplitTarget};
+
+    require_zellij!();
+    let room = LiveZellijSession::new("stack-capture");
+    let cwd = TempDir::new().unwrap();
+    room.create_plain_background(cwd.path(), "600");
+    wait_for_pane_count(room.path(), room.name(), 1);
+    let _client = AttachedClient::attach(&room, 120, 35);
+    let backend = room.backend();
+    let anchor = expect_list_panes(room.path(), room.name()).panes[0].id;
+    let printed = backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: room.name().to_owned(),
+                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{anchor}")),
+            },
+            placement: SplitPlacement::Stacked,
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "printf 'earlier-stack-output\\nsecond-line\\n'; exec sleep 600".to_owned(),
+            ]),
+            ..Default::default()
+        })
+        .unwrap()
+        .expect("printed pane id");
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            backend
+                .capture_pane(&printed, room.name(), Some(60), false)
+                .map_err(|error| error.to_string())
+        },
+        |capture| capture.raw_text.contains("earlier-stack-output"),
+        "output before collapse",
     );
-    assert!(!cwd.path().join("pid-9").exists());
-    assert_eq!(
-        wait_for_named_work_pane_count(room.path(), room.name(), "companion", 8).len(),
-        8
+    backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: room.name().to_owned(),
+                pane_id: printed.clone(),
+            },
+            placement: SplitPlacement::Stacked,
+            command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+            ..Default::default()
+        })
+        .unwrap();
+    poll_until(
+        Duration::from_secs(10),
+        || Ok(expect_list_panes(room.path(), room.name())),
+        |listed| {
+            listed
+                .panes
+                .iter()
+                .any(|pane| printed.raw() == format!("terminal_{}", pane.id) && pane.pane_rows == 1)
+        },
+        "printed member collapsed",
+    );
+    let capture = backend
+        .capture_pane(&printed, room.name(), Some(60), false)
+        .unwrap();
+    assert!(
+        capture.raw_text.contains("earlier-stack-output"),
+        "{capture:?}"
     );
 }
 

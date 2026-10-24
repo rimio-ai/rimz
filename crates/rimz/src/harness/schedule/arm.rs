@@ -75,8 +75,8 @@ pub enum DeliveryPrompt {
 }
 
 pub enum DeliveryProvenance {
-    /// `reader` is the arming agent's handle, whose `out/` directory receives
-    /// a watched command's output.
+    /// `reader` is the arming agent's name (a launched child's petname), whose
+    /// `out/` directory receives a watched command's output.
     SelfWait {
         reader: Option<String>,
     },

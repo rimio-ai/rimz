@@ -114,6 +114,7 @@ struct NamedHome {
 
 impl ProviderLogin {
     /// The provider's native home.
+    /// Knows no declared homes; use a catalog or [`session_login`] for the native-home rule.
     pub fn default_for(kind: AgentKind) -> Self {
         Self {
             kind,
@@ -539,7 +540,7 @@ impl LoginCatalog {
     /// `ambient` as `kind`'s own home reads it: an exported home override
     /// that names a declared account's home is dropped, since a pane born on
     /// that account exports it by design and `default` is not that account.
-    pub fn native_ambient(
+    fn native_ambient(
         &self,
         kind: &AgentKind,
         ambient: &BTreeMap<String, String>,
@@ -759,7 +760,8 @@ impl ProviderLogin {
     /// Whether this account's home is a directory carrying trusted RimZ
     /// hooks. Interactive launches, relaunches, recovery, and account rows use
     /// this check, `default` included; supervised preflight checks named accounts.
-    /// Pass it the [`LoginCatalog::native_ambient`] of its kind.
+    /// Pass the ambient environment; a catalog-issued default drops an
+    /// exported declared account home itself.
     pub fn health(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
         let Some(adapter) = crate::agents::find_definition(&self.kind) else {
             return Ok(());
@@ -1351,9 +1353,9 @@ impl RoomLoginSet {
     }
 
     /// The environment `login`'s provider state is read under. With a catalog,
-    /// `default` reads it under [`LoginCatalog::native_ambient`], so an exported
-    /// declared account home never stands in for the native one; without a
-    /// catalog the ambient environment passes through unchanged.
+    /// `default` drops an exported declared account home even when the login
+    /// was built outside the catalog; without one the ambient environment
+    /// passes to the login unchanged.
     pub fn env(&self, login: &ProviderLogin) -> BTreeMap<String, String> {
         if login.is_default()
             && let Some(catalog) = &self.catalog

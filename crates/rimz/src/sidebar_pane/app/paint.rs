@@ -13,7 +13,7 @@ use crate::sidebar_pane::pets::{
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::pixel::probe::CAPS_REFRESH_INTERVAL;
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot};
-use crate::sidebar_pane::render::{self, UiState};
+use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::store::snapshot::SidebarSnapshot;
 
 use super::backend::{BufferedFrame, PaneBackend};
@@ -39,12 +39,13 @@ impl FramePainter {
     #[cfg(feature = "testkit")]
     pub(super) fn prepare_play_pet(
         &mut self,
+        view: &ViewState,
         ui: &mut UiState,
         snapshot: &SidebarSnapshot,
     ) -> bool {
-        self.refresh_view(ui, snapshot, false);
+        self.refresh_view(ui, view, snapshot, false);
         let ready = self.assets.settle_load(std::time::Duration::from_secs(5));
-        self.refresh_view(ui, snapshot, false);
+        self.refresh_view(ui, view, snapshot, false);
         ready
     }
 
@@ -132,10 +133,11 @@ impl FramePainter {
     pub(super) fn refresh_view(
         &mut self,
         ui: &mut UiState,
+        view: &ViewState,
         snapshot: &SidebarSnapshot,
         alert_active: bool,
     ) {
-        let action = render::selected_pet_action(snapshot, ui);
+        let action = render::selected_pet_action(snapshot, view);
         let theme = ui.theme(&snapshot.theme);
         let pet_body_enabled = theme.pet_body_enabled();
         let leased = !matches!(self.pixel_session, PixelSession::Disabled);
@@ -163,7 +165,7 @@ impl FramePainter {
             &snapshot.theme.pets,
             PetViewFrame {
                 action,
-                phase: ui.cosmetic_phase.unwrap_or(ui.animation_phase),
+                phase: view.cosmetic_phase.unwrap_or(view.animation_phase),
                 refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
                 body,
                 pixel_id_base: self.painter.id_base(),
@@ -194,9 +196,10 @@ impl FramePainter {
         terminal: &mut Terminal<PaneBackend>,
         snapshot: &SidebarSnapshot,
         alert: Option<&render::Alert>,
+        view: &mut ViewState,
         ui: &mut UiState,
     ) -> io::Result<()> {
-        let (body_result, frame) = self.compose_frame(terminal, snapshot, alert, ui);
+        let (body_result, frame) = self.compose_frame(terminal, snapshot, alert, view, ui);
         body_result.and(frame.write(terminal.backend_mut()))
     }
 
@@ -205,6 +208,7 @@ impl FramePainter {
         terminal: &mut Terminal<PaneBackend>,
         snapshot: &SidebarSnapshot,
         alert: Option<&render::Alert>,
+        view: &mut ViewState,
         ui: &mut UiState,
     ) -> (io::Result<()>, BufferedFrame) {
         terminal.backend_mut().begin_frame();
@@ -212,12 +216,12 @@ impl FramePainter {
         let mut bracket = false;
         let body_result = (|| {
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
-                .saturating_mul(ui.animation_phase);
+                .saturating_mul(view.animation_phase);
             self.ensure_pixel_transmitted(&mut graphics, ui, now_ms)?;
             bracket = !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)?;
             graphics.clear();
-            render::draw_to_terminal(terminal, snapshot, alert, ui)?;
+            render::draw_to_terminal(terminal, snapshot, alert, view, ui)?;
             self.ensure_meters_transmitted(&mut graphics, ui, now_ms)?;
             bracket |= !graphics.is_empty();
             terminal.backend_mut().write_all(&graphics)

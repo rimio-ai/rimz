@@ -15,15 +15,15 @@ fn resize_hold_releases_only_on_a_post_engage_pane_stamp() {
         (99, SnapshotSource::Produced, false),
     ] {
         let mut rig = Rig::new();
-        rig.view().current = agent_snapshot(&rig.ws);
-        rig.state.self_close.seen_sibling = true;
-        rig.state.paint_hold.engage(Instant::now(), 100);
+        rig.view().ctx().current = agent_snapshot(&rig.ws);
+        rig.state.pane.self_close.seen_sibling = true;
+        rig.state.pane.paint_hold.engage(Instant::now(), 100);
 
         let snapshot = agent_snapshot_observed(&rig.ws, observed_at_ms);
         rig.fold(snapshot, source);
 
         assert_eq!(
-            !rig.state.paint_hold.is_engaged(),
+            !rig.state.pane.paint_hold.is_engaged(),
             releases,
             "{source:?} pane stamp {observed_at_ms} against an engage at 100"
         );
@@ -35,18 +35,19 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     let mut rig = Rig::new();
     let mut prior = agent_snapshot(&rig.ws);
     prior.panes_observed_at_ms = Some(90);
-    rig.view().current = prior;
-    rig.state.paint_hold.engage(Instant::now(), 100);
+    rig.view().ctx().current = prior;
+    rig.state.pane.paint_hold.engage(Instant::now(), 100);
 
     let snapshot = process_snapshot(&rig.ws, 150);
     rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
-        rig.state.paint_hold.is_engaged(),
+        rig.state.pane.paint_hold.is_engaged(),
         "the rejected fold stays held"
     );
-    assert_eq!(rig.view().gate.reject_streak, 1);
+    assert_eq!(rig.view().ctx().gate.reject_streak, 1);
     assert_eq!(
         rig.view()
+            .ctx()
             .overlay_baseline
             .as_ref()
             .and_then(|snapshot| snapshot.panes_observed_at_ms),
@@ -57,22 +58,22 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     let snapshot = process_snapshot(&rig.ws, 151);
     rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
-        rig.state.paint_hold.is_engaged(),
+        rig.state.pane.paint_hold.is_engaged(),
         "the second rejected fold still stays held"
     );
-    assert_eq!(rig.view().gate.reject_streak, 2);
+    assert_eq!(rig.view().ctx().gate.reject_streak, 2);
     let now_ms = jiff::Timestamp::now().as_millisecond();
-    rig.view().gate.rejecting_since =
+    rig.view().ctx().gate.rejecting_since =
         Some(jiff::Timestamp::from_millisecond(now_ms - 1_000).unwrap());
 
     let snapshot = process_snapshot(&rig.ws, 152);
     rig.fold(snapshot, SnapshotSource::Cached);
     assert!(
-        !rig.state.paint_hold.is_engaged(),
+        !rig.state.pane.paint_hold.is_engaged(),
         "the escape-hatch accepted fold releases by pane stamp"
     );
     assert!(
-        rig.view().overlay_baseline.is_none(),
+        rig.view().ctx().overlay_baseline.is_none(),
         "an accepted overlay-free pull releases the full baseline"
     );
 }
@@ -101,17 +102,17 @@ fn arm_paint_hold_on_grow_engages_only_beyond_the_legitimate_width() {
 
     for (label, prev_width, seen_sibling, grow_to, arms) in cases {
         let mut rig = Rig::new();
-        rig.state.prev_width = Some(prev_width);
-        rig.state.self_close.seen_sibling = seen_sibling;
+        rig.state.pane.prev_width = Some(prev_width);
+        rig.state.pane.self_close.seen_sibling = seen_sibling;
 
         assert_eq!(
             rig.state.arm_paint_hold_on_grow(grow_to, Instant::now()),
             arms,
             "{label}"
         );
-        assert_eq!(rig.state.paint_hold.is_engaged(), arms, "{label}");
+        assert_eq!(rig.state.pane.paint_hold.is_engaged(), arms, "{label}");
         assert_eq!(
-            rig.state.prev_width,
+            rig.state.pane.prev_width,
             Some(prev_width),
             "resize wakeup still owns prev_width advancement: {label}"
         );
@@ -121,24 +122,27 @@ fn arm_paint_hold_on_grow_engages_only_beyond_the_legitimate_width() {
 #[test]
 fn attach_sized_grow_repaints_with_a_seen_sibling() {
     let mut rig = Rig::new().width(57);
-    rig.state.prev_width = Some(10);
-    rig.state.self_close.seen_sibling = true;
-    rig.state.last_heartbeat = Some(Instant::now());
+    rig.state.pane.prev_width = Some(10);
+    rig.state.pane.self_close.seen_sibling = true;
+    rig.state.pane.last_heartbeat = Some(Instant::now());
 
     rig.state
         .on_resize(&mut rig.fetch, &mut rig.terminal, Some(57))
         .expect("handle attach resize");
 
     assert_eq!(
-        rig.state.last_heartbeat, None,
+        rig.state.pane.last_heartbeat, None,
         "a resize restamps the heartbeat's pane size on this pass"
     );
     assert!(
-        !rig.state.paint_hold.is_engaged(),
+        !rig.state.pane.paint_hold.is_engaged(),
         "a grow within the legitimate cap paints immediately"
     );
-    assert!(!rig.state.dirty, "the resize wakeup repaints synchronously");
-    assert_eq!(rig.state.prev_width, Some(57));
+    assert!(
+        !rig.state.pane.dirty,
+        "the resize wakeup repaints synchronously"
+    );
+    assert_eq!(rig.state.pane.prev_width, Some(57));
     assert!(
         rig.next_request()
             .expect("fresh pane request")
@@ -149,27 +153,27 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
 #[test]
 fn empty_close_suppresses_widened_paint_until_exit() {
     let mut rig = Rig::new();
-    rig.view().current = agent_snapshot(&rig.ws);
-    rig.state.self_close.seen_sibling = true;
-    rig.state.paint_hold.engage(Instant::now(), 100);
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    rig.state.pane.self_close.seen_sibling = true;
+    rig.state.pane.paint_hold.engage(Instant::now(), 100);
 
     let mut empty = agent_snapshot_observed(&rig.ws, 200);
     empty.own_view = Some(empty_own_view());
     rig.fold(empty, SnapshotSource::Produced);
 
     assert!(
-        rig.state.should_exit,
+        rig.state.pane.should_exit,
         "seen-sibling zero exits on the producer-verified empty fold"
     );
     assert!(
-        !rig.state.self_close.confirming_empty(),
+        !rig.state.pane.self_close.confirming_empty(),
         "seen-sibling empty tabs skip the confirm window"
     );
 
     rig.paint(true);
 
     assert!(
-        rig.state.dirty,
+        rig.state.pane.dirty,
         "the closing fold suppresses full-width paint instead of clearing dirty"
     );
 }
@@ -194,7 +198,7 @@ fn resize_reprobe_adopts_probed_pet_render_caps() {
         ),
     ] {
         let mut rig = Rig::new();
-        rig.state.paint.set_caps(initial);
+        rig.state.pane.paint.set_caps(initial);
         let mut observed = None;
 
         rig.state.refresh_pet_render_caps_with(
@@ -212,7 +216,7 @@ fn resize_reprobe_adopts_probed_pet_render_caps() {
             Some((crate::MuxName::Tmux, "rimz-test".to_owned())),
             "the probe receives the live mux and session: {label}"
         );
-        assert_eq!(rig.state.paint.caps(), probed, "{label}");
+        assert_eq!(rig.state.pane.paint.caps(), probed, "{label}");
     }
 }
 
@@ -232,7 +236,7 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
         &rig.terminal,
         |_, _, _| enabled,
     ));
-    assert_eq!(rig.state.paint.caps(), enabled);
+    assert_eq!(rig.state.pane.paint.caps(), enabled);
     assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
         crate::MuxName::Tmux,
         "rimz-test",
@@ -259,6 +263,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
     let mut rig = Rig::new();
     let armed = |rig: &Rig| {
         rig.state
+            .pane
             .caps_refresh_deadline
             .expect("a resize arms the caps deadline")
     };
@@ -280,7 +285,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
             |_, _, _| panic!("resize burst must not probe yet"),
         ));
     }
-    rig.state.dirty = false;
+    rig.state.pane.dirty = false;
     let enabled = PixelRenderCaps {
         pixel_transport: true,
         kitty_clients: true,
@@ -293,7 +298,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
         &rig.terminal,
         |_, _, _| enabled,
     ));
-    assert!(rig.state.dirty);
+    assert!(rig.state.pane.dirty);
     assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
         crate::MuxName::Tmux,
         "rimz-test",
@@ -311,12 +316,12 @@ fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
         Some(_) => None,
         None => crate::config::CellAspect::from_ratio(2.0),
     };
-    rig.state.paint.set_probed_aspect(stale);
+    rig.state.pane.paint.set_probed_aspect(stale);
     rig.state
         .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
         .unwrap();
-    rig.state.dirty = false;
-    let caps = rig.state.paint.caps();
+    rig.state.pane.dirty = false;
+    let caps = rig.state.pane.paint.caps();
 
     assert!(rig.state.refresh_pet_render_caps_if_stale_with(
         crate::MuxName::Tmux,
@@ -325,7 +330,7 @@ fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
         &rig.terminal,
         |_, _, _| caps,
     ));
-    assert!(rig.state.dirty);
+    assert!(rig.state.pane.dirty);
 }
 
 #[test]
@@ -357,13 +362,17 @@ fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
 
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
-    rig.state.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
-    let snapshot = rig.state.current.clone();
+    rig.state.pane.ui.meter_pixels = Some(crate::sidebar_pane::pixel::meter::MeterPixels::new(1));
+    let snapshot = rig.state.views.mirror().clone();
     {
-        let mut guard = rig.view();
-        let state = &mut *guard;
-        state.paint.refresh_view(&mut state.ui, &snapshot, false);
+        let pane = &mut rig.state.pane;
+        let mut guard = rig
+            .state
+            .views
+            .rig(pane.config.own_pane.as_ref(), pane.clock.now());
+        let (ui, _) = guard.pair();
+        pane.paint.refresh_view(&mut pane.ui, ui, &snapshot, false);
     }
 
-    assert!(rig.state.ui.meter_pixels.is_none());
+    assert!(rig.state.pane.ui.meter_pixels.is_none());
 }

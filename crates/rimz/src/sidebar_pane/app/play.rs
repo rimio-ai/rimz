@@ -286,6 +286,7 @@ impl Column {
         let mut views = self
             .state
             .views
+            .registry
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         views.publish(FetchUpdate::Snapshot {
@@ -293,11 +294,11 @@ impl Column {
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         });
-        self.state.completion.store(true, Ordering::Relaxed);
+        self.state.pane.completion.store(true, Ordering::Relaxed);
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {
-        let frozen = self.state.ui.freeze.is_some();
+        let frozen = self.state.inspect_view(|ui, _| ui.freeze.is_some());
         let (mut painted, mut deadline) =
             self.state
                 .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
@@ -309,7 +310,7 @@ impl Column {
             painted |= result.0;
             deadline = result.1;
         }
-        self.pending_key |= frozen && self.state.ui.freeze.is_none();
+        self.pending_key |= frozen && self.state.inspect_view(|ui, _| ui.freeze.is_none());
         self.next = Duration::from_millis(self.at.as_millis() as u64)
             + deadline
                 .saturating_duration_since(self.clock.now())
@@ -333,11 +334,13 @@ impl Column {
                 (next.as_millis() - self.at.as_millis()) as u64,
             ));
             self.at = next;
-            self.state.ui.cosmetic_phase = (!self
-                .motion
-                .as_ref()
-                .is_some_and(|range| range.contains(&self.at)))
-            .then_some(0);
+            self.state.set_play_cosmetic_phase(
+                (!self
+                    .motion
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&self.at)))
+                .then_some(0),
+            );
             let mut changed = self.at == self.next_tick;
             if changed {
                 self.next_tick += Duration::from_secs(1);
@@ -395,7 +398,7 @@ impl Column {
 
     fn set_delegation(&mut self, row: String, open: bool) -> Result<bool> {
         let target = crate::sidebar_pane::render::HitTarget::ToggleDelegation { row, open };
-        let Some((column, row)) = self.state.ui.interactions.line_for_target(&target) else {
+        let Some((column, row)) = self.state.pane.ui.interactions.line_for_target(&target) else {
             return Ok(false);
         };
         self.input(Wakeup::MouseClick { column, row })?;
@@ -429,16 +432,24 @@ impl Column {
             | UiAction::Expand(handle)
             | UiAction::Collapse(handle)
             | UiAction::Click(handle) => {
-                let roster = self.state.ui.visible_roster(&self.state.current);
-                let ordinal = roster.rows().iter().position(|row| {
-                    row.as_agent()
-                        .is_some_and(|card| card.handle.as_deref() == Some(handle))
+                let target = self.state.inspect_view(|ui, view| {
+                    let roster = ui.visible_roster(&view.current);
+                    let ordinal = roster.rows().iter().position(|row| {
+                        row.as_agent()
+                            .is_some_and(|card| card.handle.as_deref() == Some(handle))
+                    })?;
+                    Some((
+                        ordinal,
+                        ui.selected_index == Some(ordinal),
+                        roster.rows()[ordinal].id.clone(),
+                        roster.len(),
+                    ))
                 });
-                let Some(ordinal) = ordinal else {
+                let Some((ordinal, selected, row, count)) = target else {
                     self.label = format!("{}: @{handle} not on screen", self.label);
                     return Ok(());
                 };
-                let line = self.state.ui.interactions.line_for_row(ordinal);
+                let line = self.state.pane.ui.interactions.line_for_row(ordinal);
                 let Some(line) = line else {
                     self.label = format!("{}: @{handle} not on screen", self.label);
                     return Ok(());
@@ -449,9 +460,6 @@ impl Column {
                         row: line as u16,
                     });
                 }
-                let selected = self.state.ui.selected_index == Some(ordinal);
-                let row = roster.rows()[ordinal].id.clone();
-                let count = roster.len();
                 if matches!(action, UiAction::Collapse(_)) {
                     if self.set_delegation(row, false)? {
                         return Ok(());
@@ -486,7 +494,12 @@ impl Column {
 
     fn capture(&self) -> Result<PaintedFrame> {
         let mut rows = Vec::new();
-        for row in self.state.ui.frame_rows(self.terminal.backend().buffer()) {
+        for row in self
+            .state
+            .pane
+            .ui
+            .frame_rows(self.terminal.backend().buffer())
+        {
             let mut ansi = Vec::new();
             row.write_ansi(&mut ansi)?;
             rows.push(PaintedRow {

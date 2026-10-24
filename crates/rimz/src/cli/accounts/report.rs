@@ -748,20 +748,13 @@ fn account_rows(
     let mut rows: Vec<AccountRow> = catalog
         .all()
         .map(|login| {
-            let ambient = if login.is_default() {
-                catalog.native_ambient(login.kind(), ambient)
-            } else {
-                ambient.clone()
-            };
             let mut row = row(
                 login.kind(),
                 login.name(),
-                login.home_dir(&ambient),
-                login.health(&ambient).err(),
+                login.home_dir(ambient),
+                login.health(ambient).err(),
             );
-            row.read(readings.get(&login.key()), || {
-                login_command(login, &ambient)
-            });
+            row.read(readings.get(&login.key()), || login_command(login, ambient));
             row
         })
         .collect();

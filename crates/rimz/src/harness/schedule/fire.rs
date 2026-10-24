@@ -33,7 +33,7 @@ enum Action {
     WatchLost,
 }
 
-const WATCH_LOST_GRACE_SECS: i64 = 30;
+pub(super) const WATCH_LOST_GRACE_SECS: i64 = 30;
 const RESIDENT_RETRY_SECS: i64 = 5 * 60;
 const WORKFLOW_TICK_SECS: i64 = 60;
 const BACKLOG_TICK_SECS: i64 = 60;

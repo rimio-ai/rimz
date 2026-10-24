@@ -196,7 +196,7 @@ fn healthy_frame_at_64_columns() {
             "  trunk-ci-fix       on ci.failed   heard ci.passed 2h ago\n",
             "                     · branch=main\n\n",
             "  done      7 one-offs · newest shared-view-step2 6h ago\n",
-            "  wake-ups  19 wake agents · all healthy · rimz loop list --all\n",
+            "  wake-ups  19 subscriptions · rimz loop list --all\n",
         )
     );
 }
@@ -239,7 +239,7 @@ fn needs_you_frame_at_64_columns() {
             "  trunk-ci-fix       on ci.failed     heard ci.passed 2h ago\n",
             "                     · branch=main\n\n",
             "  done      7 one-offs · newest shared-view-step2 6h ago\n",
-            "  wake-ups  18 wake agents · all healthy · rimz loop list --all\n",
+            "  wake-ups  18 subscriptions · rimz loop list --all\n",
         )
     );
 }
@@ -370,7 +370,7 @@ fn wake_fold_excludes_attention_and_running_wakes() {
     lost.kind = TaskKind::WakeUp;
     let output = frame(&room(vec![quiet, active, lost]), 100, 24, true);
     assert!(
-        output.contains("  wake-ups  1 wake agents · all healthy · rimz loop list --all\n"),
+        output.contains("  wake-ups  1 subscription · rimz loop list --all\n"),
         "{output}"
     );
     assert!(
@@ -391,7 +391,7 @@ fn folds_alone_have_no_header_or_next() {
     history(&mut done, 3600, true);
     assert_eq!(
         frame(&room(vec![wake, done]), 100, 24, true),
-        "loop\n\n  done      1 one-off · newest folded-done 1h ago\n  wake-ups  1 wake agents · all healthy · rimz loop list --all\n"
+        "loop\n\n  done      1 one-off · newest folded-done 1h ago\n  wake-ups  1 subscription · rimz loop list --all\n"
     );
 }
 

@@ -680,15 +680,13 @@ fn render_enriched_selected_agent_card() {
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
-        &UiState {
-            view: ViewState {
-                selected_index: Some(0),
-                help_visible: false,
-                animation_phase: 0,
-                ..Default::default()
-            },
-            ..UiState::default()
+        &ViewState {
+            selected_index: Some(0),
+            help_visible: false,
+            animation_phase: 0,
+            ..Default::default()
         },
+        &UiState::default(),
         54,
         17,
     );

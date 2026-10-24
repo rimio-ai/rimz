@@ -381,9 +381,28 @@ fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Tone {
 }
 
 /// The RGB a terminal shows for `tone`: an indexed cell's xterm value.
-fn emitted_rgb(tone: Tone) -> oklab::Rgb {
+pub(super) fn emitted_rgb(tone: Tone) -> oklab::Rgb {
+    const ANSI: [oklab::Rgb; 16] = [
+        (0x00, 0x00, 0x00),
+        (0x80, 0x00, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x80, 0x80, 0x00),
+        (0x00, 0x00, 0x80),
+        (0x80, 0x00, 0x80),
+        (0x00, 0x80, 0x80),
+        (0xc0, 0xc0, 0xc0),
+        (0x80, 0x80, 0x80),
+        (0xff, 0x00, 0x00),
+        (0x00, 0xff, 0x00),
+        (0xff, 0xff, 0x00),
+        (0x00, 0x00, 0xff),
+        (0xff, 0x00, 0xff),
+        (0x00, 0xff, 0xff),
+        (0xff, 0xff, 0xff),
+    ];
     match tone {
         Tone::Rgb(red, green, blue) => (red, green, blue),
+        Tone::Indexed(index) if index < 16 => ANSI[index as usize],
         Tone::Indexed(index) => xterm_rgb(index),
     }
 }

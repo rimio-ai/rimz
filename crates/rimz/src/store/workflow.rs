@@ -142,6 +142,16 @@ pub struct StepVisits {
     pub keys: Vec<KeyVisits>,
 }
 
+impl StepVisits {
+    /// Visits under `key`, where `None` is the unkeyed row; 0 before the key's first visit.
+    pub fn for_key(&self, key: Option<&Key>) -> u64 {
+        self.keys
+            .iter()
+            .find(|visits| visits.key.as_ref() == key)
+            .map_or(0, |visits| visits.visits)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KeyVisits {
     pub key: Option<Key>,

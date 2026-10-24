@@ -588,10 +588,10 @@ impl IdleCycleFixture {
         let mut watched = 0;
         let mut prior = None;
         for (renderer, _) in &mut self.renderers {
-            assert!(renderer.current.own_view.is_some());
+            assert!(renderer.views.mirror().own_view.is_some());
             if renderer.bench_frame_timing(true) {
                 watched += 1;
-                prior = Some(renderer.current.clone());
+                prior = Some(renderer.views.mirror().clone());
             }
         }
         assert_eq!(watched, 1);
@@ -599,8 +599,11 @@ impl IdleCycleFixture {
         let prior = prior.expect("one watched renderer");
         for (renderer, _) in &mut self.renderers {
             if renderer.bench_frame_timing(false) {
-                assert_ne!(prior.worktree_groups, renderer.current.worktree_groups);
-                assert_eq!(prior.own_view, renderer.current.own_view);
+                assert_ne!(
+                    prior.worktree_groups,
+                    renderer.views.mirror().worktree_groups
+                );
+                assert_eq!(prior.own_view, renderer.views.mirror().own_view);
             }
         }
     }
@@ -697,10 +700,10 @@ impl IdleCycleFixture {
             cursor.revision = views.revision;
         }
         for (renderer, dispatcher) in &mut self.renderers {
-            let before = renderer.current.now;
+            let before = renderer.views.mirror().now;
             renderer.on_snapshot(dispatcher);
             assert!(
-                renderer.current.now >= before,
+                renderer.views.mirror().now >= before,
                 "renderer clock never regresses"
             );
         }

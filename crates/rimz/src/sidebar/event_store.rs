@@ -1,5 +1,7 @@
 //! Room-plane realtime event overlay policy and storage.
 
+use std::sync::Arc;
+
 use crate::agents::LifecycleSignal;
 use crate::ids::PaneId;
 use crate::sidebar::timing::EVENT_STORE_TTL;
@@ -52,7 +54,7 @@ pub(super) struct StoredEvent {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EventStore {
-    events: Vec<StoredEvent>,
+    events: Arc<Vec<StoredEvent>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,26 +80,34 @@ impl EventStore {
             received_at_ms,
             event,
         };
-        if let Some(existing) = self
+        if let Some(index) = self
             .events
-            .iter_mut()
-            .find(|event| event_key(&event.event).as_ref() == Some(&key))
+            .iter()
+            .position(|event| event_key(&event.event).as_ref() == Some(&key))
         {
+            let existing = &self.events[index];
             if (next.sent_at_ms, next.received_at_ms)
                 >= (existing.sent_at_ms, existing.received_at_ms)
+                && existing != &next
             {
-                *existing = next;
+                Arc::make_mut(&mut self.events)[index] = next;
             }
         } else {
-            self.events.push(next);
+            Arc::make_mut(&mut self.events).push(next);
         }
         self.enforce_cap();
     }
 
     pub(crate) fn prune(&mut self, now_ms: u64) {
         let ttl_ms = EVENT_STORE_TTL.as_millis() as u64;
-        self.events
-            .retain(|event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms);
+        if self
+            .events
+            .iter()
+            .any(|event| now_ms.saturating_sub(event.received_at_ms) > ttl_ms)
+        {
+            Arc::make_mut(&mut self.events)
+                .retain(|event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms);
+        }
         self.enforce_cap();
     }
 
@@ -119,10 +129,10 @@ impl EventStore {
         if self.events.len() <= MAX_EVENTS {
             return;
         }
-        self.events
-            .sort_by_key(|event| (event.received_at_ms, event.sent_at_ms));
-        let overflow = self.events.len() - MAX_EVENTS;
-        self.events.drain(0..overflow);
+        let events = Arc::make_mut(&mut self.events);
+        events.sort_by_key(|event| (event.received_at_ms, event.sent_at_ms));
+        let overflow = events.len() - MAX_EVENTS;
+        events.drain(0..overflow);
     }
 }
 
@@ -281,6 +291,64 @@ mod tests {
         assert_eq!(store.active(100 + ttl).count(), 1);
         store.prune(101 + ttl);
         assert_eq!(store.events.len(), 0);
+    }
+
+    #[test]
+    fn a_retained_clone_survives_append_prune_and_expiry() {
+        let mut store = EventStore::default();
+        let focus = |id| SidebarEvent::FocusChanged {
+            focused: vec![pane(id)],
+            unfocused: vec![],
+        };
+        store.append(focus("terminal_1"), 10, 100);
+        store.append(
+            SidebarEvent::PaneClosed {
+                pane_id: pane("terminal_1"),
+            },
+            11,
+            101,
+        );
+        let retained = store.clone();
+        let original = retained.active(101).cloned().collect::<Vec<_>>();
+        store.append(focus("terminal_2"), 12, 102);
+        store.append(
+            SidebarEvent::PaneOpened {
+                pane_id: pane("terminal_3"),
+                command: Some("zsh".into()),
+            },
+            13,
+            103,
+        );
+        assert_eq!(store.active(103).count(), 3);
+        assert_eq!(store.active(103).next().unwrap().event, focus("terminal_2"));
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        let ttl = EVENT_STORE_TTL.as_millis() as u64;
+        store.prune(102 + ttl);
+        assert_eq!(store.events.len(), 2);
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        for index in 0..=MAX_EVENTS {
+            let stamp = 103 + ttl + index as u64;
+            store.append(
+                SidebarEvent::PaneClosed {
+                    pane_id: pane(&format!("terminal_cap_{index}")),
+                },
+                stamp,
+                stamp,
+            );
+        }
+        assert_eq!(
+            store
+                .active(103 + ttl + MAX_EVENTS as u64)
+                .map(|event| event.event.clone())
+                .collect::<Vec<_>>(),
+            (1..=MAX_EVENTS)
+                .map(|index| SidebarEvent::PaneClosed {
+                    pane_id: pane(&format!("terminal_cap_{index}")),
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(retained.active(101).cloned().collect::<Vec<_>>(), original);
+        assert_eq!(retained.active(102 + ttl).count(), 0);
     }
 
     #[test]

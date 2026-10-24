@@ -68,6 +68,11 @@ impl Harness {
                 refreshed_at_ms: now_ms,
                 day_cutoff_secs: rimz::agents::spending::local_day_start_secs(now_ms / 1000, None)
                     .unwrap(),
+                timezone: "UTC".into(),
+                chart: rimz::agents::spending::ChartSpend {
+                    today: (now_ms / 86_400_000) as i64,
+                    ..Default::default()
+                },
                 spending: rimz::agents::spending::Spending::default(),
                 ..Default::default()
             },

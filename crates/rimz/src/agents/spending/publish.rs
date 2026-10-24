@@ -41,7 +41,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v20: profile-attributed agent tallies alongside subagents.
 // v21: team-role tallies split from solo agent profiles, with active-time and message
 // effort windows.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 21;
+// v22: bounded daily and weekly model-dollar chart cells.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 22;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -78,16 +79,21 @@ pub struct ProviderSpendingCache {
     /// Account-local calendar-day spend by history pool, for account daily caps.
     #[serde(default)]
     pub day_by_login: BTreeMap<crate::ids::LoginKey, SpendWindow>,
-    /// Epoch second at which the published local calendar day began.
+    /// Account-day midnight in the configured/system zone. Budget and accounts
+    /// readers compare it with their own midnight, not with the history zone.
     #[serde(default)]
     pub day_cutoff_secs: u64,
-    /// Resolved timezone for local civil-date history and the reader's today index.
+    /// Named history zone for day keys and publication freshness; UTC when the
+    /// configured/system zone has no IANA name.
     #[serde(default)]
     pub timezone: String,
     /// Account-global local-date buckets keyed by epoch day, published so the stats
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
     pub days: BTreeMap<i64, DaySpend>,
+    /// Stored model dollars for 30 local days and 52 seven-day blocks ending today.
+    #[serde(default)]
+    pub chart: super::ChartSpend,
     /// Account-global model buckets by trailing window, published so
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
@@ -108,6 +114,7 @@ impl ProviderSpendingCache {
             day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,
             days: result.days.clone(),
+            chart: result.chart.clone(),
             timezone: result.timezone.clone(),
             models: result.models.clone(),
             roles: result.roles.clone(),
@@ -120,22 +127,25 @@ impl ProviderSpendingCache {
         self.version == PROVIDER_SPENDING_VERSION
     }
 
+    /// Whether the walk's history day is today in its published timezone.
+    pub fn is_from_today(&self, now_secs: u64) -> bool {
+        Some(self.chart.today) == local_day_index(now_secs, Some(&self.timezone))
+    }
+
     /// Whether the published walk is young enough that the producer skips the
     /// transcript walk this tick.
     pub fn is_fresh(&self, now_ms: u64) -> bool {
         self.is_fresh_within(now_ms, SPENDING_TTL)
     }
 
-    /// Whether the published walk is no older than `max_age` and from the
-    /// current local day, using the walk's day cutoff rather than its completion
-    /// stamp, so crossing midnight expires it at once. Saturating,
-    /// so a clock that ran backwards within that day reads fresh rather than
-    /// re-walking every tick.
+    /// Whether the published walk is no older than `max_age` and from today in
+    /// its history zone. The history day belongs to aggregation, not completion,
+    /// so crossing that zone's midnight expires it at once. Saturating age keeps
+    /// a backwards clock within that day fresh rather than re-walking every tick.
     pub(crate) fn is_fresh_within(&self, now_ms: u64, max_age: Duration) -> bool {
         self.is_current_version()
             && now_ms.saturating_sub(self.refreshed_at_ms) <= max_age.as_millis() as u64
-            && local_day_index(self.day_cutoff_secs, Some(&self.timezone))
-                == local_day_index(now_ms / 1000, Some(&self.timezone))
+            && self.is_from_today(now_ms / 1000)
     }
 }
 

@@ -217,6 +217,8 @@ A test of a bounded retry or poll includes a case that succeeds only after sever
 
 A test of a timing floor or rate limit queues the inputs it means to merge before the worker can wake (sent from inside the cycle, or held behind a barrier) instead of racing a sleep against the floor; it asserts a delay's lower bound against the floor and its upper bound against the floor plus generous slack.
 
+A table test that must be shown red first collects every case's result and asserts the whole vector in one `assert_eq!`, so one failing run shows each case.
+
 ## Dependency budget
 
 The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why RimZ does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.

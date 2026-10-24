@@ -117,7 +117,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     else {
         unreachable!("timer, process, and command waits are not subscriptions")
     };
-    let pending = list::pending_rows(&ctx)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
     if args.json {
         return super::super::render::json(&WakeReceipt {
             name: &name,
@@ -132,7 +132,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         "armed {name}: {description} → {}{timeout}",
         target.handle
     )?;
-    list::write_rows(&mut out, pending)
+    list::write_rows(&mut out, &ctx, Some(agent), &snapshot, pending)
 }
 
 fn watch_trigger(

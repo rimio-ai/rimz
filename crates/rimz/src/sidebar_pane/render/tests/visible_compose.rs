@@ -79,46 +79,45 @@ fn fleet(count: usize) -> SidebarSnapshot {
 
 fn compose_cached(
     snapshot: &SidebarSnapshot,
-    ui: &mut UiState,
+    ui: &mut ViewState,
+    pane_ui: &mut UiState,
     width: u16,
     height: u16,
 ) -> compose::ComposedFrame {
-    let theme = ui.theme(&snapshot.theme);
-    let mut heights = std::mem::take(&mut ui.card_heights);
+    let theme = pane_ui.theme(&snapshot.theme);
+    let mut heights = std::mem::take(&mut pane_ui.card_heights);
     let frame = compose_lines_with_meter(
         snapshot,
         None,
         ui,
+        pane_ui,
         &theme,
         width,
         height,
         None,
         Some(&mut heights),
     );
-    ui.card_heights = heights;
+    pane_ui.card_heights = heights;
     frame
 }
 
-fn write_back(ui: &mut UiState, frame: compose::ComposedFrame) {
-    ui.interactions = frame.interactions;
+fn write_back(ui: &mut ViewState, pane_ui: &mut UiState, frame: compose::ComposedFrame) {
+    pane_ui.interactions = frame.interactions;
     ui.scrollbar.shift(frame.correction);
-    ui.view
-        .scrollbar
+    ui.scrollbar
         .observe(frame.visible_scroll_offset, ui.animation_phase);
     ui.scroll_ease = frame.scroll_ease;
-    ui.view
-        .scroll_ease
-        .observe(frame.scroll_offset, ui.frame_ms);
+    ui.scroll_ease.observe(frame.scroll_offset, ui.frame_ms);
     ui.scroll_offset = frame.scroll_offset;
-    ui.drawn_scroll_max = Some(frame.scroll_max);
-    ui.painted_rows = frame.painted_rows;
+    pane_ui.drawn_scroll_max = Some(frame.scroll_max);
+    pane_ui.painted_rows = frame.painted_rows;
     ui.anchored_rows = frame.anchored_rows;
     ui.anchor_banner_shown = frame.banner_shown;
     ui.drawn_selection = frame.drawn_selection;
     ui.held_expansions = frame.held_expansions;
-    ui.scroll_zone_top = frame.top_height;
-    ui.banner_shown = frame.banner_shown;
-    ui.anchor_clamped = frame.anchor_clamped;
+    pane_ui.scroll_zone_top = frame.top_height;
+    pane_ui.banner_shown = frame.banner_shown;
+    pane_ui.anchor_clamped = frame.anchor_clamped;
     ui.offset_authoritative = false;
     ui.landed_reveal = false;
     ui.reveal_row = None;
@@ -134,14 +133,15 @@ proptest! {
         steps in prop::collection::vec((0u8..12, any::<u16>()), 8..=16),
     ) {
         let mut snapshot = fleet(count);
-        let mut ui = UiState::default();
+        let mut ui = ViewState::default();
+        let mut pane_ui = UiState::default();
         for (step, (action, value)) in steps.into_iter().enumerate() {
             ui.frame_ms += 40;
             ui.animation_phase += 1;
             match action {
                 0 => {
                     ui.scroll_ease.arm();
-                    ui.scroll_offset = usize::from(value) % (ui.drawn_scroll_max.unwrap_or(0) + 1);
+                    ui.scroll_offset = usize::from(value) % (pane_ui.drawn_scroll_max.unwrap_or(0) + 1);
                     ui.offset_authoritative = true;
                 }
                 1 => ui.selected_index = Some(usize::from(value) % ui.visible_roster(&snapshot).len().max(1)),
@@ -165,11 +165,12 @@ proptest! {
                 }
             }
             let before = ui.clone();
-            let theme = ui.theme(&snapshot.theme);
-            let expected = compose_lines(&snapshot, None, &before, &theme, width, height);
-            let actual = compose_cached(&snapshot, &mut ui, width, height);
+            let pane_before = pane_ui.clone();
+            let theme = pane_ui.theme(&snapshot.theme);
+            let expected = compose_lines(&snapshot, None, &before, &pane_before, &theme, width, height);
+            let actual = compose_cached(&snapshot, &mut ui, &mut pane_ui, width, height);
             prop_assert_eq!(&actual, &expected, "step {} action {}", step, action);
-            write_back(&mut ui, actual);
+            write_back(&mut ui, &mut pane_ui, actual);
         }
     }
 }
@@ -177,7 +178,7 @@ proptest! {
 fn visible_cards(
     frame: &compose::ComposedFrame,
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
 ) -> BTreeSet<usize> {
     let roster = ui.visible_roster(snapshot);
     frame
@@ -200,43 +201,41 @@ fn assert_painted(ui: &UiState, expected: BTreeSet<usize>) {
 #[test]
 fn paint_scope_tracks_window_epoch_and_selection() {
     let mut snapshot = fleet(124);
-    let mut ui = UiState {
-        view: ViewState {
-            expanded_groups: snapshot
-                .worktree_groups
-                .iter()
-                .map(|g| g.key.clone())
-                .collect(),
-            landed_open: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let mut ui = ViewState {
+        expanded_groups: snapshot
+            .worktree_groups
+            .iter()
+            .map(|g| g.key.clone())
+            .collect(),
+        landed_open: true,
+        ..Default::default()
     };
+    let mut pane_ui = UiState::default();
     let count = ui.visible_roster(&snapshot).len();
     assert_eq!(count, 124);
-    let first = compose_cached(&snapshot, &mut ui, 54, 40);
-    assert_painted(&ui, (0..count).collect());
-    write_back(&mut ui, first);
+    let first = compose_cached(&snapshot, &mut ui, &mut pane_ui, 54, 40);
+    assert_painted(&pane_ui, (0..count).collect());
+    write_back(&mut ui, &mut pane_ui, first);
     ui.scroll_offset = 80;
     ui.offset_authoritative = true;
-    let second = compose_cached(&snapshot, &mut ui, 54, 40);
+    let second = compose_cached(&snapshot, &mut ui, &mut pane_ui, 54, 40);
     let visible = visible_cards(&second, &snapshot, &ui);
     assert!(visible.len() < count / 2);
-    assert_painted(&ui, visible);
-    write_back(&mut ui, second);
+    assert_painted(&pane_ui, visible);
+    write_back(&mut ui, &mut pane_ui, second);
     snapshot.now += Duration::from_secs(2);
-    let third = compose_cached(&snapshot, &mut ui, 54, 40);
-    assert_painted(&ui, (0..count).collect());
-    write_back(&mut ui, third);
+    let third = compose_cached(&snapshot, &mut ui, &mut pane_ui, 54, 40);
+    assert_painted(&pane_ui, (0..count).collect());
+    write_back(&mut ui, &mut pane_ui, third);
     let roster = ui.visible_roster(&snapshot);
     let card_0 = roster.ordinal_of_id("card-0").unwrap();
     let card_1 = roster.ordinal_of_id("card-1").unwrap();
     for selected in [card_0, card_1] {
         ui.selected_index = Some(selected);
-        let frame = compose_cached(&snapshot, &mut ui, 54, 40);
+        let frame = compose_cached(&snapshot, &mut ui, &mut pane_ui, 54, 40);
         let mut expected = visible_cards(&frame, &snapshot, &ui);
         expected.extend([card_0, selected]);
-        assert_painted(&ui, expected);
-        write_back(&mut ui, frame);
+        assert_painted(&pane_ui, expected);
+        write_back(&mut ui, &mut pane_ui, frame);
     }
 }

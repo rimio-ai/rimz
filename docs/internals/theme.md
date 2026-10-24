@@ -174,6 +174,8 @@ An unregistered kind gets a title-cased name (`provider_title_case`) and `BrandC
 
 `BrandColor::tone(&Palette)` converts a brand to a `Tone`. A registered definition's `BrandColor::Brand` carries both a truecolor RGB and a hand-picked xterm index. At indexed depth it emits the authored index instead of quantizing the RGB, because the nearest cube cell to a brand color is often not the one a person would pick. A configured `color` resolves like a slot override: a role through the palette, RGB quantized by depth, a raw index unchanged.
 
+`crates/rimz/src/theme/provider.rs::BrandColor::shade` derives model tones from that resolved brand, provider colour overrides included. Step zero is exactly the identity tone. Later ranks blend in OKLab toward the farther of black and white: light brands, including Grok's white, darken, and dark brands lighten. Blending keeps a saturated brand inside the gamut, where a clamped lightness drop would stall on a dark hue. At the palette's depth, each rank's emitted colour, ANSI and cube colours included, sits at least `MODEL_SHADE_STRIDE` (0.1) lightness past the previous rank's, so two models of one provider read apart in a stacked bar. A rank beyond the lightness range keeps its final tone.
+
 Identity depends only on the provider kind and the theme config, never on whether the dashboard shows that provider's panel. Human-facing provider names, agent handles, tabs, and emblems all resolve through it, and JSON fields keep the definition's own values. One field breaks that rule: `rimz accounts --json` serializes `product_name` from the resolved identity, so it carries a `[theme.providers.<kind>] product_name` override (`crates/rimz/src/cli/accounts/report.rs::ProviderReport`).
 
 ## Interface language
@@ -182,7 +184,7 @@ Four meanings cover every human-facing use of color, and a new surface picks fro
 
 | meaning | rule | home |
 | --- | --- | --- |
-| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Models, statuses, plans, and headings use their own roles. | `theme/provider.rs` |
+| Identity | the resolved provider brand, for provider names, agent handles, tabs, and emblems. Model spend markers derive shades from that brand; statuses, plans, and headings use their own roles. | `theme/provider.rs` |
 | State | typed lifecycle values map to a state role, and a glyph or status word carries the same meaning without color | `cli/render/status.rs` |
 | Hierarchy | `body` for primary content, `muted` for labels and metadata, `faint` for separators and placeholders, bold for emphasis. Headings are muted bold, and `accent` marks categories. | every renderer |
 | Quantity | dollar green (`Identity::Money`) for currency, the token-category tones, and the heat ramp plus shape-readable bars for percentages and budgets | `theme/identity.rs`, `theme/palette.rs` |

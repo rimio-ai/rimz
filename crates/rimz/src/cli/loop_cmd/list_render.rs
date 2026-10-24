@@ -9,6 +9,7 @@ pub(super) fn write(
     rooms: &[&Room],
     all: bool,
     width: Option<usize>,
+    current_root: Option<&Path>,
 ) -> Result<()> {
     let total = model
         .rooms
@@ -37,7 +38,7 @@ pub(super) fn write(
         routine_rows(out, room, model.now, width)?;
         waiting_rows(out, room, model.now, width)?;
         done_rows(out, room, model.now, all, width)?;
-        wake_ups(out, room, model.now, all)?;
+        wake_ups(out, room, model.now, all, current_root)?;
     }
     if !all && model.caller_root.is_some() {
         let elsewhere = model
@@ -338,55 +339,12 @@ fn action(row: &TaskRow) -> String {
         ActionKind::Check => TaskActionKind::CheckOnly,
         ActionKind::Workflow => TaskActionKind::Workflow,
     };
-    action_text(
+    crate::cli::wake_view::action_text(
         kind,
         &spec.subject,
         row.task.as_ref().map(LoadedTask::entry),
         row.you,
     )
-}
-
-pub(in crate::cli::loop_cmd) fn action_text(
-    kind: TaskActionKind,
-    subject: &str,
-    entry: Option<&TaskEntry>,
-    you: bool,
-) -> String {
-    let mut action = match kind {
-        TaskActionKind::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
-        TaskActionKind::Spawn => format!("start {subject}"),
-        TaskActionKind::Workflow => format!("start workflow {subject}"),
-        TaskActionKind::CheckOnly => "run check".into(),
-    };
-    if let Some(entry) = entry {
-        let guard = entry.guard();
-        let stages = guard
-            .shell
-            .map(|_| "check".to_owned())
-            .into_iter()
-            .chain(
-                guard
-                    .judges
-                    .iter()
-                    .map(|judge| format!("judge `{}`", judge.agent)),
-            )
-            .collect::<Vec<_>>();
-        if !stages.is_empty() && kind.has_effect() {
-            let guard = stages.join(", then ");
-            action = if kind.is_spawn() {
-                format!("{guard}, then start {subject}")
-            } else {
-                format!("{action} · {guard}")
-            };
-        }
-    }
-    if you {
-        action.push_str(" (you)");
-    }
-    if let Some(account) = entry.and_then(|entry| entry.account.as_ref()) {
-        action.push_str(&format!(" · account {account}"));
-    }
-    action
 }
 
 fn done_rows(
@@ -475,20 +433,25 @@ fn done_rows(
     Ok(())
 }
 
-fn wake_ups(out: &mut impl Write, room: &Room, now: Timestamp, all: bool) -> Result<()> {
-    let count = room
+fn wake_ups(
+    out: &mut impl Write,
+    room: &Room,
+    now: Timestamp,
+    all: bool,
+    current_root: Option<&Path>,
+) -> Result<()> {
+    use crate::cli::wake_view::{self, WakeRow};
+
+    let rows = room
         .tasks
         .iter()
         .filter(|row| row.kind == TaskKind::WakeUp)
-        .count();
-    if count == 0 {
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
         return Ok(());
     }
-    let need_you = room
-        .tasks
-        .iter()
-        .filter(|row| row.kind == TaskKind::WakeUp && row.attention.is_some())
-        .count();
+    let counts = wake_view::counts(rows.iter().map(|row| row.owner_class()));
+    let need_you = rows.iter().filter(|row| row.attention.is_some()).count();
     let health = if need_you == 0 {
         "all healthy".into()
     } else {
@@ -497,123 +460,54 @@ fn wake_ups(out: &mut impl Write, room: &Room, now: Timestamp, all: bool) -> Res
     let hint = if all { "" } else { " · rimz loop list --all" };
     writeln!(
         out,
-        "\n{}  {count} wake agents · {health}{hint}",
+        "\n{}  {counts} · {health}{hint}",
         ui::paint(ui::palette::header(), "WAKE-UPS")
     )?;
     if !all {
         return Ok(());
     }
-    let mut rows = room
-        .tasks
+    let agents = if rows
         .iter()
-        .filter(|row| row.section == Section::WakeUps)
-        .collect::<Vec<_>>();
-    rows.sort_by_key(|row| &row.name);
-    for members in collapsed(&rows) {
-        let row = members[0];
-        let Some(owner) = &row.owner else {
-            let checkout = row
-                .worktree
-                .as_ref()
-                .map(|_| format!(" · {}", worktree_text(row)))
-                .unwrap_or_default();
-            writeln!(
-                out,
-                "  {}{checkout} · {} · {} · {}",
-                row.name,
-                row.trigger,
-                action(row),
-                row.last_text(now)
-            )?;
-            continue;
-        };
-        let name = if owner.kind == OwnerKind::Team {
-            format!("team {}", owner.name)
-        } else {
-            owner.name.clone()
-        };
-        let signals = signal_names(
-            members
-                .iter()
-                .filter_map(|row| row.task.as_ref()?.entry().signal.clone())
-                .collect(),
-        );
-        let triggers = if signals.is_empty() {
-            members
-                .iter()
-                .map(|row| row.head.as_str())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
-                .join(" / ")
-        } else {
-            signals
-        };
-        let targets = members
-            .iter()
-            .map(|row| action(row))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(", ");
-        let checkouts = members
-            .iter()
-            .filter_map(|row| {
-                row.dir
+        .any(|row| row.owner_class() == schedule::DeliveryOwner::SelfWait)
+    {
+        StatePaths::for_project_root(&room.root)
+            .ok()
+            .and_then(|paths| crate::cli::open_existing_store_at(paths).ok().flatten())
+            .and_then(|store| store.runtime_projection(rimz::RuntimeScope::Runtime).ok())
+            .map(|projection| projection.agents)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let wakes = rows
+        .iter()
+        .filter_map(|row| {
+            let task = row.task.as_ref()?;
+            Some(WakeRow::new(
+                &row.name,
+                task.entry(),
+                row.timing
                     .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .or_else(|| row.worktree.clone())
-            })
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        writeln!(
-            out,
-            "  {name} · {triggers} → {targets} in {checkouts} worktree{}",
-            if checkouts == 1 { "" } else { "s" }
-        )?;
-    }
-    Ok(())
-}
-
-fn collapsed<'a>(rows: &[&'a TaskRow]) -> Vec<Vec<&'a TaskRow>> {
-    let mut groups: Vec<Vec<&TaskRow>> = Vec::new();
-    for row in rows {
-        let group = row
-            .owner
-            .as_ref()
-            .and_then(|_| groups.iter_mut().find(|group| group[0].owner == row.owner));
-        match group {
-            Some(group) => group.push(row),
-            None => groups.push(vec![row]),
-        }
-    }
-    groups
-}
-
-fn signal_names(mut signals: Vec<String>) -> String {
-    signals.sort();
-    signals.dedup();
-    let mut families: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for signal in signals {
-        let (family, member) = signal.split_once('.').unwrap_or((&signal, ""));
-        families
-            .entry(family.to_owned())
-            .or_default()
-            .push(member.to_owned());
-    }
-    families
-        .into_iter()
-        .map(|(family, members)| {
-            if members.len() > 1 {
-                format!("{family}.{{{}}}", members.join(","))
-            } else if members[0].is_empty() {
-                family
-            } else {
-                format!("{family}.{}", members[0])
-            }
+                    .map_or(ArmState::Live, |timing| timing.arm_state()),
+                row.watcher_pid,
+                &agents,
+                now,
+            ))
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect::<Vec<_>>();
+    let caller = rows
+        .iter()
+        .find(|row| row.you)
+        .and_then(|row| row.task.as_ref()?.entry().wait.as_ref())
+        .map(|target| (target.kind.clone(), target.session.clone()));
+    wake_view::write_room(
+        out,
+        &wakes,
+        &agents,
+        caller.as_ref(),
+        current_root.unwrap_or(&room.root),
+        now,
+    )
 }
 
 pub(super) fn write_table(
@@ -706,7 +600,7 @@ fn last_style(row: &TaskRow) -> anstyle::Style {
         }),
         (_, None)
             if row.heard.is_none()
-                && !row.watcher_live
+                && row.watcher_pid.is_none()
                 && row
                     .task
                     .as_ref()

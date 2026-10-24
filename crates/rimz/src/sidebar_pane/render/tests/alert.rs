@@ -138,18 +138,18 @@ fn active_alert_suppresses_truth_degraded_notice() {
 #[test]
 fn render_gate_hold_notice_keeps_room_chrome() {
     let snapshot = snapshot_with(Vec::new());
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let pane_ui = UiState {
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::EmptyStampedFrame,
         }),
         ..UiState::default()
     };
 
-    let (lines, _) = bottom_chrome_texts_with_ui(&snapshot, None, &ui);
+    let (lines, _) = bottom_chrome_texts_with_ui(&snapshot, None, &ui, &pane_ui);
     let text = lines.join("\n");
 
     assert!(text.contains("pane updates held"), "{text}");
@@ -160,11 +160,11 @@ fn render_gate_hold_notice_keeps_room_chrome() {
 #[test]
 fn active_alert_suppresses_gate_hold_notice() {
     let snapshot = snapshot_with(Vec::new());
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let pane_ui = UiState {
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::AgentDemotedToProcess,
         }),
@@ -172,7 +172,7 @@ fn active_alert_suppresses_gate_hold_notice() {
     };
     let alert = Alert::active("snapshot failed", snapshot.now);
 
-    let (lines, _) = bottom_chrome_texts_with_ui(&snapshot, Some(&alert), &ui);
+    let (lines, _) = bottom_chrome_texts_with_ui(&snapshot, Some(&alert), &ui, &pane_ui);
     let text = lines.join("\n");
 
     assert!(text.contains("Sidebar degraded"), "{text}");

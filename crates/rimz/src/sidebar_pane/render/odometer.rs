@@ -9,7 +9,7 @@
 //! big first steps decay into penny-sized last clicks onto the exact
 //! two-decimal value, and a small jump simply lands early once rounding
 //! reaches the target. Motion is driven purely by the wall-clock animation
-//! phase ([`super::UiState::animation_phase`]) — never by the age of the
+//! phase ([`super::ViewState::animation_phase`]) — never by the age of the
 //! fetched data — so a roll plays smoothly even when the data behind it is
 //! stale, per the render-thread performance contract.
 //!

@@ -1,4 +1,5 @@
-//! Renderer state transitions and loop-lifetime context, including fetch application, focus repair, maintenance deadlines, and paint eligibility.
+//! `LoopState` lends client views through `ViewAccess` to pane-local `PaneState` transitions.
+//! Fetch application, focus repair, maintenance deadlines, and paint eligibility stay pane-local.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -27,7 +28,7 @@ use crate::sidebar::timing::TAB_READ_DWELL;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
-use crate::sidebar_pane::render::{self, UiState};
+use crate::sidebar_pane::render::{self, UiState, ViewState};
 use crate::sidebar_pane::view::BodyLens;
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
@@ -78,11 +79,7 @@ const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
 
 mod shared;
 
-#[derive(Clone, Copy)]
-enum ViewScope {
-    Scratch,
-    Shared(super::views::ViewId),
-}
+use shared::{Route, ViewAccess, ViewBorrow, ViewTarget};
 
 pub(super) type BaselineReporter = Box<dyn Fn(Option<&PaneId>) + Send>;
 
@@ -128,6 +125,29 @@ struct FoldPreparation {
     anchor: Option<crate::mux::focus_anchor::FocusAnchor>,
 }
 
+impl FoldPreparation {
+    fn load(
+        runtime: &RuntimePaths,
+        inputs: Option<Arc<super::fetch::FoldInputs>>,
+        visible: Option<bool>,
+        events: EventStore,
+    ) -> Self {
+        Self {
+            visible,
+            events,
+            marks: ReadMarks::load(runtime),
+            filter: inputs.as_ref().map_or_else(
+                || crate::sidebar::body_filter::load(runtime),
+                |inputs| inputs.filter.clone(),
+            ),
+            anchor: inputs.map_or_else(
+                || crate::mux::focus_anchor::load(runtime),
+                |inputs| inputs.anchor.clone(),
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 struct FoldEffects {
     diagnostics: Vec<crate::diag::record::DiagEvent>,
@@ -135,6 +155,7 @@ struct FoldEffects {
     receipts: Vec<(ReadClear, Timestamp)>,
     filter: Option<BodyLens>,
     retirements: Vec<(
+        ViewTarget,
         crate::mux::focus_anchor::FocusAnchor,
         Option<FocusObservationOutcome>,
     )>,
@@ -146,27 +167,20 @@ struct FoldEffects {
 }
 
 pub(super) struct LoopState {
+    pub(super) pane: PaneState,
+    pub(super) views: ViewAccess,
+    pub(super) room_events: Option<super::plane::RoomEvents>,
+}
+
+pub(super) struct PaneState {
     #[cfg(test)]
     pub(super) content_applications: u64,
     #[cfg(test)]
     pub(super) projections: u64,
     #[cfg(test)]
     fold_preparations: u64,
-    pub(super) view: ViewContext,
-    fold_preparation: Option<FoldPreparation>,
     fold_effects: FoldEffects,
-    pub(super) views: Arc<Mutex<super::views::Views>>,
-    view_scope: Option<ViewScope>,
-    transition_view: Option<super::views::ViewId>,
-    view_focus: Option<Option<PaneId>>,
-    view_focus_event: Option<u64>,
-    view_parked: Option<bool>,
-    view_events: Option<EventStore>,
-    view_latest: bool,
-    view_advanced: bool,
-    was_resolved: bool,
     baseline_seed: Option<PaneId>,
-    view_token: Option<(super::views::ViewId, u64, u64)>,
     /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
     nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
     config: ServeConfig,
@@ -183,8 +197,6 @@ pub(super) struct LoopState {
     paints: u64,
     paint_reports: Vec<(FocusPush, PushVerdict)>,
     optimistic_watch_until: Option<Instant>,
-    pub(super) events: Arc<Mutex<EventStore>>,
-    pub(super) room_events: Option<super::plane::RoomEvents>,
     pending_focus_repair: Option<PendingFocusRepair>,
     observer: observe::OwnObserver,
     clicked_row: Option<ClickedRowWatch>,
@@ -216,22 +228,9 @@ pub(super) struct LoopState {
     painted_selection: Option<String>,
 }
 
-impl std::ops::Deref for LoopState {
-    type Target = ViewContext;
-
-    fn deref(&self) -> &Self::Target {
-        &self.view
-    }
-}
-
-impl std::ops::DerefMut for LoopState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view
-    }
-}
-
 pub(super) fn handle_wakeup(
     wakeup: Wakeup,
+    view: &mut ViewState,
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
     keymap: &super::NavKeymap,
@@ -239,9 +238,9 @@ pub(super) fn handle_wakeup(
 ) -> InputOutcome {
     let wakeup = match wakeup {
         Wakeup::Press { code, mods } => {
-            let mode = if ui.help_visible {
+            let mode = if view.help_visible {
                 InputMode::Help
-            } else if ui.search_draft.is_some() {
+            } else if view.search_draft.is_some() {
                 InputMode::Typing
             } else {
                 InputMode::Normal
@@ -253,48 +252,48 @@ pub(super) fn handle_wakeup(
     // The help popup is a transient modal: while it is up, the next
     // interaction dismisses it and is consumed, never also acting on the
     // sidebar beneath.
-    if ui.help_visible
+    if view.help_visible
         && matches!(
             wakeup,
             Wakeup::Key(_) | Wakeup::MouseClick { .. } | Wakeup::Scroll { .. }
         )
     {
-        ui.help_visible = false;
+        view.help_visible = false;
         return InputOutcome::redraw();
     }
     match wakeup {
         Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
-        Wakeup::Key(action) => handle_key(action, ui, snapshot),
+        Wakeup::Key(action) => handle_key(action, view, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
             if let Some(render::HitTarget::Row(index)) = ui.interactions.target_at(column, row)
                 && !ui
                     .painted_roster
                     .get(index)
-                    .is_some_and(|id| ui.visible_roster(snapshot).ordinal_of_id(id).is_some())
+                    .is_some_and(|id| view.visible_roster(snapshot).ordinal_of_id(id).is_some())
             {
                 return InputOutcome::default();
             }
-            if ui.search_draft.is_some() {
+            if view.search_draft.is_some() {
                 // Resolve the pane against the painted draft before clearing widens the roster.
                 let pane = ui
                     .interactions
                     .target_at(column, row)
-                    .and_then(|target| click_focus_pane(&target, ui, snapshot));
+                    .and_then(|target| click_focus_pane(&target, view, ui, snapshot));
                 if pane.is_some() {
-                    let click = handle_mouse_click(column, row, ui, snapshot);
-                    let mut outcome = finish_search(ui, snapshot, false);
+                    let click = handle_mouse_click(column, row, view, ui, snapshot);
+                    let mut outcome = finish_search(view, snapshot, false);
                     outcome.redraw |= click.redraw;
                     outcome.effects.extend(click.effects);
                     return outcome;
                 }
             }
-            let mut outcome = finish_search(ui, snapshot, true);
-            let click = handle_mouse_click(column, row, ui, snapshot);
+            let mut outcome = finish_search(view, snapshot, true);
+            let click = handle_mouse_click(column, row, view, ui, snapshot);
             outcome.redraw |= click.redraw;
             outcome.effects.extend(click.effects);
             outcome
         }
-        Wakeup::Scroll { down } => handle_scroll(down, ui),
+        Wakeup::Scroll { down } => handle_scroll(down, view, ui),
         Wakeup::Resize => InputOutcome::redraw(),
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
@@ -308,16 +307,49 @@ pub(super) fn handle_wakeup(
 }
 
 impl LoopState {
-    fn fold_transition<T>(&mut self, advance: impl FnOnce(&mut Self) -> T) -> T {
-        let inputs = self.inspect_view(|_, view| view.fold_inputs.clone());
-        self.fold_transition_with_inputs(inputs, advance)
+    pub(in crate::sidebar_pane::app) fn inspect_view<T>(
+        &self,
+        inspect: impl FnOnce(&ViewState, &ViewContext) -> T,
+    ) -> T {
+        self.views
+            .inspect(self.pane.config.own_pane.as_ref(), inspect)
     }
 
-    fn fold_transition_with_inputs<T>(
+    fn observed_watched(&self) -> bool {
+        let (resolved, observed) = self
+            .views
+            .visibility(self.pane.config.own_pane.as_ref(), || self.pane.clock.now());
+        resolved || observed.unwrap_or_else(|| self.pane.watches_snapshot(self.views.mirror()))
+    }
+
+    pub(in crate::sidebar_pane::app) fn share_views(
         &mut self,
-        inputs: Option<Arc<super::fetch::FoldInputs>>,
-        advance: impl FnOnce(&mut Self) -> T,
+        views: Arc<Mutex<super::views::Views>>,
+        revision: u64,
+    ) {
+        self.pane.baseline_seed = self.views.share(views);
+        self.pane.own = super::views::Cursor {
+            revision,
+            accepted: None,
+        };
+    }
+
+    /// Routes like production: a hidden, unresolved pane borrows Scratch and drops its shared
+    /// view's paint mapping, so a test that needs that view's id reads it before hiding the pane.
+    #[cfg(test)]
+    fn with_view_for_test<T>(
+        &mut self,
+        route: Route<'_>,
+        advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>) -> T,
     ) -> T {
+        self.views.with(&mut self.pane, route, advance)
+    }
+
+    fn fold_transition<T>(
+        &mut self,
+        advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>, &FoldPreparation) -> T,
+    ) -> T {
+        let inputs = self.inspect_view(|_, view| view.fold_inputs.clone());
         self.view_transition(false, inputs, None, advance)
     }
 
@@ -326,101 +358,100 @@ impl LoopState {
         input: bool,
         inputs: Option<Arc<super::fetch::FoldInputs>>,
         visible: Option<bool>,
-        advance: impl FnOnce(&mut Self) -> T,
+        advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>, &FoldPreparation) -> T,
     ) -> T {
-        if self.fold_preparation.is_some() {
-            return advance(self);
-        }
         #[cfg(test)]
         {
-            self.fold_preparations += 1;
+            self.pane.fold_preparations += 1;
         }
         let events = self.events().clone();
-        self.fold_preparation = Some(FoldPreparation {
-            visible,
-            events,
-            marks: ReadMarks::load(&self.runtime),
-            filter: inputs.as_ref().map_or_else(
-                || crate::sidebar::body_filter::load(&self.runtime),
-                |inputs| inputs.filter.clone(),
-            ),
-            anchor: inputs.map_or_else(
-                || crate::mux::focus_anchor::load(&self.runtime),
-                |inputs| inputs.anchor.clone(),
-            ),
-        });
-        let result = self.with_projected_view(input, true, advance);
-        self.fold_preparation = None;
+        let prepared = FoldPreparation::load(&self.pane.runtime, inputs, visible, events);
+        let result = self
+            .views
+            .with(&mut self.pane, Route::fold(input, &prepared), |pane, v| {
+                advance(pane, v, &prepared)
+            });
         self.finish_view_effects();
         result
     }
 
-    fn paint_transition<T>(&mut self, advance: impl FnOnce(&mut Self) -> T) -> T {
-        let result = self.with_projected_view(false, true, advance);
+    fn paint_transition<T>(
+        &mut self,
+        advance: impl FnOnce(&mut PaneState, &mut ViewBorrow<'_>) -> T,
+    ) -> T {
+        let result = self.views.with(&mut self.pane, Route::PAINT, advance);
         self.finish_view_effects();
         result
     }
 
     fn finish_view_effects(&mut self) {
-        let transition_view = self.transition_view.take();
-        let effects = std::mem::take(&mut self.fold_effects);
-        emit_diagnostics(&self.diag, effects.diagnostics);
+        let effects = std::mem::take(&mut self.pane.fold_effects);
+        emit_diagnostics(&self.pane.diag, effects.diagnostics);
         for trace in effects.traces {
-            self.diag.trace_focus(trace, HashSet::new());
+            self.pane.diag.trace_focus(trace, HashSet::new());
         }
         for (clear, now) in effects.receipts {
-            if let Err(err) = write_read_marks(&self.runtime, clear.ids, now.as_millisecond()) {
+            if let Err(err) = write_read_marks(&self.pane.runtime, clear.ids, now.as_millisecond())
+            {
                 debug!(error = %err, "sidebar read-mark write failed");
             }
-            emit_unread_cleared_trace(&self.diag, &clear.trace);
+            emit_unread_cleared_trace(&self.pane.diag, &clear.trace);
         }
         if let Some(filter) = effects.filter {
             self.persist_body_filter(filter);
         }
-        for (anchor, outcome) in effects.retirements {
-            if crate::mux::focus_anchor::clear_matching(&self.runtime, anchor.nonce) {
-                self.retire_shared_anchor(transition_view, &anchor);
+        for (target, anchor, outcome) in effects.retirements {
+            if crate::mux::focus_anchor::clear_matching(&self.pane.runtime, anchor.nonce) {
+                self.views
+                    .retire_anchor(target, &anchor, || self.pane.clock.now());
                 if let Some(outcome) = outcome {
-                    self.record_focus_resolution(&anchor, outcome);
+                    self.pane.record_focus_resolution(&anchor, outcome);
                 }
             }
         }
         for sig in effects.observations {
-            self.observer
-                .observe_into(sig, &self.observe_tx, &self.config.instance_id);
+            self.pane.observer.observe_into(
+                sig,
+                &self.pane.observe_tx,
+                &self.pane.config.instance_id,
+            );
         }
         for draft in effects.anomalies {
-            self.observer
-                .send_draft(draft, &self.observe_tx, &self.config.instance_id);
+            self.pane.observer.send_draft(
+                draft,
+                &self.pane.observe_tx,
+                &self.pane.config.instance_id,
+            );
         }
         if let Some(reason) = effects.degraded {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason, "sidebar refresh degraded");
         }
         if effects.invalidate {
-            self.own.accepted = None;
+            self.pane.own.accepted = None;
         }
         if effects.retry_focus_repair {
             self.retry_pending_focus_repair();
         }
     }
 
-    fn event_snapshot(&self) -> EventStore {
-        self.fold_preparation
-            .as_ref()
-            .map(|prepared| &prepared.events)
-            .or(self.view_events.as_ref())
-            .cloned()
-            .unwrap_or_else(|| self.events().clone())
+    #[cfg(feature = "testkit")]
+    pub(super) fn set_play_cosmetic_phase(&mut self, phase: Option<u64>) {
+        self.views.with(&mut self.pane, Route::READ, |_, v| {
+            v.state.cosmetic_phase = phase;
+        });
     }
 
     #[cfg(feature = "testkit")]
     pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
-        self.paint.prepare_play_pet(&mut self.ui, snapshot)
+        let presentation = self.inspect_view(|ui, _| ui.clone());
+        self.pane
+            .paint
+            .prepare_play_pet(&presentation, &mut self.pane.ui, snapshot)
     }
 
     #[cfg(feature = "testkit")]
     pub(super) fn play_frame_settled(&self) -> bool {
-        !self.dirty
+        !self.pane.dirty
             && self.inspect_view(|ui, _| {
                 !ui.tally.any_rolling(ui.animation_phase)
                     && !ui.cost_rolls.any_rolling(ui.animation_phase)
@@ -429,34 +460,22 @@ impl LoopState {
     }
 
     fn parked(&self, now_ms: u64) -> bool {
-        let Some(pane) = self.config.own_pane.as_ref() else {
+        let Some(pane) = self.pane.config.own_pane.as_ref() else {
             return false;
         };
-        let (sampled, event) = if self.view_scope.is_some() {
-            (self.view_parked, self.view_focus_event)
-        } else {
-            let views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+        let (sampled, event) = {
+            let views = self
+                .views
+                .registry
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             (
                 views.has_sample().then(|| views.parked(pane)),
                 views.attributed_focus_event(pane),
             )
         };
-        let events = self.event_snapshot();
-        self.inspect_view(|_, view| {
-            let pulled = view.overlay_baseline.as_ref().unwrap_or(&view.current);
-            let baseline = pulled
-                .panes_observed_at_ms
-                .or(pulled.panes_produced_at_ms)
-                .unwrap_or(0);
-            if sampled.is_none()
-                || event
-                    .is_some_and(|stamp| stamp > baseline && events.has_focus_since(stamp, now_ms))
-            {
-                crate::sidebar::fuse::pane_is_focused(pulled, &events, pane, now_ms)
-            } else {
-                sampled.unwrap_or(false)
-            }
-        })
+        let events = self.events().clone();
+        self.inspect_view(|_, view| parked(view, &events, pane, sampled, event, now_ms))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -492,84 +511,74 @@ impl LoopState {
             width,
         );
         let make_up_filter = crate::sidebar::body_filter::load(&runtime);
+        let nav_keys = (
+            current.sidebar.keys.clone(),
+            super::NavKeymap::from_config(&current.sidebar.keys),
+        );
         Self {
-            #[cfg(test)]
-            content_applications: 0,
-            #[cfg(test)]
-            projections: 0,
-            #[cfg(test)]
-            fold_preparations: 0,
-            nav_keys: (
-                current.sidebar.keys.clone(),
-                super::NavKeymap::from_config(&current.sidebar.keys),
-            ),
-            config,
-            clock,
-            runtime,
-            host_wake_path,
-            diag,
-            completion,
-            own: super::views::Cursor::default(),
-            view: ViewContext::new(current, now),
-            fold_preparation: None,
-            fold_effects: FoldEffects::default(),
-            views: Arc::default(),
-            view_scope: None,
-            transition_view: None,
-            view_focus: None,
-            view_focus_event: None,
-            view_parked: None,
-            view_events: None,
-            view_latest: false,
-            view_advanced: false,
-            was_resolved: false,
-            baseline_seed: None,
-            view_token: None,
-            pending_focus_push: None,
-            painted_focus_anchor_ms: 0,
-            painted_at: now,
-            painted_height: 0,
-            paints: 0,
-            paint_reports: Vec::new(),
-            optimistic_watch_until: None,
-            events: Arc::default(),
-            room_events: None,
-            pending_focus_repair: None,
-            observer: observe::OwnObserver::default(),
-            clicked_row: None,
-            click_guard: None,
-            hold_expired_since_paint: false,
-            observe_tx,
-            self_close: SelfCloseState::default(),
-            ui: UiState {
-                view: render::ViewState {
+            views: ViewAccess::new(
+                ViewState {
                     make_up_filter,
                     baseline_pane: baseline_pane.clone(),
                     ..Default::default()
                 },
-                ..UiState::default()
+                ViewContext::new(current, now),
+            ),
+            room_events: None,
+            pane: PaneState {
+                #[cfg(test)]
+                content_applications: 0,
+                #[cfg(test)]
+                projections: 0,
+                #[cfg(test)]
+                fold_preparations: 0,
+                nav_keys,
+                config,
+                clock,
+                runtime,
+                host_wake_path,
+                diag,
+                completion,
+                own: super::views::Cursor::default(),
+                fold_effects: FoldEffects::default(),
+                baseline_seed: None,
+                pending_focus_push: None,
+                painted_focus_anchor_ms: 0,
+                painted_at: now,
+                painted_height: 0,
+                paints: 0,
+                paint_reports: Vec::new(),
+                optimistic_watch_until: None,
+                pending_focus_repair: None,
+                observer: observe::OwnObserver::default(),
+                clicked_row: None,
+                click_guard: None,
+                hold_expired_since_paint: false,
+                observe_tx,
+                self_close: SelfCloseState::default(),
+                ui: UiState::default(),
+                paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
+                room_caps: Arc::default(),
+                focus_peers: None,
+                input_jump: None,
+                wake: None,
+                dirty: true,
+                paint_hold: PaintHold::default(),
+                next_frame: now,
+                fetched_at: now,
+                last_self_close_check: now,
+                last_heartbeat: None,
+                prev_width: initial_width,
+                caps_refresh_deadline: None,
+                width_control,
+                titled: false,
+                should_exit: false,
+                request_reload: Box::new(|| {}),
+                baseline_changed: Box::new(|_| {}),
+                last_reported_baseline: baseline_pane.clone(),
+                painted_baseline: baseline_pane,
+                painted_selection: None,
             },
-            paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
-            room_caps: Arc::default(),
-            focus_peers: None,
-            input_jump: None,
-            wake: None,
-            dirty: true,
-            paint_hold: PaintHold::default(),
-            next_frame: now,
-            fetched_at: now,
-            last_self_close_check: now,
-            last_heartbeat: None,
-            prev_width: initial_width,
-            caps_refresh_deadline: None,
-            width_control,
-            titled: false,
-            should_exit: false,
-            request_reload: Box::new(|| {}),
-            baseline_changed: Box::new(|_| {}),
-            last_reported_baseline: baseline_pane.clone(),
-            painted_baseline: baseline_pane,
-            painted_selection: None,
         }
     }
 
@@ -584,7 +593,7 @@ impl LoopState {
     ) -> Result<()> {
         self.report_baseline();
         let (_, mut timeout) = self.frame_timing();
-        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.clock.now());
+        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.pane.clock.now());
         inbox.wait(timeout);
         self.advance(inbox, fetch, terminal).map(|_| ())
     }
@@ -596,9 +605,14 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<(bool, Instant)> {
-        let paints = self.paints;
+        let paints = self.pane.paints;
         self.retire_superseded_push();
-        let pushed = if let Some(push) = self.focus_peers.as_ref().and_then(FocusPeers::take_push) {
+        let pushed = if let Some(push) = self
+            .pane
+            .focus_peers
+            .as_ref()
+            .and_then(FocusPeers::take_push)
+        {
             self.on_focus_push(push, fetch, terminal)?;
             true
         } else {
@@ -610,8 +624,8 @@ impl LoopState {
         }
         // A pane the mux had not laid out at attach gets its title
         // with its first size.
-        if !self.titled {
-            self.titled = terminal.backend_mut().set_pane_title()?;
+        if !self.pane.titled {
+            self.pane.titled = terminal.backend_mut().set_pane_title()?;
         }
 
         self.run_maintenance(fetch, terminal);
@@ -619,35 +633,35 @@ impl LoopState {
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)?;
         let (_, timeout) = self.frame_timing();
-        let now = self.clock.now();
+        let now = self.pane.clock.now();
         let timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), now);
         let mut deadline = now + timeout;
         if self.watched()
             && let Some(remaining) =
-                self.freeze_remaining(self.clock.timestamp_at(now).as_millisecond())
+                self.freeze_remaining(self.pane.clock.timestamp_at(now).as_millisecond())
         {
             deadline = deadline.min(now + remaining.max(FRAME_MIN_TIMEOUT));
         }
-        Ok((self.paints != paints, deadline))
+        Ok((self.pane.paints != paints, deadline))
     }
 
     pub(super) fn report_baseline(&mut self) {
-        let baseline = &self.painted_baseline;
-        if *baseline != self.last_reported_baseline {
-            (self.baseline_changed)(baseline.as_ref());
-            self.last_reported_baseline.clone_from(baseline);
+        let baseline = &self.pane.painted_baseline;
+        if *baseline != self.pane.last_reported_baseline {
+            (self.pane.baseline_changed)(baseline.as_ref());
+            self.pane.last_reported_baseline.clone_from(baseline);
         }
     }
 
     pub(super) fn seed(&mut self, fold: &WorkspaceFold) {
         let snapshot = Self::project_fold(
             fold,
-            self.config.own_pane.as_ref(),
-            self.config.refresh_ms_override,
+            self.pane.config.own_pane.as_ref(),
+            self.pane.config.refresh_ms_override,
         );
         #[cfg(test)]
         {
-            self.projections += 1;
+            self.pane.projections += 1;
         }
         self.apply_latest_snapshot_with_seed(
             FetchUpdate::Snapshot {
@@ -676,136 +690,38 @@ impl LoopState {
         if paint && self.watched() {
             let mut terminal =
                 Terminal::new(PaneBackend::captured(40, 60)).expect("benchmark terminal");
-            self.draw_frame(&mut terminal, self.clock.now(), false)
+            self.draw_frame(&mut terminal, self.pane.clock.now(), false)
                 .expect("benchmark paint");
-            assert!(self.ui.theme_cache.is_some());
+            assert!(self.pane.ui.theme_cache.is_some());
         }
         std::hint::black_box(self.frame_timing());
         self.watched()
     }
 
     fn freeze_remaining(&mut self, now_ms: i64) -> Option<Duration> {
-        if self.view_scope.is_none() {
-            return self.with_projected_view(false, false, |state| state.freeze_remaining(now_ms));
-        }
-        let hold = self.ui.freeze.as_ref()?;
-        Some(Duration::from_millis(
-            (hold.deadline_ms(self.parked(now_ms as u64)) - now_ms).max(0) as u64,
-        ))
+        self.views.with(&mut self.pane, Route::READ, |pane, v| {
+            pane.freeze_remaining(v, now_ms)
+        })
     }
 
     fn frame_timing(&mut self) -> (bool, Duration) {
-        if self.view_scope.is_none() {
-            return self.with_projected_view(false, false, Self::frame_timing);
-        }
-        let clock = frame_clock(
-            self.clock.now(),
-            self.view.anim_start,
-            self.view.current.theme.display.resolved_refresh_ms(),
-        );
-        let alert_active = self.alert_active();
-        let watched = self.watched();
-        let animating = watched
-            && render::animation_interval(&self.view.current, &self.ui, clock.phase, alert_active)
-                .is_some();
-        let active = !self.self_close.confirming_empty()
-            && (watched && (animating || self.dirty || self.focus_marker_due(self.clock.now())));
-        let mut timeout = if active {
-            self.next_frame
-                .saturating_duration_since(self.clock.now())
-                .max(FRAME_MIN_TIMEOUT)
-        } else {
-            // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer.
-            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
-                self.clock
-                    .now()
-                    .saturating_duration_since(self.last_self_close_check),
-            );
-            let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
-            if watched
-                && let Some(remaining) =
-                    self.freeze_remaining(self.clock.timestamp().as_millisecond())
-            {
-                timeout = timeout.min(remaining);
-            }
-            timeout.max(FRAME_MIN_TIMEOUT)
-        };
-        if watched && let Some(FocusMarker::Dwelling(until)) = self.view.focus_marker {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(until) = self
-            .view
-            .tab_read_dwell_until
-            .filter(|_| self.view.current.own_view.is_some())
-        {
-            timeout = timeout.min(
-                until
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(deadline) = self
-            .width_control
-            .feedback_deadline()
-            .into_iter()
-            .chain(self.caps_refresh_deadline)
-            .min()
-        {
-            timeout = timeout.min(
-                deadline
-                    .saturating_duration_since(self.clock.now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
-        if let Some(remaining) = gate_remaining(&self.view.gate, self.clock.timestamp()) {
-            timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
-        }
-        (active, timeout)
-    }
-
-    fn alert_active(&self) -> bool {
-        self.inspect_view(|_, view| {
-            view.health
-                .alert
-                .as_ref()
-                .is_some_and(render::Alert::is_active)
-        })
+        self.views
+            .with(&mut self.pane, Route::READ, PaneState::frame_timing)
     }
 
     /// Whether an attached client's focus currently lands in this sidebar's tab.
     /// Unknown ownership or own-view state reads as watched so uncertainty never
     /// suppresses motion.
     fn watched(&self) -> bool {
-        if self.shared_view_id().is_some() {
-            return true;
-        }
         // Input and corroborated resize keep a painting view warm between samples.
         if self
+            .pane
             .optimistic_watch_until
-            .is_some_and(|until| self.clock.now() < until)
+            .is_some_and(|until| self.pane.clock.now() < until)
         {
             return true;
         }
         self.observed_watched()
-    }
-
-    fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
-        self.watches_view(snapshot.own_view.as_ref(), &snapshot.viewed_panes)
-    }
-
-    fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
-        let Some(own_pane) = self.config.own_pane.as_ref() else {
-            return true;
-        };
-        let Some(view) = own_view else {
-            return true;
-        };
-        own_tab_viewed(viewed_panes, view, own_pane)
     }
 
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
@@ -814,52 +730,56 @@ impl LoopState {
 
     fn drain_snapshot(&mut self, fetch: &mut FetchDispatcher, allow_defer: bool) {
         let (pending, revision, completed) = {
-            let views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+            let views = self
+                .views
+                .registry
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             (
-                views.latest.since(self.own.revision),
+                views.latest.since(self.pane.own.revision),
                 views.revision,
-                self.completion.swap(false, Ordering::Relaxed),
+                self.pane.completion.swap(false, Ordering::Relaxed),
             )
         };
         let deferred = allow_defer
             && pending.iter().all(FetchUpdate::is_success)
             && pending
                 .iter()
-                .find_map(|update| update.preview_for(self.config.own_pane.as_ref()))
+                .find_map(|update| update.preview_for(self.pane.config.own_pane.as_ref()))
                 .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
         let mut rejected = false;
         if deferred {
             if completed {
-                self.fetched_at = self.clock.now();
-                self.last_self_close_check = self.fetched_at;
+                self.pane.fetched_at = self.pane.clock.now();
+                self.pane.last_self_close_check = self.pane.fetched_at;
             }
         } else {
             for update in pending {
                 rejected |= self.apply_latest_snapshot(update);
             }
-            self.own.revision = revision;
+            self.pane.own.revision = revision;
         }
         if completed {
-            fetch.complete(!self.should_exit);
+            fetch.complete(!self.pane.should_exit);
         }
         // A held transient regression schedules one reevaluation at the gate
         // deadline. Eager finals can otherwise feed themselves through the
         // fast fold and pin the renderer to its 1 ms gate wakeup.
-        if !self.should_exit && completed && rejected {
+        if !self.pane.should_exit && completed && rejected {
             let defer_for = self
-                .inspect_view(|_, view| gate_remaining(&view.gate, self.clock.timestamp()))
+                .inspect_view(|_, view| gate_remaining(&view.gate, self.pane.clock.timestamp()))
                 .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
-            fetch.defer_until(FetchRequest::default(), self.clock.now() + defer_for);
+            fetch.defer_until(FetchRequest::default(), self.pane.clock.now() + defer_for);
         }
     }
 
     fn skips_hidden(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
         let hidden = !self.watched()
-            && !self.watches_view(own_view, viewed_panes)
-            && own_view == self.view.current.own_view.as_ref()
-            && !self.should_exit
-            && !self.self_close.confirming_empty()
-            && self.pending_focus_repair.is_none();
+            && !self.pane.watches_view(own_view, viewed_panes)
+            && own_view == self.views.mirror().own_view.as_ref()
+            && !self.pane.should_exit
+            && !self.pane.self_close.confirming_empty()
+            && self.pane.pending_focus_repair.is_none();
         hidden
             && self.inspect_view(|_, view| {
                 view.gate == GateState::default()
@@ -869,139 +789,27 @@ impl LoopState {
             })
     }
 
-    /// Whether the next fold equal to the one just applied may arrive as a
-    /// clock-only delivery. Renderer-local reconciliation state blocks it, so
-    /// that state always meets full content. Exhaustive: a new field must be
-    /// named here, as a blocker or as irrelevant to delivery.
+    #[cfg(test)]
     fn admits_clock_only(&self, rejected: bool) -> bool {
-        let Self {
-            // Blockers: an exit, a held overlay or focus fence, a gate episode,
-            // a failure streak, a frozen order, an armed read dwell, an empty
-            // confirmation, and a pending focus repair each resolve on a fold.
-            should_exit,
-            view: _,
-            fold_preparation: _,
-            fold_effects: _,
-            views: _,
-            view_scope: _,
-            transition_view: _,
-            view_focus: _,
-            view_focus_event: _,
-            view_parked: _,
-            view_events: _,
-            view_latest: _,
-            view_advanced: _,
-            was_resolved: _,
-            baseline_seed: _,
-            view_token: _,
-            ui: _,
-            self_close,
-            pending_focus_repair,
-            #[cfg(test)]
-                content_applications: _,
-            #[cfg(test)]
-                projections: _,
-            #[cfg(test)]
-                fold_preparations: _,
-            // Derived from `current`, which equal content leaves unchanged.
-            nav_keys: _,
-            // Loop wiring and identity, fixed for the attachment.
-            config: _,
-            clock: _,
-            runtime: _,
-            host_wake_path: _,
-            diag: _,
-            completion: _,
-            own: _,
-            observe_tx: _,
-            wake: _,
-            room_caps: _,
-            room_events: _,
-            request_reload: _,
-            baseline_changed: _,
-            // Focus-anchor bookkeeping: a live intent or fence holds
-            // `overlay_baseline`, and an anchor change is content.
-            pending_focus_push: _,
-            painted_focus_anchor_ms: _,
-            painted_at: _,
-            painted_height: _,
-            paints: _,
-            paint_reports: _,
-            // Overlay events: an active one holds `overlay_baseline`.
-            events: _,
-            // Paint, animation, and frame scheduling, which a clock-only
-            // delivery drives itself.
-            paint: _,
-            titled: _,
-            dirty: _,
-            paint_hold: _,
-            next_frame: _,
-            prev_width: _,
-            caps_refresh_deadline: _,
-            width_control: _,
-            observer: _,
-            clicked_row: _,
-            click_guard: _,
-            hold_expired_since_paint: _,
-            optimistic_watch_until: _,
-            // Maintenance stamps, read against `current`.
-            fetched_at: _,
-            last_self_close_check: _,
-            last_heartbeat: _,
-            // Baseline reporting, read from `ui` outside the fold.
-            last_reported_baseline: _,
-            painted_baseline: _,
-            painted_selection: _,
-            focus_peers: _,
-            input_jump: _,
-        } = self;
-        self.inspect_view(|ui, view| {
-            let ViewContext {
-                overlay_baseline,
-                gate,
-                health,
-                tab_read_dwell_until,
-                pending_input_focus,
-                focus_marker: _,
-                current: _,
-                last_focus_observation: _,
-                last_pulled_rows: _,
-                observation: _,
-                fold_inputs: _,
-                observed_anchor: _,
-                last_folded_focus_intent: _,
-                live_focus_source: _,
-                focus_landing: _,
-                focus_rollback: _,
-                retired_anchor: _,
-                confirmed_focus_intent_ms: _,
-                filter_observed_at: _,
-                anim_start: _,
-            } = view;
-            !should_exit
-                && !rejected
-                && overlay_baseline.is_none()
-                && *gate == GateState::default()
-                && health.failure_streak == 0
-                && ui.freeze.is_none()
-                && tab_read_dwell_until.is_none()
-                && !self_close.confirming_empty()
-                && pending_focus_repair.is_none()
-                && pending_input_focus.is_none()
-        })
+        self.inspect_view(|state, context| self.pane.admits_clock_only(state, context, rejected))
+    }
+
+    #[cfg(test)]
+    fn alert_active(&self) -> bool {
+        self.inspect_view(|_, view| alert_active(view))
     }
 
     pub(super) fn share_width_geometry(
         &mut self,
         geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     ) {
-        self.width_control.geometry = geometry;
+        self.pane.width_control.geometry = geometry;
     }
 
     /// The pane's cell aspect as its terminal reports it, read by whoever
     /// holds the pane's output.
     pub(super) fn set_probed_aspect(&mut self, aspect: Option<crate::config::CellAspect>) {
-        self.paint.set_probed_aspect(aspect);
+        self.pane.paint.set_probed_aspect(aspect);
     }
 
     pub(super) fn on_wakeup(
@@ -1038,26 +846,11 @@ impl LoopState {
     }
 
     fn on_focus_failed(&mut self, pane: PaneId, error: String) {
-        if self.fold_preparation.is_none() {
-            if self.fail_rerouted_focus(&pane, &error) {
-                return;
-            }
-            self.fold_transition(|state| state.on_focus_failed(pane, error));
-            return;
+        if !self.fail_rerouted_focus(&pane, &error) {
+            self.fold_transition(|state, v, prepared| {
+                state.on_focus_failed(v, prepared, pane, error)
+            });
         }
-        if self.view.pending_input_focus.as_ref() == Some(&pane) {
-            self.view.pending_input_focus = None;
-        }
-        let Some(label) = self
-            .view
-            .roll_back_focus(&mut self.ui.view, &pane, self.clock.now())
-        else {
-            return;
-        };
-        self.fold_fused_now();
-        self.view
-            .alert_focus_failure(&label, &error, self.clock.timestamp());
-        self.dirty = true;
     }
 
     /// A client swap between dispatch and failure routes this pane away from the view that
@@ -1071,17 +864,21 @@ impl LoopState {
         if dispatched_here {
             return false;
         }
-        let mut views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut views = self
+            .views
+            .registry
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let Some((state, context)) = views.dispatched(pane) else {
             return false;
         };
         if context.pending_input_focus.as_ref() == Some(pane) {
             context.pending_input_focus = None;
         }
-        let Some(label) = context.roll_back_focus(state, pane, self.clock.now()) else {
+        let Some(label) = context.roll_back_focus(state, pane, self.pane.clock.now()) else {
             return false;
         };
-        context.alert_focus_failure(&label, error, self.clock.timestamp());
+        context.alert_focus_failure(&label, error, self.pane.clock.timestamp());
         true
     }
 
@@ -1095,18 +892,18 @@ impl LoopState {
             _ => None,
         };
         let visible = update
-            .preview_for(self.config.own_pane.as_ref())
-            .map(|(own_view, viewed)| self.watches_view(own_view.as_ref(), viewed));
+            .preview_for(self.pane.config.own_pane.as_ref())
+            .map(|(own_view, viewed)| self.pane.watches_view(own_view.as_ref(), viewed));
         let mut reduction = None;
-        let rejected = self.view_transition(false, inputs, visible, |state| {
-            if state.shared_view_id().is_some() && state.view_latest {
+        let rejected = self.view_transition(false, inputs, visible, |state, v, prepared| {
+            if v.target.shared_id().is_some() && v.latest {
                 state.own.accepted = None;
-                return state.view.gate != GateState::default();
+                return v.context.gate != GateState::default();
             }
             if seed {
-                return state.reduce_snapshot(update, true);
+                return state.reduce_snapshot(v, prepared, update, true);
             }
-            let clock_only = state.admits_clock_only(false);
+            let clock_only = state.admits_clock_only(v.state, v.context, false);
             let config = &state.config;
             #[cfg(test)]
             let mut projections = 0;
@@ -1128,176 +925,20 @@ impl LoopState {
             if update.is_success() {
                 reduction = Some(update.is_unchanged());
             }
-            state.reduce_snapshot(update, false)
+            state.reduce_snapshot(v, prepared, update, false)
         });
         if let Some(unchanged) = reduction {
-            let mut views = self.views.lock().unwrap_or_else(PoisonError::into_inner);
-            if unchanged {
-                views.reductions.unchanged += 1;
-            } else {
-                views.reductions.content += 1;
-            }
+            self.views.count_reduction(unchanged);
         }
         rejected
     }
 
-    fn reduce_snapshot(&mut self, update: FetchUpdate, seed: bool) -> bool {
-        let (update, context) = update.into_parts();
-        self.view.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
-        if let Some(observation) = context.and_then(|context| context.observation.clone()) {
-            self.view.observation = Some(observation);
-        }
-        if let FetchUpdate::Unchanged { clock, .. } = update {
-            clock.apply(&mut self.view.current);
-            self.view.last_focus_observation.panes_observed_at_ms =
-                self.view.current.panes_observed_at_ms;
-            self.fetched_at = self.clock.now();
-            self.last_self_close_check = self.clock.now();
-            self.dirty = true;
-            self.view.fold_inputs = None;
-            self.release_paint_hold_after_snapshot(false);
-            return false;
-        }
-        let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
-        let mut fused_event_sent_at_ms = None;
-        let update = match update {
-            FetchUpdate::Snapshot {
-                snapshot,
-                phase,
-                source,
-            } => {
-                #[cfg(test)]
-                {
-                    self.content_applications += 1;
-                }
-                let now_ms = self.clock.now_ms();
-                let pulled = *snapshot;
-                self.view.last_focus_observation = FocusObservation::from_snapshot(&pulled);
-                if self.view.observation.is_some() {
-                    self.view.last_pulled_rows = pulled.rows().count();
-                }
-                let intent = self.pending_focus_intent(now_ms, self.clock.now());
-                let events = self.event_snapshot();
-                let (mut snapshot, focus_event_sent_at_ms) =
-                    self.view
-                        .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
-                if intent.is_none()
-                    && focus_event_sent_at_ms
-                        .is_none_or(|stamp| self.view_focus_event != Some(stamp))
-                    && let Some(focused) = &self.view_focus
-                {
-                    snapshot.focused_pane.clone_from(focused);
-                }
-                fused_event_sent_at_ms = focus_event_sent_at_ms;
-                FetchUpdate::Snapshot {
-                    snapshot: Box::new(snapshot),
-                    phase,
-                    source,
-                }
-            }
-            failed @ FetchUpdate::Failed { .. } => failed,
-            FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
-            FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
-            FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
-        };
-        self.fetched_at = self.clock.now();
-        let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
-        self.view.fold_inputs = None;
-        if snapshot_ok {
-            self.last_self_close_check = self.clock.now();
-            self.fold_effects.retry_focus_repair = true;
-        }
-        self.release_paint_hold_after_snapshot(rejected);
-        rejected
-    }
-
-    fn release_paint_hold_after_snapshot(&mut self, rejected: bool) {
-        // Release by pane stamp alone. A `Fresh` frame is fresh against the
-        // request that fetched it, and a request sent before the grow can land
-        // after it with a pane list that still counts the closed sibling.
-        if !self.should_exit
-            && !rejected
-            && !self.self_close.confirming_empty()
-            && self
-                .paint_hold
-                .releases_on_stamp(self.view.current.panes_observed_at_ms)
-        {
-            // The snapshot folded a post-signal pane frame. Its own-view
-            // verdict has decided the resize-grow case: exit without
-            // painting when alone, or release the hold and paint at the new
-            // size when siblings remain.
-            self.paint_hold.release();
-        }
-    }
-
-    /// Fuse the last pulled snapshot with the overlay event store and any
-    /// pending focus intent as of `now_ms`.
-    fn fused_snapshot(&mut self, now_ms: u64) -> (SidebarSnapshot, Option<u64>) {
-        let pulled = self
-            .view
-            .overlay_baseline
-            .take()
-            .unwrap_or_else(|| self.view.current.clone());
-        let intent = self.pending_focus_intent(now_ms, self.clock.now());
-        let events = self.event_snapshot();
-        let (mut snapshot, stamp) = self
-            .view
-            .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
-        if intent.is_none()
-            && stamp.is_none_or(|stamp| self.view_focus_event != Some(stamp))
-            && let Some(focused) = &self.view_focus
-        {
-            snapshot.focused_pane.clone_from(focused);
-        }
-        (snapshot, stamp)
-    }
-
-    /// Fold a synthetic fused frame and snap the frame deadline so this
-    /// turn's frame phase paints it now.
     fn fold_fused_now(&mut self) {
-        if self.fold_preparation.is_none() {
-            self.fold_transition(Self::fold_fused_now);
-            return;
-        }
-        self.fold_effects.invalidate = true;
-        let (fused, fused_event_sent_at_ms) = self.fused_snapshot(self.clock.now_ms());
-        self.fold_outcome(
-            FetchUpdate::Snapshot {
-                snapshot: Box::new(fused),
-                phase: FetchPhase::Interim,
-                source: SnapshotSource::Cached,
-            },
-            false,
-            false,
-            fused_event_sent_at_ms,
-        );
-        self.next_frame = self.clock.now();
+        self.fold_transition(PaneState::fold_fused_now);
     }
 
     fn fold_focus_intent(&mut self, anchor: crate::mux::focus_anchor::FocusAnchor) {
-        if self.fold_preparation.is_none() {
-            self.fold_transition(|state| state.fold_focus_intent(anchor));
-            return;
-        }
-        if anchor.session_name != self.config.session_name
-            || self.view.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
-        {
-            return;
-        }
-        // The pushed intent is newer than every cut folded before it, the catch-up fold included,
-        // even on a clock that has not moved since: that older read must not retire this anchor.
-        let sampled_at = self.clock.now();
-        self.view.observed_anchor = Some((sampled_at, Some(anchor.clone())));
-        let previous = self
-            .view
-            .fold_inputs
-            .replace(Arc::new(super::fetch::FoldInputs {
-                sampled_at,
-                anchor: Some(anchor),
-                filter: self.ui.make_up_filter.clone(),
-            }));
-        self.fold_fused_now();
-        self.view.fold_inputs = previous;
+        self.fold_transition(|pane, v, prepared| pane.fold_focus_intent(v, prepared, anchor));
     }
 
     fn on_focus_push(
@@ -1306,7 +947,7 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
-        let arrived = self.clock.now();
+        let arrived = self.pane.clock.now();
         push.peer.received_ms = Some(push.elapsed_ms());
         self.retire_superseded_push();
         if !push.is_current() {
@@ -1318,19 +959,21 @@ impl LoopState {
             return Ok(());
         }
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
-        self.optimistic_watch_until = Some(arrived + FOCUS_RESUME_WATCH_WINDOW);
-        if let Some((pane, source)) = self.config.own_pane.as_ref().zip(push.source_view) {
+        self.pane.optimistic_watch_until = Some(arrived + FOCUS_RESUME_WATCH_WINDOW);
+        if let Some((pane, source)) = self.pane.config.own_pane.as_ref().zip(push.source_view) {
             self.views
+                .registry
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .land(source, pane, self.clock.now());
-            self.with_projected_view(false, false, |state| {
-                state.view.live_focus_source = Some(push.anchor.nonce);
+                .land(source, pane, self.pane.clock.now());
+            self.views.with(&mut self.pane, Route::READ, |_, v| {
+                v.context.live_focus_source = Some(push.anchor.nonce);
             });
         }
         // Read the view the landing paints: a scratch fold while hidden folded into no view.
-        if self.with_projected_view(false, false, |state| state.view.last_folded_focus_intent)
-            != Some(push.anchor.nonce)
+        if self.views.with(&mut self.pane, Route::READ, |_, v| {
+            v.context.last_folded_focus_intent
+        }) != Some(push.anchor.nonce)
         {
             self.prepare_action(fetch);
             push.peer.snapshot_ms = Some(push.elapsed_ms());
@@ -1341,52 +984,58 @@ impl LoopState {
             self.fold_focus_intent(push.anchor.clone());
             push.peer.folded_ms = Some(push.elapsed_ms());
         }
-        if push.anchor.session_name != self.config.session_name
+        if push.anchor.session_name != self.pane.config.session_name
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
             push.finish(PushVerdict::NotDestination);
             return Ok(());
         }
-        if self.should_exit {
-            if let Some(pending) = self.pending_focus_push.take() {
+        if self.pane.should_exit {
+            if let Some(pending) = self.pane.pending_focus_push.take() {
                 pending.finish(PushVerdict::Exiting);
             }
             push.finish(PushVerdict::Exiting);
             return Ok(());
         }
         if self.focus_push_size_matches(&push, terminal) {
-            self.paint_hold.release();
+            self.pane.paint_hold.release();
         }
         if !push.is_current() {
             push.finish(PushVerdict::Superseded);
             return Ok(());
         }
         if let Some(verdict) = self.painted_focus_verdict(&push.anchor, Some(&push)) {
-            push.finish_painted(verdict, self.painted_at);
+            push.finish_painted(verdict, self.pane.painted_at);
             return Ok(());
         }
-        if let Some(pending) = self.pending_focus_push.replace(push) {
+        if let Some(pending) = self.pane.pending_focus_push.replace(push) {
             pending.finish(PushVerdict::Superseded);
         }
         self.paint_frame_if_due(terminal, true)
     }
 
     fn known_non_owner(&self, target: &PaneId) -> bool {
-        self.view.current.row_owning_pane(target).is_some()
+        self.views.mirror().row_owning_pane(target).is_some()
             && !self.owns_focus_target(target)
-            && self.view.current.own_view.as_ref().is_some_and(|own_view| {
-                self.pending_preview()
-                    .is_none_or(|(pending, _)| pending.as_ref() == Some(own_view))
-            })
+            && self
+                .views
+                .mirror()
+                .own_view
+                .as_ref()
+                .is_some_and(|own_view| {
+                    self.pending_preview()
+                        .is_none_or(|(pending, _)| pending.as_ref() == Some(own_view))
+                })
     }
 
     fn retire_superseded_push(&mut self) -> bool {
         if self
+            .pane
             .pending_focus_push
             .as_ref()
             .is_some_and(|push| !push.is_current())
         {
-            if let Some(push) = self.pending_focus_push.take() {
+            if let Some(push) = self.pane.pending_focus_push.take() {
                 push.finish(PushVerdict::Superseded);
             }
             return true;
@@ -1410,8 +1059,9 @@ impl LoopState {
                 | SidebarEvent::PanesChanged
         ) {
             let measured = terminal.size().ok().map(|size| size.width);
-            self.width_control
-                .note_structural(sent_at_ms, measured, &self.diag);
+            self.pane
+                .width_control
+                .note_structural(sent_at_ms, measured, &self.pane.diag);
         }
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {
@@ -1419,17 +1069,20 @@ impl LoopState {
                     self.prepare_action(fetch);
                 }
                 let measured = terminal.size().ok().map(|size| size.width);
-                self.width_control
-                    .reload_target(&self.view.current.theme, measured, &self.diag);
+                self.pane.width_control.reload_target(
+                    &self.views.mirror().theme,
+                    measured,
+                    &self.pane.diag,
+                );
             }
             SidebarEvent::BodyFilterChanged => {
                 if fold {
                     self.prepare_action(fetch);
                 }
-                let filter = crate::sidebar::body_filter::load(&self.runtime);
-                self.with_projected_view(false, false, |state| {
-                    state.view.filter_observed_at = Some(state.clock.now());
-                    if set_make_up_filter(&mut state.ui, &state.view.current, filter) {
+                let filter = crate::sidebar::body_filter::load(&self.pane.runtime);
+                self.views.with(&mut self.pane, Route::READ, |state, v| {
+                    v.context.filter_observed_at = Some(state.clock.now());
+                    if set_make_up_filter(v.state, &v.context.current, filter) {
                         state.dirty = true;
                     }
                 });
@@ -1445,8 +1098,13 @@ impl LoopState {
                 generation,
                 clients,
             } => {
-                if self.config.own_pane.as_ref() != Some(&pane_id) {
-                    trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
+                if self.pane.config.own_pane.as_ref() != Some(&pane_id) {
+                    trace!(
+                        pane = %pane_id,
+                        own_pane = ?self.pane.config.own_pane,
+                        generation,
+                        "sidebar ignored foreign strand",
+                    );
                     return;
                 }
                 self.prepare_action(fetch);
@@ -1457,7 +1115,7 @@ impl LoopState {
                     sent_at_ms,
                 };
                 if !self.handle_focus_stranded(&repair) {
-                    if let Some(replaced) = self.pending_focus_repair.replace(repair) {
+                    if let Some(replaced) = self.pane.pending_focus_repair.replace(repair) {
                         self.record_abandoned_focus_repair(
                             &replaced,
                             "superseded by a newer strand",
@@ -1471,9 +1129,10 @@ impl LoopState {
                     return;
                 }
                 if self
+                    .pane
                     .focus_peers
                     .as_ref()
-                    .is_some_and(|peers| !peers.accepts(Some(nonce), self.clock.now()))
+                    .is_some_and(|peers| !peers.accepts(Some(nonce), self.pane.clock.now()))
                 {
                     return;
                 }
@@ -1482,12 +1141,12 @@ impl LoopState {
                 }
                 // Set before draining, so the jump folds the latest into the view.
                 if self.reveals_own_tab(&envelope.event) {
-                    self.optimistic_watch_until =
-                        Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+                    self.pane.optimistic_watch_until =
+                        Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
                 }
                 self.prepare_action(fetch);
                 if let Some(anchor) = self
-                    .focus_anchor(self.clock.now())
+                    .focus_anchor(self.pane.clock.now())
                     .filter(|anchor| anchor.nonce == nonce)
                 {
                     self.fold_focus_intent(anchor);
@@ -1498,8 +1157,8 @@ impl LoopState {
             event if event.is_overlay() => {
                 // Set before draining, so a revealing focus folds the latest into the view.
                 if self.reveals_own_tab(&event) {
-                    self.optimistic_watch_until =
-                        Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+                    self.pane.optimistic_watch_until =
+                        Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
                 }
                 if fold {
                     self.prepare_action(fetch);
@@ -1522,12 +1181,13 @@ impl LoopState {
 
     fn pending_preview(&self) -> Option<(Option<SidebarOwnView>, Vec<PaneId>)> {
         self.views
+            .registry
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .latest
-            .since(self.own.revision)
+            .since(self.pane.own.revision)
             .iter()
-            .find_map(|update| update.preview_for(self.config.own_pane.as_ref()))
+            .find_map(|update| update.preview_for(self.pane.config.own_pane.as_ref()))
             .map(|(own_view, viewed)| (own_view, viewed.to_vec()))
     }
 
@@ -1535,8 +1195,8 @@ impl LoopState {
         let preview = self.pending_preview();
         let (view, viewed) = preview.as_ref().map_or(
             (
-                self.view.current.own_view.as_ref(),
-                self.view.current.viewed_panes.as_slice(),
+                self.views.mirror().own_view.as_ref(),
+                self.views.mirror().viewed_panes.as_slice(),
             ),
             |(view, viewed)| (view.as_ref(), viewed.as_slice()),
         );
@@ -1544,7 +1204,7 @@ impl LoopState {
             return true;
         }
         match event {
-            SidebarEvent::FocusChanged { focused, .. } => self.watches_view(view, focused),
+            SidebarEvent::FocusChanged { focused, .. } => self.pane.watches_view(view, focused),
             SidebarEvent::Notify { panes, .. } => view.is_some_and(|view| {
                 panes
                     .iter()
@@ -1552,10 +1212,11 @@ impl LoopState {
             }),
             SidebarEvent::FocusIntent { nonce, .. } => {
                 let view = view.cloned();
-                self.focus_anchor(self.clock.now())
+                self.focus_anchor(self.pane.clock.now())
                     .filter(|anchor| anchor.nonce == *nonce)
                     .is_some_and(|anchor| {
-                        self.watches_view(view.as_ref(), std::slice::from_ref(&anchor.pane_id))
+                        self.pane
+                            .watches_view(view.as_ref(), std::slice::from_ref(&anchor.pane_id))
                     })
             }
             _ => false,
@@ -1565,13 +1226,13 @@ impl LoopState {
     fn prepare_action(&mut self, fetch: &mut FetchDispatcher) {
         // Require content before flushing, then invalidate reuse again:
         // the action can change renderer state after the drain.
-        self.own.accepted = None;
+        self.pane.own.accepted = None;
         self.drain_snapshot(fetch, false);
-        self.own.accepted = None;
+        self.pane.own.accepted = None;
     }
 
     fn handle_notification(&mut self, terminal: &mut Terminal<PaneBackend>, event: SidebarEvent) {
-        if !self.clock.effects_enabled() {
+        if !self.pane.clock.effects_enabled() {
             return;
         }
         // `on_event` calls this helper only from the typed notification arm.
@@ -1590,9 +1251,9 @@ impl LoopState {
                 .as_deref()
                 .unwrap_or(if recheck_unread { "agent" } else { "link" });
         match emit_terminal_notification(
-            &self.config,
+            &self.pane.config,
             terminal,
-            &self.view.current,
+            self.views.mirror(),
             BellNotice {
                 title: &title,
                 body: &body,
@@ -1600,7 +1261,7 @@ impl LoopState {
                 recheck_unread,
                 kind,
             },
-            &self.diag,
+            &self.pane.diag,
         ) {
             Ok(_) => {}
             Err(err) => debug!(error = %err, "terminal notification emit failed"),
@@ -1608,12 +1269,12 @@ impl LoopState {
     }
 
     fn handle_focus_stranded(&mut self, repair: &PendingFocusRepair) -> bool {
-        let now_ms = self.clock.now_ms();
-        let own_pane = self.config.own_pane.clone();
-        let verdict = self.with_projected_view(false, false, |state| {
+        let now_ms = self.pane.clock.now_ms();
+        let own_pane = self.pane.config.own_pane.clone();
+        let verdict = self.views.with(&mut self.pane, Route::READ, |_, v| {
             focus_stranded_target(
-                &state.view.current,
-                &state.ui,
+                &v.context.current,
+                v.state,
                 &repair.pane_id,
                 &repair.clients,
                 own_pane.as_ref(),
@@ -1629,8 +1290,8 @@ impl LoopState {
                     own_pane = ?own_pane,
                     generation = repair.generation,
                     evidence = ?repair.clients,
-                    own_view = ?self.view.current.own_view,
-                    client_views = ?self.view.current.client_views,
+                    own_view = ?self.views.mirror().own_view,
+                    client_views = ?self.views.mirror().client_views,
                     age_ms = now_ms.saturating_sub(repair.sent_at_ms),
                     reason,
                     "sidebar focus repair deferred",
@@ -1647,21 +1308,24 @@ impl LoopState {
                     .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
             }),
         };
-        let (placement, order) = self.with_projected_view(false, false, |state| {
-            (state.focus_placement(&target), state.ui.last_order.clone())
+        let (placement, order) = self.views.with(&mut self.pane, Route::READ, |state, v| {
+            (
+                state.focus_placement(v.state, v.context, &target),
+                v.state.last_order.clone(),
+            )
         });
         spawn_pane_focus(
-            &self.clock,
-            self.clock.now(),
+            &self.pane.clock,
+            self.pane.clock.now(),
             target,
-            &self.config.session_name,
-            self.runtime.clone(),
+            &self.pane.config.session_name,
+            self.pane.runtime.clone(),
             crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
             expected,
             (placement, Some(order)),
             Some(dispatch),
             None,
-            self.wake.clone(),
+            self.pane.wake.clone(),
         );
         true
     }
@@ -1671,15 +1335,15 @@ impl LoopState {
     /// stays viable for the event's whole TTL and retries on each fold. Past
     /// the TTL it is abandoned with a record.
     fn retry_pending_focus_repair(&mut self) {
-        let Some(repair) = self.pending_focus_repair.take() else {
+        let Some(repair) = self.pane.pending_focus_repair.take() else {
             return;
         };
         if self.handle_focus_stranded(&repair) {
             return;
         }
-        let now_ms = self.clock.now_ms();
+        let now_ms = self.pane.clock.now_ms();
         if focus_repair_still_viable(repair.sent_at_ms, now_ms) {
-            self.pending_focus_repair = Some(repair);
+            self.pane.pending_focus_repair = Some(repair);
         } else {
             self.record_abandoned_focus_repair(
                 &repair,
@@ -1699,12 +1363,12 @@ impl LoopState {
             "sidebar focus repair abandoned",
         );
         crate::diag::focus_repair::spawn_append(
-            &self.runtime,
+            &self.pane.runtime,
             &FocusRepairRecord {
-                at: self.clock.timestamp(),
+                at: self.pane.clock.timestamp(),
                 nonce: None,
-                workspace_id: self.runtime.workspace_id.clone(),
-                session_name: self.config.session_name.clone(),
+                workspace_id: self.pane.runtime.workspace_id.clone(),
+                session_name: self.pane.config.session_name.clone(),
                 generation: repair.generation,
                 evidence: repair.clients.clone(),
                 observed: Vec::new(),
@@ -1719,7 +1383,7 @@ impl LoopState {
     /// Focus landing anywhere on this tab, or a jump to a pane on it, is viewing evidence the
     /// plane's next sample confirms. Ownership reads the latest delivery, as hidden skipping does.
     fn reveals_own_tab(&self, event: &SidebarEvent) -> bool {
-        let Some(own) = self.config.own_pane.as_ref() else {
+        let Some(own) = self.pane.config.own_pane.as_ref() else {
             return false;
         };
         let targets = match event {
@@ -1730,7 +1394,7 @@ impl LoopState {
         let preview = self.pending_preview();
         let own_view = preview
             .as_ref()
-            .map_or(self.view.current.own_view.as_ref(), |(view, _)| {
+            .map_or(self.views.mirror().own_view.as_ref(), |(view, _)| {
                 view.as_ref()
             });
         targets.contains(own) || own_view.is_some_and(|view| own_tab_viewed(targets, view, own))
@@ -1747,28 +1411,29 @@ impl LoopState {
         // real pull, which supersedes the overlay once its fresh frame
         // folds in. A resize-grow paint hold stays held until a pulled
         // sibling-count verdict releases it.
-        let own = self.config.own_pane.as_ref();
+        let own = self.pane.config.own_pane.as_ref();
         let own_focused = self.reveals_own_tab(&event);
         let own_revealed = own_focused && !self.observed_watched();
         let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { focused, unfocused }
             if own.is_some_and(|own| unfocused.contains(own)
-                || (self.view.current.client_views.len() == 1
+                || (self.views.mirror().client_views.len() == 1
                     && matches!(focused.as_slice(), [pane] if pane != own))));
         let requests_verification = event.requests_producer_verification();
         if fold {
             self.fold_fused_now();
         }
-        if !self.should_exit && (requests_verification || own_revealed) {
+        if !self.pane.should_exit && (requests_verification || own_revealed) {
             fetch.request(FetchRequest::fresh_panes(), true);
         }
         if own_focused {
-            self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+            self.pane.optimistic_watch_until =
+                Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         } else if own_unfocused {
-            self.optimistic_watch_until = None;
-            self.with_projected_view(false, false, |state| {
-                state.ui.help_visible = false;
-                if state.ui.search_draft.take().is_some() {
-                    reconcile_selection(&mut state.ui, &state.view.current, None);
+            self.pane.optimistic_watch_until = None;
+            self.views.with(&mut self.pane, Route::READ, |state, v| {
+                v.state.help_visible = false;
+                if v.state.search_draft.take().is_some() {
+                    reconcile_selection(v.state, &v.context.current, None);
                     state.dirty = true;
                 }
             });
@@ -1783,13 +1448,14 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         settled_width: Option<u16>,
     ) -> Result<()> {
-        if self.clock.effects_enabled() {
-            self.caps_refresh_deadline = Some(self.clock.now() + RESIZE_CAPS_SETTLE);
+        if self.pane.clock.effects_enabled() {
+            self.pane.caps_refresh_deadline = Some(self.pane.clock.now() + RESIZE_CAPS_SETTLE);
         }
         // A hidden resize is no viewing evidence, and revokes none: a jump that just landed here
         // keeps painting until the plane samples the tab.
         if self.observed_watched() {
-            self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+            self.pane.optimistic_watch_until =
+                Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         }
         // Watched resize uses the newest fold; hidden content stays deferred.
         self.drain_snapshot(fetch, true);
@@ -1799,35 +1465,37 @@ impl LoopState {
         // and paint immediately.
         let held_grow = match settled_width {
             Some(width) => {
-                let grew = resize_grew(self.prev_width, width);
-                self.prev_width = Some(width);
-                grew && grow_beyond_legit(width, self.width_control.max_legit_cols())
+                let grew = resize_grew(self.pane.prev_width, width);
+                self.pane.prev_width = Some(width);
+                grew && grow_beyond_legit(width, self.pane.width_control.max_legit_cols())
             }
             None => false,
         };
         self.run_width_control(terminal, WidthControlTrigger::ResizeFeedback);
         if held_grow
-            && self.self_close.seen_sibling
+            && self.pane.self_close.seen_sibling
             && !self
+                .pane
                 .pending_focus_push
                 .as_ref()
                 .is_some_and(|push| self.focus_push_size_matches(push, terminal))
         {
-            self.dirty = true;
-            self.paint_hold
-                .engage(self.clock.now(), self.clock.now_ms());
+            self.pane.dirty = true;
+            self.pane
+                .paint_hold
+                .engage(self.pane.clock.now(), self.pane.clock.now_ms());
         } else {
             if self.apply_input([Wakeup::Resize], terminal)?.redraw {
-                self.dirty = false;
+                self.pane.dirty = false;
             }
             // A safe-width paint just landed; drop any stale hold a prior grow
             // left pending so it cannot suppress this frame.
-            self.paint_hold.release();
+            self.pane.paint_hold.release();
         }
-        self.last_self_close_check = self.clock.now();
+        self.pane.last_self_close_check = self.pane.clock.now();
         // The heartbeat carries this pane's size for `sidebar frame`: restamp
         // it on this pass rather than a beat later.
-        self.last_heartbeat = None;
+        self.pane.last_heartbeat = None;
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the host and require a cache produced after
         // this signal.
@@ -1843,19 +1511,21 @@ impl LoopState {
         let Ok(size) = terminal.size() else {
             return;
         };
-        self.width_control.observe(size.width, trigger, &self.diag);
+        self.pane
+            .width_control
+            .observe(size.width, trigger, &self.pane.diag);
     }
 
     fn run_width_control_backstop(&mut self, terminal: &mut Terminal<PaneBackend>) {
-        self.width_control.backstop(
+        self.pane.width_control.backstop(
             terminal.size().ok().map(|size| size.width),
-            self.view
-                .current
+            self.views
+                .mirror()
                 .own_view
                 .as_ref()
                 .map(|view| view.sibling_count),
-            self.view.current.panes_observed_at_ms,
-            &self.diag,
+            self.views.mirror().panes_observed_at_ms,
+            &self.pane.diag,
         );
     }
 
@@ -1867,8 +1537,12 @@ impl LoopState {
         terminal: &Terminal<PaneBackend>,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) {
-        self.paint
-            .refresh_caps_with(mux, session_name, terminal.backend().cell_aspect(), detect);
+        self.pane.paint.refresh_caps_with(
+            mux,
+            session_name,
+            terminal.backend().cell_aspect(),
+            detect,
+        );
     }
 
     fn refresh_pet_render_caps_if_stale_with(
@@ -1879,22 +1553,23 @@ impl LoopState {
         terminal: &Terminal<PaneBackend>,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) -> bool {
-        let changed = if let Some(deadline) = self.caps_refresh_deadline {
+        let changed = if let Some(deadline) = self.pane.caps_refresh_deadline {
             if now < deadline {
                 return false;
             }
-            self.caps_refresh_deadline = None;
-            self.paint.refresh_caps_with(
+            self.pane.caps_refresh_deadline = None;
+            self.pane.paint.refresh_caps_with(
                 mux,
                 session_name,
                 terminal.backend().cell_aspect(),
                 detect,
             )
         } else {
-            self.paint
+            self.pane
+                .paint
                 .refresh_caps_if_stale_with(mux, session_name, now, detect)
         };
-        self.dirty |= changed;
+        self.pane.dirty |= changed;
         changed
     }
 
@@ -1917,51 +1592,55 @@ impl LoopState {
         let applied = match self.apply_input(wakeups, terminal) {
             Ok(applied) => applied,
             Err(error) => {
-                self.input_jump = None;
+                self.pane.input_jump = None;
                 return Err(error);
             }
         };
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
-            self.dirty = false;
+            self.pane.dirty = false;
         }
         for effect in applied.effects {
             match effect {
                 InputEffect::Focus(pane) => {
-                    let peers = self.input_jump.take();
+                    let peers = self.pane.input_jump.take();
                     let clicked = peers
                         .as_ref()
                         .and_then(FocusPeers::clicked)
-                        .unwrap_or_else(|| self.clock.now());
-                    let (placement, order) = self.with_projected_view(false, false, |state| {
-                        (state.focus_placement(&pane), state.ui.last_order.clone())
-                    });
+                        .unwrap_or_else(|| self.pane.clock.now());
+                    let (placement, order) =
+                        self.views.with(&mut self.pane, Route::READ, |state, v| {
+                            (
+                                state.focus_placement(v.state, v.context, &pane),
+                                v.state.last_order.clone(),
+                            )
+                        });
                     spawn_pane_focus(
-                        &self.clock,
+                        &self.pane.clock,
                         clicked,
                         pane,
-                        &self.config.session_name,
-                        self.runtime.clone(),
+                        &self.pane.config.session_name,
+                        self.pane.runtime.clone(),
                         crate::mux::focus_anchor::FocusOrigin::User,
                         None,
                         (placement, Some(order)),
                         None,
                         peers,
-                        self.wake.clone(),
+                        self.pane.wake.clone(),
                     );
                 }
                 InputEffect::Width(dir) => {
                     let Ok(size) = terminal.size() else {
                         return Ok(());
                     };
-                    self.width_control.adjust(size.width, dir);
+                    self.pane.width_control.adjust(size.width, dir);
                 }
                 InputEffect::MarkRead(row_id) => self.mark_row_read(fetch, &row_id),
                 InputEffect::MarkUnread(row_id) => self.mark_row_unread(fetch, &row_id),
                 InputEffect::MarkAllRead => self.mark_all_read(fetch),
                 InputEffect::SyncFilter(filter) => self.persist_body_filter(filter),
-                InputEffect::Reload => (self.request_reload)(),
+                InputEffect::Reload => (self.pane.request_reload)(),
                 InputEffect::DismissAlert => {}
             }
         }
@@ -1969,21 +1648,21 @@ impl LoopState {
     }
 
     fn persist_body_filter(&mut self, filter: BodyLens) {
-        self.with_projected_view(false, false, |state| {
-            state.view.filter_observed_at = Some(state.clock.now());
+        self.views.with(&mut self.pane, Route::READ, |state, v| {
+            v.context.filter_observed_at = Some(state.clock.now());
         });
-        let persisted = crate::sidebar::body_filter::write(&self.runtime, &filter);
+        let persisted = crate::sidebar::body_filter::write(&self.pane.runtime, &filter);
         if let Err(err) = persisted {
             debug!(error = %err, "sidebar body filter write failed");
             return;
         }
-        if self.clock.effects_enabled()
+        if self.pane.clock.effects_enabled()
             && let Some(room_events) = &self.room_events
         {
             room_events.dispatch(SidebarEventEnvelope::new(
-                self.config.workspace_id.clone(),
-                Some(self.config.session_name.clone()),
-                self.clock.now_ms(),
+                self.pane.config.workspace_id.clone(),
+                Some(self.pane.config.session_name.clone()),
+                self.pane.clock.now_ms(),
                 SidebarEvent::BodyFilterChanged,
             ));
         }
@@ -2007,17 +1686,19 @@ impl LoopState {
             .iter()
             .any(|wakeup| !matches!(wakeup, Wakeup::Resize));
         if user_input {
-            self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
+            self.pane.optimistic_watch_until =
+                Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         }
-        let (outcome, source_view) = self.view_transition(user_input, None, None, |state| {
+        let (outcome, source_view) = self.view_transition(user_input, None, None, |state, v, _| {
             (
-                state.reduce_input(wakeups, state.clock.now()),
-                state.shared_view_id(),
+                state.reduce_input(v, wakeups, state.clock.now()),
+                v.target.shared_id(),
             )
         });
         for effect in &outcome.effects {
             if let InputEffect::Focus(pane) = effect {
-                self.input_jump = self
+                self.pane.input_jump = self
+                    .pane
                     .clock
                     .effects_enabled()
                     .then(|| self.focus_peers_for(pane))
@@ -2025,11 +1706,11 @@ impl LoopState {
                     .map(|peers| {
                         peers
                             .with_source_view(source_view)
-                            .arm(pane.clone(), self.clock.now())
+                            .arm(pane.clone(), self.pane.clock.now())
                     });
-                if self.clock.effects_enabled()
-                    && self.input_jump.is_none()
-                    && let Some(peers) = &self.focus_peers
+                if self.pane.clock.effects_enabled()
+                    && self.pane.input_jump.is_none()
+                    && let Some(peers) = &self.pane.focus_peers
                 {
                     peers.supersede();
                 }
@@ -2037,11 +1718,11 @@ impl LoopState {
         }
         if outcome.redraw {
             if !self.watched() {
-                self.dirty = true;
+                self.pane.dirty = true;
                 return Ok(outcome);
             }
-            self.draw_frame(terminal, self.clock.now(), user_input)?;
-            self.with_projected_view(false, false, |state| {
+            self.draw_frame(terminal, self.pane.clock.now(), user_input)?;
+            self.views.with(&mut self.pane, Route::READ, |state, v| {
                 let now = state.clock.now();
                 if outcome
                     .effects
@@ -2049,17 +1730,18 @@ impl LoopState {
                     .any(|effect| matches!(effect, InputEffect::Focus(_)))
                 {
                     layout_freeze::arm_freeze(
-                        &mut state.ui,
+                        v.state,
                         state.clock.timestamp_at(now).as_millisecond(),
                     );
                 }
                 let interval = render::animation_interval(
-                    &state.view.current,
+                    &v.context.current,
+                    v.state,
                     &state.ui,
-                    state.ui.animation_phase,
-                    state.alert_active(),
+                    v.state.animation_phase,
+                    alert_active(v.context),
                 )
-                .unwrap_or(animation_frame(&state.view.current));
+                .unwrap_or(animation_frame(&v.context.current));
                 let deadline = now + interval;
                 if state.next_frame <= now || state.next_frame > deadline {
                     state.next_frame = deadline;
@@ -2069,109 +1751,20 @@ impl LoopState {
         Ok(outcome)
     }
 
-    fn reduce_input(&mut self, wakeups: Vec<Wakeup>, now: Instant) -> InputOutcome {
-        let keys = &self.view.current.sidebar.keys;
-        if self.nav_keys.0 != *keys {
-            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
-        }
-        let mut outcome = InputOutcome::default();
-        let mut user_input = false;
-        for wakeup in wakeups {
-            user_input |= !matches!(wakeup, Wakeup::Resize);
-            let wheel = matches!(wakeup, Wakeup::Scroll { .. });
-            let alert_active = self.alert_active();
-            let live_frame = self
-                .click_guard
-                .as_ref()
-                .filter(|guard| now < guard.until && matches!(wakeup, Wakeup::MouseClick { .. }))
-                .map(|guard| {
-                    (
-                        std::mem::replace(&mut self.ui.interactions, guard.interactions.clone()),
-                        std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
-                    )
-                });
-            let previous_selection = self.ui.selected_pane.clone();
-            let previous_row = self
-                .ui
-                .selected_index
-                .and_then(|index| self.ui.visible_roster(&self.view.current).row(index))
-                .map(|row| row.id.clone());
-            let applied = handle_wakeup(
-                wakeup,
-                &mut self.ui,
-                &self.view.current,
-                &self.nav_keys.1,
-                alert_active,
-            );
-            if let Some((interactions, roster)) = live_frame {
-                self.ui.interactions = interactions;
-                self.ui.painted_roster = roster;
-            }
-            self.clicked_row = None;
-            let selected_row = self
-                .ui
-                .selected_index
-                .and_then(|index| self.ui.visible_roster(&self.view.current).row(index))
-                .map(|row| row.id.clone());
-            if selected_row != previous_row {
-                self.view.pending_input_focus = None;
-                self.ui.own_input_reveal = true;
-                self.view.focus_marker = None;
-                self.ui.focus_marker_ready = false;
-            }
-            if self.ui.selected_pane != previous_selection {
-                self.view.focus_rollback = None;
-            }
-            for effect in &applied.effects {
-                if let InputEffect::Focus(pane) = effect {
-                    self.view.pending_input_focus = Some(pane.clone());
-                    let owner = self
-                        .ui
-                        .selected_pane
-                        .as_ref()
-                        .and_then(|selected| self.view.current.row_owning_pane(selected))
-                        .filter(|row| row.pane_ids().any(|id| id == pane))
-                        .or_else(|| self.view.current.row_owning_pane(pane));
-                    self.view.focus_rollback = owner.map(|row| FocusRollback {
-                        target: pane.clone(),
-                        baseline: self.ui.baseline_pane.clone(),
-                        label: row.display_name().to_owned(),
-                    });
-                    self.arm_clicked_row(pane, now);
-                }
-            }
-            if applied.redraw && !wheel {
-                self.ui.scroll_ease.cancel();
-            }
-            if applied.effects.contains(&InputEffect::DismissAlert) {
-                self.view.health.alert = None;
-            }
-            outcome.redraw |= applied.redraw;
-            outcome.effects.extend(applied.effects);
-        }
-        if user_input
-            && (outcome.redraw || !outcome.effects.is_empty())
-            && !outcome.effects.contains(&InputEffect::Reload)
-        {
-            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
-        }
-        outcome
-    }
-
     /// Mark a row read without jumping (`m`): write the room receipt,
     /// clear the row locally for an instant repaint, trace the clear, wake the
     /// room so the host prunes the episode and peer tabs converge, and refetch
     /// so the receipt lands in the pulled snapshot. A no-op when the row is
     /// already read.
     fn mark_row_read(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
-        let now = self.clock.timestamp();
-        let marks = ReadMarks::load(&self.runtime);
-        let clear = self.with_projected_view(false, false, |state| {
-            if state.ui.unread_guard.as_deref() == Some(row_id) {
-                state.ui.unread_guard = None;
+        let now = self.pane.clock.timestamp();
+        let marks = ReadMarks::load(&self.pane.runtime);
+        let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
+            if v.state.unread_guard.as_deref() == Some(row_id) {
+                v.state.unread_guard = None;
             }
             read_receipt_for_row(
-                &state.view.current,
+                &v.context.current,
                 Some(row_id),
                 UnreadClearCause::MarkRead,
                 &marks,
@@ -2190,14 +1783,16 @@ impl LoopState {
         if clear.ids.is_empty() {
             return;
         }
-        if let Err(err) = write_read_marks(&self.runtime, clear.ids.clone(), now.as_millisecond()) {
+        if let Err(err) =
+            write_read_marks(&self.pane.runtime, clear.ids.clone(), now.as_millisecond())
+        {
             warn!(error = %err, "mark-read receipt write failed");
             return;
         }
-        self.with_projected_view(false, false, |state| {
-            set_rows_unread(&mut state.view.current, &clear.ids, false);
+        self.views.with(&mut self.pane, Route::READ, |_, v| {
+            set_rows_unread(&mut v.context.current, &clear.ids, false);
         });
-        emit_unread_cleared_trace(&self.diag, &clear.trace);
+        emit_unread_cleared_trace(&self.pane.diag, &clear.trace);
         self.commit_local_mark(fetch);
     }
 
@@ -2205,11 +1800,11 @@ impl LoopState {
     /// for every unread or needs-a-look row, clear local unread bits, and refetch
     /// so peers converge through the producer.
     fn mark_all_read(&mut self, fetch: &mut FetchDispatcher) {
-        let now = self.clock.timestamp();
-        let marks = ReadMarks::load(&self.runtime);
-        let clear = self.with_projected_view(false, false, |state| {
-            state.ui.unread_guard = None;
-            read_receipts_for_all(&state.view.current, UnreadClearCause::MarkRead, &marks, now)
+        let now = self.pane.clock.timestamp();
+        let marks = ReadMarks::load(&self.pane.runtime);
+        let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
+            v.state.unread_guard = None;
+            read_receipts_for_all(&v.context.current, UnreadClearCause::MarkRead, &marks, now)
         });
         self.apply_read_clear(clear, now, fetch);
     }
@@ -2220,39 +1815,42 @@ impl LoopState {
     /// lands in the pulled snapshot. A no-op when the row has left the room.
     fn mark_row_unread(&mut self, fetch: &mut FetchDispatcher, row_id: &str) {
         let Some(row) = self
-            .view
-            .current
+            .views
+            .mirror()
             .rows()
             .find(|row| row.id == row_id)
             .cloned()
         else {
             return;
         };
-        let now_ms = self.clock.timestamp().as_millisecond();
-        let opened =
-            match unread::mark_rows_unread(&self.runtime, std::slice::from_ref(&row), now_ms) {
-                Ok(opened) => opened,
-                Err(err) => {
-                    warn!(error = %err, "mark-unread episode write failed");
-                    return;
-                }
-            };
-        self.with_projected_view(false, false, |state| {
-            set_rows_unread(&mut state.view.current, std::slice::from_ref(&row.id), true);
-            state.ui.unread_guard = Some(row.id.clone());
+        let now_ms = self.pane.clock.timestamp().as_millisecond();
+        let opened = match unread::mark_rows_unread(
+            &self.pane.runtime,
+            std::slice::from_ref(&row),
+            now_ms,
+        ) {
+            Ok(opened) => opened,
+            Err(err) => {
+                warn!(error = %err, "mark-unread episode write failed");
+                return;
+            }
+        };
+        self.views.with(&mut self.pane, Route::READ, |_, v| {
+            set_rows_unread(&mut v.context.current, std::slice::from_ref(&row.id), true);
+            v.state.unread_guard = Some(row.id.clone());
         });
         for item in &opened {
-            self.diag.trace_notify(item.trace_event());
+            self.pane.diag.trace_notify(item.trace_event());
         }
         self.commit_local_mark(fetch);
     }
 
     fn commit_local_mark(&mut self, fetch: &mut FetchDispatcher) {
-        if self.clock.effects_enabled() {
-            wake_room(&self.runtime);
+        if self.pane.clock.effects_enabled() {
+            wake_room(&self.pane.runtime);
         }
-        self.dirty = true;
-        self.next_frame = self.clock.now();
+        self.pane.dirty = true;
+        self.pane.next_frame = self.pane.clock.now();
         fetch.request(FetchRequest::default(), true);
     }
 
@@ -2261,13 +1859,13 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) {
-        let own_pane = self.config.own_pane.clone();
-        let room_caps = self.room_caps.clone();
-        if self.clock.effects_enabled() {
+        let own_pane = self.pane.config.own_pane.clone();
+        let room_caps = self.pane.room_caps.clone();
+        if self.pane.clock.effects_enabled() {
             self.refresh_pet_render_caps_if_stale_with(
-                self.config.mux,
-                &self.config.session_name.clone(),
-                self.clock.now(),
+                self.pane.config.mux,
+                &self.pane.config.session_name.clone(),
+                self.pane.clock.now(),
                 terminal,
                 |mux, session_name, prev| {
                     // A probe publishes its whole sample at once; a panic leaves
@@ -2285,15 +1883,15 @@ impl LoopState {
         // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(fetch);
-        fetch.fire_due(self.clock.now());
+        fetch.fire_due(self.pane.clock.now());
 
         let (gate_due, dwell_due) = self.inspect_view(|_, view| {
             (
-                gate_remaining(&view.gate, self.clock.timestamp())
+                gate_remaining(&view.gate, self.pane.clock.timestamp())
                     .is_some_and(|remaining| remaining.is_zero()),
                 view.tab_read_dwell_until
                     .filter(|_| view.current.own_view.is_some())
-                    .is_some_and(|until| self.clock.now() >= until),
+                    .is_some_and(|until| self.pane.clock.now() >= until),
             )
         });
         if gate_due {
@@ -2310,24 +1908,28 @@ impl LoopState {
         // Data backstop: catch pane/git drift no store delta announced. It is
         // self-gated to the data tick; an armed clamp-deferred nudge merges
         // into this fold instead of waiting to echo it.
-        if self.clock.now().saturating_duration_since(self.fetched_at)
-            >= tick_for(self.config.tick_seconds)
+        if self
+            .pane
+            .clock
+            .now()
+            .saturating_duration_since(self.pane.fetched_at)
+            >= tick_for(self.pane.config.tick_seconds)
         {
             fetch.request(FetchRequest::default(), false);
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
         // exit path never races a background writer.
-        if self.clock.effects_enabled() && heartbeat_write_due(self.last_heartbeat) {
-            self.last_heartbeat = Some(self.clock.now());
+        if self.pane.clock.effects_enabled() && heartbeat_write_due(self.pane.last_heartbeat) {
+            self.pane.last_heartbeat = Some(self.pane.clock.now());
             if let Err(err) = write_heartbeat(
-                &self.config,
-                &self.runtime,
-                &self.host_wake_path,
+                &self.pane.config,
+                &self.pane.runtime,
+                &self.pane.host_wake_path,
                 terminal.backend().pane_size(),
             ) {
                 warn!(
-                    session = %self.config.session_name,
+                    session = %self.pane.config.session_name,
                     error = %err,
                     "heartbeat write failed",
                 );
@@ -2340,13 +1942,14 @@ impl LoopState {
         // new fold so a prior cycle cannot absorb this renderer-local change
         // before the confirm timer can close it.
         if self
+            .pane
             .clock
             .now()
-            .saturating_duration_since(self.last_self_close_check)
+            .saturating_duration_since(self.pane.last_self_close_check)
             >= SELF_CLOSE_WATCHDOG
         {
-            self.last_self_close_check = self.clock.now();
-            let request = if self.self_close.confirming_empty() {
+            self.pane.last_self_close_check = self.pane.clock.now();
+            let request = if self.pane.self_close.confirming_empty() {
                 FetchRequest::fresh_panes()
             } else {
                 FetchRequest::default()
@@ -2356,11 +1959,11 @@ impl LoopState {
         if !self.inspect_view(|ui, _| ui.freeze.is_some()) {
             return;
         }
-        let parked = self.parked(self.clock.now_ms());
+        let parked = self.parked(self.pane.clock.now_ms());
         if self.watched()
             && self.inspect_view(|ui, _| {
                 ui.freeze.as_ref().is_some_and(|hold| {
-                    self.clock.timestamp().as_millisecond() >= hold.deadline_ms(parked)
+                    self.pane.clock.timestamp().as_millisecond() >= hold.deadline_ms(parked)
                 })
             })
         {
@@ -2369,7 +1972,7 @@ impl LoopState {
     }
 
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<PaneBackend>) {
-        if let Err(err) = self.paint.clear(terminal.backend_mut()) {
+        if let Err(err) = self.pane.paint.clear(terminal.backend_mut()) {
             debug!(error = %err, "pet pixel clear failed");
         }
     }
@@ -2382,25 +1985,25 @@ impl LoopState {
         if self.retire_superseded_push() {
             return Ok(());
         }
-        let now = self.clock.now();
+        let now = self.pane.clock.now();
         let paint_blocked = self.prepare_paint(terminal, now);
-        if let Some(push) = &mut self.pending_focus_push {
-            if !self.should_exit && push.peer.blocked_by.is_none() {
+        if let Some(push) = &mut self.pane.pending_focus_push {
+            if !self.pane.should_exit && push.peer.blocked_by.is_none() {
                 push.peer.blocked_by = if paint_blocked {
                     Some(PushBlock::PaintHold)
-                } else if self.self_close.confirming_empty() {
+                } else if self.pane.self_close.confirming_empty() {
                     Some(PushBlock::ConfirmingEmpty)
                 } else {
                     None
                 };
             }
-            if now >= push.until || self.should_exit {
-                let verdict = if self.should_exit {
+            if now >= push.until || self.pane.should_exit {
+                let verdict = if self.pane.should_exit {
                     PushVerdict::Exiting
                 } else {
                     PushVerdict::Expired
                 };
-                if let Some(push) = self.pending_focus_push.take() {
+                if let Some(push) = self.pane.pending_focus_push.take() {
                     push.finish(verdict);
                 }
             }
@@ -2409,35 +2012,38 @@ impl LoopState {
         let foreground = self.foreground_paint_due(now, active, watched);
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
-        if !self.should_exit && !self.self_close.confirming_empty() && !paint_blocked && foreground
+        if !self.pane.should_exit
+            && !self.pane.self_close.confirming_empty()
+            && !paint_blocked
+            && foreground
         {
             if self.retire_superseded_push()
-                || self.focus_peers.as_ref().is_some_and(|peers| {
+                || self.pane.focus_peers.as_ref().is_some_and(|peers| {
                     !peers.accepts(
                         self.inspect_view(|_, view| view.last_folded_focus_intent),
-                        self.clock.now(),
+                        self.pane.clock.now(),
                     )
                 })
             {
                 return Ok(());
             }
             self.paint_now(terminal, now)?;
-        } else if !active && !self.dirty {
+        } else if !active && !self.pane.dirty {
             // Idle re-arm only: with a fold pending, the armed boundary must
             // hold so a paint already due within one frame is not pushed out.
-            self.next_frame = now + animation_frame(&self.view.current);
+            self.pane.next_frame = now + animation_frame(self.views.mirror());
         }
         Ok(())
     }
 
     fn prepare_paint(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> bool {
-        if self.dirty {
-            let dirty_deadline = now + animation_frame(&self.view.current);
-            if self.next_frame > dirty_deadline {
-                self.next_frame = dirty_deadline;
+        if self.pane.dirty {
+            let dirty_deadline = now + animation_frame(self.views.mirror());
+            if self.pane.next_frame > dirty_deadline {
+                self.pane.next_frame = dirty_deadline;
             }
         }
-        if !self.paint_hold.is_engaged()
+        if !self.pane.paint_hold.is_engaged()
             && let Ok(size) = terminal.size()
         {
             // Close the engage-gap: a data/animation frame can reach this paint
@@ -2446,8 +2052,8 @@ impl LoopState {
             // pane fetch that resolves the sibling-count verdict.
             self.arm_paint_hold_on_grow(size.width, now);
         }
-        let hold_was_engaged = self.paint_hold.is_engaged();
-        let paint_blocked = self.paint_hold.blocks_paint(now);
+        let hold_was_engaged = self.pane.paint_hold.is_engaged();
+        let paint_blocked = self.pane.paint_hold.blocks_paint(now);
         if hold_was_engaged && !paint_blocked {
             debug!("resize paint hold expired");
         }
@@ -2456,42 +2062,45 @@ impl LoopState {
 
     fn foreground_paint_due(&self, now: Instant, active: bool, watched: bool) -> bool {
         let marker_due = self.inspect_view(|_, view| matches!(view.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until));
-        (watched && (active || self.dirty)) && (now >= self.next_frame || (watched && marker_due))
+        (watched && (active || self.pane.dirty))
+            && (now >= self.pane.next_frame || (watched && marker_due))
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
-        let (paint, interval, nonce) = self.with_projected_view(false, false, |state| {
+        let (paint, interval, nonce) = self.views.with(&mut self.pane, Route::READ, |state, v| {
             frame_clock(
                 now,
-                state.view.anim_start,
-                state.view.current.theme.display.resolved_refresh_ms(),
+                v.context.anim_start,
+                v.context.current.theme.display.resolved_refresh_ms(),
             )
-            .stamp(&mut state.ui);
+            .stamp(v.state);
             let interval = render::animation_interval(
-                &state.view.current,
+                &v.context.current,
+                v.state,
                 &state.ui,
-                state.ui.animation_phase,
-                state.alert_active(),
+                v.state.animation_phase,
+                alert_active(v.context),
             );
             (
-                state.dirty || interval.is_some() || state.focus_marker_due(now),
-                interval.unwrap_or(animation_frame(&state.view.current)),
-                state.view.last_folded_focus_intent,
+                state.dirty || interval.is_some() || state.focus_marker_due(v, now),
+                interval.unwrap_or(animation_frame(&v.context.current)),
+                v.context.last_folded_focus_intent,
             )
         });
         if paint {
             if self.retire_superseded_push()
                 || self
+                    .pane
                     .focus_peers
                     .as_ref()
-                    .is_some_and(|peers| !peers.accepts(nonce, self.clock.now()))
+                    .is_some_and(|peers| !peers.accepts(nonce, self.pane.clock.now()))
             {
                 return Ok(());
             }
             self.draw_frame(terminal, now, false)?;
-            self.dirty = false;
+            self.pane.dirty = false;
         }
-        self.next_frame = next_frame_after(self.next_frame, now, interval);
+        self.pane.next_frame = next_frame_after(self.pane.next_frame, now, interval);
         Ok(())
     }
 
@@ -2505,35 +2114,34 @@ impl LoopState {
             return Ok(());
         }
         loop {
-            let (token, snapshot, view, alert_active) = self.paint_transition(|state| {
+            let (token, snapshot, view, alert_active) = self.paint_transition(|_, v| {
                 frame_clock(
                     now,
-                    state.view.anim_start,
-                    state.view.current.theme.display.resolved_refresh_ms(),
+                    v.context.anim_start,
+                    v.context.current.theme.display.resolved_refresh_ms(),
                 )
-                .stamp(&mut state.ui);
+                .stamp(v.state);
                 (
-                    state.view_token,
-                    state.view.current.clone(),
-                    state.ui.view.clone(),
-                    state.alert_active(),
+                    v.token,
+                    v.context.current.clone(),
+                    v.state.clone(),
+                    alert_active(v.context),
                 )
             });
-            let scratch = std::mem::replace(&mut self.ui.view, view);
-            self.paint
-                .refresh_view(&mut self.ui, &snapshot, alert_active);
-            self.ui.view = scratch;
+            self.pane
+                .paint
+                .refresh_view(&mut self.pane.ui, &view, &snapshot, alert_active);
             let nonce = self.inspect_view(|_, view| view.last_folded_focus_intent);
             let permit = self
+                .pane
                 .focus_peers
                 .as_ref()
-                .map(|peers| peers.paint_permit(nonce, self.clock.now()));
+                .map(|peers| peers.paint_permit(nonce, self.pane.clock.now()));
             if matches!(permit, Some(None)) {
                 return Ok(());
             }
-            let events = self.events().clone();
-            let composed = self.paint_transition(|state| {
-                if state.view_token != token {
+            let composed = self.paint_transition(|state, v| {
+                if v.token != token {
                     return None;
                 }
                 if permit
@@ -2543,396 +2151,58 @@ impl LoopState {
                 {
                     return None;
                 }
-                Some(state.compose_frame(terminal, now, user_input, &events))
+                Some(state.compose_frame(v, terminal, now, user_input))
             });
             let Some((result, frame)) = composed else {
                 continue;
             };
             let output = frame.write(terminal.backend_mut());
             result.and(output)?;
-            self.painted_at = self.clock.now();
-            for (push, verdict) in self.paint_reports.drain(..) {
-                push.finish_painted(verdict, self.painted_at);
+            self.pane.painted_at = self.pane.clock.now();
+            for (push, verdict) in self.pane.paint_reports.drain(..) {
+                push.finish_painted(verdict, self.pane.painted_at);
             }
             return Ok(());
         }
     }
 
-    fn compose_frame(
-        &mut self,
-        terminal: &mut Terminal<PaneBackend>,
-        now: Instant,
-        user_input: bool,
-        events: &EventStore,
-    ) -> (std::io::Result<()>, BufferedFrame) {
-        if self.shared_view_id().is_some() && self.ui.baseline_pane.is_none() {
-            self.ui.baseline_pane = self.baseline_seed.take();
-            reconcile_selection(&mut self.ui, &self.view.current, None);
-        }
-        self.ui.focus_marker_ready = self.watched()
-            && match self.view.focus_marker {
-                Some(FocusMarker::Ready) => true,
-                Some(FocusMarker::Dwelling(until)) => now >= until,
-                None => false,
-            };
-        // The notice is pane chrome over the borrowed view's gate, which another pane may have moved.
-        self.ui.gate_notice = self.view.gate.rule.map(|rule| render::GateNotice { rule });
-        let user_input = user_input || self.ui.scroll_ease.in_flight();
-        let interactions = std::mem::take(&mut self.ui.interactions);
-        let roster = std::mem::take(&mut self.ui.painted_roster);
-        let rows = std::mem::take(&mut self.ui.painted_rows);
-        let (result, frame) = self.paint.compose_frame(
-            terminal,
-            &self.view.current,
-            self.view.health.alert.as_ref(),
-            &mut self.ui,
-        );
-        if result.is_err() {
-            return (result, frame);
-        }
-        self.painted_at = self.clock.now();
-        self.paints += 1;
-        self.painted_height = terminal.get_frame().area().height;
-        self.painted_baseline.clone_from(&self.ui.baseline_pane);
-        self.baseline_seed = None;
-        self.painted_selection.clone_from(&self.ui.drawn_selection);
-        let selected_visible = self
-            .ui
-            .drawn_selection
-            .as_ref()
-            .is_some_and(|selected| self.ui.painted_rows.iter().any(|(id, _)| id == selected));
-        if selected_visible {
-            self.view.focus_marker = None;
-            self.ui.focus_marker_ready = false;
-        } else if self.ui.focus_marker_ready {
-            self.view.focus_marker = Some(FocusMarker::Ready);
-        }
-        self.ui.last_order = layout_freeze::capture_order(&self.view.current, &self.ui);
-        self.ui.arrival_pending = false;
-        if user_input || !self.watched() {
-            self.click_guard = None;
-        } else if self
-            .click_guard
-            .as_ref()
-            .is_none_or(|guard| now >= guard.until)
-            && rows.iter().any(|row| !self.ui.painted_rows.contains(row))
-        {
-            self.click_guard = Some(ClickGuard {
-                until: now + crate::sidebar::timing::CLICK_GUARD,
-                interactions,
-                roster,
-            });
-        }
-        self.observe_paint(now, events);
-        (Ok(()), frame)
-    }
-
     fn arm_paint_hold_on_grow(&mut self, width: u16, now: Instant) -> bool {
-        if !self.paint_hold.is_engaged()
-            && self.self_close.seen_sibling
-            && resize_grew(self.prev_width, width)
-            && grow_beyond_legit(width, self.width_control.max_legit_cols())
+        if !self.pane.paint_hold.is_engaged()
+            && self.pane.self_close.seen_sibling
+            && resize_grew(self.pane.prev_width, width)
+            && grow_beyond_legit(width, self.pane.width_control.max_legit_cols())
         {
-            self.paint_hold.engage(
+            self.pane.paint_hold.engage(
                 now,
-                self.clock.timestamp_at(now).as_millisecond().max(0) as u64,
+                self.pane.clock.timestamp_at(now).as_millisecond().max(0) as u64,
             );
             return true;
         }
         false
     }
 
-    /// Fold one fetch outcome into the render state: gate it against the
-    /// last-known-good frame, update health, snapshot, and selection, and
-    /// report whether the loop should exit.
-    fn apply_fetch_outcome(
-        &mut self,
-        update: FetchUpdate,
-        allow_shared_filter_sync: bool,
-    ) -> ApplyOutcome {
-        let (update, _) = update.into_parts();
-        let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
-        let now = self.clock.timestamp();
-        let searching = self.ui.search_draft.is_some();
-        let (prev_good, rejected, diagnostics) = self.view.commit_fetch(update, &mut self.ui, now);
-        self.fold_effects.diagnostics.extend(diagnostics);
-        self.ui.gate_notice = self.view.gate.rule.map(|rule| render::GateNotice { rule });
-        if let Some(alert) = self
-            .view
-            .health
-            .alert
-            .as_ref()
-            .filter(|alert| alert.is_active())
-        {
-            self.fold_effects.degraded = Some(alert.reason.clone());
-        }
-        self.dirty |= searching && self.ui.search_draft.is_none();
-        let authoritative_filter_fold = allow_shared_filter_sync
-            && snapshot_ok
-            && !rejected
-            && self.view.fold_inputs.as_ref().is_none_or(|inputs| {
-                self.view
-                    .filter_observed_at
-                    .is_none_or(|observed| inputs.sampled_at > observed)
-            });
-        let prev_selected = self.ui.selected_pane.clone();
-        let (focused_pane, cleared) = self.sweep_read_receipts(now);
-        self.reconcile_selection_and_order(
-            &prev_good,
-            prev_selected,
-            focused_pane,
-            cleared,
-            authoritative_filter_fold,
-            self.clock.instant_at(now),
-        );
-        self.view.fold_spend_rolls(&mut self.ui, &self.clock);
-        self.exit_verdict(rejected)
-    }
-
-    fn exit_verdict(&mut self, rejected: bool) -> ApplyOutcome {
-        // Own-view (sibling count) rides in on the snapshot — the producer computes
-        // it from the same pane list it already enumerated. Presence publication and
-        // the poll backstop feed this latch; resize only decides whether to hold a
-        // grown-width paint while the fresh fold is pending.
-        ApplyOutcome {
-            should_exit: self.self_close.should_close(
-                self.view
-                    .current
-                    .own_view
-                    .as_ref()
-                    .map(|view| view.sibling_count),
-                self.clock.now(),
-            ),
-            rejected,
-        }
-    }
-
-    fn sweep_read_receipts(&mut self, now: Timestamp) -> (Option<PaneId>, bool) {
-        if self.fold_preparation.is_none() {
-            return self.fold_transition(|state| state.sweep_read_receipts(now));
-        }
-        if self.shared_view_id().is_none() {
-            return (None, false);
-        }
-        let marks = self
-            .fold_preparation
-            .as_ref()
-            .expect("fold transition prepared read marks")
-            .marks
-            .clone();
-        self.prepare_tab_arrival();
-        let (focused, clear) = self.view.read_receipts(
-            &mut self.ui,
-            &ReadContext {
-                own_pane: self.config.own_pane.as_ref(),
-                marks: &marks,
-                now,
-                at: self.clock.now(),
-            },
-        );
-        let live: HashSet<String> = self.view.current.rows().map(|row| row.id.clone()).collect();
-        let cleared = !clear.ids.is_empty();
-        let mut clear = clear;
-        clear.ids.retain(|id| live.contains(id));
-        self.fold_effects.receipts.push((clear, now));
-        (focused, cleared)
-    }
-
-    fn prepare_tab_arrival(&mut self) {
-        let arriving = self.ui.viewing_own_tab == Some(false)
-            && self
-                .view
-                .current
-                .own_view
-                .as_ref()
-                .zip(self.config.own_pane.as_ref())
-                .is_some_and(|(view, own)| {
-                    own_tab_viewed(&self.view.current.viewed_panes, view, own)
-                });
-        if arriving {
-            self.next_frame = self.clock.now();
-        }
+    fn focus_anchor(&mut self, observed: Instant) -> Option<crate::mux::focus_anchor::FocusAnchor> {
+        self.fold_transition(|pane, v, prepared| pane.focus_anchor(v, prepared, observed))
     }
 
     #[cfg(test)]
-    fn sweep_tab_read_receipts(
-        &mut self,
-        focused_row_id: Option<&str>,
-        marks: &ReadMarks,
-        now: Timestamp,
-        clear: &mut ReadClear,
-    ) {
-        self.prepare_tab_arrival();
-        self.view.sweep_tab_read_receipts(
-            &mut self.ui,
-            focused_row_id,
-            &ReadContext {
-                own_pane: self.config.own_pane.as_ref(),
-                marks,
-                now,
-                at: self.clock.now(),
-            },
-            clear,
-        );
-    }
-
-    fn reconcile_selection_and_order(
-        &mut self,
-        prev_good: &SidebarSnapshot,
-        prev_selected: Option<PaneId>,
-        focused_pane: Option<PaneId>,
-        cleared: bool,
-        authoritative_filter_fold: bool,
-        now: Instant,
-    ) {
-        if self.fold_preparation.is_none() {
-            self.fold_transition(|state| {
-                state.reconcile_selection_and_order(
-                    prev_good,
-                    prev_selected,
-                    focused_pane,
-                    cleared,
-                    authoritative_filter_fold,
-                    now,
-                );
-            });
-            return;
-        }
-        let filter = authoritative_filter_fold.then(|| {
-            if let Some(inputs) = &self.view.fold_inputs {
-                return inputs.filter.clone();
-            }
-            let filter = self
-                .fold_preparation
-                .as_ref()
-                .expect("fold transition prepared filter")
-                .filter
-                .clone();
-            self.view.filter_observed_at = Some(self.clock.now());
-            filter
-        });
-        let parked = self.parked(self.clock.timestamp_at(now).as_millisecond() as u64);
-        let (persist_filter, expired) = self.view.reconcile_selection_and_order(
-            &mut self.ui,
-            SelectionFold {
-                previous: prev_good,
-                selected: prev_selected,
-                focused: focused_pane,
-                cleared,
-                filter,
-                mux: self.config.mux,
-                clock: &self.clock,
-                now,
-                parked,
-            },
-        );
-        self.hold_expired_since_paint |= expired;
-        if persist_filter {
-            self.fold_effects.filter = Some(self.ui.make_up_filter.clone());
-        }
-    }
-
-    fn fold_outcome(
-        &mut self,
-        update: FetchUpdate,
-        allow_shared_filter_sync: bool,
-        seed: bool,
-        fused_event_sent_at_ms: Option<u64>,
-    ) -> bool {
-        let trace = match &update {
-            FetchUpdate::Snapshot { source, phase, .. } => Some((*source, *phase)),
-            _ => None,
-        };
-        let selected_before = self.ui.selected_pane.clone();
-        let applied = self.apply_fetch_outcome(update, allow_shared_filter_sync);
-        if let Some((source, phase)) = trace {
-            self.fold_effects.traces.push(FocusTraceEvent::FoldDecided {
-                source: match source {
-                    SnapshotSource::Produced => "produced",
-                    SnapshotSource::Cached => "published",
-                }
-                .to_owned(),
-                phase: match phase {
-                    FetchPhase::Interim => "interim",
-                    FetchPhase::Final => "final",
-                }
-                .to_owned(),
-                seed,
-                panes_produced_at_ms: self.view.current.panes_produced_at_ms,
-                panes_observed_at_ms: self.view.current.panes_observed_at_ms,
-                snapshot_focused_pane: self.view.current.focused_pane.clone(),
-                fused_event_sent_at_ms,
-                own_view: self.view.current.own_view.is_some(),
-                baseline: session_focus_baseline(&self.view.current, self.config.own_pane.as_ref()),
-                selected_before,
-                selected_after: self.ui.selected_pane.clone(),
-            });
-        }
-        self.should_exit = applied.should_exit;
-        self.apply_focus_anchor();
-        self.observe_commit();
-        self.dirty = true;
-        applied.rejected
-    }
-
-    fn focus_anchor(&mut self, observed: Instant) -> Option<crate::mux::focus_anchor::FocusAnchor> {
-        if self.view_scope.is_none() {
-            return self.fold_transition(|state| state.focus_anchor(observed));
-        }
-        let loaded = self
-            .view
-            .fold_inputs
-            .is_none()
-            .then(|| {
-                self.fold_preparation.as_ref().map_or_else(
-                    || crate::mux::focus_anchor::load(&self.runtime),
-                    |prepared| prepared.anchor.clone(),
-                )
-            })
-            .flatten();
-        let own_pane = self.shared_view_id().and(self.config.own_pane.as_ref());
-        self.view
-            .observe_focus_anchor(&self.config.session_name, observed, loaded, own_pane)
-    }
-
     fn focus_placement(&self, pane: &PaneId) -> Option<crate::mux::focus_anchor::FocusPlacement> {
-        self.inspect_view(|view, context| {
-            let row = context.current.row_owning_pane(pane)?;
-            self.ui
-                .painted_rows
-                .iter()
-                .find(|(id, _)| id == &row.id)
-                .map(|(id, y)| crate::mux::focus_anchor::FocusPlacement {
-                    row_id: id.clone(),
-                    viewport_row: y - self.ui.scroll_zone_top as isize,
-                    held: view
-                        .held_expansions
-                        .iter()
-                        .chain(view.drawn_selection.iter())
-                        .cloned()
-                        .collect(),
-                })
-        })
+        self.inspect_view(|state, context| self.pane.focus_placement(state, context, pane))
     }
 
     fn owns_focus_target(&self, pane: &PaneId) -> bool {
-        self.view.current.own_view.as_ref().is_some_and(|view| {
-            self.config
-                .own_pane
-                .as_ref()
-                .is_some_and(|own| own_tab_viewed(std::slice::from_ref(pane), view, own))
-        })
+        self.pane.owns_focus_target(self.views.mirror(), pane)
     }
 
     fn focus_peers_for(&self, pane: &PaneId) -> Option<FocusPeers> {
         if self.owns_focus_target(pane) {
             return None;
         }
-        self.focus_peers.clone()
+        self.pane.focus_peers.clone()
     }
 
     fn focus_push_size_matches(&self, push: &FocusPush, terminal: &Terminal<PaneBackend>) -> bool {
-        let Some(expected) = self.config.own_pane.as_ref().and_then(|pane| {
+        let Some(expected) = self.pane.config.own_pane.as_ref().and_then(|pane| {
             push.expected_panes
                 .as_ref()
                 .and_then(|panes| panes.get(pane))
@@ -2949,9 +2219,860 @@ impl LoopState {
         anchor: &crate::mux::focus_anchor::FocusAnchor,
         push: Option<&FocusPush>,
     ) -> Option<PushVerdict> {
-        let portable_matches = self.inspect_view(|ui, _| {
-            ui.last_focus_anchor_ms == anchor.issued_at_ms && ui.focus_placement.is_none()
+        self.inspect_view(|state, _| {
+            self.pane.painted_focus_verdict(
+                state,
+                self.views.mirror(),
+                &self.pane.painted_selection,
+                anchor,
+                push,
+            )
+        })
+    }
+
+    fn events(&self) -> MutexGuard<'_, EventStore> {
+        self.views
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl PaneState {
+    fn freeze_remaining(&mut self, v: &mut ViewBorrow<'_>, now_ms: i64) -> Option<Duration> {
+        let hold = v.state.freeze.as_ref()?;
+        Some(Duration::from_millis(
+            (hold.deadline_ms(self.parked(v, now_ms as u64)) - now_ms).max(0) as u64,
+        ))
+    }
+
+    fn frame_timing(&mut self, v: &mut ViewBorrow<'_>) -> (bool, Duration) {
+        let clock = frame_clock(
+            self.clock.now(),
+            v.context.anim_start,
+            v.context.current.theme.display.resolved_refresh_ms(),
+        );
+        let alert_active = alert_active(v.context);
+        let watched = self.watched(v);
+        let animating = watched
+            && render::animation_interval(
+                &v.context.current,
+                v.state,
+                &self.ui,
+                clock.phase,
+                alert_active,
+            )
+            .is_some();
+        let active = !self.self_close.confirming_empty()
+            && (watched && (animating || self.dirty || self.focus_marker_due(v, self.clock.now())));
+        let mut timeout = if active {
+            self.next_frame
+                .saturating_duration_since(self.clock.now())
+                .max(FRAME_MIN_TIMEOUT)
+        } else {
+            // Cap by the watchdog so the self-close backstop fires on time even
+            // when the data tick is much longer.
+            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
+                self.clock
+                    .now()
+                    .saturating_duration_since(self.last_self_close_check),
+            );
+            let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
+            if watched
+                && let Some(remaining) =
+                    self.freeze_remaining(v, self.clock.timestamp().as_millisecond())
+            {
+                timeout = timeout.min(remaining);
+            }
+            timeout.max(FRAME_MIN_TIMEOUT)
+        };
+        if watched && let Some(FocusMarker::Dwelling(until)) = v.context.focus_marker {
+            timeout = timeout.min(
+                until
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(until) = v
+            .context
+            .tab_read_dwell_until
+            .filter(|_| v.context.current.own_view.is_some())
+        {
+            timeout = timeout.min(
+                until
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(deadline) = self
+            .width_control
+            .feedback_deadline()
+            .into_iter()
+            .chain(self.caps_refresh_deadline)
+            .min()
+        {
+            timeout = timeout.min(
+                deadline
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(remaining) = gate_remaining(&v.context.gate, self.clock.timestamp()) {
+            timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
+        }
+        (active, timeout)
+    }
+
+    fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
+        self.watches_view(snapshot.own_view.as_ref(), &snapshot.viewed_panes)
+    }
+
+    fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
+        let Some(own_pane) = self.config.own_pane.as_ref() else {
+            return true;
+        };
+        let Some(view) = own_view else {
+            return true;
+        };
+        own_tab_viewed(viewed_panes, view, own_pane)
+    }
+
+    /// Whether the next fold equal to the one just applied may arrive as a
+    /// clock-only delivery. Renderer-local reconciliation state blocks it, so
+    /// that state always meets full content. Exhaustive: a new field must be
+    /// named here, as a blocker or as irrelevant to delivery.
+    fn admits_clock_only(&self, ui: &ViewState, view: &ViewContext, rejected: bool) -> bool {
+        let Self {
+            // Blockers: an exit, a held overlay or focus fence, a gate episode,
+            // a failure streak, a frozen order, an armed read dwell, an empty
+            // confirmation, and a pending focus repair each resolve on a fold.
+            should_exit,
+            fold_effects: _,
+            baseline_seed: _,
+            ui: _,
+            self_close,
+            pending_focus_repair,
+            #[cfg(test)]
+                content_applications: _,
+            #[cfg(test)]
+                projections: _,
+            #[cfg(test)]
+                fold_preparations: _,
+            // Derived from `current`, which equal content leaves unchanged.
+            nav_keys: _,
+            // Loop wiring and identity, fixed for the attachment.
+            config: _,
+            clock: _,
+            runtime: _,
+            host_wake_path: _,
+            diag: _,
+            completion: _,
+            own: _,
+            observe_tx: _,
+            wake: _,
+            room_caps: _,
+            request_reload: _,
+            baseline_changed: _,
+            // Focus-anchor bookkeeping: a live intent or fence holds
+            // `overlay_baseline`, and an anchor change is content.
+            pending_focus_push: _,
+            painted_focus_anchor_ms: _,
+            painted_at: _,
+            painted_height: _,
+            paints: _,
+            paint_reports: _,
+            // Paint, animation, and frame scheduling, which a clock-only
+            // delivery drives itself.
+            paint: _,
+            titled: _,
+            dirty: _,
+            paint_hold: _,
+            next_frame: _,
+            prev_width: _,
+            caps_refresh_deadline: _,
+            width_control: _,
+            observer: _,
+            clicked_row: _,
+            click_guard: _,
+            hold_expired_since_paint: _,
+            optimistic_watch_until: _,
+            // Maintenance stamps, read against `current`.
+            fetched_at: _,
+            last_self_close_check: _,
+            last_heartbeat: _,
+            // Baseline reporting, read from `ui` outside the fold.
+            last_reported_baseline: _,
+            painted_baseline: _,
+            painted_selection: _,
+            focus_peers: _,
+            input_jump: _,
+        } = self;
+        let ViewContext {
+            overlay_baseline,
+            gate,
+            health,
+            tab_read_dwell_until,
+            pending_input_focus,
+            focus_marker: _,
+            current: _,
+            last_focus_observation: _,
+            last_pulled_rows: _,
+            observation: _,
+            fold_inputs: _,
+            observed_anchor: _,
+            last_folded_focus_intent: _,
+            live_focus_source: _,
+            focus_landing: _,
+            focus_rollback: _,
+            retired_anchor: _,
+            confirmed_focus_intent_ms: _,
+            filter_observed_at: _,
+            anim_start: _,
+        } = view;
+        !should_exit
+            && !rejected
+            && overlay_baseline.is_none()
+            && *gate == GateState::default()
+            && health.failure_streak == 0
+            && ui.freeze.is_none()
+            && tab_read_dwell_until.is_none()
+            && !self_close.confirming_empty()
+            && pending_focus_repair.is_none()
+            && pending_input_focus.is_none()
+    }
+
+    fn on_focus_failed(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        pane: PaneId,
+        error: String,
+    ) {
+        if v.context.pending_input_focus.as_ref() == Some(&pane) {
+            v.context.pending_input_focus = None;
+        }
+        let Some(label) = v.context.roll_back_focus(v.state, &pane, self.clock.now()) else {
+            return;
+        };
+        self.fold_fused_now(v, prepared);
+        v.context
+            .alert_focus_failure(&label, &error, self.clock.timestamp());
+        self.dirty = true;
+    }
+
+    fn reduce_snapshot(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        update: FetchUpdate,
+        seed: bool,
+    ) -> bool {
+        let (update, context) = update.into_parts();
+        v.context.fold_inputs = context.as_ref().map(|context| context.inputs.clone());
+        if let Some(observation) = context.and_then(|context| context.observation.clone()) {
+            v.context.observation = Some(observation);
+        }
+        if let FetchUpdate::Unchanged { clock, .. } = update {
+            clock.apply(&mut v.context.current);
+            v.context.last_focus_observation.panes_observed_at_ms =
+                v.context.current.panes_observed_at_ms;
+            self.fetched_at = self.clock.now();
+            self.last_self_close_check = self.clock.now();
+            self.dirty = true;
+            v.context.fold_inputs = None;
+            self.release_paint_hold_after_snapshot(v, false);
+            return false;
+        }
+        let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
+        let mut fused_event_sent_at_ms = None;
+        let update = match update {
+            FetchUpdate::Snapshot {
+                snapshot,
+                phase,
+                source,
+            } => {
+                #[cfg(test)]
+                {
+                    self.content_applications += 1;
+                }
+                let now_ms = self.clock.now_ms();
+                let pulled = *snapshot;
+                v.context.last_focus_observation = FocusObservation::from_snapshot(&pulled);
+                if v.context.observation.is_some() {
+                    v.context.last_pulled_rows = pulled.rows().count();
+                }
+                let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
+                let events = v.events.clone();
+                let (mut snapshot, focus_event_sent_at_ms) =
+                    v.context
+                        .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
+                if intent.is_none()
+                    && focus_event_sent_at_ms.is_none_or(|stamp| v.focus_event != Some(stamp))
+                    && let Some(focused) = &v.focused
+                {
+                    snapshot.focused_pane.clone_from(focused);
+                }
+                fused_event_sent_at_ms = focus_event_sent_at_ms;
+                FetchUpdate::Snapshot {
+                    snapshot: Box::new(snapshot),
+                    phase,
+                    source,
+                }
+            }
+            failed @ FetchUpdate::Failed { .. } => failed,
+            FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
+            FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
+            FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
+        };
+        self.fetched_at = self.clock.now();
+        let rejected = self.fold_outcome(v, prepared, update, true, seed, fused_event_sent_at_ms);
+        v.context.fold_inputs = None;
+        if snapshot_ok {
+            self.last_self_close_check = self.clock.now();
+            self.fold_effects.retry_focus_repair = true;
+        }
+        self.release_paint_hold_after_snapshot(v, rejected);
+        rejected
+    }
+
+    fn release_paint_hold_after_snapshot(&mut self, v: &mut ViewBorrow<'_>, rejected: bool) {
+        // Release by pane stamp alone. A `Fresh` frame is fresh against the
+        // request that fetched it, and a request sent before the grow can land
+        // after it with a pane list that still counts the closed sibling.
+        if !self.should_exit
+            && !rejected
+            && !self.self_close.confirming_empty()
+            && self
+                .paint_hold
+                .releases_on_stamp(v.context.current.panes_observed_at_ms)
+        {
+            // The snapshot folded a post-signal pane frame. Its own-view
+            // verdict has decided the resize-grow case: exit without
+            // painting when alone, or release the hold and paint at the new
+            // size when siblings remain.
+            self.paint_hold.release();
+        }
+    }
+
+    /// Fuse the last pulled snapshot with the overlay event store and any
+    /// pending focus intent as of `now_ms`.
+    fn fused_snapshot(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        now_ms: u64,
+    ) -> (SidebarSnapshot, Option<u64>) {
+        let pulled = v
+            .context
+            .overlay_baseline
+            .take()
+            .unwrap_or_else(|| v.context.current.clone());
+        let intent = self.pending_focus_intent(v, prepared, now_ms, self.clock.now());
+        let events = v.events.clone();
+        let (mut snapshot, stamp) = v
+            .context
+            .fuse_pulled(pulled, events, intent.as_ref(), now_ms);
+        if intent.is_none()
+            && stamp.is_none_or(|stamp| v.focus_event != Some(stamp))
+            && let Some(focused) = &v.focused
+        {
+            snapshot.focused_pane.clone_from(focused);
+        }
+        (snapshot, stamp)
+    }
+
+    /// Fold a synthetic fused frame and snap the frame deadline so this
+    /// turn's frame phase paints it now.
+    fn fold_fused_now(&mut self, v: &mut ViewBorrow<'_>, prepared: &FoldPreparation) {
+        self.fold_effects.invalidate = true;
+        let (fused, fused_event_sent_at_ms) = self.fused_snapshot(v, prepared, self.clock.now_ms());
+        self.fold_outcome(
+            v,
+            prepared,
+            FetchUpdate::Snapshot {
+                snapshot: Box::new(fused),
+                phase: FetchPhase::Interim,
+                source: SnapshotSource::Cached,
+            },
+            false,
+            false,
+            fused_event_sent_at_ms,
+        );
+        self.next_frame = self.clock.now();
+    }
+
+    fn fold_focus_intent(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        anchor: crate::mux::focus_anchor::FocusAnchor,
+    ) {
+        if anchor.session_name != self.config.session_name
+            || v.context.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
+        {
+            return;
+        }
+        // The pushed intent is newer than every cut folded before it, the catch-up fold included,
+        // even on a clock that has not moved since: that older read must not retire this anchor.
+        let sampled_at = self.clock.now();
+        v.context.observed_anchor = Some((sampled_at, Some(anchor.clone())));
+        let previous = v
+            .context
+            .fold_inputs
+            .replace(Arc::new(super::fetch::FoldInputs {
+                sampled_at,
+                anchor: Some(anchor),
+                filter: v.state.make_up_filter.clone(),
+            }));
+        self.fold_fused_now(v, prepared);
+        v.context.fold_inputs = previous;
+    }
+
+    fn reduce_input(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        wakeups: Vec<Wakeup>,
+        now: Instant,
+    ) -> InputOutcome {
+        let keys = &v.context.current.sidebar.keys;
+        if self.nav_keys.0 != *keys {
+            self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
+        }
+        let mut outcome = InputOutcome::default();
+        let mut user_input = false;
+        for wakeup in wakeups {
+            user_input |= !matches!(wakeup, Wakeup::Resize);
+            let wheel = matches!(wakeup, Wakeup::Scroll { .. });
+            let alert_active = alert_active(v.context);
+            let live_frame = self
+                .click_guard
+                .as_ref()
+                .filter(|guard| now < guard.until && matches!(wakeup, Wakeup::MouseClick { .. }))
+                .map(|guard| {
+                    (
+                        std::mem::replace(&mut self.ui.interactions, guard.interactions.clone()),
+                        std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
+                    )
+                });
+            let previous_selection = v.state.selected_pane.clone();
+            let previous_row = v
+                .state
+                .selected_index
+                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
+                .map(|row| row.id.clone());
+            let applied = handle_wakeup(
+                wakeup,
+                v.state,
+                &mut self.ui,
+                &v.context.current,
+                &self.nav_keys.1,
+                alert_active,
+            );
+            if let Some((interactions, roster)) = live_frame {
+                self.ui.interactions = interactions;
+                self.ui.painted_roster = roster;
+            }
+            self.clicked_row = None;
+            let selected_row = v
+                .state
+                .selected_index
+                .and_then(|index| v.state.visible_roster(&v.context.current).row(index))
+                .map(|row| row.id.clone());
+            if selected_row != previous_row {
+                v.context.pending_input_focus = None;
+                v.state.own_input_reveal = true;
+                v.context.focus_marker = None;
+                v.state.focus_marker_ready = false;
+            }
+            if v.state.selected_pane != previous_selection {
+                v.context.focus_rollback = None;
+            }
+            for effect in &applied.effects {
+                if let InputEffect::Focus(pane) = effect {
+                    v.context.pending_input_focus = Some(pane.clone());
+                    let owner = v
+                        .state
+                        .selected_pane
+                        .as_ref()
+                        .and_then(|selected| v.context.current.row_owning_pane(selected))
+                        .filter(|row| row.pane_ids().any(|id| id == pane))
+                        .or_else(|| v.context.current.row_owning_pane(pane));
+                    v.context.focus_rollback = owner.map(|row| FocusRollback {
+                        target: pane.clone(),
+                        baseline: v.state.baseline_pane.clone(),
+                        label: row.display_name().to_owned(),
+                    });
+                    self.arm_clicked_row(v, pane, now);
+                }
+            }
+            if applied.redraw && !wheel {
+                v.state.scroll_ease.cancel();
+            }
+            if applied.effects.contains(&InputEffect::DismissAlert) {
+                v.context.health.alert = None;
+            }
+            outcome.redraw |= applied.redraw;
+            outcome.effects.extend(applied.effects);
+        }
+        if user_input
+            && (outcome.redraw || !outcome.effects.is_empty())
+            && !outcome.effects.contains(&InputEffect::Reload)
+        {
+            layout_freeze::arm_freeze(v.state, self.clock.timestamp_at(now).as_millisecond());
+        }
+        outcome
+    }
+
+    fn compose_frame(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        terminal: &mut Terminal<PaneBackend>,
+        now: Instant,
+        user_input: bool,
+    ) -> (std::io::Result<()>, BufferedFrame) {
+        if v.target.shared_id().is_some() && v.state.baseline_pane.is_none() {
+            v.state.baseline_pane = self.baseline_seed.take();
+            reconcile_selection(v.state, &v.context.current, None);
+        }
+        v.state.focus_marker_ready = self.watched(v)
+            && match v.context.focus_marker {
+                Some(FocusMarker::Ready) => true,
+                Some(FocusMarker::Dwelling(until)) => now >= until,
+                None => false,
+            };
+        // The notice is pane chrome over the view's gate, which another pane may have moved.
+        self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
+        let user_input = user_input || v.state.scroll_ease.in_flight();
+        let interactions = std::mem::take(&mut self.ui.interactions);
+        let roster = std::mem::take(&mut self.ui.painted_roster);
+        let rows = std::mem::take(&mut self.ui.painted_rows);
+        let (result, frame) = self.paint.compose_frame(
+            terminal,
+            &v.context.current,
+            v.context.health.alert.as_ref(),
+            v.state,
+            &mut self.ui,
+        );
+        if result.is_err() {
+            return (result, frame);
+        }
+        self.painted_at = self.clock.now();
+        self.paints += 1;
+        self.painted_height = terminal.get_frame().area().height;
+        self.painted_baseline.clone_from(&v.state.baseline_pane);
+        self.baseline_seed = None;
+        self.painted_selection.clone_from(&v.state.drawn_selection);
+        let selected_visible = v
+            .state
+            .drawn_selection
+            .as_ref()
+            .is_some_and(|selected| self.ui.painted_rows.iter().any(|(id, _)| id == selected));
+        if selected_visible {
+            v.context.focus_marker = None;
+            v.state.focus_marker_ready = false;
+        } else if v.state.focus_marker_ready {
+            v.context.focus_marker = Some(FocusMarker::Ready);
+        }
+        v.state.last_order = layout_freeze::capture_order(&v.context.current, v.state);
+        v.state.arrival_pending = false;
+        if user_input || !self.watched(v) {
+            self.click_guard = None;
+        } else if self
+            .click_guard
+            .as_ref()
+            .is_none_or(|guard| now >= guard.until)
+            && rows.iter().any(|row| !self.ui.painted_rows.contains(row))
+        {
+            self.click_guard = Some(ClickGuard {
+                until: now + crate::sidebar::timing::CLICK_GUARD,
+                interactions,
+                roster,
+            });
+        }
+        self.observe_paint(v, now);
+        (Ok(()), frame)
+    }
+
+    /// Fold one fetch outcome into the render state: gate it against the
+    /// last-known-good frame, update health, snapshot, and selection, and
+    /// report whether the loop should exit.
+    fn apply_fetch_outcome(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        update: FetchUpdate,
+        allow_shared_filter_sync: bool,
+    ) -> ApplyOutcome {
+        let (update, _) = update.into_parts();
+        let snapshot_ok = matches!(&update, FetchUpdate::Snapshot { .. });
+        let now = self.clock.timestamp();
+        let searching = v.state.search_draft.is_some();
+        let (prev_good, rejected, diagnostics) = v.context.commit_fetch(update, v.state, now);
+        self.fold_effects.diagnostics.extend(diagnostics);
+        self.ui.gate_notice = v.context.gate.rule.map(|rule| render::GateNotice { rule });
+        if let Some(alert) = v
+            .context
+            .health
+            .alert
+            .as_ref()
+            .filter(|alert| alert.is_active())
+        {
+            self.fold_effects.degraded = Some(alert.reason.clone());
+        }
+        self.dirty |= searching && v.state.search_draft.is_none();
+        let authoritative_filter_fold = allow_shared_filter_sync
+            && snapshot_ok
+            && !rejected
+            && v.context.fold_inputs.as_ref().is_none_or(|inputs| {
+                v.context
+                    .filter_observed_at
+                    .is_none_or(|observed| inputs.sampled_at > observed)
+            });
+        let prev_selected = v.state.selected_pane.clone();
+        let (focused_pane, cleared) = self.sweep_read_receipts(v, prepared, now);
+        self.reconcile_selection_and_order(
+            v,
+            prepared,
+            &prev_good,
+            prev_selected,
+            focused_pane,
+            cleared,
+            authoritative_filter_fold,
+            self.clock.instant_at(now),
+        );
+        v.context.fold_spend_rolls(v.state, &self.clock);
+        self.exit_verdict(v, rejected)
+    }
+
+    fn exit_verdict(&mut self, v: &mut ViewBorrow<'_>, rejected: bool) -> ApplyOutcome {
+        // Own-view (sibling count) rides in on the snapshot — the producer computes
+        // it from the same pane list it already enumerated. Presence publication and
+        // the poll backstop feed this latch; resize only decides whether to hold a
+        // grown-width paint while the fresh fold is pending.
+        ApplyOutcome {
+            should_exit: self.self_close.should_close(
+                v.context
+                    .current
+                    .own_view
+                    .as_ref()
+                    .map(|view| view.sibling_count),
+                self.clock.now(),
+            ),
+            rejected,
+        }
+    }
+
+    fn sweep_read_receipts(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        now: Timestamp,
+    ) -> (Option<PaneId>, bool) {
+        if v.target.shared_id().is_none() {
+            return (None, false);
+        }
+        let marks = prepared.marks.clone();
+        self.prepare_tab_arrival(v);
+        let (focused, clear) = v.context.read_receipts(
+            v.state,
+            &ReadContext {
+                own_pane: self.config.own_pane.as_ref(),
+                marks: &marks,
+                now,
+                at: self.clock.now(),
+            },
+        );
+        let live: HashSet<String> = v.context.current.rows().map(|row| row.id.clone()).collect();
+        let cleared = !clear.ids.is_empty();
+        let mut clear = clear;
+        clear.ids.retain(|id| live.contains(id));
+        self.fold_effects.receipts.push((clear, now));
+        (focused, cleared)
+    }
+
+    fn prepare_tab_arrival(&mut self, v: &mut ViewBorrow<'_>) {
+        let arriving = v.state.viewing_own_tab == Some(false)
+            && v.context
+                .current
+                .own_view
+                .as_ref()
+                .zip(self.config.own_pane.as_ref())
+                .is_some_and(|(view, own)| {
+                    own_tab_viewed(&v.context.current.viewed_panes, view, own)
+                });
+        if arriving {
+            self.next_frame = self.clock.now();
+        }
+    }
+
+    #[cfg(test)]
+    fn sweep_tab_read_receipts(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        focused_row_id: Option<&str>,
+        marks: &ReadMarks,
+        now: Timestamp,
+        clear: &mut ReadClear,
+    ) {
+        self.prepare_tab_arrival(v);
+        v.context.sweep_tab_read_receipts(
+            v.state,
+            focused_row_id,
+            &ReadContext {
+                own_pane: self.config.own_pane.as_ref(),
+                marks,
+                now,
+                at: self.clock.now(),
+            },
+            clear,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_selection_and_order(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        prev_good: &SidebarSnapshot,
+        prev_selected: Option<PaneId>,
+        focused_pane: Option<PaneId>,
+        cleared: bool,
+        authoritative_filter_fold: bool,
+        now: Instant,
+    ) {
+        let filter = authoritative_filter_fold.then(|| {
+            if let Some(inputs) = &v.context.fold_inputs {
+                return inputs.filter.clone();
+            }
+            let filter = prepared.filter.clone();
+            v.context.filter_observed_at = Some(self.clock.now());
+            filter
         });
+        let parked = self.parked(v, self.clock.timestamp_at(now).as_millisecond() as u64);
+        let (persist_filter, expired) = v.context.reconcile_selection_and_order(
+            v.state,
+            SelectionFold {
+                previous: prev_good,
+                selected: prev_selected,
+                focused: focused_pane,
+                cleared,
+                filter,
+                mux: self.config.mux,
+                clock: &self.clock,
+                now,
+                parked,
+            },
+        );
+        self.hold_expired_since_paint |= expired;
+        if persist_filter {
+            self.fold_effects.filter = Some(v.state.make_up_filter.clone());
+        }
+    }
+
+    fn fold_outcome(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        update: FetchUpdate,
+        allow_shared_filter_sync: bool,
+        seed: bool,
+        fused_event_sent_at_ms: Option<u64>,
+    ) -> bool {
+        let trace = match &update {
+            FetchUpdate::Snapshot { source, phase, .. } => Some((*source, *phase)),
+            _ => None,
+        };
+        let selected_before = v.state.selected_pane.clone();
+        let applied = self.apply_fetch_outcome(v, prepared, update, allow_shared_filter_sync);
+        if let Some((source, phase)) = trace {
+            self.fold_effects.traces.push(FocusTraceEvent::FoldDecided {
+                source: match source {
+                    SnapshotSource::Produced => "produced",
+                    SnapshotSource::Cached => "published",
+                }
+                .to_owned(),
+                phase: match phase {
+                    FetchPhase::Interim => "interim",
+                    FetchPhase::Final => "final",
+                }
+                .to_owned(),
+                seed,
+                panes_produced_at_ms: v.context.current.panes_produced_at_ms,
+                panes_observed_at_ms: v.context.current.panes_observed_at_ms,
+                snapshot_focused_pane: v.context.current.focused_pane.clone(),
+                fused_event_sent_at_ms,
+                own_view: v.context.current.own_view.is_some(),
+                baseline: session_focus_baseline(&v.context.current, self.config.own_pane.as_ref()),
+                selected_before,
+                selected_after: v.state.selected_pane.clone(),
+            });
+        }
+        self.should_exit = applied.should_exit;
+        self.apply_focus_anchor(v, prepared);
+        self.observe_commit(v);
+        self.dirty = true;
+        applied.rejected
+    }
+
+    fn focus_anchor(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        observed: Instant,
+    ) -> Option<crate::mux::focus_anchor::FocusAnchor> {
+        let loaded = v
+            .context
+            .fold_inputs
+            .is_none()
+            .then(|| prepared.anchor.clone())
+            .flatten();
+        let own_pane = v.target.shared_id().and(self.config.own_pane.as_ref());
+        v.context
+            .observe_focus_anchor(&self.config.session_name, observed, loaded, own_pane)
+    }
+
+    fn focus_placement(
+        &self,
+        view: &ViewState,
+        context: &ViewContext,
+        pane: &PaneId,
+    ) -> Option<crate::mux::focus_anchor::FocusPlacement> {
+        let row = context.current.row_owning_pane(pane)?;
+        self.ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &row.id)
+            .map(|(id, y)| crate::mux::focus_anchor::FocusPlacement {
+                row_id: id.clone(),
+                viewport_row: y - self.ui.scroll_zone_top as isize,
+                held: view
+                    .held_expansions
+                    .iter()
+                    .chain(view.drawn_selection.iter())
+                    .cloned()
+                    .collect(),
+            })
+    }
+
+    fn owns_focus_target(&self, snapshot: &SidebarSnapshot, pane: &PaneId) -> bool {
+        snapshot.own_view.as_ref().is_some_and(|view| {
+            self.config
+                .own_pane
+                .as_ref()
+                .is_some_and(|own| own_tab_viewed(std::slice::from_ref(pane), view, own))
+        })
+    }
+
+    fn painted_focus_verdict(
+        &self,
+        ui: &ViewState,
+        snapshot: &SidebarSnapshot,
+        drawn_selection: &Option<String>,
+        anchor: &crate::mux::focus_anchor::FocusAnchor,
+        push: Option<&FocusPush>,
+    ) -> Option<PushVerdict> {
+        let portable_matches =
+            ui.last_focus_anchor_ms == anchor.issued_at_ms && ui.focus_placement.is_none();
         if self.painted_focus_anchor_ms != anchor.issued_at_ms
             || !portable_matches
             || push
@@ -2966,12 +3087,7 @@ impl LoopState {
         {
             return None;
         }
-        let row = self.view.current.row_owning_pane(&anchor.pane_id)?;
-        let drawn_selection = if self.view_scope.is_none() {
-            &self.painted_selection
-        } else {
-            &self.ui.drawn_selection
-        };
+        let row = snapshot.row_owning_pane(&anchor.pane_id)?;
         if drawn_selection.as_ref() != Some(&row.id) {
             return None;
         }
@@ -2989,33 +3105,30 @@ impl LoopState {
         )
     }
 
-    fn apply_focus_anchor(&mut self) {
-        if self.fold_preparation.is_none() {
-            self.fold_transition(Self::apply_focus_anchor);
-            return;
-        }
-        let Some(anchor) = self.focus_anchor(self.clock.now()) else {
+    fn apply_focus_anchor(&mut self, v: &mut ViewBorrow<'_>, prepared: &FoldPreparation) {
+        let Some(anchor) = self.focus_anchor(v, prepared, self.clock.now()) else {
             return;
         };
-        if self
-            .view
-            .apply_focus_anchor(&mut self.ui, &anchor, &self.clock)
-        {
-            self.fold_effects.retirements.push((anchor, None));
+        if v.context.apply_focus_anchor(v.state, &anchor, &self.clock) {
+            self.fold_effects.retirements.push((v.target, anchor, None));
         }
     }
 
-    fn pending_focus_intent(&mut self, now_ms: u64, now: Instant) -> Option<FocusPresentation> {
-        if self.fold_preparation.is_none() {
-            return self.fold_transition(|state| state.pending_focus_intent(now_ms, now));
-        }
-        let anchor = self.focus_anchor(now);
-        let events = self.event_snapshot();
+    fn pending_focus_intent(
+        &mut self,
+        v: &mut ViewBorrow<'_>,
+        prepared: &FoldPreparation,
+        now_ms: u64,
+        now: Instant,
+    ) -> Option<FocusPresentation> {
+        let anchor = self.focus_anchor(v, prepared, now);
         let (presentation, retirement) =
-            self.view
-                .pending_focus_intent(anchor.as_ref(), &events, now_ms);
+            v.context
+                .pending_focus_intent(anchor.as_ref(), &v.events, now_ms);
         if let (Some(anchor), Some(outcome)) = (anchor, retirement) {
-            self.fold_effects.retirements.push((anchor, Some(outcome)));
+            self.fold_effects
+                .retirements
+                .push((v.target, anchor, Some(outcome)));
         }
         presentation
     }
@@ -3053,36 +3166,32 @@ impl LoopState {
         );
     }
 
-    fn focus_marker_due(&self, now: Instant) -> bool {
-        self.watched()
-            && self.inspect_view(|_, view| matches!(view.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until))
+    fn focus_marker_due(&self, v: &ViewBorrow<'_>, now: Instant) -> bool {
+        self.watched(v)
+            && matches!(v.context.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until)
     }
 
-    fn events(&self) -> MutexGuard<'_, EventStore> {
-        self.events.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn observe_commit(&mut self) {
-        let Some(common) = &self.view.observation else {
+    fn observe_commit(&mut self, v: &mut ViewBorrow<'_>) {
+        let Some(common) = &v.context.observation else {
             return;
         };
         let now_ms = self.clock.now_ms();
         let sig = observe::OwnFrameSig::extract(
-            &self.view.current,
+            &v.context.current,
             (
-                self.view.last_pulled_rows,
+                v.context.last_pulled_rows,
                 common.pulled_panes_produced_at_ms,
             ),
-            &self.event_snapshot(),
-            self.view.gate.reject_streak,
-            self.view.health.failure_streak,
+            &v.events,
+            v.context.gate.reject_streak,
+            v.context.health.failure_streak,
             now_ms,
         );
         self.fold_effects.observations.push(sig);
     }
 
-    fn arm_clicked_row(&mut self, pane: &PaneId, now: Instant) {
-        self.clicked_row = self.view.current.row_owning_pane(pane).and_then(|row| {
+    fn arm_clicked_row(&mut self, v: &mut ViewBorrow<'_>, pane: &PaneId, now: Instant) {
+        self.clicked_row = v.context.current.row_owning_pane(pane).and_then(|row| {
             self.ui
                 .painted_rows
                 .iter()
@@ -3091,23 +3200,23 @@ impl LoopState {
                     row_id: id.clone(),
                     y: *y,
                     clicked_at: now,
-                    selection: self.ui.drawn_selection.clone(),
+                    selection: v.state.drawn_selection.clone(),
                     banner_shown: self.ui.banner_shown,
-                    gliding: self.ui.scroll_ease.in_flight(),
+                    gliding: v.state.scroll_ease.in_flight(),
                 })
         });
     }
 
-    fn observe_paint(&mut self, now: Instant, events: &EventStore) {
-        self.painted_focus_anchor_ms = self.ui.last_focus_anchor_ms;
-        let live_landing = self
-            .view
+    fn observe_paint(&mut self, v: &mut ViewBorrow<'_>, now: Instant) {
+        self.painted_focus_anchor_ms = v.state.last_focus_anchor_ms;
+        let live_landing = v
+            .context
             .focus_landing
             .as_ref()
-            .is_some_and(|(anchor, _)| self.view.live_focus_source == Some(anchor.nonce));
+            .is_some_and(|(anchor, _)| v.context.live_focus_source == Some(anchor.nonce));
         // This paint consumed the placement, so the landing is judged here or never.
-        let landing = self
-            .view
+        let landing = v
+            .context
             .focus_landing
             .take()
             .and_then(|(anchor, applied_at)| {
@@ -3115,11 +3224,17 @@ impl LoopState {
                     .pending_focus_push
                     .as_ref()
                     .filter(|push| push.anchor.nonce == anchor.nonce);
-                let verdict = self.painted_focus_verdict(&anchor, push)?;
+                let verdict = self.painted_focus_verdict(
+                    v.state,
+                    &v.context.current,
+                    &v.state.drawn_selection,
+                    &anchor,
+                    push,
+                )?;
                 Some((verdict, anchor.placement?, applied_at))
             });
         if landing.is_some() && !live_landing {
-            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
+            layout_freeze::arm_freeze(v.state, self.clock.timestamp_at(now).as_millisecond());
         }
         let mut seeded_landing = false;
         if let Some((PushVerdict::Displaced, placement, applied_at)) = landing
@@ -3132,17 +3247,25 @@ impl LoopState {
                 row_id: placement.row_id,
                 y: self.ui.scroll_zone_top as isize + placement.viewport_row,
                 clicked_at: applied_at,
-                selection: self.ui.drawn_selection.clone(),
+                selection: v.state.drawn_selection.clone(),
                 banner_shown: self.ui.banner_shown,
                 gliding: false,
             });
             seeded_landing = true;
         }
         let verdict = self.pending_focus_push.as_ref().and_then(|push| {
-            if now >= push.until || !self.owns_focus_target(&push.anchor.pane_id) {
+            if now >= push.until
+                || !self.owns_focus_target(&v.context.current, &push.anchor.pane_id)
+            {
                 return None;
             }
-            self.painted_focus_verdict(&push.anchor, Some(push))
+            self.painted_focus_verdict(
+                v.state,
+                &v.context.current,
+                &v.state.drawn_selection,
+                &push.anchor,
+                Some(push),
+            )
         });
         if let Some(verdict) = verdict
             && let Some(push) = self.pending_focus_push.take()
@@ -3151,11 +3274,10 @@ impl LoopState {
         }
         if let Some(push) = &mut self.pending_focus_push {
             push.peer.unmatched_paints = push.peer.unmatched_paints.saturating_add(1);
-            if self
-                .view
+            if v.context
                 .current
                 .row_owning_pane(&push.anchor.pane_id)
-                .is_some_and(|row| self.ui.drawn_selection.as_ref() == Some(&row.id))
+                .is_some_and(|row| v.state.drawn_selection.as_ref() == Some(&row.id))
             {
                 push.peer.misplaced_paints = push.peer.misplaced_paints.saturating_add(1);
             }
@@ -3180,14 +3302,14 @@ impl LoopState {
             ClickedRowDisplacementCause::HoldExpired
         } else if watch.banner_shown != self.ui.banner_shown {
             ClickedRowDisplacementCause::BannerToggled
-        } else if watch.selection != self.ui.drawn_selection {
+        } else if watch.selection != v.state.drawn_selection {
             ClickedRowDisplacementCause::SelectionChanged
         } else {
             ClickedRowDisplacementCause::HeightAboveChanged
         };
         watch.banner_shown = self.ui.banner_shown;
-        watch.selection = self.ui.drawn_selection.clone();
-        let glided = std::mem::replace(&mut watch.gliding, self.ui.scroll_ease.in_flight());
+        watch.selection = v.state.drawn_selection.clone();
+        let glided = std::mem::replace(&mut watch.gliding, v.state.scroll_ease.in_flight());
         let kind = (!glided && to_y != Some(watch.y)).then(|| AnomalyKind::ClickedRowDisplaced {
             row_id: watch.row_id.clone(),
             from_y: watch.y,
@@ -3203,17 +3325,17 @@ impl LoopState {
             return;
         };
         let sig = observe::OwnFrameSig::extract(
-            &self.view.current,
+            &v.context.current,
             (
-                self.view.last_pulled_rows,
-                self.view
+                v.context.last_pulled_rows,
+                v.context
                     .observation
                     .as_ref()
                     .and_then(|sig| sig.pulled_panes_produced_at_ms),
             ),
-            events,
-            self.view.gate.reject_streak,
-            self.view.health.failure_streak,
+            &v.events,
+            v.context.gate.reject_streak,
+            v.context.health.failure_streak,
             self.clock.timestamp_at(now).as_millisecond().max(0) as u64,
         );
         self.fold_effects
@@ -3224,11 +3346,57 @@ impl LoopState {
                 Some(duration_millis(LAYOUT_FREEZE)),
             ));
     }
+
+    fn watched(&self, v: &ViewBorrow<'_>) -> bool {
+        v.target.shared_id().is_some()
+            || self
+                .optimistic_watch_until
+                .is_some_and(|until| self.clock.now() < until)
+            || v.resolved
+            || v.observed
+                .unwrap_or_else(|| self.watches_snapshot(&v.context.current))
+    }
+
+    fn parked(&self, v: &ViewBorrow<'_>, now_ms: u64) -> bool {
+        self.config
+            .own_pane
+            .as_ref()
+            .is_some_and(|pane| parked(v.context, &v.events, pane, v.parked, v.focus_event, now_ms))
+    }
+}
+
+fn alert_active(view: &ViewContext) -> bool {
+    view.health
+        .alert
+        .as_ref()
+        .is_some_and(render::Alert::is_active)
+}
+
+fn parked(
+    view: &ViewContext,
+    events: &EventStore,
+    pane: &PaneId,
+    sampled: Option<bool>,
+    event: Option<u64>,
+    now_ms: u64,
+) -> bool {
+    let pulled = view.overlay_baseline.as_ref().unwrap_or(&view.current);
+    let baseline = pulled
+        .panes_observed_at_ms
+        .or(pulled.panes_produced_at_ms)
+        .unwrap_or(0);
+    if sampled.is_none()
+        || event.is_some_and(|stamp| stamp > baseline && events.has_focus_since(stamp, now_ms))
+    {
+        crate::sidebar::fuse::pane_is_focused(pulled, events, pane, now_ms)
+    } else {
+        sampled.unwrap_or(false)
+    }
 }
 
 fn focus_stranded_target(
     snapshot: &SidebarSnapshot,
-    ui: &UiState,
+    ui: &ViewState,
     stranded_pane_id: &PaneId,
     evidence: &[crate::pane::ClientPaneView],
     own_pane_id: Option<&PaneId>,

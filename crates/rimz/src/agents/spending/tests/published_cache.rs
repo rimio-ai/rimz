@@ -34,7 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 21);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 22);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
@@ -43,6 +43,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
         &path,
         &ProviderSpendingCache {
             refreshed_at_ms: 12_345,
+            timezone: "UTC".into(),
             spending: spending.clone(),
             ..Default::default()
         },
@@ -142,6 +143,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     let fresh = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms: 1_000,
+        timezone: "UTC".into(),
         ..ProviderSpendingCache::default()
     };
     assert!(fresh.is_fresh(1_000 + ttl_ms));

@@ -393,11 +393,7 @@ impl Transition<'_> {
         let outcome = ending.outcome;
         attempt.ending = Some(ending);
         let visits = &self.record.visits[&attempt.node];
-        let visit = visits
-            .keys
-            .iter()
-            .find(|v| v.key == self.record.key)
-            .map_or(0, |v| v.visits);
+        let visit = visits.for_key(self.record.key.as_ref());
         self.record.prev_attempt = Some(PreviousAttempt {
             step: attempt.node.clone(),
             outcome,

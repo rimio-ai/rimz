@@ -54,6 +54,7 @@ mod uninstall;
 mod update;
 mod usage;
 mod wait;
+mod wake_view;
 mod web;
 mod workflow;
 mod workspace;
@@ -1406,7 +1407,7 @@ pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result
     open_existing_store_at(paths)
 }
 
-fn open_existing_store_at(paths: StatePaths) -> Result<Option<Store>> {
+pub(crate) fn open_existing_store_at(paths: StatePaths) -> Result<Option<Store>> {
     if rimz::workspace::record::read(&paths.workspace_record).is_err() {
         return Ok(None);
     }

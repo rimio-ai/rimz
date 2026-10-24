@@ -53,6 +53,63 @@ fn wait_for_presence_stream_end(
 }
 
 #[test]
+fn presence_watch_filters_client_attaches_and_switches_by_session() {
+    use rimz::mux::tmux::{ControlLine, PresenceWatch};
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("watched");
+    server.tmux(&["new-session", "-d", "-s", "other", "sleep 120"]);
+    let watch = PresenceWatch::attach(&server.socket, "watched").unwrap();
+    let (rx, drain) = spawn_presence_drain(watch);
+    recv_presence_line_until(&rx, Duration::from_secs(5), "attach seed", |line| {
+        matches!(line, ControlLine::SeedPane { .. })
+    });
+    let _other = AttachedTmuxClient::attach(&server.socket, "other", 80, 25);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display("other", "#{session_attached}") != "1" {
+        assert!(Instant::now() < deadline, "other client did not attach");
+        thread::sleep(Duration::from_millis(10));
+    }
+    // A subscription update fences notifications from the preceding attach.
+    server.tmux(&["respawn-pane", "-k", "-t", "watched:0", "sleep 120"]);
+    recv_presence_line_until(&rx, Duration::from_secs(5), "other attach fence", |line| {
+        assert!(
+            !matches!(line, ControlLine::ClientSessionChanged { .. }),
+            "{line:?}"
+        );
+        matches!(line, ControlLine::Subscription { command: Some(command), .. } if command == "sleep")
+    });
+    let _watched = AttachedTmuxClient::attach(&server.socket, "watched", 80, 25);
+    recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "watched attach",
+        |line| matches!(line, ControlLine::ClientSessionChanged { session } if session == "watched"),
+    );
+    let other_client = server.stdout(&["list-clients", "-t", "other", "-F", "#{client_name}"]);
+    server.tmux(&["switch-client", "-c", &other_client, "-t", "watched"]);
+    recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "watched switch",
+        |line| matches!(line, ControlLine::ClientSessionChanged { session } if session == "watched"),
+    );
+    server.tmux(&["switch-client", "-c", &other_client, "-t", "other"]);
+    server.tmux(&["respawn-pane", "-k", "-t", "watched:0", "sh"]);
+    recv_presence_line_until(&rx, Duration::from_secs(5), "other switch fence", |line| {
+        assert!(
+            !matches!(line, ControlLine::ClientSessionChanged { .. }),
+            "{line:?}"
+        );
+        matches!(line, ControlLine::Subscription { command: Some(command), .. } if command == "sh")
+    });
+    server.tmux(&["kill-server"]);
+    wait_for_presence_stream_end(&rx);
+    drain.join().unwrap();
+}
+
+#[test]
 fn presence_watch_seeds_current_window_before_hidden_pane_activation() {
     use rimz::mux::tmux::{ControlLine, PresenceWatch};
 

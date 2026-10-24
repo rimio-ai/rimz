@@ -10,7 +10,7 @@ use crate::mux::{PaneRect, ViewGeometry};
 use super::TmuxBackend;
 use super::options::{
     RIMZ_TAB_BASE_OPTION, RIMZ_TAB_FOUNDERS_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
-    spawn_command_is_sidebar_serve,
+    spawn_command_is_sidebar_serve, window_option_argv,
 };
 use super::parse::parse_new_window_ids;
 
@@ -44,9 +44,33 @@ struct TmuxPaneCell {
 
 struct NativePaneRect {
     rect: PaneRect,
-    plain: bool,
+    stack: String,
+    zoomed: bool,
     floating: bool,
     chrome: bool,
+}
+
+fn companion_stack_target(panes: &[NativePaneRect]) -> Option<PaneId> {
+    let work = panes
+        .iter()
+        .filter(|pane| !pane.floating && !pane.chrome)
+        .collect::<Vec<_>>();
+    let first = work.first()?;
+    if panes.iter().any(|pane| !pane.floating && pane.zoomed)
+        || (work.len() > 1
+            && (first.stack.is_empty() || work.iter().any(|pane| pane.stack != first.stack)))
+    {
+        return None;
+    }
+    let top = work.iter().map(|pane| pane.rect.y).min()?;
+    let bottom = work.iter().map(|pane| pane.rect.y + pane.rect.rows).max()?;
+    let open_rows = (bottom - top).saturating_sub(2 * work.len() as u64 + 1);
+    if open_rows < crate::mux::COMPANION_STACK_MIN_CONTENT_ROWS {
+        return None;
+    }
+    work.into_iter()
+        .max_by_key(|pane| pane.rect.y)
+        .map(|pane| pane.rect.pane_id.clone())
 }
 
 pub(super) struct OpenedWindow {
@@ -189,34 +213,78 @@ impl TmuxBackend {
         )
     }
 
-    pub(super) fn fit_hidden_view(
+    pub(super) fn fit_hidden_views(
         &self,
+        views: &[crate::ids::ViewId],
+        target: crate::mux::ViewSize,
+        sidebar_cols: std::num::NonZeroU16,
+    ) -> Result<Vec<crate::mux::ViewFit>> {
+        let reads = views
+            .iter()
+            .map(|view| {
+                let window = view.as_str();
+                vec![
+                    ["show-options", "-wqv", "-t", window, "window-size"]
+                        .map(str::to_owned)
+                        .into(),
+                    [
+                        "list-panes",
+                        "-t",
+                        window,
+                        "-F",
+                        "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let before = self.run_script(&reads)?;
+        let fits = before
+            .lines
+            .iter()
+            .zip(views)
+            .map(|(line, view)| {
+                if !line.completed {
+                    return Vec::new();
+                }
+                match Self::fit_hidden_view(view, target, sidebar_cols, &line.stdout) {
+                    Ok(command) => vec![command],
+                    Err(err) => {
+                        tracing::debug!(%view, error = %err, "hidden-view fit read failed");
+                        Vec::new()
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let output = self.run_script(&fits)?;
+        Ok(output
+            .lines
+            .iter()
+            .map(|line| {
+                if !line.completed {
+                    return crate::mux::ViewFit::Failed;
+                }
+                match parse_fitted_panes(&line.stdout) {
+                    Ok(Some(panes)) => crate::mux::ViewFit::Fitted(panes),
+                    Ok(None) => crate::mux::ViewFit::Skipped,
+                    Err(_) => crate::mux::ViewFit::Failed,
+                }
+            })
+            .collect())
+    }
+
+    fn fit_hidden_view(
         view: &crate::ids::ViewId,
         target: crate::mux::ViewSize,
         sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
+        before: &str,
+    ) -> Result<Vec<String>> {
         let window = view.as_str();
         window
             .strip_prefix('@')
             .and_then(|id| id.parse::<u32>().ok())
             .ok_or_else(geometry_error)?;
-        let before = self
-            .batch_spec(&[
-                ["show-options", "-wqv", "-t", window, "window-size"]
-                    .map(str::to_owned)
-                    .into(),
-                [
-                    "list-panes",
-                    "-t",
-                    window,
-                    "-F",
-                    "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
-                ]
-                .map(str::to_owned)
-                .into(),
-            ])
-            .run()?;
-        let before = String::from_utf8_lossy(&before.stdout);
         let mut lines = before.lines().peekable();
         let local = match lines.peek().copied() {
             Some("latest" | "largest" | "smallest" | "manual") => lines.next().unwrap_or_default(),
@@ -254,29 +322,30 @@ impl TmuxBackend {
             }
             _ => return Err(geometry_error()),
         };
-        // Selection may change while a paced queue is pending. Recheck in
-        // tmux at the mutation, without another read subprocess per step.
+        // Selection, sizing clients, and geometry may change after the read.
+        // Recheck at the mutation; equal-size resizes would unzoom the window.
+        let differs = format!(
+            "#{{||:#{{!=:#{{window_width}},{}}},#{{!=:#{{window_height}},{}}}}}",
+            target.cols, target.rows
+        );
         let guard = format!(
-            "#{{&&:#{{&&:#{{==:#{{window_active}},0}},#{{!=:#{{window-size}},manual}}}},{SIZING_CLIENT}}}"
+            "#{{&&:#{{&&:#{{==:#{{window_active}},0}},#{{!=:#{{window-size}},manual}}}},#{{&&:{SIZING_CLIENT},{differs}}}}}"
         );
         let commands = format!(
             "resize-window -t {window} -x {} -y {} ; {sidebar_resize}{restore} ; list-panes -t {window} -F '#{{pane_id}} #{{pane_height}}'",
             target.cols, target.rows
         );
-        let output = self
-            .batch_spec(&[[
-                "if-shell",
-                "-F",
-                "-t",
-                window,
-                &guard,
-                &commands,
-                "display-message -p skipped",
-            ]
-            .map(str::to_owned)
-            .into()])
-            .run()?;
-        parse_fitted_panes(&String::from_utf8_lossy(&output.stdout))
+        Ok([
+            "if-shell",
+            "-F",
+            "-t",
+            window,
+            &guard,
+            &commands,
+            "display-message -p skipped",
+        ]
+        .map(str::to_owned)
+        .into())
     }
 
     fn pane_rectangles(
@@ -323,7 +392,8 @@ impl TmuxBackend {
             };
             panes.push(NativePaneRect {
                 rect: pane,
-                plain: *zoomed != "1" && stack.is_empty(),
+                stack: (*stack).to_owned(),
+                zoomed: *zoomed == "1",
                 floating: *floating == "1",
                 chrome: *sidebar == "1"
                     || crate::pane::command_is_sidebar_chrome(command)
@@ -343,7 +413,7 @@ impl TmuxBackend {
         };
         let mut panes = Vec::new();
         for pane in listed.into_iter().filter(|pane| !pane.floating) {
-            if !pane.plain {
+            if pane.zoomed || !pane.stack.is_empty() {
                 return Ok(None);
             }
             panes.push(pane.rect);
@@ -354,58 +424,11 @@ impl TmuxBackend {
         Ok(Some(ViewGeometry { panes, gap: 1 }))
     }
 
-    pub(super) fn companion_geometry(
-        &self,
-        anchor: &PaneId,
-    ) -> Result<Option<(Vec<PaneRect>, Vec<PaneRect>)>> {
+    pub(super) fn companion_append_target(&self, anchor: &PaneId) -> Result<Option<PaneId>> {
         let Some(listed) = self.pane_rectangles(anchor, std::time::Duration::from_secs(2))? else {
             return Ok(None);
         };
-        let mut work = Vec::new();
-        let mut chrome = Vec::new();
-        for pane in listed {
-            if !pane.plain || pane.floating {
-                return Ok(None);
-            }
-            if pane.chrome {
-                chrome.push(pane.rect);
-            } else {
-                work.push(pane.rect);
-            }
-        }
-        if !work.iter().any(|pane| pane.pane_id == *anchor) {
-            return Ok(None);
-        }
-        Ok(Some((work, chrome)))
-    }
-
-    pub(super) fn balance_companion_grid(
-        &self,
-        anchor: &PaneId,
-        before: &[PaneRect],
-        chrome_before: &[PaneRect],
-    ) -> Result<()> {
-        let Some((panes, chrome)) = self.companion_geometry(anchor)? else {
-            return Ok(());
-        };
-        if chrome != chrome_before
-            || panes.len() != before.len() + 1
-            || !before
-                .iter()
-                .all(|old| panes.iter().any(|pane| pane.pane_id == old.pane_id))
-        {
-            return Ok(());
-        }
-        let Some(targets) = crate::mux::companion_layout::balance(&panes, 1) else {
-            return Ok(());
-        };
-        let Some(layout) = companion_tmux_layout(&targets, &chrome) else {
-            return Ok(());
-        };
-        self.cmd()
-            .args(["select-layout", "-t", anchor.raw(), &layout])
-            .run_with_timeout(std::time::Duration::from_secs(2))?;
-        Ok(())
+        Ok(companion_stack_target(&listed))
     }
 
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
@@ -799,51 +822,82 @@ impl TmuxBackend {
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
     }
 
-    /// Align a detached session's geometry with the attaching terminal: set
-    /// the session default-size, resize every window to it, and unpin the
-    /// `window-size manual` that resize-window sets so windows resume tracking
-    /// clients on attach. Best-effort; reconcile's width convergence follows it.
+    /// Align only the detached session's default-size and non-manual current
+    /// window with the attaching terminal, minus its status rows. Write only
+    /// differences, preserve the local window-size, and leave hidden windows
+    /// to the sweep. Best-effort; reconcile's width convergence follows it.
     pub(super) fn normalize_detached_geometry(&self, session: &str, cols: u16, rows: u16) {
         let output = match self
-            .cmd()
-            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .batch_spec(&[
+                vec![
+                    "display-message".into(),
+                    "-p".into(),
+                    "-t".into(),
+                    session.into(),
+                    concat!(
+                        "#{default-size}|#{status}|#{window_id}|",
+                        "#{window_width}|#{window_height}|#{window-size}",
+                    )
+                    .into(),
+                ],
+                vec![
+                    "show-options".into(),
+                    "-wqv".into(),
+                    "-t".into(),
+                    session.into(),
+                    "window-size".into(),
+                ],
+            ])
             .run()
         {
             Ok(output) => output,
             Err(err) => {
                 tracing::warn!(
                     session,
-                    tags.operation = "tmux.reconcile.list_windows",
+                    tags.operation = "tmux.reconcile.read_geometry",
                     error = &err as &dyn std::error::Error,
-                    "sidebar reconcile: listing windows for detached geometry normalization failed",
+                    "sidebar reconcile: reading detached geometry for normalization failed",
                 );
                 return;
             }
         };
-        let mut commands = vec![vec![
-            "set-option".to_owned(),
-            "-t".to_owned(),
-            session.to_owned(),
-            "default-size".to_owned(),
-            format!("{cols}x{rows}"),
-        ]];
-        for window_id in String::from_utf8_lossy(&output.stdout).lines() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let Some(geometry) = parse_detached_geometry(&stdout) else {
+            tracing::warn!(
+                session,
+                tags.operation = "tmux.reconcile.read_geometry",
+                error = "invalid detached geometry",
+                "sidebar reconcile: reading detached geometry for normalization failed",
+            );
+            return;
+        };
+        let default_size = format!("{cols}x{rows}");
+        let mut commands = Vec::new();
+        if geometry.default_size != default_size {
             commands.push(vec![
-                "resize-window".to_owned(),
-                "-x".to_owned(),
+                "set-option".into(),
+                "-t".into(),
+                session.into(),
+                "default-size".into(),
+                default_size,
+            ]);
+        }
+        let window_rows = rows.saturating_sub(geometry.status_lines).max(1);
+        if geometry.policy != "manual" && geometry.size != (cols, window_rows) {
+            commands.push(vec![
+                "resize-window".into(),
+                "-t".into(),
+                geometry.window.into(),
+                "-x".into(),
                 cols.to_string(),
-                "-y".to_owned(),
-                rows.to_string(),
-                "-t".to_owned(),
-                window_id.to_owned(),
+                "-y".into(),
+                window_rows.to_string(),
             ]);
-            commands.push(vec![
-                "set-window-option".to_owned(),
-                "-u".to_owned(),
-                "-t".to_owned(),
-                window_id.to_owned(),
-                "window-size".to_owned(),
-            ]);
+            commands.push(window_option_argv(
+                "window-size",
+                geometry.local_policy,
+                Some(geometry.window),
+            ));
         }
         if let Err(err) = self.batch(&commands) {
             tracing::warn!(
@@ -1412,75 +1466,6 @@ impl TmuxBackend {
     }
 }
 
-/// Encode only the supported columns and optional full-height left sidebar.
-/// A single native layout replacement avoids ancestor-dependent resize effects.
-pub(super) fn companion_tmux_layout(panes: &[PaneRect], chrome: &[PaneRect]) -> Option<String> {
-    let first = panes.first()?;
-    let right = panes.iter().map(|pane| pane.x + pane.cols).max()?;
-    let bottom = panes.iter().map(|pane| pane.y + pane.rows).max()?;
-    let width = right - first.x;
-    let height = bottom - first.y;
-    let leaf = |pane: &PaneRect| {
-        Some(format!(
-            "{}x{},{},{},{}",
-            pane.cols,
-            pane.rows,
-            pane.x,
-            pane.y,
-            pane.pane_id.raw().strip_prefix('%')?.parse::<u64>().ok()?
-        ))
-    };
-    let mut bands = Vec::new();
-    let mut remaining = panes;
-    while let Some(first) = remaining.first() {
-        let count = remaining
-            .iter()
-            .take_while(|pane| pane.x == first.x)
-            .count();
-        let (band, rest) = remaining.split_at(count);
-        let leaves = band.iter().map(leaf).collect::<Option<Vec<_>>>()?;
-        bands.push(if leaves.len() == 1 {
-            leaves[0].clone()
-        } else {
-            format!(
-                "{}x{},{},{}[{}]",
-                first.cols,
-                height,
-                first.x,
-                first.y,
-                leaves.join(",")
-            )
-        });
-        remaining = rest;
-    }
-    let work = if bands.len() == 1 {
-        bands.pop()?
-    } else {
-        format!(
-            "{}x{},{},{}{{{}}}",
-            width,
-            height,
-            first.x,
-            first.y,
-            bands.join(",")
-        )
-    };
-    let body = match chrome {
-        [] if first.x == 0 && first.y == 0 => work,
-        [sidebar]
-            if sidebar.x == 0
-                && sidebar.y == 0
-                && first.y == 0
-                && sidebar.rows == height
-                && sidebar.cols + 1 == first.x =>
-        {
-            format!("{}x{},0,0{{{},{}}}", right, height, leaf(sidebar)?, work)
-        }
-        _ => return None,
-    };
-    Some(super::layout::with_checksum(&body))
-}
-
 pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {
     let mut fields = line.split_whitespace();
     let geometry = TmuxPaneGeometry {
@@ -1519,6 +1504,37 @@ fn geometry_error() -> MuxErr {
         program: "tmux".to_owned(),
         reason: "invalid hidden-window geometry".to_owned(),
     }
+}
+
+struct DetachedGeometry<'a> {
+    default_size: &'a str,
+    status_lines: u16,
+    window: &'a str,
+    size: (u16, u16),
+    policy: &'a str,
+    local_policy: Option<&'a str>,
+}
+
+fn parse_detached_geometry(output: &str) -> Option<DetachedGeometry<'_>> {
+    let mut lines = output.lines();
+    let fields: Vec<_> = lines.next()?.split('|').collect();
+    let [default_size, status, window, cols, rows, policy] = fields.as_slice() else {
+        return None;
+    };
+    let status_lines = match *status {
+        "off" => 0,
+        "on" => 1,
+        value => value.parse().ok().filter(|lines| (2..=5).contains(lines))?,
+    };
+    window.strip_prefix('@')?.parse::<u32>().ok()?;
+    Some(DetachedGeometry {
+        default_size,
+        status_lines,
+        window,
+        size: (cols.parse().ok()?, rows.parse().ok()?),
+        policy,
+        local_policy: lines.next().filter(|policy| !policy.is_empty()),
+    })
 }
 
 fn parse_window_geometry(line: &str) -> Option<WindowGeometry> {
@@ -1591,6 +1607,9 @@ fn parse_fitted_panes(
             },
         );
     }
+    if panes.is_empty() {
+        return Err(geometry_error());
+    }
     if let Some((pane, cols)) = sidebar {
         panes.get_mut(&pane).ok_or_else(geometry_error)?.cols = Some(cols);
     }
@@ -1632,6 +1651,95 @@ mod tests {
     use super::*;
     use crate::ids::ViewId;
     use crate::mux::{LaggingViews, ViewSize};
+
+    fn companion_member(id: &str, y: u64, rows: u64, stack: &str) -> NativePaneRect {
+        NativePaneRect {
+            rect: PaneRect {
+                pane_id: PaneId::from_parts(MuxName::Tmux, id),
+                x: 31,
+                y,
+                cols: 100,
+                rows,
+            },
+            stack: stack.to_owned(),
+            zoomed: false,
+            floating: false,
+            chrome: false,
+        }
+    }
+
+    #[test]
+    fn companion_stack_admits_lone_pane_and_targets_bottom_member() {
+        let lone = companion_member("%1", 0, 13, "");
+        assert_eq!(
+            companion_stack_target(&[lone]),
+            Some(PaneId::from_parts(MuxName::Tmux, "%1"))
+        );
+        let stack = [
+            companion_member("%3", 14, 1, "%1"),
+            companion_member("%1", 0, 13, "%1"),
+        ];
+        assert_eq!(
+            companion_stack_target(&stack),
+            Some(PaneId::from_parts(MuxName::Tmux, "%3"))
+        );
+    }
+
+    #[test]
+    fn companion_stack_room_admits_floor_but_not_one_row_less() {
+        for (span, admits) in [(15, true), (14, false)] {
+            let panes = [
+                companion_member("%1", 0, span - 2, "%1"),
+                companion_member("%2", span - 1, 1, "%1"),
+            ];
+            assert_eq!(
+                companion_stack_target(&panes).is_some(),
+                admits,
+                "span {span}"
+            );
+        }
+    }
+
+    #[test]
+    fn companion_stack_rejects_grids_mixed_marks_zoom_and_chrome_only() {
+        assert!(companion_stack_target(&[companion_member("%1", 0, 40, "")]).is_some());
+        let mut zoomed = companion_member("%1", 0, 40, "");
+        zoomed.zoomed = true;
+        let mut chrome = companion_member("%0", 0, 40, "");
+        chrome.chrome = true;
+        for panes in [
+            vec![],
+            vec![
+                companion_member("%1", 0, 19, ""),
+                companion_member("%2", 20, 20, ""),
+            ],
+            vec![
+                companion_member("%1", 0, 19, "%1"),
+                companion_member("%2", 20, 20, "%2"),
+            ],
+            vec![
+                companion_member("%1", 0, 19, "%1"),
+                companion_member("%2", 20, 20, ""),
+            ],
+            vec![zoomed],
+            vec![chrome],
+        ] {
+            assert!(companion_stack_target(&panes).is_none());
+        }
+    }
+
+    #[test]
+    fn companion_stack_ignores_floating_panes_and_sidebar_anchor() {
+        let mut chrome = companion_member("%0", 0, 40, "");
+        chrome.chrome = true;
+        let mut floating = companion_member("%9", 50, 20, "");
+        floating.floating = true;
+        let panes = [chrome, floating, companion_member("%1", 0, 40, "")];
+        assert_eq!(
+            companion_stack_target(&panes),
+            Some(PaneId::from_parts(MuxName::Tmux, "%1"))
+        );
+    }
 
     #[test]
     fn declined_fit_is_skipped_not_fitted_rows() {

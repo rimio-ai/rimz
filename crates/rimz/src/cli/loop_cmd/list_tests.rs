@@ -33,7 +33,7 @@ fn done_keeps_running_rows_above_the_finished_cut() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
     let rendered = String::from_utf8(out).unwrap();
     for i in 0..7 {
         assert!(rendered.contains(&format!("running-{i}")), "{rendered}");
@@ -43,54 +43,33 @@ fn done_keeps_running_rows_above_the_finished_cut() {
 }
 
 #[test]
-fn expanded_wake_ups_drop_the_unfold_hint_and_pluralize_worktrees() {
+fn expanded_wake_ups_drop_the_unfold_hint() {
     let now = Timestamp::from_second(1_000).unwrap();
-    let mut tasks = Vec::new();
-    for count in 1..=2 {
-        let mut row = TaskRow::rowless(format!("wake-{count}"), None, None);
-        row.kind = TaskKind::WakeUp;
-        row.section = Section::WakeUps;
-        row.dir = Some(format!("/repo/topic-{count}").into());
-        row.owner = Some(Owner {
-            kind: OwnerKind::Team,
-            name: "recon".into(),
-        });
-        row.action = Some(Action {
-            kind: ActionKind::Wake,
-            subject: "@coder".into(),
-        });
-        tasks.push(row);
-        let model = ListModel {
-            rooms: vec![Room {
-                root: "/repo".into(),
-                open: true,
-                here: true,
-                spend_today_usd: 0.0,
-                tasks: std::mem::take(&mut tasks),
-                retired: Vec::new(),
-            }],
-            caller_root: Some("/repo".into()),
-            now,
-            warnings: Vec::new(),
-        };
-        for all in [false, true] {
-            let mut out = Vec::new();
-            text::write(&mut out, &model, &[&model.rooms[0]], all, None).unwrap();
-            let rendered = String::from_utf8(out).unwrap();
-            assert_eq!(
-                rendered.contains("rimz loop list --all"),
-                !all,
-                "{rendered}"
-            );
-            if all {
-                let suffix = if count == 1 { "worktree" } else { "worktrees" };
-                assert!(
-                    rendered.contains(&format!("in {count} {suffix}\n")),
-                    "{rendered}"
-                );
-            }
-        }
-        tasks = model.rooms.into_iter().next().unwrap().tasks;
+    let mut row = TaskRow::rowless("wake".into(), None, None);
+    row.kind = TaskKind::WakeUp;
+    row.section = Section::WakeUps;
+    let model = ListModel {
+        rooms: vec![Room {
+            root: "/repo".into(),
+            open: true,
+            here: true,
+            spend_today_usd: 0.0,
+            tasks: vec![row],
+            retired: Vec::new(),
+        }],
+        caller_root: Some("/repo".into()),
+        now,
+        warnings: Vec::new(),
+    };
+    for all in [false, true] {
+        let mut out = Vec::new();
+        text::write(&mut out, &model, &[&model.rooms[0]], all, None, None).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert_eq!(
+            rendered.contains("rimz loop list --all"),
+            !all,
+            "{rendered}"
+        );
     }
 }
 
@@ -119,7 +98,7 @@ fn here_marks_only_rows_that_name_a_worktree() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
     let rendered = String::from_utf8(out).unwrap();
     assert!(rendered.contains("card-ux"), "{rendered}");
     assert!(!rendered.contains("(here)"), "{rendered}");
@@ -185,7 +164,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
     let rendered = String::from_utf8(out).unwrap();
     assert!(
         rendered.contains("  live gate user: review the probe"),
@@ -231,7 +210,7 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], true, None).unwrap();
+    text::write(&mut out, &model, &[&model.rooms[0]], true, None, None).unwrap();
     let rendered = String::from_utf8(out).unwrap();
     for name in ["office-sync", "✓sync", "off branch=main"] {
         assert!(

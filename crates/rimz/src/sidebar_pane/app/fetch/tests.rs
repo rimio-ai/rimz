@@ -189,7 +189,15 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
         .renderers
         .iter()
         .position(|(renderer, _)| {
-            renderer.current.own_view.as_ref().unwrap().working_pane_ids[0].raw() == "terminal_0"
+            renderer
+                .views
+                .mirror()
+                .own_view
+                .as_ref()
+                .unwrap()
+                .working_pane_ids[0]
+                .raw()
+                == "terminal_0"
         })
         .unwrap();
     let destination = 1 - source;
@@ -203,11 +211,14 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
             dispatcher,
         )
         .unwrap();
-    let before = cycles.renderers[destination].0.content_applications;
+    let before = cycles.renderers[destination].0.pane.content_applications;
     for _ in 0..3 {
         cycles.run_cycle();
     }
-    assert_eq!(cycles.renderers[destination].0.content_applications, before);
+    assert_eq!(
+        cycles.renderers[destination].0.pane.content_applications,
+        before
+    );
     {
         let mut data = cycles.sink.host_data.lock().unwrap();
         let frame = Arc::make_mut(&mut data.inputs.as_mut().unwrap().frame);
@@ -271,7 +282,7 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
     let before = cycles
         .renderers
         .iter()
-        .map(|(renderer, _)| renderer.content_applications)
+        .map(|(renderer, _)| renderer.pane.content_applications)
         .collect::<Vec<_>>();
     assert!(
         before.iter().all(|count| *count > 0),
@@ -294,7 +305,7 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
             cycles
                 .renderers
                 .iter()
-                .map(|(renderer, _)| renderer.content_applications)
+                .map(|(renderer, _)| renderer.pane.content_applications)
                 .collect::<Vec<_>>(),
             before,
             "{event:?}: identity-free nudges must not force content onto idle consumers"
@@ -440,18 +451,18 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
         }
         previous = Some(fold);
         for (renderer, dispatcher) in &mut renderers {
-            let before = renderer.current.now;
+            let before = renderer.views.mirror().now;
             renderer.on_snapshot(dispatcher);
             assert!(
-                renderer.current.now > before,
+                renderer.views.mirror().now > before,
                 "clock advances on cycle {cycle}"
             );
             assert!(matches!(
-                renderer.current.presence,
+                renderer.views.mirror().presence,
                 Some(crate::store::snapshot::SidebarPresence::Idle { .. })
             ));
             assert_eq!(
-                renderer.content_applications, 1,
+                renderer.pane.content_applications, 1,
                 "only the first idle delivery applies content (cycle {cycle})"
             );
         }
@@ -538,7 +549,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
         cycles.run_cycle();
         for (renderer, dispatcher) in &mut renderers {
             renderer.on_snapshot(dispatcher);
-            assert_eq!(renderer.content_applications, 1);
+            assert_eq!(renderer.pane.content_applications, 1);
         }
     }
 
@@ -553,7 +564,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
     for (renderer, dispatcher) in &mut renderers {
         renderer.on_snapshot(dispatcher);
         assert_eq!(
-            renderer.content_applications, 1,
+            renderer.pane.content_applications, 1,
             "new subscriber gets content while established consumers stay idle"
         );
     }
@@ -586,7 +597,8 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
             renderer.on_snapshot(dispatcher);
             if change == "context" {
                 let agent = renderer
-                    .current
+                    .views
+                    .mirror()
                     .agents
                     .iter()
                     .find(|agent| agent.agent_id.as_str() == "agent-0")
@@ -600,7 +612,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
                 );
             }
             assert_eq!(
-                renderer.content_applications,
+                renderer.pane.content_applications,
                 index as u64 + 2,
                 "{change} reaches each consumer on the next cycle"
             );
@@ -670,18 +682,18 @@ fn clock_thresholds_reach_every_consumer_as_content() {
             });
             for (renderer, dispatcher) in &mut renderers {
                 renderer.on_snapshot(dispatcher);
-                assert_eq!(renderer.content_applications, step as u64 + 1);
+                assert_eq!(renderer.pane.content_applications, step as u64 + 1);
                 if presence {
                     assert_eq!(
                         matches!(
-                            renderer.current.presence,
+                            renderer.views.mirror().presence,
                             Some(crate::store::snapshot::SidebarPresence::Idle { .. })
                         ),
                         step == 1
                     );
                 } else {
                     assert_eq!(
-                        renderer.current.rows().next().unwrap().status(),
+                        renderer.views.mirror().rows().next().unwrap().status(),
                         Some(if step == 0 {
                             crate::agents::AgentStatus::Running
                         } else {
@@ -1091,8 +1103,11 @@ fn refresh_override_stamps_folded_snapshot() {
         config.refresh_ms_override = Some(50);
         let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), reader);
         renderer.on_snapshot(&mut dispatcher);
-        assert_eq!(renderer.current.theme.display.refresh_ms, 50);
-        assert_eq!(renderer.current.theme.display.resolved_refresh_ms(), 50);
+        assert_eq!(renderer.views.mirror().theme.display.refresh_ms, 50);
+        assert_eq!(
+            renderer.views.mirror().theme.display.resolved_refresh_ms(),
+            50
+        );
     }
     assert_eq!(
         fixture
@@ -1352,6 +1367,11 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
             refreshed_at_ms: now_ms,
             day_cutoff_secs: crate::agents::spending::local_day_start_secs(now_ms / 1000, None)
                 .unwrap(),
+            timezone: "UTC".into(),
+            chart: crate::agents::spending::ChartSpend {
+                today: (now_ms / 86_400_000) as i64,
+                ..Default::default()
+            },
             spending: crate::agents::spending::Spending::default(),
             ..Default::default()
         },
@@ -2232,9 +2252,19 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
         config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
         let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
         renderer.on_snapshot(&mut dispatcher);
-        assert_eq!(renderer.current.own_view.as_ref().unwrap().sibling_count, 2);
+        assert_eq!(
+            renderer
+                .views
+                .mirror()
+                .own_view
+                .as_ref()
+                .unwrap()
+                .sibling_count,
+            2
+        );
         let shown: Vec<String> = renderer
-            .current
+            .views
+            .mirror()
             .rows()
             .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.raw().to_owned()))
             .collect();
@@ -2315,21 +2345,22 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         .iter()
         .enumerate()
         .find_map(|(index, (r, _))| {
-            r.current
+            r.views
+                .mirror()
                 .own_view
                 .as_ref()
                 .is_some_and(|view| {
                     !view
                         .working_pane_ids
                         .iter()
-                        .any(|pane| r.current.viewed_panes.contains(pane))
+                        .any(|pane| r.views.mirror().viewed_panes.contains(pane))
                 })
                 .then_some(index)
         })
         .expect("a hidden pane");
     assert_eq!(hidden, 0, "the eldest pane is hidden too");
     assert_eq!(
-        cycles.renderers[hidden].0.projections, 1,
+        cycles.renderers[hidden].0.pane.projections, 1,
         "a hidden pane projects on its first reduction"
     );
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
@@ -2342,7 +2373,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         cycles.run_cycle();
     }
     assert_eq!(
-        cycles.renderers[hidden].0.projections, 1,
+        cycles.renderers[hidden].0.pane.projections, 1,
         "hidden equal folds never project"
     );
     let guard = views.lock().unwrap();
@@ -2355,7 +2386,8 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     drop(guard);
     let own = cycles.renderers[hidden]
         .0
-        .current
+        .views
+        .mirror()
         .own_view
         .as_ref()
         .unwrap()
@@ -2367,13 +2399,14 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     }
     cycles.run_cycle();
     assert_eq!(
-        cycles.renderers[hidden].0.projections, 2,
+        cycles.renderers[hidden].0.pane.projections, 2,
         "reveal projects the unread fold once"
     );
     assert!(
         cycles.renderers[hidden]
             .0
-            .current
+            .views
+            .mirror()
             .viewed_panes
             .contains(&own)
     );
@@ -2563,12 +2596,19 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         state.apply_latest_snapshot(update);
         assert!(
             !state
-                .current
+                .views
+                .mirror()
                 .rows()
                 .any(|row| row.pane.as_ref().is_some_and(|pane| pane.pane_id == own))
         );
         assert_eq!(
-            state.current.own_view.as_ref().unwrap().working_pane_ids,
+            state
+                .views
+                .mirror()
+                .own_view
+                .as_ref()
+                .unwrap()
+                .working_pane_ids,
             vec![PaneId::from_parts(
                 MuxName::Zellij,
                 format!("terminal_{}", n + 100)

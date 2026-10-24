@@ -7,6 +7,7 @@ use rimz::harness::auto_redeem::RedeemReason;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::SessionDeathCause;
 use rimz::store::message::AutoCompact;
+use rimz::theme::fmt::group_thousands;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct AssistStats {
@@ -1042,15 +1043,17 @@ impl Window {
     }
 }
 
-pub(super) fn panel_lines(lines: &mut Vec<String>, stats: &AssistStats, panel_width: usize) {
-    let rows = category_rows(&stats.rollup);
+pub(super) fn panel_lines(
+    lines: &mut Vec<String>,
+    stats: &AssistStats,
+    panel_width: usize,
+    title: &str,
+) {
+    let rows = category_rows(&stats.rollup, CategoryMode::Dashboard);
     if rows.is_empty() {
         return;
     }
-    lines.push(format!(
-        "  {}",
-        render::paint(render::palette::header(), "Assists")
-    ));
+    lines.push(render::paint(render::palette::header(), title));
     let split = rows.len().div_ceil(2);
     two_column(lines, &rows[..split], &rows[split..], panel_width);
 }
@@ -1066,7 +1069,7 @@ pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bo
         writeln!(out, "no assists recorded")?;
         return Ok(());
     }
-    let categories = category_entries(&stats.rollup)
+    let categories = category_entries(&stats.rollup, CategoryMode::Timeline)
         .into_iter()
         .map(|(label, value)| format!("{label} {value}"))
         .collect::<Vec<_>>()
@@ -1086,26 +1089,40 @@ pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bo
     Ok(())
 }
 
-pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
-    category_entries(rollup)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CategoryMode {
+    Dashboard,
+    Timeline,
+}
+
+pub(super) fn category_rows(rollup: &AssistRollup, mode: CategoryMode) -> Vec<String> {
+    category_entries(rollup, mode)
         .into_iter()
         .map(|(label, value)| kv(label, &value))
         .collect()
 }
 
-fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
+pub(super) fn category_entries(
+    rollup: &AssistRollup,
+    mode: CategoryMode,
+) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
     let mut row = |label: &'static str, key: &str, count: usize, detail: Option<String>| {
-        let held = rollup.held.get(key).copied().unwrap_or(0);
+        let held = if mode == CategoryMode::Timeline {
+            rollup.held.get(key).copied().unwrap_or(0)
+        } else {
+            0
+        };
         if count == 0 && held == 0 {
             return;
         }
         let notes = detail
             .into_iter()
-            .chain((held > 0).then(|| format!("{held} held")))
+            .chain((held > 0).then(|| format!("{} held", group_thousands(held as u64))))
             .collect::<Vec<_>>();
+        let count = group_thousands(count as u64);
         let value = if notes.is_empty() {
-            count.to_string()
+            count
         } else {
             format!("{count} ({})", notes.join(", "))
         };
@@ -1138,10 +1155,16 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
         rollup.tier_fallbacks,
         None,
     );
-    let recovered =
-        (rollup.recovered_secs > 0).then(|| format!("+{}", format_hours(rollup.recovered_secs)));
+    let recovered = (rollup.recovered_secs > 0)
+        .then(|| format!("after {} parked", format_hours(rollup.recovered_secs)));
     row("Auto-continue:", "resumes", rollup.resumes, recovered);
-    row("Auto-compact:", "compacts", rollup.compacts, None);
+    let compacts = rollup.compacts
+        + if mode == CategoryMode::Dashboard {
+            rollup.held.get("compacts").copied().unwrap_or(0)
+        } else {
+            0
+        };
+    row("Auto-compact:", "compacts", compacts, None);
     row("Keepalive:", "keepalives", rollup.keepalives, None);
     row("Idle stop:", "idle_stops", rollup.idle_stops, None);
     row(
@@ -1164,11 +1187,21 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     );
     let auto_redeems = rollup.redeems - rollup.manual_redeems;
     let auto_resets = rollup.resets - rollup.manual_resets;
-    let resets = (auto_resets > 0).then(|| format!("{auto_resets} reset{}", plural(auto_resets)));
+    let resets = (auto_resets > 0).then(|| {
+        format!(
+            "{} reset{}",
+            group_thousands(auto_resets as u64),
+            plural(auto_resets)
+        )
+    });
     row("Auto-redeem:", "redeems", auto_redeems, resets);
     let agents = (rollup.restores > 0).then(|| {
         let restored = rollup.restored_sessions;
-        format!("{restored} agent{}", plural(restored))
+        format!(
+            "{} agent{}",
+            group_thousands(restored as u64),
+            plural(restored)
+        )
     });
     row("Auto-resume:", "restores", rollup.restores, agents);
     let freed = (rollup.reclaimed_bytes > 0).then(|| render::fmt_bytes(rollup.reclaimed_bytes));

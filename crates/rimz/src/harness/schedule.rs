@@ -49,6 +49,48 @@ pub use fire::last_stamps;
 
 pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 
+/// The recorded provenance of a session delivery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryOwner<'a> {
+    SelfWait,
+    Loop(&'a str),
+    Resident(&'a str),
+    Team(&'a crate::ids::TeamInstanceId),
+}
+
+impl std::fmt::Display for DeliveryOwner<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SelfWait => f.write_str("self"),
+            Self::Loop(name) | Self::Resident(name) => write!(f, "loop:{name}"),
+            Self::Team(team) => write!(f, "team:{team}"),
+        }
+    }
+}
+
+/// Classify a catalog delivery, including a plain loop's own name.
+pub fn delivery_owner<'a>(name: &'a str, entry: &'a TaskEntry) -> DeliveryOwner<'a> {
+    if let Some(team) = &entry.team {
+        return DeliveryOwner::Team(team);
+    }
+    if let Some(task) = entry.loop_task.as_deref() {
+        return DeliveryOwner::Resident(task);
+    }
+    if entry.wait_meta.is_some() {
+        return DeliveryOwner::SelfWait;
+    }
+    DeliveryOwner::Loop(name)
+}
+
+/// Whether a missing watch has passed the host's startup grace.
+pub fn watch_lost(entry: &TaskEntry, watcher_live: bool, now: Timestamp) -> bool {
+    entry.watch.is_some()
+        && !watcher_live
+        && entry.wait_meta.as_ref().is_none_or(|meta| {
+            now.duration_since(meta.armed_at).as_secs() > fire::WATCH_LOST_GRACE_SECS
+        })
+}
+
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskAction {

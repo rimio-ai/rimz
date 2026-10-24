@@ -499,7 +499,8 @@ path = "crates/rimz/src/agents/spending"
 # The session-effort module, record, event, append and decoder cross the hook/ledger boundary (+5).
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
 # EffortWindow::merge sums effort for the stats rows that fold several roles (+1).
-surface-budget = 106
+# ChartSpend carries bounded model dollars across the publication/stats seam (+1).
+surface-budget = 107
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -538,7 +539,8 @@ path = "crates/rimz/src/cli"
 # Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
 # Explicit child statuses reach main through the shared exit-code error.
 # anchor_caller_workspace shares agent-started placement across launch paths (+1).
-surface-budget = 34
+# open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -849,6 +851,11 @@ reason = "Published model spend carries the producing agent kind for stats ident
 
 [[verdict]]
 kind = "item"
+key = "agents::spending::ChartSpend"
+reason = "Published 30-day and 52-block model dollars let stats draw charts without walking transcripts."
+
+[[verdict]]
+kind = "item"
 key = "agents::spending::session_roles::SessionRole"
 reason = "Typed durable role enforces a required subagent profile at the hook-to-ledger boundary."
 
@@ -1106,7 +1113,8 @@ path = "crates/rimz/src/harness"
 # RESERVED_OUTCOMES shares the reserved workflow vocabulary across validation and settlement (+1).
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
-surface-budget = 976
+# DeliveryOwner, delivery_owner and watch_lost share record provenance and watcher grace (+3).
+surface-budget = 979
 
 [[verdict]]
 kind = "item"
@@ -1244,8 +1252,7 @@ reason = "Lifecycle checkpoints and resumed wrappers trigger the same card's FIF
 
 [[module]]
 path = "crates/rimz/src/mux"
-# Companion append adds one deep operation, its outcome, and the shared tab cap.
-# Geometry planning and native balancing remain private to mux.
+# Companion append adds one deep operation and its outcome; native stack checks stay private.
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Tab naming shares pane-label policy and one intent-driven operation across launch and projection.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
@@ -1269,7 +1276,8 @@ path = "crates/rimz/src/mux"
 # MuxBackend::close_pane_on_exit lets the sidebar pin only its own pane's lifetime (+1).
 # PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
 # MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
-surface-budget = 296
+# ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
+surface-budget = 297
 
 [[verdict]]
 kind = "item"
@@ -1279,7 +1287,7 @@ reason = "The CLI retries early client loss only when the backend reports an aff
 [[verdict]]
 kind = "item"
 key = "mux::PaneRect"
-reason = "One outer rectangle vocabulary serves companion tiling and the backend-neutral daemon shape judge."
+reason = "One outer rectangle vocabulary serves companion stack admission and the backend-neutral daemon shape judge."
 
 [[verdict]]
 kind = "item"
@@ -1308,6 +1316,11 @@ reason = "Only a fit that reasserted legit sidebar columns can bypass the destin
 
 [[verdict]]
 kind = "item"
+key = "mux::ViewFit"
+reason = "Sweep and jump consume ordered per-view outcomes while transport failures remain whole-call errors."
+
+[[verdict]]
+kind = "item"
 key = "mux::LaggingViews"
 reason = "The host consumes one backend-owned MRU snapshot per settled sweep."
 
@@ -1328,8 +1341,8 @@ reason = "The focus decision needs fresh target geometry rather than a watch hin
 
 [[verdict]]
 kind = "item"
-key = "mux::MuxBackend::fit_view"
-reason = "Both paced sweep and immediate jump fitting preserve backend-local sizing policy."
+key = "mux::MuxBackend::fit_views"
+reason = "Both settled sweep and immediate jump fitting preserve backend-local sizing policy in one ordered call."
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -1376,7 +1389,13 @@ upward-dependencies = [
 # `memory::Pressure` and `memory::pressure` give the lsp kill and eviction records the memory stall averages (+2).
 # TreeMemory adds swap to the existing status walk (+1).
 # process_group_has_env proves a reaped workflow leader's surviving group ownership (+1).
-surface-budget = 141
+# sole_agent_child and its proc re-export share candidate descent across both walks (+2).
+surface-budget = 143
+
+[[verdict]]
+kind = "item"
+key = "proc::command::sole_agent_child"
+reason = "Resume identity and hibernation share the unambiguous child step past RimZ helpers."
 
 [[verdict]]
 kind = "item"
@@ -1918,7 +1937,8 @@ upward-dependencies = ["agents"]
 # `fmt::dollars_left` gives provider credit rows one floored money vocabulary (+1).
 # fmt::dollars_estimate gives selected cache lines a two-significant-figure money vocabulary (+1).
 # fmt::active_duration shares agent-time formatting between attribution and stats (+1).
-surface-budget = 36
+# BrandColor::shade shares provider-relative model tones with renderers (+1).
+surface-budget = 37
 
 [[verdict]]
 kind = "item"
@@ -3368,11 +3388,6 @@ key = "mux::zellij::backend::close_pane"
 reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
 
 [[verdict]]
-kind = "shape"
-key = "SplitPlacement::Directional+companion_geometry+plan_append+split_pane"
-reason = "Pass 10: companion_layout already shares the policy; backend-native remainders differ in gap width, the 0.45 no-focus gate, target kind and native convergence (one origin bce9d5d75)."
-
-[[verdict]]
 kind = "item"
 key = "config::harness::DayCap"
 reason = "Pass 12: DayCap requires /day while TurnCap forbids it, with distinct errors (9aa7a3192, d8e3abc9a); one wrapper parameterizes policy without shrinking a caller."
@@ -4461,6 +4476,11 @@ reason = "Shares scene discovery and presentation without duplicating resolver f
 kind = "item"
 key = "cli::profile_report::profile_summary"
 reason = "Shares scene discovery and presentation without duplicating resolver facts or profile-card summaries."
+
+[[verdict]]
+kind = "item"
+key = "cli::open_existing_store_at"
+reason = "Expanded wake-up cards enrich room handles from existing stores without creating state."
 
 [[verdict]]
 kind = "item"
@@ -7109,11 +7129,6 @@ reason = "cli/doctor/runtime.rs:252-264 reads the scanned server binaries in the
 
 [[verdict]]
 kind = "item"
-key = "mux::companion_layout::GridSplit"
-reason = "Signature floor on the mux-internal plan_append (companion_layout.rs:68); pub(super) is already its narrowest (pass 24c)."
-
-[[verdict]]
-kind = "item"
 key = "mux::domain::ProcessDomain"
 reason = "tests/integration/proc.rs drives the process-domain predicates from the separate crate, which sees only pub (pass 24c)."
 
@@ -8751,6 +8766,21 @@ reason = "GcPolicy shares the machine's typed forever-or-duration history and te
 kind = "item"
 key = "harness::schedule::TaskKind"
 reason = "The harness classifies compiled tasks once for lifecycle presentation and durable history."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::DeliveryOwner"
+reason = "Wait and loop views share the recorded delivery provenance vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::delivery_owner"
+reason = "Lists and cancellation classify delivery provenance once from the row's name and entry."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::watch_lost"
+reason = "Both listings share the host's lost-watcher grace without changing its firing decision."
 
 [[verdict]]
 kind = "item"

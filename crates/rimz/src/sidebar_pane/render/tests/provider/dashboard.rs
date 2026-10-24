@@ -8,8 +8,15 @@ fn skipped_settings_notice_is_above_the_footer_and_absent_at_zero() {
     for count in [2, 0] {
         snapshot.skipped_settings = count;
         let roster = VisibleRoster::new(&snapshot, &BodyLens::default(), &Default::default(), None);
-        let block =
-            compose::build_bottom_chrome(&snapshot, None, &theme, 90, &UiState::default(), &roster);
+        let block = compose::build_bottom_chrome(
+            &snapshot,
+            None,
+            &theme,
+            90,
+            &ViewState::default(),
+            &UiState::default(),
+            &roster,
+        );
         let text = block
             .lines
             .iter()
@@ -36,7 +43,7 @@ fn no_selection_derives_no_provider_and_rests_the_pet() {
     )]);
     snapshot.providers = two_provider_panels();
     snapshot.providers.reverse();
-    let mut ui = UiState::default();
+    let mut ui = ViewState::default();
     assert_eq!(selected_agent_kind(&snapshot, &ui), None);
     assert_eq!(selected_pet_action(&snapshot, &ui), PetAction::Idle);
     assert_eq!(
@@ -403,18 +410,16 @@ fn render_provider_dashboard_pins_empty_state_template() {
 fn render_provider_dashboard_codex_tab_paints_however_derived() {
     // A manual tab pick over a selected Claude row swaps to the Codex block.
     let snapshot = tabbed_provider_snapshot();
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            dashboard_tab: Some(DashboardTab {
-                login: "codex@default".parse().unwrap(),
-                derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
-            }),
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        dashboard_tab: Some(DashboardTab {
+            login: "codex@default".parse().unwrap(),
+            derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
+        }),
+        ..Default::default()
     };
-    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 34);
+    let pane_ui = UiState::default();
+    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, &pane_ui, 54, 34);
 
     assert!(
         rendered.contains("ChatGPT Pro 200 · v0.135.0"),
@@ -660,19 +665,20 @@ fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
 fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
     let mut snapshot = tabbed_provider_snapshot();
     snapshot.theme.pets.enabled = true;
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            ..Default::default()
-        },
+    let ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let pane_ui = UiState {
         pet: Some(pixel_pet()),
         ..Default::default()
     };
 
     let backend = TestBackend::new(54, 34);
     let mut terminal = Terminal::new(backend).unwrap();
-    let mut ui = fixed_theme_ui(&snapshot, &ui);
-    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    let mut ui = ui;
+    let mut pane_ui = fixed_theme_ui(&snapshot, &pane_ui);
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui, &mut pane_ui).unwrap();
     let buffer = terminal.backend().buffer();
     let first = crate::sidebar_pane::pixel::placeholder_cluster(0, 0);
     let (x, y) = (0..buffer.area.height)
@@ -962,16 +968,14 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let theme = Theme::for_sidebar(&snapshot.theme);
-    let ui = UiState {
-        view: ViewState {
-            selected_index: Some(0),
-            scroll_offset: 6,
-            offset_authoritative: true,
-            ..Default::default()
-        },
-        ..UiState::default()
+    let ui = ViewState {
+        selected_index: Some(0),
+        scroll_offset: 6,
+        offset_authoritative: true,
+        ..Default::default()
     };
-    let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 23);
+    let pane_ui = UiState::default();
+    let frame = compose_lines(&snapshot, None, &ui, &pane_ui, &theme, 54, 23);
     let lines = line_texts(&frame.lines);
     let rendered = lines.join("\n");
     let rail = lines

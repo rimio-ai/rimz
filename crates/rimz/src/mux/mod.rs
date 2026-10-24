@@ -8,7 +8,6 @@
 pub mod binaries;
 mod capabilities;
 mod command;
-mod companion_layout;
 pub mod domain;
 pub mod focus_anchor;
 mod focus_key;
@@ -28,7 +27,6 @@ pub use capabilities::drops_desktop_osc;
 pub(crate) use capabilities::{lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
-pub use companion_layout::COMPANION_PANE_LIMIT;
 pub use focus_key::RoomKeyBinding;
 pub use pane_writer::PaneWriter;
 use reconcile::{
@@ -44,6 +42,8 @@ pub use width::{
     WidthStep, client_size_from_env, detect_terminal_size, split_along_longer_edge,
 };
 pub use zellij::ZellijBackend;
+
+const COMPANION_STACK_MIN_CONTENT_ROWS: u64 = 10;
 
 /// Outer pane rectangle, including backend-owned frame cells where applicable.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -389,6 +389,14 @@ pub struct FittedPane {
     pub cols: Option<u16>,
 }
 
+/// One view's outcome in an ordered hidden-view fit.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ViewFit {
+    Fitted(std::collections::HashMap<PaneId, FittedPane>),
+    Skipped,
+    Failed,
+}
+
 /// Hidden views that lag the attached session's current view, most recent first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaggingViews {
@@ -728,8 +736,10 @@ impl SplitPaneOptions {
 /// A companion append never asks the caller to retry after opening a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompanionPaneAppend {
+    /// The payload was spawned, even when the backend printed no pane id.
     Opened,
-    /// No pane was opened: the view is full or cannot safely be subdivided.
+    /// No payload ran: no work pane, an unsuitable layout, insufficient stack
+    /// room, or background placement unavailable on this backend version.
     Full,
 }
 
@@ -1037,14 +1047,14 @@ pub trait MuxBackend: Send + Sync {
         Ok(None)
     }
 
-    /// Fit one view and its sidebar, preserving autosize policy. `None` means skipped.
-    fn fit_view(
+    /// Fit views and their sidebars in order, preserving autosize policy.
+    fn fit_views(
         &self,
-        _view: &crate::ids::ViewId,
+        views: &[crate::ids::ViewId],
         _target: ViewSize,
         _sidebar_cols: std::num::NonZeroU16,
-    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
-        Ok(None)
+    ) -> Result<Vec<ViewFit>> {
+        Ok(views.iter().map(|_| ViewFit::Skipped).collect())
     }
 
     fn name(&self) -> MuxName;
@@ -1107,8 +1117,11 @@ pub trait MuxBackend: Send + Sync {
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>>;
 
-    /// Append to a dedicated child tab, preserving existing processes and chrome.
-    /// Recheck physical occupancy before birth; balancing after birth is best-effort.
+    /// Append unfocused to a companion view's single stack, founding it on a lone work pane.
+    /// The target identifies the view through any pane, including its sidebar;
+    /// the backend splits its bottom-most work pane only when the open member
+    /// will retain at least 10 content rows. No balancing or geometry confirmation
+    /// follows the split. Zoomed, fullscreen, suppressed and mixed layouts are full.
     fn append_companion_pane(&self, opts: SplitPaneOptions) -> Result<CompanionPaneAppend>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
     /// room pane pass `Some(session)`; with `None` the Zellij backend names the

@@ -70,7 +70,7 @@ Every probe, claim, cache entry, and panel on this page is keyed by a login (`Lo
 
 After an account switch, the old login keeps its caches while its agents run, and it has no panel. Spend and the account budget are keyed by the login's history pool (`LoginCatalog::pool`), so `default` and every shared account of a kind share one figure.
 
-RimZ's own credential reads are read-only. It does not refresh tokens, write provider auth files, or import browser cookies. A probe reads the login's home through the environment its caller passes, with five exceptions: the Amp, Copilot, Kimi, OpenCode, and Pi probes read the process environment. Those kinds have only `default`, whose login environment is the ambient one.
+RimZ's own credential reads are read-only. It does not refresh tokens, write provider auth files, or import browser cookies. A probe reads the login's home through the environment its caller passes. A catalog-issued `default` drops an exported declared account home through `crates/rimz/src/agents/login.rs::ProviderLogin::env`; `RoomLoginSet::env` also applies the catalog's native-home rule to default logins built outside the catalog. Five probes read the process environment instead: Amp, Copilot, Kimi, OpenCode, and Pi. Those kinds have only `default`, whose login environment is the ambient one.
 
 ## Two origins
 

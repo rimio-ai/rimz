@@ -88,9 +88,9 @@ The walk publishes the machine-shared `provider-spending.json`, and every reader
 | fleet store `W:` and `M:` rows | the fleet-wide trailing-week and trailing-month totals, `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
 | cockpit `◎`, `¤`, and breakdown | a workspace-scoped tally limited to the room's project root and grouped worktrees, omitting unknown-origin files |
 | account daily caps | a local-calendar-day `SpendWindow` per kind (`day_by_provider`) and per history pool (`day_by_login`), computed for eligible kinds independently of the headline ([budget.md](../harness/budget.md)) |
-| `rimz stats` | local-calendar-day buckets and per-model buckets ([stats.md](../stats.md)) |
+| `rimz stats` | local-calendar-day and per-model buckets; `chart.days` holds model dollars for the last 30 local days, and `chart.weeks` for 52 seven-day blocks ending at `chart.today`, keyed by each block's last day ([stats.md](../stats.md)) |
 
-The publication names its resolved `timezone`. Its day keys (local civil dates as epoch-day numbers) and the reader's today index both use that zone. A raw row uses its local date. A row compacted beyond eight days carries only its UTC rollup's maximum timestamp, so its heatmap cell uses that timestamp's local date: an approximation that leaves window totals unchanged. The walk computes local-midnight boundaries once per history pass, not per row. The cursor cache holds timestamps, so a change to local-day bucketing bumps only the aggregate version and re-parses no transcript.
+The publication names its resolved `timezone`. Its day keys (local civil dates as epoch-day numbers) and the reader's today index both use that zone. `chart.today` records each walk's local epoch day in that history zone, anchoring weekly blocks and publication freshness independently of the configured/system-zone account-day cutoff. `crates/rimz/src/agents/spending/publish.rs::ProviderSpendingCache::is_from_today` compares it with today's index in the published zone. A raw row uses its local date. A row compacted beyond eight days carries only its UTC rollup's maximum timestamp, so its heatmap cell uses that timestamp's local date: an approximation that leaves window totals unchanged. The walk computes local-midnight boundaries once per history pass, not per row. The cursor cache holds timestamps, so a change to local-day bucketing bumps only the aggregate version and re-parses no transcript.
 
 An unnamed system timezone cannot be carried in the publication. History then uses and publishes UTC, with a tracing warning to set `timezone` in config. Account-day budget windows keep the configured zone, else the system zone, in that case too.
 
@@ -157,6 +157,8 @@ Three version constants gate schema changes:
 | `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 | `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
+`PROVIDER_SPENDING_VERSION` is 22, covering the bounded daily and weekly model-dollar chart cells.
+
 Writers refuse a schema downgrade after a cheap leading-version probe. A long-lived build of a lower version therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
 
 ### Response timing
@@ -184,14 +186,16 @@ The first host-eligible long-lived client (a sidebar cache refresher or a held s
 
 One service thread admits connections and answers fresh-publication requests without touching the walker. A stale request atomically claims the walker until its reply is written, and passes through a single-slot channel to one lifetime walker thread. A second stale request gets an immediate busy reply and serves the durable publications, so the caller's refresh tick never queues. Every publishing refresh still takes the runtime `spending.lock`, which keeps mixed builds and the one-shot fallback safe.
 
-The full walk runs at most once per namespace per `SPENDING_TTL` (15 seconds). Crossing local midnight expires the publication at once, timeout grace included. Between walks, readers serve `provider-spending.json`, and each caller falls back in its own way:
+The full walk runs at most once per namespace per `SPENDING_TTL` (15 seconds). Crossing midnight in the published history zone expires the publication at once, timeout grace included. Between walks, readers serve `provider-spending.json`, and each caller falls back in its own way:
 
 | Caller | Fallback |
 | --- | --- |
 | live sidebar | when the service call fails, it serves compatible publications and retries on its next cache tick |
 | one-shot sidebar (`rimz sidebar snapshot`) | never takes the owner lock. When no owner answers, it serves any current-version publication regardless of age, with the workspace tally from the sidecar matching its scope, else the sole surviving sidecar in the runtime `lanes/` directory (the room's last publication after its scope drifted), else empty. Only when no current-version publication exists does it run the direct walker, seeded from the disk cursor cache. |
-| one-shot `rimz stats` | refreshes any publication from a previous local day, so its selected-window breakdowns agree with Spend Today |
+| one-shot `rimz stats` | refreshes any publication from a previous history day, so its selected-window breakdowns agree with Spend Today |
 | held `rimz stats` | uses the service and keeps no walker. Its refresh-error fallback accepts any compatible publication. |
+
+With an unnamed system zone, history uses UTC while the account-day maps and the `spend_window = "today"` headline use system midnight (`crates/rimz/src/agents/spending/aggregate.rs::uniform_headline_cutoff`). TTL and timeout-grace hits can retain those system-zone figures for up to 15 or 90 seconds after system midnight. Budget and accounts readers discard account-day maps whose cutoff is not today's midnight. No reader discards the headline, so the provider dashboard's today rows can show the previous day's total during that window.
 
 A live sidebar owns freshening. A room missing its workspace cache on the service path derives `workspace-spending.<scope_hash>.json` from the shared entry cache without taking the walk lock ([performance.md](../performance.md#per-enrichment-cadences)).
 

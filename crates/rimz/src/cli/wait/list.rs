@@ -1,177 +1,127 @@
 use anyhow::Result;
-use serde::Serialize;
 use std::io::Write;
 
-use rimz::harness::schedule::Trigger;
-use rimz::harness::schedule::arm::duration_label;
+use rimz::agents::AgentState;
 use rimz::harness::schedule::arming::{self, ArmState};
-use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog};
+use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::pending::session_deliveries;
 use rimz::harness::schedule::runner::parse_task_timeout;
 use rimz::harness::schedule::signal::watcher_info;
+use rimz::harness::schedule::{TaskKind, Trigger};
 
 use super::*;
+use crate::cli::{render as ui, wake_view};
 
-#[derive(Serialize)]
-pub(super) struct WakeRow {
-    pub(super) name: String,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    state: &'static str,
-    target: String,
-    trigger: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dir: Option<String>,
-    elapsed: Option<String>,
-    elapsed_s: Option<u64>,
-    check_in: Option<String>,
-    check_in_s: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    watcher_pid: Option<u32>,
-}
+pub(super) use crate::cli::wake_view::WakeRow;
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let rows = pending_rows(&ctx)?;
+    let caller = caller(&ctx)?;
+    let snapshot = ctx.resolution_snapshot()?;
+    let agent = caller_agent(&snapshot, caller.as_ref())?;
+    let rows = if agent.is_some() {
+        pending_rows(&ctx, agent, &snapshot.agents)?
+    } else {
+        room_rows(&ctx, &snapshot.agents)?
+    };
     if json {
-        return super::super::render::json(&rows);
+        return ui::json(&rows);
     }
-    write_rows(&mut super::super::render::out(), rows)
+    write_rows(&mut ui::out(), &ctx, agent, &snapshot, rows)
 }
 
-pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
-    let caller_session = caller_session(ctx)?;
-    let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
+pub(super) fn pending_rows(
+    ctx: &Ctx,
+    agent: Option<&AgentState>,
+    agents: &[AgentState],
+) -> Result<Vec<WakeRow>> {
+    let session = agent.map(|agent| (agent.kind.clone(), agent.agent_id.clone()));
+    let root = &ctx.workspace.project_root;
+    let catalog = TaskCatalog::load(Some(root))?;
     let arming = arming::load();
     let now = jiff::Timestamp::now();
-    session_deliveries(
-        &catalog,
-        &ctx.workspace.project_root,
-        caller_session.as_ref(),
-    )
-    .map(|(name, task)| {
-        let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
-        row(ctx, name, task, state, now)
-    })
-    .collect()
+    session_deliveries(&catalog, root, session.as_ref())
+        .map(|(name, task)| {
+            let entry = task.entry();
+            let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
+            let duration = match &parsed.trigger {
+                Trigger::Watch(_) => entry.timeout.as_deref(),
+                Trigger::Schedule(_) => entry
+                    .wait_meta
+                    .as_ref()
+                    .and_then(|meta| meta.delay.as_deref()),
+                Trigger::Signal { .. } | Trigger::Condition { .. } => None,
+            };
+            if let Some(duration) = duration {
+                parse_task_timeout(duration).map_err(anyhow::Error::msg)?;
+            }
+            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
+            let pid = if entry.watch.is_some() {
+                watcher_info(ctx.runtime(), name)?.map(|info| info.pid)
+            } else {
+                None
+            };
+            Ok(WakeRow::new(name, entry, state, pid, agents, now))
+        })
+        .collect()
 }
 
-pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()> {
+fn room_rows(ctx: &Ctx, agents: &[AgentState]) -> Result<Vec<WakeRow>> {
+    let root = &ctx.workspace.project_root;
+    let catalog = TaskCatalog::load_room(root)?;
+    let arming = arming::load();
+    let now = jiff::Timestamp::now();
+    Ok(catalog
+        .visible()
+        .iter()
+        .filter(|(_, task)| {
+            task.kind() == TaskKind::WakeUp && task.entry().resolved_root() == *root
+        })
+        .map(|(name, task)| {
+            let entry = task.entry();
+            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
+            let pid = entry
+                .watch
+                .as_ref()
+                .and_then(|_| watcher_info(ctx.runtime(), name).ok().flatten())
+                .map(|info| info.pid);
+            WakeRow::new(name, entry, state, pid, agents, now)
+        })
+        .collect())
+}
+
+pub(super) fn write_rows(
+    out: &mut impl Write,
+    ctx: &Ctx,
+    agent: Option<&AgentState>,
+    snapshot: &SidebarSnapshot,
+    rows: Vec<WakeRow>,
+) -> Result<()> {
+    let now = jiff::Timestamp::now();
+    if let Some(agent) = agent {
+        return wake_view::write_self(
+            out,
+            agent,
+            snapshot,
+            &rows,
+            &ctx.workspace.worktree_root,
+            now,
+        );
+    }
+    writeln!(
+        out,
+        "{} · whole room · {}",
+        ui::home_relative(&ctx.workspace.project_root.to_string_lossy()),
+        wake_view::counts(rows.iter().map(WakeRow::owner))
+    )?;
     if rows.is_empty() {
-        writeln!(out, "no pending waits")?;
         return Ok(());
     }
-    let mut table = super::super::render::Table::new([
-        "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "CHECK-IN", "TRIGGER",
-    ])
-    .max_width(super::super::render::terminal_columns(120));
-    for row in rows {
-        table.row([
-            super::super::render::cell(row.name),
-            super::super::render::cell(row.kind),
-            super::super::render::cell(row.state),
-            super::super::render::cell(row.target),
-            super::super::render::cell(row.elapsed.as_deref().unwrap_or("-")),
-            super::super::render::cell(row.check_in.as_deref().unwrap_or("-")),
-            super::super::render::cell(row.trigger),
-        ]);
-    }
-    table.render(out)?;
-    Ok(())
-}
-
-fn row(
-    ctx: &Ctx,
-    name: &str,
-    task: &LoadedTask,
-    arm_state: ArmState,
-    now: jiff::Timestamp,
-) -> Result<WakeRow> {
-    let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
-    let entry = task.entry();
-    let target = entry
-        .wait
-        .as_ref()
-        .expect("wait rows have delivery targets");
-    let delay = entry
-        .wait_meta
-        .as_ref()
-        .and_then(|meta| meta.delay.as_deref());
-    let (kind, state, timeout, watcher_pid) = match &parsed.trigger {
-        Trigger::Schedule(_) => match delay {
-            Some(delay) => {
-                let seconds = parse_task_timeout(delay)
-                    .map_err(anyhow::Error::msg)?
-                    .as_secs();
-                ("timer", "pending", Some((delay.to_owned(), seconds)), None)
-            }
-            None => ("schedule", "waiting", None, None),
-        },
-        Trigger::Signal { .. } => ("signal", "waiting", None, None),
-        Trigger::Condition { .. } => ("condition", "waiting", None, None),
-        Trigger::Watch(spec) => {
-            let pid = watcher_info(ctx.runtime(), name)?.map(|info| info.pid);
-            // A watch armed under cache keepalive records no check-in limit.
-            let timeout = entry
-                .timeout
-                .as_deref()
-                .map(parse_task_timeout)
-                .transpose()
-                .map_err(anyhow::Error::msg)?;
-            (
-                spec.kind(),
-                if pid.is_some() { "watching" } else { "lost" },
-                timeout.map(|timeout| (duration_label(timeout), timeout.as_secs())),
-                pid,
-            )
-        }
-    };
-    let meta = match &parsed.trigger {
-        Trigger::Watch(_) => entry.wait_meta.as_ref(),
-        Trigger::Schedule(_) if delay.is_some() => entry.wait_meta.as_ref(),
-        Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Condition { .. } => None,
-    };
-    let dir = entry
-        .dir
-        .as_deref()
-        .map(|dir| super::super::render::home_relative(&dir.to_string_lossy()));
-    let mut trigger = match &parsed.trigger {
-        Trigger::Watch(spec) => {
-            let trigger = entry.label.clone().unwrap_or_else(|| spec.subject());
-            match dir.as_deref() {
-                Some(dir) => format!("{trigger} · in {dir}"),
-                None => trigger,
-            }
-        }
-        Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Condition { .. } => {
-            parsed.describe()
-        }
-    };
-    let state = match arm_state {
-        ArmState::Live => state,
-        ArmState::Disabled(_) => "disabled",
-        ArmState::Paused(until) => {
-            trigger.push_str(&format!(
-                " · resumes {}",
-                super::super::render::rel_until(until, now)
-            ));
-            "paused"
-        }
-    };
-    Ok(WakeRow {
-        name: name.to_owned(),
-        kind,
-        state,
-        target: target.handle.clone(),
-        trigger,
-        label: entry.label.clone(),
-        dir,
-        elapsed: meta.map(|meta| super::super::render::age_short(meta.armed_at, now)),
-        elapsed_s: meta.map(|meta| now.duration_since(meta.armed_at).as_secs().max(0) as u64),
-        check_in_s: timeout.as_ref().map(|(_, seconds)| *seconds),
-        check_in: timeout.map(|(label, _)| label),
-        watcher_pid,
-    })
+    let agents = ctx
+        .store
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .map(|projection| projection.agents)
+        .unwrap_or_default();
+    writeln!(out)?;
+    wake_view::write_room(out, &rows, &agents, None, &ctx.workspace.worktree_root, now)
 }

@@ -33,6 +33,7 @@ One server process per socket owns every session, window, and pane. Clients are 
 - The client's terminal is stdin. An attach-shaped command opens its terminal from stdin, not `/dev/tty`. With stdin piped or null it fails `open terminal failed: not a terminal`, exit 1 (probed on 3.5a). Commands that never attach are unaffected, so a subprocess wrapper that nulls stdin cannot attach by accident.
 - Version string. `tmux -V` reports the build version, such as `tmux 3.8`. Point releases add a letter to the same minor. OpenBSD's base tmux prints `tmux openbsd-X.Y`, which a numeric parser rejects.
 - Command sequences. One client argv carries several commands separated by standalone `;` tokens (`tmux set -t s mouse on ';' set -t s history-limit 100000`): one fork, one server round trip. A parse error anywhere, such as an unknown command, fails the whole sequence before anything runs. A runtime failure, such as a bad target, stops at the failing command with earlier commands applied, exit 1, and stderr naming the failure (probed on 3.5a. The man page states only the runtime half).
+- Stdin scripts. `source-file -` reads commands from a non-attached, non-control client's stdin without packing the script into argv ([cmd-source-file.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-source-file.c), [file.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/file.c)). Each line is its own command group: a runtime error stops the rest of that line, later lines still run, and the client exits 1 with stderr lacking line numbers. A parse error runs nothing and prints `-:LINE: ...` on stdout, with stderr empty. `display-message -p` output, including inside `if-shell -F`, stays in execution order, so begin/end markers can bracket each line. Single-quote each word and escape an embedded quote as `'\''`; reject newlines and carriage returns for byte-preserving words, since even quoted backslash-newline folds (probed on 3.5, 3.7c, and 3.8).
 - No server. A command that requires an existing server exits 1 when none is running. stderr is `no server running on <path>` when the socket file exists but its server died, and `error connecting to <path> (No such file or directory)` when the socket was never created. A denied connect also exits 1, but prints `error connecting to <path> (Permission denied)` or `error connecting to <path> (Operation not permitted)` instead. The parenthesized reason is `strerror(errno)`, not proof that the server is absent ([client.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/client.c), `client_main`).
 
 Global flags that matter to a wrapper:
@@ -245,9 +246,13 @@ Index: `break-pane`, `join-pane`, `move-pane`, `swap-pane`, `rotate-window`, `li
 
 **`resize-window [-aADLRU] [-x width] [-y height] [-t window] [adjustment]`** sets a window's size and, as a side effect, sets that window's `window-size` option to `manual` ([cmd-resize-window.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-resize-window.c)). Unset the option (`set-option -wu -t @win window-size`) to return the window to client-driven sizing. `-a` and `-A` size the window to the smallest or largest session containing it.
 
+`resize-window` unzooms even when the requested size equals the current size ([resize.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/resize.c), `resize_window`). A caller preserving zoom must skip an equal-size resize.
+
 **`select-layout [-Enop] [-t pane] [layout-name]`** applies a preset or a layout string. The seven presets are `even-horizontal`, `even-vertical`, `main-horizontal`, `main-horizontal-mirrored`, `main-vertical`, `main-vertical-mirrored`, and `tiled` ([layout-set.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/layout-set.c)). A layout string is the format `window_layout` prints ([layout strings](#layout-strings)). Tmux accepts JSON layouts and legacy checksummed layouts, and rejects invalid geometry or syntax ([layout-custom.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/layout-custom.c), `layout_parse`). `-E` spreads the target pane and its neighbours evenly, `-n`/`-p` step through presets, and `-o` restores the previous layout.
 
 Sizing options that interact with these commands: `window-size` (`largest`, `smallest`, `manual`, `latest`. Default `latest`), `aggressive-resize`, `default-size`, and the `ignore-size` client flag.
+
+A sizing client gives the current window its terminal rows minus the session's `status` lines (`off`: 0, `on`: 1, `2` through `5`: that many). The window keeps that size after the client detaches ([resize.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/resize.c), [status.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/status.c), `status_line_size`; probed on 3.8).
 
 ### Pane I/O
 
@@ -429,7 +434,7 @@ Hooks run tmux commands on triggers. They are array options stored globally or p
 | `client-focus-in` / `client-focus-out` | a client's terminal gains / loses focus | session |
 | `client-light-theme` / `client-dark-theme` | a client's terminal reports a theme change (3.6) | session |
 | `client-resized` | a client is resized | session |
-| `client-session-changed` | a client switches session | session |
+| `client-session-changed` | a client attaches or switches session | session |
 | `command-error` | a command fails (3.5) | session |
 | `session-created` / `session-closed` / `session-renamed` | session lifecycle | session |
 | `session-window-changed` | a session's current window changes | session |
@@ -554,7 +559,7 @@ Notifications from a batched command list arrive in command order (probed on 3.7
 | `%window-pane-changed` | `%window-pane-changed @id %id` | a window's active pane changes |
 | `%session-window-changed` | `%session-window-changed $id @id` | a session's current window changes |
 | `%session-changed` | `%session-changed $id name` | this client switches session |
-| `%client-session-changed` | `%client-session-changed <client> $id name` | another client switches session |
+| `%client-session-changed` | `%client-session-changed <client> $id name` | another client attaches or switches session; delivered to every control client on the server, regardless of its watched session (probed on 3.5, 3.7c, and 3.8) |
 | `%session-renamed` | `%session-renamed $id name` | a session is renamed, the man page documents the name alone, so parse the id first |
 | `%sessions-changed` | `%sessions-changed` | a session is created or destroyed |
 | `%client-detached` | `%client-detached <client>` | a client detaches (3.2) |

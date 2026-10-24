@@ -47,6 +47,7 @@ fn history_days_follow_published_zone_including_rolled_rows() {
     assert_eq!(result.days[&day("2026-01-12T00:00:00Z")].usd, 1.0);
     assert_eq!(result.days[&day("2026-01-13T00:00:00Z")].usd, 2.0);
     assert_eq!(result.days[&day("2026-01-02T00:00:00Z")].usd, 4.0);
+    assert_eq!(result.chart.days[&day("2026-01-02T00:00:00Z")][""], 4.0);
     assert_eq!(result.spending.total.day.usd, 2.0);
     assert_eq!(result.spending.total.week.usd, 3.0);
     assert_eq!(result.spending.total.day.sessions, 1);
@@ -71,6 +72,140 @@ fn history_days_follow_published_zone_including_rolled_rows() {
     assert_eq!(
         serde_json::to_value(publication).unwrap()["timezone"],
         "Asia/Shanghai"
+    );
+}
+
+#[test]
+fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
+    let now_secs = "2026-01-12T17:00:00Z"
+        .parse::<Timestamp>()
+        .unwrap()
+        .as_second() as u64;
+    let spec = HeadlineSpec {
+        timezone: Some("Asia/Shanghai".into()),
+        ..Default::default()
+    };
+    let today = local_day_index(now_secs, spec.timezone.as_deref()).unwrap();
+    let path = PathBuf::from("/x/chart.jsonl");
+    let mut entries: Vec<_> = [0, 1, 6, 7, 29, 30, 362, 363, 364]
+        .into_iter()
+        .map(|age| {
+            let mut entry = cached_entry(now_secs - age * 86_400, 2.0, &format!("day-{age}"));
+            entry.model = Some("model-a".into());
+            entry
+        })
+        .collect();
+    let mut unknown = cached_entry(now_secs, 3.0, "unknown");
+    unknown.model = None;
+    let mut rolled = cached_entry(now_secs - 12 * 86_400, 7.0, "rolled");
+    rolled.ts_secs -= rolled.ts_secs % 86_400;
+    rolled.rolled = true;
+    rolled.model = Some("model-b".into());
+    let rolled_day = local_day_index(rolled.ts_secs, spec.timezone.as_deref()).unwrap();
+    entries.extend([
+        unknown,
+        rolled,
+        cached_entry(now_secs - 2 * 86_400, 0.0, "unpriced"),
+        cached_entry(now_secs + 86_400, 11.0, "future"),
+    ]);
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(&path, entries)]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(opencode_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs,
+            spec: &spec,
+        },
+        Some(&Default::default()),
+    );
+    assert!(
+        !result.chart.days.is_empty(),
+        "daily chart must retain model spend"
+    );
+    assert_eq!(result.chart.today, today);
+    for day in today - 29..=today {
+        let actual: f64 = result
+            .chart
+            .days
+            .get(&day)
+            .into_iter()
+            .flat_map(|cells| cells.values())
+            .sum();
+        let expected = result.days.get(&day).map_or(0.0, |day| day.usd);
+        assert_eq!(actual, expected, "chart dollars for local day {day}");
+    }
+    for block in 0..52 {
+        let end = today - 7 * block;
+        let actual: f64 = result
+            .chart
+            .weeks
+            .get(&end)
+            .into_iter()
+            .flat_map(|cells| cells.values())
+            .sum();
+        let expected: f64 = result
+            .days
+            .range(end - 6..=end)
+            .map(|(_, day)| day.usd)
+            .sum();
+        assert_eq!(actual, expected, "chart dollars for block ending {end}");
+    }
+    assert!(
+        result
+            .chart
+            .days
+            .keys()
+            .all(|day| (today - 29..=today).contains(day))
+    );
+    assert!(
+        result
+            .chart
+            .weeks
+            .keys()
+            .all(|end| (today - 357..=today).contains(end) && (today - end) % 7 == 0)
+    );
+    assert_eq!(result.chart.days[&today][""], 3.0);
+    assert_eq!(result.chart.weeks[&today][""], 3.0);
+    assert_eq!(
+        result.chart.days[&rolled_day]["model-b"],
+        result.days[&rolled_day].usd
+    );
+    assert_eq!(result.chart.weeks[&(today - 357)]["model-a"], 4.0);
+    assert!(
+        !result.chart.days.contains_key(&(today - 2)),
+        "zero-dollar models need no chart cell"
+    );
+    let publication = ProviderSpendingCache::from_walk(&result, 0);
+    assert_eq!(publication.chart, result.chart);
+    let round_trip: ProviderSpendingCache =
+        serde_json::from_slice(&serde_json::to_vec(&publication).unwrap()).unwrap();
+    assert_eq!(round_trip.chart, result.chart);
+    let scoped = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs,
+            spec: &spec,
+        },
+        None,
+    );
+    assert_eq!(
+        scoped.chart,
+        ChartSpend {
+            today,
+            ..Default::default()
+        }
     );
 }
 
@@ -806,6 +941,10 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
         None,
     );
 
+    assert_eq!(
+        rollups.chart.today,
+        local_day_index(now.as_second() as u64, spec.timezone.as_deref()).unwrap()
+    );
     assert_eq!(
         rollups.day_cutoff_secs,
         "2025-06-01T04:00:00Z"

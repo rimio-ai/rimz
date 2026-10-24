@@ -109,8 +109,7 @@ pub(super) fn resume_provider(
         &machine,
     )?;
     let login = logins.login(&cell.kind, &machine.accounts)?;
-    let catalog = rimz::agents::LoginCatalog::room_view(&machine.accounts).0;
-    let ambient = catalog.native_ambient(&cell.kind, &rimz::agents::ambient_env());
+    let ambient = rimz::agents::ambient_env();
     match login.locate_session(adapter, &session_id.into(), &ambient) {
         rimz::agents::session::LocalSessionLookup::Found(observation) => resume_selected(
             ResumeSource::Provider(&observation, profile),
@@ -349,7 +348,7 @@ fn resume_selected(
     rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &tab.cwd)?;
     let login = logins.login(kind, &machine.accounts)?;
     crate::cli::folder_trust::preflight_hooks(
-        login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env())),
+        login.health(&rimz::agents::ambient_env()),
         || {
             caller
                 .as_ref()
@@ -571,7 +570,7 @@ pub(super) fn resume_lane(
                 cwd,
             )?;
             crate::cli::folder_trust::preflight_hooks(
-                login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env())),
+                login.health(&rimz::agents::ambient_env()),
                 || {
                     caller
                         .as_ref()

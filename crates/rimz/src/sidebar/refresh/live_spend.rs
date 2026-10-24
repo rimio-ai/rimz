@@ -240,6 +240,11 @@ mod tests {
                     None,
                 )
                 .unwrap(),
+                timezone: "UTC".into(),
+                chart: crate::agents::spending::ChartSpend {
+                    today: (walk_ms / 86_400_000) as i64,
+                    ..Default::default()
+                },
                 spending: crate::agents::spending::Spending::default(),
                 ..Default::default()
             },

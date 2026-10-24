@@ -243,7 +243,27 @@ fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
     let server = TmuxServer::new();
     let session = "rimz-reconcile-attach-probe";
     server.ensure_with_shell(session);
-    server.tmux(&["new-window", "-d", "-t", session, "-n", "second", "sh"]);
+    let current = server.display(session, "#{window_id}");
+    let local_window_size = server.stdout(&["show-options", "-wqv", "-t", &current, "window-size"]);
+    let hidden = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "-n",
+        "second",
+        "sh",
+    ]);
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &hidden,
+        "window-size",
+        "smallest",
+    ]);
     assert!(
         server
             .stdout(&["list-windows", "-t", session, "-F", "#{window_width}"])
@@ -275,24 +295,61 @@ fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
         server.show_option(&["-t", session], "default-size"),
         "212x50",
     );
-    let window_ids = server.stdout(&["list-windows", "-t", session, "-F", "#{window_id}"]);
-    for window_id in window_ids.lines() {
-        assert_eq!(server.display(window_id, "#{window_width}"), "212");
-        assert_ne!(
-            server.show_option(&["-w", "-t", window_id], "window-size"),
-            "manual",
-            "normalized windows must resume tracking attached clients",
-        );
-    }
+    assert_eq!(
+        server.display(&current, "#{window_width}x#{window_height}"),
+        "212x49"
+    );
+    assert_eq!(
+        server.stdout(&["show-options", "-wqv", "-t", &current, "window-size"]),
+        local_window_size
+    );
+    assert_eq!(server.display(&hidden, "#{window_width}"), "80");
+    assert_eq!(
+        server.show_option(&["-w", "-t", &hidden], "window-size"),
+        "smallest"
+    );
     assert_eq!(
         server.show_option(&["-t", session], "@rimz_sidebar_cols"),
         "53",
     );
     let sidebars = sidebar_pane_ids(&server, session, None);
     assert_eq!(sidebars.len(), 2, "every window should carry one sidebar");
-    for sidebar in sidebars {
-        assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "53");
+    for sidebar in &sidebars {
+        let expected = if server.display(sidebar.raw(), "#{window_id}") == current {
+            "53"
+        } else {
+            "24"
+        };
+        assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), expected);
     }
+
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-resize-window[249]",
+        "set-option -t rimz-reconcile-attach-probe @test_geometry_resized yes",
+    ]);
+    server
+        .backend
+        .reconcile_sidebars(
+            &opts,
+            &rimz::mux::SidebarLiveness {
+                claimed_panes: sidebars.into_iter().collect(),
+                ..Default::default()
+            },
+        )
+        .expect("unchanged reconcile");
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
+            "-qv",
+            "-t",
+            session,
+            "@test_geometry_resized"
+        ]),
+        "",
+        "an unchanged reconnect must not issue resize-window"
+    );
 }
 
 #[test]
@@ -504,7 +561,8 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
             max_cols: target_cols,
             pinned: true,
         },
-        detected_view_size: Some((80, 24)),
+        // The attach probe includes the status row; the existing panes do not.
+        detected_view_size: Some((80, 25)),
         ..sidebar_opts(server._tempdir.path(), session, stub, Some(80))
     };
     let report = server
