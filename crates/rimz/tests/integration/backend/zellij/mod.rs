@@ -30,6 +30,7 @@ mod presence;
 mod reap;
 mod reconcile;
 mod resume;
+mod run_command;
 mod self_close;
 mod shared_view;
 mod stack_winsize;

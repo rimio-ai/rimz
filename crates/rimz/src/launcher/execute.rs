@@ -27,6 +27,7 @@ pub enum RunCompletion {
 
 #[derive(Clone)]
 pub struct LeaderRun {
+    pub lifecycle: crate::store::run::RunLifecycle,
     pub keep: bool,
     pub report_to: ReportTo,
     pub timeout: Option<Duration>,
@@ -254,6 +255,7 @@ fn open_fresh(
                 prompt.to_owned(),
                 cwd.clone(),
             );
+            record.lifecycle = leader.lifecycle;
             record.keep = leader.keep;
             record.report_to = leader.report_to;
             record.subagent = leader.subagent;

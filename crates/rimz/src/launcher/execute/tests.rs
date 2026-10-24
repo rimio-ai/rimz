@@ -106,6 +106,7 @@ impl Fixture {
 
     fn leader(&self) -> LeaderRun {
         LeaderRun {
+            lifecycle: crate::store::run::RunLifecycle::Turn,
             keep: false,
             report_to: ReportTo::Launcher,
             timeout: None,
@@ -125,6 +126,30 @@ impl Fixture {
             },
         }
     }
+}
+
+#[test]
+fn session_lifecycle_reaches_the_published_record() {
+    let fixture = Fixture::new();
+    let mut leader = fixture.leader();
+    leader.lifecycle = crate::store::run::RunLifecycle::Session;
+    let backend = fake_backend::Backend::default();
+    let LaunchOutcome::Opened(opened) = open_fresh(
+        fixture.fresh.clone(),
+        Some(leader),
+        &mut Unattended,
+        &backend,
+    )
+    .unwrap() else {
+        panic!("launch did not open");
+    };
+    let run = opened.run.unwrap();
+    assert_eq!(
+        crate::harness::run::load(run.store.paths(), &run.record.run_id)
+            .unwrap()
+            .lifecycle,
+        crate::store::run::RunLifecycle::Session,
+    );
 }
 
 #[test]

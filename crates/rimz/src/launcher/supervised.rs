@@ -265,6 +265,7 @@ pub fn prepare_supervised(
             .or(inferred_lane.as_deref().filter(|_| cwd.is_none())),
     );
     let leader = LeaderRun {
+        lifecycle: crate::store::run::RunLifecycle::Turn,
         keep: request.keep,
         report_to: request.report_to,
         timeout: request.timeout,

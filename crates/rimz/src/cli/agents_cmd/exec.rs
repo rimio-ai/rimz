@@ -1867,6 +1867,19 @@ fn fail_run_if_child_exited_first(
     {
         tracing::debug!(%error, "could not drain terminal hooks before child-exit settlement");
     }
+    if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
+        && record.lifecycle == rimz::store::run::RunLifecycle::Session
+    {
+        match rimz::harness::run::settle_session_exit(&context.store, &context.run_id, || {
+            capture_own_failure_tail(context, globals).map(|(_, tail)| tail)
+        }) {
+            Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
+            Ok(None) => {}
+            Err(error) => tracing::debug!(run_id = %context.run_id, %error,
+                "could not settle session run after provider exit"),
+        }
+        return;
+    }
     if wait_for_terminal_run(context, terminal_grace) {
         if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
             && record.status.is_terminal()
@@ -1896,17 +1909,19 @@ fn fail_run_if_nonterminal(context: &RunExecContext, reason: &str) {
     }
 }
 
-fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) {
-    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
-        return;
-    };
-    let Some(own) = own_pane_id(mux) else {
-        return;
-    };
+fn capture_own_failure_tail(
+    context: &RunExecContext,
+    globals: &GlobalFlags,
+) -> Option<(rimz::ids::PaneId, String)> {
+    let mux = rimz::mux::auto_detect_backend(globals.mux).ok()?;
+    let own = own_pane_id(mux)?;
     let backend = rimz::mux::backend_for(mux);
-    let Some(tail) =
-        supervised::pane::capture_failure_tail(backend.as_ref(), &own, &context.session_name)
-    else {
+    supervised::pane::capture_failure_tail(backend.as_ref(), &own, &context.session_name)
+        .map(|tail| (own, tail))
+}
+
+fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) {
+    let Some((own, tail)) = capture_own_failure_tail(context, globals) else {
         return;
     };
     if let Err(err) =
@@ -2042,7 +2057,7 @@ fn session_accepts_agent_close(globals: &GlobalFlags, session_name: &str) -> boo
     backend.session_accepts_agent_close(session_name)
 }
 
-fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
+pub(super) fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return;
     };

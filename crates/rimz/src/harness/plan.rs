@@ -1768,10 +1768,29 @@ pub fn compile_layout_panes(
                         _ => cell.pane_name(),
                     };
                     let argv = match cell {
-                        Cell::Command { argv } if argv.is_empty() => {
-                            vec![crate::proc::user_shell_program()]
+                        Cell::Command { argv } => {
+                            let mut argv = if argv.is_empty() {
+                                vec![crate::proc::user_shell_program()]
+                            } else {
+                                argv.clone()
+                            };
+                            if let Some(run) = params.leader_run {
+                                let mut wrapper = vec![
+                                    rimz_bin.to_string_lossy().into_owned(),
+                                    "agents".to_owned(),
+                                    "run-command".to_owned(),
+                                    "--workspace".to_owned(),
+                                    params.runtime.workspace_id.to_string(),
+                                    "--run".to_owned(),
+                                    run.run_id.to_string(),
+                                    "--".to_owned(),
+                                ];
+                                wrapper.append(&mut argv);
+                                wrapper
+                            } else {
+                                argv
+                            }
                         }
-                        Cell::Command { argv } => argv.clone(),
                         Cell::Agent(cell) => {
                             let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);
                             let argv = match seed {

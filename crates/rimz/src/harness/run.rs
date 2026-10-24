@@ -1,4 +1,4 @@
-//! Supervised, launcher-opened peer, and team-long leader run transitions, responses, and cancellation.
+//! Supervised, peer, team and session run transitions, responses, and cancellation.
 
 mod peer;
 pub mod report;
@@ -27,7 +27,8 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{
-    EarlierAnswer, FollowUpTurn, ReportTo, RunRecord, RunStatus, RunStoreErr, RunVerify,
+    EarlierAnswer, FollowUpTurn, ReportTo, RunLifecycle, RunRecord, RunSession, RunStatus,
+    RunStoreErr, RunVerify,
 };
 use crate::store::{
     Store,
@@ -702,7 +703,9 @@ pub fn budget_exceeded(
     cost_usd: Option<f64>,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, now| {
-        if !record.mark_terminal(RunStatus::BudgetExceeded, now) {
+        if record.lifecycle == RunLifecycle::Session
+            || !record.mark_terminal(RunStatus::BudgetExceeded, now)
+        {
             return Ok(RecordMutation::Keep(false));
         }
         record.cost_usd = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0);
@@ -722,15 +725,12 @@ fn record_spend(
         return load(paths, run_id);
     }
     update_record(paths, run_id, |record, _| {
-        if let Some(cost_usd) = cost_usd {
-            record.cost_usd = Some(cost_usd);
+        RunSpend {
+            cost_usd,
+            input_tokens,
+            output_tokens,
         }
-        if let Some(input_tokens) = input_tokens {
-            record.input_tokens = Some(input_tokens);
-        }
-        if let Some(output_tokens) = output_tokens {
-            record.output_tokens = Some(output_tokens);
-        }
+        .apply(record);
         Ok(RecordMutation::Write(()))
     })
     .map(|(record, ())| record)
@@ -898,6 +898,69 @@ pub fn record_lifecycle(
     Ok(matches!(transition, LifecycleFold::NewlyTerminal).then_some(record))
 }
 
+/// Settle provider exit and cumulative spend together for a session run.
+/// An existing terminal status wins; a conversation rebind retries the spend read.
+/// The failure-tail callback runs under the workspace lock only for a Pending run,
+/// so registration cannot race a failed-run-only pane read.
+pub fn settle_session_exit(
+    store: &Store,
+    run_id: &RunId,
+    failure_tail: impl FnOnce() -> Option<String>,
+) -> Result<Option<RunRecord>> {
+    settle_session_exit_with_spend(store, run_id, failure_tail, |record| {
+        let agent = crate::agents::definition_by_kind(record.kind.as_str()).ok();
+        read_spend(store, record, agent)
+    })
+}
+
+fn settle_session_exit_with_spend(
+    store: &Store,
+    run_id: &RunId,
+    failure_tail: impl FnOnce() -> Option<String>,
+    mut spend: impl FnMut(&RunRecord) -> RunSpend,
+) -> Result<Option<RunRecord>> {
+    let mut failure_tail = Some(failure_tail);
+    loop {
+        let before = load(store.paths(), run_id)?;
+        if before.lifecycle != RunLifecycle::Session || before.status.is_terminal() {
+            return Ok(None);
+        }
+        let spend = spend(&before);
+        let (record, wrote, _) = write_record(store.paths(), run_id, |record, now| {
+            if record.lifecycle != RunLifecycle::Session || record.status.is_terminal() {
+                return Ok(RecordMutation::Keep(false));
+            }
+            if record.agent_id != before.agent_id
+                || record.transcript_path != before.transcript_path
+                || record.earlier_sessions != before.earlier_sessions
+            {
+                return Ok(RecordMutation::Keep(false));
+            }
+            let status = if record.status == RunStatus::Pending {
+                if record.failure_tail.is_none() {
+                    record.failure_tail = failure_tail
+                        .take()
+                        .and_then(|capture| capture())
+                        .and_then(|tail| capped_failure_tail(&tail));
+                }
+                RunStatus::Failed
+            } else {
+                RunStatus::Completed
+            };
+            spend.apply(record);
+            record.mark_terminal(status, now);
+            Ok(RecordMutation::Write(true))
+        })?;
+        if wrote {
+            wake_workflow(store.paths(), &record);
+            return Ok(Some(record));
+        }
+        if record.lifecycle != RunLifecycle::Session || record.status.is_terminal() {
+            return Ok(None);
+        }
+    }
+}
+
 /// Fold a hook lifecycle and settle a newly terminal non-peer run's session spend.
 pub fn settle_lifecycle(
     store: &Store,
@@ -924,19 +987,76 @@ pub fn settle_lifecycle(
             }
         },
     )?;
-    Ok(record.map(|record| {
-        // Spend is session-cumulative, so it would overstate a later peer turn.
-        if record.peer.is_some() {
-            wake_workflow(store.paths(), &record);
-            return record;
+    Ok(record.map(|record| settle_spend_and_wake(store, record, Some(agent))))
+}
+
+fn settle_spend_and_wake(
+    store: &Store,
+    record: RunRecord,
+    agent: Option<&AgentDefinition>,
+) -> RunRecord {
+    // Spend is session-cumulative, so it would overstate a later peer turn.
+    if record.peer.is_some() {
+        wake_workflow(store.paths(), &record);
+        return record;
+    }
+    let spend = read_spend(store, &record, agent);
+    let record = record_spend(
+        store.paths(),
+        &record.run_id,
+        spend.cost_usd,
+        spend.input_tokens,
+        spend.output_tokens,
+    )
+    .unwrap_or_else(|err| {
+        tracing::warn!(
+            run_id = %record.run_id,
+            error = %err,
+            "could not record supervised run spend",
+        );
+        record
+    });
+    wake_workflow(store.paths(), &record);
+    record
+}
+
+#[derive(Default)]
+struct RunSpend {
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+impl RunSpend {
+    fn apply(self, record: &mut RunRecord) {
+        if let Some(cost) = self
+            .cost_usd
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        {
+            record.cost_usd = Some(cost);
         }
-        let cost_usd = record
-            .agent_id
-            .as_deref()
-            .and_then(|id| crate::store::agent_context::read_one(store.runtime_paths(), kind, id))
-            .and_then(|context| context.context.cost)
-            .and_then(|cost| cost.total_cost_usd);
-        let token_totals = record
+        if let Some(input) = self.input_tokens {
+            record.input_tokens = Some(input);
+        }
+        if let Some(output) = self.output_tokens {
+            record.output_tokens = Some(output);
+        }
+    }
+}
+
+fn read_spend(store: &Store, record: &RunRecord, agent: Option<&AgentDefinition>) -> RunSpend {
+    if record.lifecycle == RunLifecycle::Session && record.team.is_none() {
+        return read_session_spend(store, record, agent);
+    }
+    let kind = record.kind.as_str();
+    let cost_usd = record
+        .agent_id
+        .as_deref()
+        .and_then(|id| crate::store::agent_context::read_one(store.runtime_paths(), kind, id))
+        .and_then(|context| context.context.cost)
+        .and_then(|cost| cost.total_cost_usd);
+    let token_totals = agent.and_then(|agent| {
+        record
             .agent_id
             .as_deref()
             .zip(record.transcript_path.as_deref())
@@ -950,21 +1070,66 @@ pub fn settle_lifecycle(
                     std::path::Path::new(transcript_path),
                     &prices,
                 )
-            });
-        let record = record_spend(
-            store.paths(),
-            &record.run_id,
-            cost_usd,
-            token_totals.map(|totals| totals.input),
-            token_totals.map(|totals| totals.output),
-        )
-        .unwrap_or_else(|err| {
-            tracing::warn!(run_id = %record.run_id, error = %err, "could not record supervised run spend");
+            })
+    });
+    RunSpend {
+        cost_usd,
+        input_tokens: token_totals.map(|totals| totals.input),
+        output_tokens: token_totals.map(|totals| totals.output),
+    }
+}
+
+fn read_session_spend(
+    store: &Store,
+    record: &RunRecord,
+    agent: Option<&AgentDefinition>,
+) -> RunSpend {
+    let prices =
+        crate::agents::pricing::cached_book(&store.runtime_paths().shared_pricing_cache_path());
+    let bindings = record
+        .earlier_sessions
+        .iter()
+        .map(|session| (&session.agent_id, session.transcript_path.as_deref()))
+        .chain(
             record
-        });
-        wake_workflow(store.paths(), &record);
-        record
-    }))
+                .agent_id
+                .as_ref()
+                .map(|id| (id, record.transcript_path.as_deref())),
+        );
+    let mut spend = RunSpend::default();
+    let mut tokens = crate::agents::spending::SessionTokenTotals::default();
+    for (id, path) in bindings {
+        let parsed = agent
+            .zip(path)
+            .map(|(agent, path)| agent.parse_spend(std::path::Path::new(path), None, &prices));
+        let cost =
+            crate::store::agent_context::read_one(store.runtime_paths(), record.kind.as_str(), id)
+                .and_then(|context| context.context.cost)
+                .and_then(|cost| cost.total_cost_usd)
+                .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                .or_else(|| {
+                    crate::agents::spending::session_cost_from_entries(
+                        &parsed.as_ref()?.entries,
+                        id,
+                    )?
+                    .total_cost_usd
+                });
+        if let Some(cost) = cost {
+            spend.cost_usd = Some(spend.cost_usd.unwrap_or_default() + cost);
+        }
+        let Some(parsed) = parsed else {
+            continue;
+        };
+        for entry in crate::agents::spending::session_entries(&parsed.entries, id) {
+            tokens.input = tokens.input.saturating_add(entry.input);
+            tokens.output = tokens.output.saturating_add(entry.output);
+        }
+    }
+    if tokens.input > 0 || tokens.output > 0 {
+        spend.input_tokens = Some(tokens.input);
+        spend.output_tokens = Some(tokens.output);
+    }
+    spend
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -982,13 +1147,14 @@ fn fold_lifecycle(
     now: Timestamp,
     owed: Option<OwedWake>,
 ) -> LifecycleFold {
-    let reopen = record.status.is_terminal()
+    let reopen = record.lifecycle == RunLifecycle::Turn
+        && record.status.is_terminal()
         && record.subagent
         && matches!(observation.signal, LifecycleSignal::TurnStarted { .. });
     if record.kind.as_str() != kind || (record.status.is_terminal() && !reopen) {
         return LifecycleFold::Ignored;
     }
-    if record.team.is_some() {
+    if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
         return fold_team_lifecycle(record, observation, last_message);
     }
     match (&record.agent_id, &observation.agent_id) {
@@ -1103,7 +1269,7 @@ fn fold_lifecycle(
     LifecycleFold::Updated
 }
 
-/// A team run spans every turn of its leader until the board flips to Done:
+/// A team or session run spans every turn of its leader:
 /// a turn end keeps the leader's final message and leaves the run open, and
 /// the run follows the leader onto a new conversation row of the same launch,
 /// since `session_run_id` routed the observation here by launch id.
@@ -1115,8 +1281,7 @@ fn fold_team_lifecycle(
     let Some(observed) = observation.agent_id.as_ref() else {
         return LifecycleFold::Ignored;
     };
-    let mut changed = record.agent_id.as_ref() != Some(observed);
-    record.agent_id = Some(observed.clone());
+    let mut changed = rebind_session(record, observed);
     if let Some(name) = observation.agent_name.clone() {
         record.agent_name = Some(name);
     }
@@ -1143,6 +1308,25 @@ fn fold_team_lifecycle(
     }
 }
 
+fn rebind_session(record: &mut RunRecord, agent_id: &AgentSessionId) -> bool {
+    if record.agent_id.as_ref() == Some(agent_id) {
+        return false;
+    }
+    if record.lifecycle == RunLifecycle::Session && record.team.is_none() {
+        if let Some(previous) = record.agent_id.take() {
+            record.earlier_sessions.push(RunSession {
+                agent_id: previous,
+                transcript_path: record.transcript_path.take(),
+            });
+        }
+        record
+            .earlier_sessions
+            .retain(|session| &session.agent_id != agent_id);
+    }
+    record.agent_id = Some(agent_id.clone());
+    true
+}
+
 /// Write one turn's final message after the answer sealed when work resumed.
 /// A later message of the same turn replaces only this turn's part, and an
 /// empty one adds nothing.
@@ -1166,9 +1350,9 @@ pub fn record_assistant_message(
         if record.kind.as_str() != kind || record.status.is_terminal() {
             return Ok(RecordMutation::Keep(()));
         }
-        // A team run follows its leader across conversation rows of one launch.
-        if record.team.is_some() {
-            record.agent_id = Some(agent_id.clone());
+        // Team and session runs follow their leader across conversation rows of one launch.
+        if record.team.is_some() || record.lifecycle == RunLifecycle::Session {
+            rebind_session(record, agent_id);
         }
         match &record.agent_id {
             Some(bound) if bound != agent_id => return Ok(RecordMutation::Keep(())),

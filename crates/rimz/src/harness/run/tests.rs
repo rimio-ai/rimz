@@ -29,6 +29,315 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn session_lifecycle_keeps_hooks_open_and_follows_conversation_rows() {
+    use crate::store::run::RunLifecycle;
+
+    let (_dir, paths, mut record) = setup();
+    record.lifecycle = RunLifecycle::Session;
+    create(&paths, &record).unwrap();
+    let mut outcomes = Vec::new();
+    for (index, signal) in [
+        LifecycleSignal::Registered,
+        turn_end("unused").signal,
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+        LifecycleSignal::Ended,
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = AgentSessionId::from(format!("session-{index}"));
+        let mut observation = AgentLifecycleObservation::new(Some(id.clone()), signal);
+        observation.transcript_path = Some(format!("/tmp/transcript-{index}"));
+        let terminal = record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &observation,
+            Some(format!("answer-{index}")),
+            || Some(OwedWake::Wait),
+        )
+        .unwrap();
+        let stored = load(&paths, &record.run_id).unwrap();
+        outcomes.push((
+            terminal.is_none(),
+            stored.status,
+            stored.agent_id == Some(id),
+            stored.transcript_path == observation.transcript_path,
+            stored.parked_at,
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        vec![(true, RunStatus::Running, true, true, None); 5]
+    );
+    record_assistant_message(
+        &paths,
+        &record.run_id,
+        "claude",
+        &"new-row".into(),
+        "latest".into(),
+    )
+    .unwrap();
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert_eq!(stored.last_message.as_deref(), Some("latest"));
+    assert_eq!(stored.agent_id, Some("new-row".into()));
+}
+
+#[test]
+fn session_terminal_hooks_never_reopen_a_finished_run() {
+    let (_dir, paths, mut record) = setup();
+    record.lifecycle = crate::store::run::RunLifecycle::Session;
+    record.subagent = true;
+    let mut outcomes = Vec::new();
+    for status in [RunStatus::Completed, RunStatus::Canceled, RunStatus::Failed] {
+        record.status = status;
+        create(&paths, &record).unwrap();
+        let observation = AgentLifecycleObservation::new(Some("later".into()), turn_started());
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            None
+        })
+        .unwrap();
+        outcomes.push(load(&paths, &record.run_id).unwrap().status);
+    }
+    assert_eq!(
+        outcomes,
+        [RunStatus::Completed, RunStatus::Canceled, RunStatus::Failed]
+    );
+}
+
+#[test]
+fn run_lifecycle_defaults_to_turn_without_changing_legacy_bytes() {
+    use crate::store::run::RunLifecycle;
+
+    let (_dir, _paths, record) = setup();
+    let legacy = serde_json::to_string(&record).unwrap();
+    assert!(!legacy.contains("lifecycle"));
+    let loaded: RunRecord = serde_json::from_str(&legacy).unwrap();
+    assert_eq!(loaded.lifecycle, RunLifecycle::Turn);
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), legacy);
+    let mut session = record;
+    session.lifecycle = RunLifecycle::Session;
+    let encoded = serde_json::to_value(session).unwrap();
+    assert_eq!(encoded["lifecycle"], "session");
+}
+
+#[test]
+fn session_exit_settles_once_without_capturing_a_registered_run() {
+    use crate::store::run::RunLifecycle;
+
+    let (dir, paths, mut record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    record.lifecycle = RunLifecycle::Session;
+    let mut outcomes = Vec::new();
+    for status in [
+        RunStatus::Pending,
+        RunStatus::Running,
+        RunStatus::Canceled,
+        RunStatus::Completed,
+    ] {
+        record.status = status;
+        create(&paths, &record).unwrap();
+        let mut captures = 0;
+        let settled = settle_session_exit(&store, &record.run_id, || {
+            captures += 1;
+            Some("never registered".into())
+        })
+        .unwrap();
+        let stored = load(&paths, &record.run_id).unwrap();
+        outcomes.push((
+            settled.is_some(),
+            stored.status,
+            captures,
+            stored.failure_tail,
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        vec![
+            (true, RunStatus::Failed, 1, Some("never registered".into())),
+            (true, RunStatus::Completed, 0, None),
+            (false, RunStatus::Canceled, 0, None),
+            (false, RunStatus::Completed, 0, None),
+        ]
+    );
+}
+
+#[test]
+fn session_exit_sums_every_binding_and_falls_back_to_transcript_cost() {
+    for keep_context in [true, false] {
+        let (dir, paths, mut record) = setup();
+        let runtime =
+            RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        record.lifecycle = RunLifecycle::Session;
+        create(&paths, &record).unwrap();
+        for (id, input, output, transcript_cost, context_cost) in [
+            ("first", 100, 10, 1.0, 1.25),
+            ("cleared", 200, 20, 2.0, 2.5),
+        ] {
+            let transcript = dir.path().join(format!("{id}.jsonl"));
+            std::fs::write(
+                &transcript,
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "timestamp":Timestamp::now().to_string(), "sessionId":id,
+                        "costUSD":transcript_cost, "requestId":format!("req-{id}"),
+                        "message":{"id":format!("msg-{id}"), "model":"claude-sonnet-4-6",
+                            "usage":{"input_tokens":input,"output_tokens":output}}
+                    })
+                ),
+            )
+            .unwrap();
+            if keep_context || id == "cleared" {
+                let mut context = crate::agents::AgentContext::new("claude", Timestamp::now());
+                context.cost = Some(crate::agents::AgentCost {
+                    total_cost_usd: Some(context_cost),
+                    ..Default::default()
+                });
+                crate::store::agent_context::write(
+                    store.runtime_paths(),
+                    "claude",
+                    id,
+                    &context,
+                    None,
+                )
+                .unwrap();
+            }
+            let mut observation =
+                AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+            observation.transcript_path = Some(transcript.display().to_string());
+            for _ in 0..2 {
+                record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+                    None
+                })
+                .unwrap();
+            }
+        }
+        let settled =
+            settle_session_exit(&store, &record.run_id, || panic!("registered run capture"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            settled.input_tokens,
+            Some(300),
+            "every session's fresh tokens count once"
+        );
+        assert_eq!(settled.output_tokens, Some(30));
+        assert_eq!(
+            settled.cost_usd,
+            Some(if keep_context { 3.75 } else { 3.5 })
+        );
+        assert_eq!(load(&paths, &record.run_id).unwrap(), settled);
+    }
+}
+
+#[test]
+fn session_exit_publishes_spend_in_the_first_terminal_record() {
+    let (dir, paths, mut record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    record.lifecycle = RunLifecycle::Session;
+    record.status = RunStatus::Running;
+    create(&paths, &record).unwrap();
+    let mut during_read = None;
+    let ended = settle_session_exit_with_spend(
+        &store,
+        &record.run_id,
+        || panic!("registered run capture"),
+        |_| {
+            during_read = Some(load(&paths, &record.run_id).unwrap());
+            RunSpend {
+                cost_usd: Some(1.25),
+                input_tokens: Some(100),
+                output_tokens: Some(10),
+            }
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        during_read.unwrap().status,
+        RunStatus::Running,
+        "an advance must not see a terminal run while spend is still being read"
+    );
+    assert_eq!(ended.status, RunStatus::Completed);
+    assert_eq!(ended.cost_usd, Some(1.25));
+    assert_eq!(ended.input_tokens, Some(100));
+    assert_eq!(ended.output_tokens, Some(10));
+    assert_eq!(load(&paths, &record.run_id).unwrap(), ended);
+}
+
+#[test]
+fn session_exit_rechecks_binding_and_cancellation_after_reading_spend() {
+    for cancel_during_read in [false, true] {
+        let (dir, paths, mut record) = setup();
+        let runtime =
+            RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        record.lifecycle = RunLifecycle::Session;
+        record.status = RunStatus::Running;
+        record.agent_id = Some("first".into());
+        create(&paths, &record).unwrap();
+        let mut reads = 0;
+        let ended = settle_session_exit_with_spend(
+            &store,
+            &record.run_id,
+            || None,
+            |_| {
+                reads += 1;
+                if reads == 1 {
+                    if cancel_during_read {
+                        cancel(&paths, &record.run_id).unwrap();
+                    } else {
+                        let observation = AgentLifecycleObservation::new(
+                            Some("cleared".into()),
+                            LifecycleSignal::Registered,
+                        );
+                        record_lifecycle(
+                            &paths,
+                            &record.run_id,
+                            "claude",
+                            &observation,
+                            None,
+                            || None,
+                        )
+                        .unwrap();
+                    }
+                }
+                RunSpend {
+                    cost_usd: Some(f64::from(reads)),
+                    ..Default::default()
+                }
+            },
+        )
+        .unwrap();
+        let stored = load(&paths, &record.run_id).unwrap();
+        if cancel_during_read {
+            assert!(
+                ended.is_none(),
+                "cancellation during the spend read must win"
+            );
+            assert_eq!(stored.status, RunStatus::Canceled);
+        } else {
+            assert_eq!(
+                reads, 2,
+                "a changed conversation binding requires fresh spend"
+            );
+            assert_eq!(stored.agent_id.as_deref(), Some("cleared"));
+            assert_eq!(stored.cost_usd, Some(2.0));
+            assert_eq!(ended, Some(stored));
+        }
+    }
+}
+
+#[test]
 fn delivery_stamps_subagent_answer_from_confirmed_conversation() {
     use crate::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
     use crate::store::writer::DeliveryAckMatch;
@@ -1547,6 +1856,15 @@ fn settle_verify_reopens_a_red_run_under_the_cap() {
 
 #[test]
 fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
+    assert_lifecycle_spend_wake(false);
+}
+
+#[test]
+fn session_exit_spend_is_stamped_before_the_workflow_wake() {
+    assert_lifecycle_spend_wake(true);
+}
+
+fn assert_lifecycle_spend_wake(session: bool) {
     use std::sync::Mutex;
     use tracing_subscriber::prelude::*;
 
@@ -1581,6 +1899,10 @@ fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
     let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
     let store = Store::open(paths.clone(), runtime).unwrap();
     record.agent_id = Some("priced-session".into());
+    if session {
+        record.lifecycle = crate::store::run::RunLifecycle::Session;
+        record.status = RunStatus::Running;
+    }
     // A missing workflow makes the wake observable synchronously without spawning a child.
     record.workflow = Some(crate::agents::WorkflowAttemptRef {
         run: crate::ids::WorkflowRunId::new(),
@@ -1610,6 +1932,16 @@ fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
     let ended = AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Ended);
     let adapter = crate::agents::definition_by_kind("claude").unwrap();
     let settled = tracing::subscriber::with_default(subscriber, || {
+        if session {
+            let settled =
+                settle_session_exit(&store, &record.run_id, || panic!("registered run capture"))
+                    .unwrap();
+            assert!(
+                settled.is_some(),
+                "provider exit must settle a registered session run"
+            );
+            return settled.unwrap();
+        }
         settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
             .unwrap()
             .unwrap()

@@ -10,7 +10,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
-- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 31, `cli/agents_cmd/mod.rs` 23, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 3); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
+- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 31, `cli/agents_cmd/mod.rs` 23, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 4); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
 

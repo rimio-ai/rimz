@@ -168,6 +168,13 @@ fn spawn(record: &RunRecord) -> Result<()> {
     crate::child_process::spawn_detached_reaped(
         crate::proc::rimz_exe(),
         |command| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+
+                // The advance must survive closing the pane that woke it.
+                command.process_group(0);
+            }
             command.args(super::advance_args(
                 &record.project_root,
                 Some(&record.id),

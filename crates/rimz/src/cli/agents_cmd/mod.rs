@@ -30,6 +30,7 @@ mod register;
 mod report;
 mod restart;
 mod resume;
+mod run_command;
 mod run_timeout;
 mod runs_lookup;
 mod show;
@@ -745,6 +746,8 @@ enum AgentsSubcmd {
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(Box<ExecArgs>),
+    #[command(hide = true)]
+    RunCommand(run_command::Args),
     /// Hidden helper the producer spawns to nudge a parked agent when its resume
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
@@ -898,6 +901,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             );
         }
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
+        Some(AgentsSubcmd::RunCommand(args)) => return run_command::run(args, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
         Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
