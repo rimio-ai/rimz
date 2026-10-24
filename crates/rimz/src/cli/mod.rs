@@ -70,7 +70,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
 use rimz::ids::{AskId, MuxName, WorkspaceId};
-use rimz::launcher::checkout::{admit_launch_worktree_name, caller_host_path, pinned_room_root};
+use rimz::launcher::checkout::pinned_room_root;
 use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
 use rimz::{RuntimePaths, StatePaths, Store};
 
@@ -328,7 +328,7 @@ fn scope_facts<'a>(
 
 #[cfg(test)]
 use rimz::launcher::context::current_channel_with;
-use rimz::launcher::context::{CurrentChannel, current_channel, directory_channel};
+use rimz::launcher::context::{CurrentChannel, current_channel};
 
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
@@ -941,30 +941,7 @@ pub(crate) fn position_standing(
 }
 
 fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
-    let Some(root) = globals.root.as_ref() else {
-        return Ok(());
-    };
-    let Some(caller) = rimz::harness::ancestry::CallerIdentity::from_env() else {
-        return Ok(());
-    };
-    let pinned = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
-        .ok()
-        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
-        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, std::path::Path::new(&root)));
-    let Some(pinned) = pinned else {
-        return Ok(());
-    };
-    let workspace = rimz::WorkspaceResolver::resolve_participant(".", Some(root.clone()))?;
-    let pinned =
-        rimz::StatePaths::for_workspace(rimz::ids::WorkspaceId::from_project_root(&pinned))?;
-    let target = rimz::StatePaths::for_project_root(&workspace.project_root)?;
-    rimz::harness::ancestry::check_launch_room(
-        Some(&caller),
-        Some((&pinned.workspace_id, &pinned.dir_name)),
-        (&target.workspace_id, &target.dir_name),
-        root,
-    )?;
-    Ok(())
+    rimz::launcher::checkout::check_launch_room(globals.root.as_deref())
 }
 
 pub(crate) fn anchor_caller_workspace(
@@ -972,51 +949,11 @@ pub(crate) fn anchor_caller_workspace(
     caller: Option<&rimz::agents::AgentState>,
     globals: &GlobalFlags,
 ) -> Result<rimz::ResolvedWorkspace> {
-    let Some(path) = caller.and_then(AgentState::lane_path) else {
-        tracing::debug!("caller has no recorded checkout; keeping invoking cwd");
-        return Ok(workspace);
-    };
-    if !Path::new(path).is_dir() {
-        anyhow::bail!(
-            "the calling agent's checkout `{path}` no longer exists; restart that agent from an existing checkout before it launches another"
-        );
-    }
-    let mut anchored =
-        rimz::workspace::WorkspaceResolver::resolve_participant(path, globals.root.clone())
-            .with_context(|| format!("resolving the calling agent's checkout `{path}`"))?;
-    anchored.worktree_root = Path::new(path)
-        .canonicalize()
-        .with_context(|| format!("resolving the calling agent's launch directory `{path}`"))?;
-    Ok(anchored)
+    rimz::launcher::checkout::anchor_caller_workspace(workspace, caller, globals.root.as_deref())
 }
 
-fn resolve_launch_cwd(
-    path: Option<&std::path::Path>,
-    paths: &rimz::StatePaths,
-) -> Result<Option<std::path::PathBuf>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let absolute = std::env::current_dir()
-        .context("reading the caller cwd")?
-        .join(path);
-    let host = caller_host_path(&absolute, Some(paths))?;
-    if !host.is_dir() {
-        anyhow::bail!(
-            "--cwd `{}` is not a directory; create it first or pass an existing one",
-            path.display()
-        );
-    }
-    host.canonicalize()
-        .map(Some)
-        .with_context(|| format!("resolving --cwd `{}`", path.display()))
-}
-
-pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
-    rimz::launcher::checkout::confirm_cross_repo_worktree(
-        workspace,
-        &mut launch_interaction::CliInteraction,
-    )
+fn resolve_launch_cwd(path: Option<&Path>, paths: &rimz::StatePaths) -> Result<Option<PathBuf>> {
+    rimz::launcher::checkout::resolve_launch_cwd(path, paths)
 }
 
 fn confirm_cross_repo_worktree_with(
@@ -1102,17 +1039,6 @@ pub(crate) fn report_definition_errors(config: &rimz::config::MachineConfig) -> 
     Ok(())
 }
 
-pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
-    let paths =
-        StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
-    let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
-    let store = Store::open(paths, runtime).context("opening store")?;
-    store
-        .record_workspace(workspace)
-        .context("recording workspace metadata")?;
-    Ok(store)
-}
-
 pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
     let paths =
         StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
@@ -1169,22 +1095,3 @@ mod surface_tests;
 
 #[cfg(test)]
 mod tests;
-
-fn resolve_launch_checkout(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::MachineConfig,
-    worktree: Option<&str>,
-    from_pr: Option<&rimz::forge::PrTarget>,
-    cwd: Option<&Path>,
-    base: rimz::worktree::LaunchBase,
-) -> Result<Option<rimz::worktree::LaunchCheckout>> {
-    rimz::launcher::checkout::resolve_launch_checkout(
-        workspace,
-        config,
-        worktree,
-        from_pr,
-        cwd,
-        base,
-        &mut launch_interaction::CliInteraction,
-    )
-}

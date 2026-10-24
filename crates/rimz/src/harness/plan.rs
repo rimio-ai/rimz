@@ -1683,6 +1683,15 @@ pub(super) fn resume_command(
 }
 
 #[derive(Clone, Copy)]
+pub struct LayoutRunParams<'a> {
+    pub run_id: &'a crate::ids::RunId,
+    pub leader_index: usize,
+    pub managed_launch: Option<&'a crate::agents::ManagedLaunchState>,
+    pub cleanup: bool,
+    pub subagent: bool,
+}
+
+#[derive(Clone, Copy)]
 pub struct LayoutPaneParams<'a> {
     pub runtime: &'a RuntimePaths,
     pub cwd: &'a Path,
@@ -1694,6 +1703,7 @@ pub struct LayoutPaneParams<'a> {
     pub fallback_channel: Option<&'a str>,
     /// A loop fire's `### Loop` reminder body, for the cell that receives the prompt.
     pub loop_reminder: Option<&'a str>,
+    pub leader_run: Option<LayoutRunParams<'a>>,
 }
 
 /// Compile backend-neutral pane commands for a resolved layout.
@@ -1705,13 +1715,26 @@ pub fn compile_layout_panes(
     layout: &LayoutSpec,
     params: LayoutPaneParams<'_>,
 ) -> Result<LayoutPanes> {
-    for cell in layout.agent_cells() {
+    // The run-bearing recipe validated its leader during preparation; retries
+    // reuse that preparation rather than checking its files again.
+    let layout_cells = || {
+        layout
+            .agent_cells()
+            .enumerate()
+            .filter_map(|(index, cell)| {
+                params
+                    .leader_run
+                    .is_none_or(|run| run.leader_index != index)
+                    .then_some(cell)
+            })
+    };
+    for cell in layout_cells() {
         validate_system_prompt_support(cell, crate::agents::find_definition(cell.kind.as_str()))?;
     }
-    for cell in layout.agent_cells() {
+    for cell in layout_cells() {
         validate_agent_prompt_files(cell)?;
     }
-    for cell in layout.agent_cells() {
+    for cell in layout_cells() {
         validate_system_prompt_text(cell)?;
     }
     let agent_count = layout.agent_cells().count();
@@ -1734,6 +1757,16 @@ pub fn compile_layout_panes(
                 .rows
                 .iter()
                 .map(|cell| {
+                    let name = match cell {
+                        Cell::Agent(cell)
+                            if params
+                                .leader_run
+                                .is_some_and(|run| run.leader_index == agent_index) =>
+                        {
+                            cell.kind.to_string()
+                        }
+                        _ => cell.pane_name(),
+                    };
                     let argv = match cell {
                         Cell::Command { argv } if argv.is_empty() => {
                             vec![crate::proc::user_shell_program()]
@@ -1761,7 +1794,7 @@ pub fn compile_layout_panes(
                                             "launch plan missing identity for agent cell {agent_index}"
                                         );
                                     };
-                                    fresh_agent_argv(cell, launch, &rimz_bin, params)?
+                                    fresh_agent_argv(cell, launch, &rimz_bin, params, agent_index)?
                                 }
                             };
                             agent_index = agent_index.saturating_add(1);
@@ -1770,7 +1803,7 @@ pub fn compile_layout_panes(
                     };
                     Ok(PaneCmd {
                         argv,
-                        name: Some(cell.pane_name()),
+                        name: Some(name),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1794,6 +1827,7 @@ fn fresh_agent_argv(
     launch: &AgentLaunchIdentity,
     rimz_bin: &Path,
     params: LayoutPaneParams<'_>,
+    agent_index: usize,
 ) -> Result<Vec<String>> {
     validate_agent_name(&launch.name)?;
     let mut request = crate::harness::launch::ExecRequest::fresh(
@@ -1819,11 +1853,29 @@ fn fresh_agent_argv(
     if launch.prompt.is_some() {
         request.loop_reminder = params.loop_reminder.map(str::to_owned);
     }
+    if let Some(run) = params
+        .leader_run
+        .filter(|run| run.leader_index == agent_index)
+    {
+        request.run_id = Some(run.run_id.clone());
+        request.subagent = run.subagent;
+        (request.close_pane_on_exit, request.exit_on_run_completion) = run_exit_policy(run.cleanup);
+        request.provider_account = run.managed_launch.and_then(|state| state.binding()).map_or(
+            crate::harness::launch::ProviderAccountState::Unbound,
+            |binding| crate::harness::launch::ProviderAccountState::Pending {
+                binding: binding.clone(),
+            },
+        );
+    }
     Ok(crate::harness::launch::exec_argv(
         rimz_bin,
         params.runtime,
         &request,
     )?)
+}
+
+pub fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool, bool) {
+    (self_cleanup_on_completion, self_cleanup_on_completion)
 }
 
 pub fn validate_agent_name(name: &str) -> Result<()> {

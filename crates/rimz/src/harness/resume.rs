@@ -1861,6 +1861,7 @@ fn materialize_team_restore_tab(
             launch_identities: identities,
             fallback_channel: planned.channel.as_deref(),
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .context("building team restore layout")

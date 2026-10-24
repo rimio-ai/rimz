@@ -1446,6 +1446,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
             launch_identities: &[],
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .expect_err("later unsupported prompt wins before file checks");
@@ -2718,6 +2719,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
             launch_identities: &identities,
             fallback_channel: None,
             loop_reminder: Some("fired"),
+            leader_run: None,
         },
     )
     .unwrap();
@@ -2826,6 +2828,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
                 launch_identities: &[],
                 fallback_channel: None,
                 loop_reminder: None,
+                leader_run: None,
             },
         )
         .unwrap();
@@ -2894,6 +2897,7 @@ fn in_place_resume_layout_returns_to_the_existing_shell() {
             launch_identities: &[],
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .unwrap();
@@ -2956,6 +2960,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             launch_identities: &fresh,
             fallback_channel: Some("fallback"),
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .expect("mixed panes");
@@ -2987,6 +2992,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             launch_identities: &[],
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .expect_err("identity count mismatch");
@@ -3007,6 +3013,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             launch_identities: &fresh,
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .expect_err("resume seed count mismatch");
@@ -3025,6 +3032,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             launch_identities: &surplus,
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .expect_err("surplus launch identity");
@@ -3089,6 +3097,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             launch_identities: &launches,
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .unwrap();
@@ -3130,6 +3139,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
                 launch_identities: &launches,
                 fallback_channel: None,
                 loop_reminder: None,
+                leader_run: None,
             },
         )
         .unwrap();
@@ -3198,6 +3208,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
             launch_identities: &[],
             fallback_channel: Some("new-channel"),
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .unwrap();

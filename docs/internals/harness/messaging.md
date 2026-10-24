@@ -85,29 +85,29 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 
 | Site | Module and composing symbol | Sender / body queued |
 | --- | --- | --- |
-| Human or agent message | `cli/message/dispatch.rs::send_message`, caller text. `cli/send.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`. `--no-from` uses `System` / `Prompt` |
-| Fleet digest | `cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
-| Team report | `cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
-| Child parked on a provider limit | `cli/agents_cmd/park_notice.rs::run`, text from `harness/park_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
-| Launched child silent mid-turn or never started | `cli/agents_cmd/stall_notice.rs::run`, text from `harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
-| Agent-sent message ended undelivered | `store/writer/queue.rs::QueueTxn::close` collects endings, `Store::commit_queue` composes through `store/message/sender_notice.rs::undelivered` | `Harness { notice: MessageUndelivered }` / `Prompt` |
-| Agent-sent message still queued | `message/deliver.rs::sweep`, text from `store/message/sender_notice.rs::still_queued` | `Harness { notice: MessageQueued }` / `Prompt` |
-| Prompt-cache keepalive | `cli/agents_cmd/cache_keepalive.rs::run`, text from `harness/cache_keepalive.rs::prompt`, through `deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
-| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text through `SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
-| Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
-| Fleet or account budget continuation | `cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
-| Agent budget continuation | `cli/agents_cmd/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
-| Idle compaction | `cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
-| Stage-flip compaction | `harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
-| Operator compaction | `cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
-| Smart compact before delivery | `message/send.rs::compact_message_for_target`, `agents::compact_command` | `System` / `Command` |
-| Stage notice | `harness/team_stage.rs::stage_open_body`, queued by `open_stage` from a flip, the exec wrapper's resume (`rewake_resumed`), or the registration backstop ([teams.md § Resume re-wake](./teams.md#resume-re-wake)) | `Harness { notice: Stage }` / `Prompt` |
-| Loop delivery, self-wait, or watch delivery | `harness/schedule/runner.rs::resolve_effect_prompt`, `runner/prompt.rs::compose_wait`, dispatched by `cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
-| Signal delivery | Same composition and dispatch, for a `Trigger::Signal` row. Team bindings are armed by `harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
-| Loop-spawned run | `harness/schedule/runner.rs::compile_spawn_request` and `resolve_effect_prompt` | No queue record. `RunRecord.loop_task` supplies harness origin |
-| Supervised launch or subagent brief | `cli/supervised/run.rs::supervised_prompt`, fallback reminder from `harness/launch_reminders.rs::subagent_reminder` | No queue record. Run origin is human or the subagent's parent |
-| Supervised retry | `harness/prompt_compose.rs::retry_prompt` | No queue record. Keeps the run's origin |
-| `message --create` on a missing recipient | `cli/message/dispatch.rs::recipient_miss`, caller text passed as a launch prompt | No queue record. Agent-sender preservation is deferred |
+| Human or agent message | `crates/rimz/src/cli/message/dispatch.rs::send_message`, caller text. `crates/rimz/src/launcher/context.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`. `--no-from` uses `System` / `Prompt` |
+| Fleet digest | `crates/rimz/src/cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` when every row is a subagent run, else `AgentReport` / `Prompt` |
+| Team report | `crates/rimz/src/cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
+| Child parked on a provider limit | `crates/rimz/src/cli/agents_cmd/park_notice.rs::run`, text from `crates/rimz/src/harness/park_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentPaused }` / `Prompt` |
+| Launched child silent mid-turn or never started | `crates/rimz/src/cli/agents_cmd/stall_notice.rs::run`, text from `crates/rimz/src/harness/stall_notice.rs::text`, through `SyntheticMessage` | `Harness { notice: SubagentStalled }` / `Prompt` |
+| Agent-sent message ended undelivered | `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects endings, `Store::commit_queue` composes through `crates/rimz/src/store/message/sender_notice.rs::undelivered` | `Harness { notice: MessageUndelivered }` / `Prompt` |
+| Agent-sent message still queued | `crates/rimz/src/message/deliver.rs::sweep`, text from `crates/rimz/src/store/message/sender_notice.rs::still_queued` | `Harness { notice: MessageQueued }` / `Prompt` |
+| Prompt-cache keepalive | `crates/rimz/src/cli/agents_cmd/cache_keepalive.rs::run`, text from `crates/rimz/src/harness/cache_keepalive.rs::prompt`, through `deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
+| Auto-continue | `crates/rimz/src/cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text through `SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
+| Supervised verification reprompt | `crates/rimz/src/harness/prompt_compose.rs::verify_reprompt`, delivered by `crates/rimz/src/cli/supervised/verify.rs::deliver_reprompt` through `deliver_now` | `System` / `Prompt` |
+| Fleet or account budget continuation | `crates/rimz/src/cli/budget.rs::run`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
+| Agent budget continuation | `crates/rimz/src/cli/agents_cmd/budget.rs::run_budget`, configured resume text through `SyntheticMessage` | `System` / `Prompt` |
+| Idle compaction | `crates/rimz/src/cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
+| Stage-flip compaction | `crates/rimz/src/harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `crates/rimz/src/message/compact.rs::send_compact` | `System` / `Command` |
+| Operator compaction | `crates/rimz/src/cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `crates/rimz/src/message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
+| Smart compact before delivery | `crates/rimz/src/message/send.rs::compact_message_for_target`, `agents::compact_command` | `System` / `Command` |
+| Stage notice | `crates/rimz/src/harness/team_stage.rs::stage_open_body`, queued by `open_stage` from a flip, the exec wrapper's resume (`rewake_resumed`), or the registration backstop ([teams.md § Resume re-wake](./teams.md#resume-re-wake)) | `Harness { notice: Stage }` / `Prompt` |
+| Loop delivery, self-wait, or watch delivery | `crates/rimz/src/harness/schedule/runner.rs::resolve_effect_prompt`, `crates/rimz/src/harness/schedule/runner/prompt.rs::compose_wait`, dispatched by `crates/rimz/src/cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
+| Signal delivery | Same composition and dispatch, for a `Trigger::Signal` row. Team bindings are armed by `crates/rimz/src/harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
+| Loop-spawned run | `crates/rimz/src/harness/schedule/runner.rs::compile_spawn_request` and `resolve_effect_prompt` | No queue record. `RunRecord.loop_task` supplies harness origin |
+| Supervised launch or subagent brief | `crates/rimz/src/launcher/resolve.rs::supervised_prompt`, fallback reminder from `crates/rimz/src/harness/launch_reminders.rs::subagent_reminder` | No queue record. Run origin is human or the subagent's parent |
+| Supervised retry | `crates/rimz/src/harness/prompt_compose.rs::retry_prompt` | No queue record. Keeps the run's origin |
+| `message --create` on a missing recipient | `crates/rimz/src/cli/message/dispatch.rs::recipient_miss`, caller text passed as a launch prompt | No queue record. Agent-sender preservation is deferred |
 
 Run-origin matching and the wrapper registry are in [transcript.md § Writing entries](./transcript.md#writing-entries). Text outside this table has no message record. Direct typing and `rimz pane send` are raw keystrokes whose caller is the author. Ordinary root launch text is not queued. Team system prompts use the system-text channel, and restart, fork, resume, and rebirth inject no turn-opening text. Provider control payloads pass through `SanitizedPrompt`, process plugins included, before they can become lifecycle prompts.
 
@@ -293,7 +293,7 @@ Check 14 honours the pin. A record pinned to a pane binds only to that pane (`ad
 
 #### The FIFO hold
 
-Check 6 counts three kinds of holder in the same card and lane: a deliverable `Queued` record, an unexpired `Claimed` record, and a `Sent` prompt still inside its reconcile deadline. The selector and the explain scan share this rule (`store/message.rs::delivery_batch_indices`, `older_ready_blocker`).
+Check 6 counts three kinds of holder in the same card and lane: a deliverable `Queued` record, an unexpired `Claimed` record, and a `Sent` prompt still inside its reconcile deadline. The selector and the explain scan share this rule (`crates/rimz/src/store/message.rs::delivery_batch_indices`, `older_ready_blocker`).
 
 A `Sent` prompt holds the slot while its turn-start acknowledgement is pending, even if the card still reads `Idle`: the store already knows a prompt was submitted before the hook commits. Readers release an overdue hold without a sweep or a record transition, through `MessageRecord::sent_hold_expired`. A compaction, ingress, or provider-start deferral extends that deadline ([Reconciliation](#reconciliation)). Late acknowledgements stay valid while the record is `Sent`, or `Queued` after a requeue.
 
@@ -307,7 +307,7 @@ An `Ended` receiver refuses delivery until a later lifecycle fold revives its ca
 
 A queued follow-up with `register_by` waits for registration while its card is absent or every matching row has `ended_at <= enqueued_at`. A tie keeps waiting, so the record is not archived against the child's previous end. A child that registers and then ends after enqueue reaches `ReceiverEnded` instead, and the sweep archives the record with the ordinary receiver-ended reason. While registration is awaited, the sweep wake is deferred by at most one delivery window, capped at the deadline. `Store::reconcile_stale_messages` alone writes `Expired` at or after the deadline, under the same card-aware predicate, with a reason naming the child and the deadline. A live row wins even past the deadline if reconciliation has not yet expired the record, and a registered child waiting on its own prompt does not expire.
 
-Ended launched children stay in runtime snapshots while their parent is visible and has no parent of its own (`store/runtime.rs::RuntimeProjection::runtime_from_refs`), so an ended grandchild drops out under a visible parent. For an ended receiver that projection omits, the sweep and `message show` consult the audit row instead of reading its absence as an unknown receiver. For `ReceiverGone`, `message show` consults the audit rollup too. When the durable card survives but runtime projection expelled it, the verdict names the card's last-seen time, says no live process claims it, and points at `rimz agents resume`. The verdict and its JSON name stay the same.
+Ended launched children stay in runtime snapshots while their parent is visible and has no parent of its own (`crates/rimz/src/store/runtime.rs::RuntimeProjection::runtime_from_refs`), so an ended grandchild drops out under a visible parent. For an ended receiver that projection omits, the sweep and `message show` consult the audit row instead of reading its absence as an unknown receiver. For `ReceiverGone`, `message show` consults the audit rollup too. When the durable card survives but runtime projection expelled it, the verdict names the card's last-seen time, says no live process claims it, and points at `rimz agents resume`. The verdict and its JSON name stay the same.
 
 #### Compaction and gates
 
@@ -523,7 +523,7 @@ The receiver's turn-start hook parses the header into transcript entries ([trans
 
 Four callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, flip compaction at a team hand-off, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
 
-The three standalone callers (idle, flip, operator) go through `message/compact.rs::send_compact`, which queues a pane-pinned, `Done`-gated command and attempts boundary delivery at once through `synthetic.rs::attempt_now`. A miss records the refusal verdict or delivery error. A retryable post-claim stop keeps the attempt's own reason, and only a terminal stop writes the caller's fallback. The store refreshes the host's wake stamp in each queue-changing commit, so the sweep retries a queued command at most once per delivery window until it delivers or, for an automatic command, expires.
+The three standalone callers (idle, flip, operator) go through `crates/rimz/src/message/compact.rs::send_compact`, which queues a pane-pinned, `Done`-gated command and attempts boundary delivery at once through `crates/rimz/src/message/synthetic.rs::attempt_now`. A miss records the refusal verdict or delivery error. A retryable post-claim stop keeps the attempt's own reason, and only a terminal stop writes the caller's fallback. The store refreshes the host's wake stamp in each queue-changing commit, so the sweep retries a queued command at most once per delivery window until it delivers or, for an automatic command, expires.
 
 A queued `Resume` record contributes no wake deadline: the sweep's `queue_head` excludes its control lane, so auto-continue owns its re-drive and a miss on an otherwise idle queue leaves no stamp. Claimed and sent resume records still arm recovery.
 
@@ -759,9 +759,9 @@ Durations accept `s`, `m`, `h`, and `d`, and zero is rejected. Wall-clock `HH:MM
 
 An agent that sent a message gets one notice when the message ends undelivered and one when it stays queued too long. Harness senders never get either, so a notice cannot cause a notice. Neither notice is an owed wake, and `reply_wait` records get neither, because their blocked CLI already reports failures and timeout hints.
 
-**Undelivered.** `store/writer/queue.rs::QueueTxn::close` collects agent-sent, non-`reply_wait` endings in `Archived`, `TimedOut`, `Abandoned`, or `Expired`. `Store::commit_queue` resolves the live sender and queues a `MESSAGE_UNDELIVERED` notice and its `message.queued` event in the same commit as the ending. A closed record leaves the live queue once, so an ending cannot notify twice. The notice quotes the ending reason and attempt evidence, previews the text, and asks the sender to inspect the receiver before resending. `Errored` is left out: a send failure errors inside the sender's own `rimz message` call, which exits non-zero with the reason. A queued compaction refused as a repeat also ends `Errored` without a notice. Delivered and deliberately canceled messages do not qualify.
+**Undelivered.** `crates/rimz/src/store/writer/queue.rs::QueueTxn::close` collects agent-sent, non-`reply_wait` endings in `Archived`, `TimedOut`, `Abandoned`, or `Expired`. `Store::commit_queue` resolves the live sender and queues a `MESSAGE_UNDELIVERED` notice and its `message.queued` event in the same commit as the ending. A closed record leaves the live queue once, so an ending cannot notify twice. The notice quotes the ending reason and attempt evidence, previews the text, and asks the sender to inspect the receiver before resending. `Errored` is left out: a send failure errors inside the sender's own `rimz message` call, which exits non-zero with the reason. A queued compaction refused as a repeat also ends `Errored` without a notice. Delivered and deliberately canceled messages do not qualify.
 
-**Still queued.** The sweep classifies a refused head's verdict through the exhaustive `message/deliver.rs::DeliveryVerdict::stall_class`:
+**Still queued.** The sweep classifies a refused head's verdict through the exhaustive `crates/rimz/src/message/deliver.rs::DeliveryVerdict::stall_class`:
 
 | Class | Delay | Verdicts |
 | --- | --- | --- |
@@ -771,7 +771,7 @@ An agent that sent a message gets one notice when the message ends undelivered a
 
 Each qualifying pending record on the refused head's card is measured from its own `enqueued_at`, not just the head, and its own schedule and conditions must be met. An unconfirmed-send requeue keeps that clock, while `message requeue` creates a fresh message. `Store::queue_still_queued_notice` rechecks `Queued` and an absent `queued_notice_at` under the workspace lock, then stamps that field and queues `MESSAGE_QUEUED` with its audit event together, so a second call changes nothing. The original message stays queued, and the notice names `rimz message cancel <id>` as the withdrawal path. The [millisecond overrides](../../reference/cli/message.md#the-message-header) for the two delays use the same `env_ms` convention as the delivery window, and are independent of it.
 
-`store/message/sender_notice.rs::resolve_sender` picks the recipient: an unended card of the sender's kind. When the sender has `agent_id`, it must match the card's session id or launch id. Otherwise the recorded name must match, and among several live cards with that name (as team roles across lanes) the one in the sender's recorded channel wins. It never falls back from a stale id to a recycled name. With no live sender there is no notice, only the ending's own audit. A notice is an ordinary queued `Harness` prompt with the sender card's channel, a `Done` gate, no pane pin, and no `in_reply_to` causality.
+`crates/rimz/src/store/message/sender_notice.rs::resolve_sender` picks the recipient: an unended card of the sender's kind. When the sender has `agent_id`, it must match the card's session id or launch id. Otherwise the recorded name must match, and among several live cards with that name (as team roles across lanes) the one in the sender's recorded channel wins. It never falls back from a stale id to a recycled name. With no live sender there is no notice, only the ending's own audit. A notice is an ordinary queued `Harness` prompt with the sender card's channel, a `Done` gate, no pane pin, and no `in_reply_to` causality.
 
 The queue commit refreshes the wake stamp for the notices it queues, including endings outside the sweep (lifecycle hooks, GC, worktree creation or retirement), so no caller-side refresh or notice timer is needed. Notices write no assist record: the message record and its queued audit event are the durable account.
 

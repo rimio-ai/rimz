@@ -477,6 +477,7 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
                 launch_identities: &[],
                 fallback_channel: None,
                 loop_reminder: None,
+                leader_run: None,
             },
         )
         .unwrap();
@@ -661,6 +662,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                         launch_identities: &[],
                         fallback_channel: None,
                         loop_reminder: None,
+                        leader_run: None,
                     },
                 )
                 .unwrap();
@@ -1538,6 +1540,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
             launch_identities: &[],
             fallback_channel: None,
             loop_reminder: None,
+            leader_run: None,
         },
     )
     .unwrap();

@@ -1,8 +1,9 @@
 //! Checkout admission, settlement, and caller-path translation.
 
 use super::{Interaction, Notice};
+use crate::agents::AgentState;
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn admit_launch_worktree_name(
     workspace: &crate::ResolvedWorkspace,
@@ -126,7 +127,7 @@ fn record_creation(workspace: &crate::ResolvedWorkspace, marker: &crate::worktre
     }
 }
 
-pub fn open_launch_store(workspace: &crate::ResolvedWorkspace) -> Result<crate::Store> {
+pub(super) fn open_launch_store(workspace: &crate::ResolvedWorkspace) -> Result<crate::Store> {
     let paths = crate::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing store paths")?;
     let runtime = crate::RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
@@ -235,4 +236,76 @@ pub fn pinned_room_root() -> Option<PathBuf> {
         .ok()
         .zip(std::env::var_os(crate::workspace::ENV_PROJECT_ROOT))
         .and_then(|(id, root)| crate::workspace::verify_pin(&id, &PathBuf::from(root)))
+}
+
+pub fn check_launch_room(root: Option<&Path>) -> Result<()> {
+    let Some(root) = root else {
+        return Ok(());
+    };
+    let Some(caller) = crate::harness::ancestry::CallerIdentity::from_env() else {
+        return Ok(());
+    };
+    let pinned = std::env::var(crate::workspace::ENV_WORKSPACE_ID)
+        .ok()
+        .zip(std::env::var_os(crate::workspace::ENV_PROJECT_ROOT))
+        .and_then(|(id, root)| crate::workspace::verify_pin(&id, std::path::Path::new(&root)));
+    let Some(pinned) = pinned else {
+        return Ok(());
+    };
+    let workspace = crate::WorkspaceResolver::resolve_participant(".", Some(root.to_path_buf()))?;
+    let pinned =
+        crate::StatePaths::for_workspace(crate::ids::WorkspaceId::from_project_root(&pinned))?;
+    let target = crate::StatePaths::for_project_root(&workspace.project_root)?;
+    crate::harness::ancestry::check_launch_room(
+        Some(&caller),
+        Some((&pinned.workspace_id, &pinned.dir_name)),
+        (&target.workspace_id, &target.dir_name),
+        root,
+    )?;
+    Ok(())
+}
+
+pub fn anchor_caller_workspace(
+    workspace: crate::ResolvedWorkspace,
+    caller: Option<&crate::agents::AgentState>,
+    root: Option<&Path>,
+) -> Result<crate::ResolvedWorkspace> {
+    let Some(path) = caller.and_then(AgentState::lane_path) else {
+        tracing::debug!("caller has no recorded checkout; keeping invoking cwd");
+        return Ok(workspace);
+    };
+    if !Path::new(path).is_dir() {
+        anyhow::bail!(
+            "the calling agent's checkout `{path}` no longer exists; restart that agent from an existing checkout before it launches another"
+        );
+    }
+    let mut anchored =
+        crate::workspace::WorkspaceResolver::resolve_participant(path, root.map(Path::to_path_buf))
+            .with_context(|| format!("resolving the calling agent's checkout `{path}`"))?;
+    anchored.worktree_root = Path::new(path)
+        .canonicalize()
+        .with_context(|| format!("resolving the calling agent's launch directory `{path}`"))?;
+    Ok(anchored)
+}
+
+pub fn resolve_launch_cwd(
+    path: Option<&std::path::Path>,
+    paths: &crate::StatePaths,
+) -> Result<Option<std::path::PathBuf>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let absolute = std::env::current_dir()
+        .context("reading the caller cwd")?
+        .join(path);
+    let host = caller_host_path(&absolute, Some(paths))?;
+    if !host.is_dir() {
+        anyhow::bail!(
+            "--cwd `{}` is not a directory; create it first or pass an existing one",
+            path.display()
+        );
+    }
+    host.canonicalize()
+        .map(Some)
+        .with_context(|| format!("resolving --cwd `{}`", path.display()))
 }

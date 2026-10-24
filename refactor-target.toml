@@ -580,7 +580,8 @@ path = "crates/rimz/src/cli"
 # anchor_caller_workspace shares agent-started placement across launch paths (+1).
 # open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
 # Launch checkout and caller/lane facts move into the library (-4).
-surface-budget = 31
+# Supervised store creation and cross-repo consent move into the library (-2).
+surface-budget = 29
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -1291,7 +1292,11 @@ path = "crates/rimz/src/launcher"
 # Layout prepare/execute, typed interaction, shared placement and admission move here (+77).
 # Managed worktree entry, runtime protections, offers and relaunch guidance move here (+12).
 # Supervised preparation uses the launcher's store-creation doorway (+1).
-surface-budget = 93
+# SupervisedContext, LeaderRun, RunCompletion, OpenedRun, prepare_supervised and run_exit_policy (+6).
+# Caller room, checkout anchoring and cwd admission move with supervised preparation (+3).
+# The store-creation doorway is launcher-private (-1).
+# run_exit_policy moves to the shared pane compiler (-1).
+surface-budget = 99
 
 [[verdict]]
 kind = "item"
@@ -1302,11 +1307,6 @@ reason = "The shared launcher owns managed-checkout entry consent and protected 
 kind = "item"
 key = "launcher::worktree_entry::PrintInput"
 reason = "Supervised retry guidance preserves positional prompt and input mode without recording stdin."
-
-[[verdict]]
-kind = "item"
-key = "launcher::worktree_entry::check"
-reason = "The supervised CLI driver shares the launcher's managed-checkout entry gate."
 
 [[verdict]]
 kind = "item"
@@ -1327,11 +1327,6 @@ reason = "Launcher recreation and explicit CLI removal share freshly gathered ru
 kind = "item"
 key = "launcher::worktree_entry::runtime_protections"
 reason = "CLI cleanup and launch recreation share best-effort runtime occupancy collection."
-
-[[verdict]]
-kind = "item"
-key = "launcher::checkout::open_launch_store"
-reason = "Room-choosing supervised preparation and checkout creation share workspace recording."
 
 [[verdict]]
 kind = "item"
@@ -1472,6 +1467,51 @@ reason = "Preparation precedes resident takeover; execution owns live-room layou
 kind = "item"
 key = "launcher::execute"
 reason = "Preparation precedes resident takeover; execution owns live-room layout effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::SupervisedContext"
+reason = "CLI supervised callers supply room-entry and completion effects to library preparation."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LeaderRun"
+reason = "Explicit leader-run policy selects the shared run-bearing execution path for either front end."
+
+[[verdict]]
+kind = "item"
+key = "launcher::RunCompletion"
+reason = "Detached and watched callers share publication order without moving CLI signal handling."
+
+[[verdict]]
+kind = "item"
+key = "launcher::OpenedRun"
+reason = "The CLI receives run, waiter and room facts and can retry the retained preparation."
+
+[[verdict]]
+kind = "item"
+key = "launcher::prepare_supervised"
+reason = "Supervised callers preserve their strict preparation recipe before shared execution."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::run_exit_policy"
+reason = "Fresh and resumed supervised wrappers share the same close and completion policy."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::check_launch_room"
+reason = "Layout and supervised callers share the pinned-room admission check."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::anchor_caller_workspace"
+reason = "Layout and supervised callers share durable caller checkout anchoring."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::resolve_launch_cwd"
+reason = "Layout and supervised callers share host-path translation and cwd validation."
 
 [[verdict]]
 kind = "item"
@@ -2581,7 +2621,8 @@ reason = "Host condition probes and task firing share stat-gated, 60-second-boun
 path = "crates/rimz/src/cli/supervised"
 # PaneBindWait carries run identity and open timing from both CLI doorways (+1).
 # Placement, binding and selection now belong to the library launcher (-7).
-surface-budget = 32
+# The run_exit_policy re-export moves to harness::plan (-1).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
@@ -2892,7 +2933,14 @@ allowed-dependencies = [
 # `ResolvedSingleAgentLaunch::for_booking` keeps loop account admission independent of live routing (+1).
 # PermissionClamp, PermissionClampSource, ChildPermissionErr, and check_child_permission_mode share child-mode notes and resume refusal (+4).
 # ResumeLaunchPosture::into_cell shares finalization with single-session restore (+1).
-surface-budget = 49
+# LayoutRunParams lowers the leader's supervised binding through the shared pane compiler (+1).
+# run_exit_policy shares fresh and resumed run wrapper policy (+1).
+surface-budget = 51
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::LayoutRunParams"
+reason = "The one pane compiler lowers explicit run policy without depending on the launcher."
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -3637,17 +3685,7 @@ reason = "Pass 29d: cx 0.6 (cyclomatic/cognitive/SLOC 26/12/126), solely the SLO
 [[verdict]]
 kind = "item"
 key = "cli::supervised::run::run_supervised"
-reason = "The run driver births the room and places, presents and closes attempt panes through room::RoomContext, room::select_birth_logins and room::pane_identity_env, and verify re-prompts read sidebar::produce::resolution_snapshot; harness cannot import room (same layer, room imports harness) or sidebar and channel (above it), and an effect trait would serve one caller (pass 32c)."
-
-[[verdict]]
-kind = "item"
-key = "cli::supervised::run::prepare_supervised"
-reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist and new-worktree name admission before the lane snapshot read, then sandbox, login, program and LSP preflight, channel admission); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
-
-[[verdict]]
-kind = "item"
-key = "cli::supervised::run::execute_attempt"
-reason = "The attempt's RunRecord and identity build is a single-use struct fill; a harness home adds one pub item at harness/run.rs's ceiling and deletes nothing (pass 32c)."
+reason = "The CLI driver retains waits, stream rendering, verify re-prompts, retry decisions, joins, failure-tail capture and cleanup; preparation and pane opening use the library launcher."
 
 [[verdict]]
 kind = "item"

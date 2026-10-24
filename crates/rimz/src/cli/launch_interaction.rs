@@ -56,6 +56,24 @@ impl Interaction for CliInteraction {
                 writeln!(render::err(), "rimz: {message}; agents use grep")?
             }
             Notice::LspWait(wait) => write_wait(wait)?,
+            Notice::IsolationClamp { profile, source } => writeln!(
+                render::err(),
+                "rimz: {profile} {source}, and a subagent never runs looser than its parent"
+            )?,
+            Notice::PermissionClamp { profile, clamp } => writeln!(
+                render::err(),
+                "rimz: {profile} runs in {} mode: {} asks for {}, and a subagent never runs looser than its parent",
+                clamp.mode,
+                clamp.source,
+                clamp.requested
+            )?,
+            Notice::YoloSandbox(profile) => writeln!(
+                render::err(),
+                "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
+            )?,
+            Notice::RoomReset { session, report } => {
+                render::room::print_automatic_reset(session, report)?
+            }
             Notice::Dispatch { target, result } => super::send::report_dispatch(
                 rimz::message::DeliveryKind::Boundary,
                 target,

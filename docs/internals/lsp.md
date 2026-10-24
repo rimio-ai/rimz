@@ -71,11 +71,11 @@ A reason that ends the server leaves the broker dormant, and the next agent quer
 
 | Caller | Checkouts |
 | --- | --- |
-| `crates/rimz/src/launcher/mod.rs::execute` (`rimz agents`, `rimz teams`) | The launch's cwd |
+| `crates/rimz/src/launcher/execute.rs::execute` (`rimz agents`, `rimz teams`) | The launch's cwd |
 | `crates/rimz/src/launcher/mod.rs::launch_resume_layout` (cohort resume) | Each resumed empty-dir agent's recorded checkout, then the cohort's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_selected` | Each resumed tab's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane` | Each distinct target cwd |
-| `crates/rimz/src/cli/supervised/run.rs::prepare_supervised` (`-p` runs) | The launch's cwd, after provider preflights, skipped for a subagent |
+| `crates/rimz/src/launcher/supervised.rs::prepare_supervised` (`-p` runs) | The launch's cwd, after provider preflights, skipped for a subagent |
 | `crates/rimz/src/cli/room/mod.rs::preflight_recovery` (rebirth) | `RebirthPlan::checkout_roots`, warning and continuing on any admission error |
 
 A subagent launch never admits. It joins whatever broker its checkout already has, dormant or running, which by default is its parent's ([subagents.md § The child works where its parent works](./harness/subagents.md#the-child-works-where-its-parent-works)). A child sent with `--cwd` into a checkout with no broker gets exit 3 from its queries.
