@@ -109,7 +109,7 @@ max-items = 3
 
 **Tests.** Behaviour is pinned at the interface before internals move; a module whose escaping items have no outside test site (`pins` empty, `t/c` low) pays this in full. Tests reaching past a narrowed reach move with it: rewritten when the assertion matters, deleted with the internals when not; the plan names each one. A pin is proven before the steps build on it: break the pinned behaviour with a one-line edit, watch the pin fail, restore. The PR lists each mutation with the pin it failed.
 
-**Prove.** On a tree that passed `gate`, `cargo xtask atlas diff --expect <contract>` exits zero, or the drift is fixed or the contract loosened with the reason in the commit. A lint fix after `diff` reindexes, so prove again. `[[dependency]]` rows prove a closed direction; a grep is a convenience and must not count rustdoc links or inline `#[cfg(test)]` sites. Then `cargo xtask atlas conform --tighten --only <owned-path>` per owned path.
+**Prove.** On a tree that passed `gate`, `cargo xtask atlas diff --expect <contract>` exits zero, or the drift is fixed or the contract loosened with the reason in the commit. A lint fix after `diff` reindexes, so prove again. `[[dependency]]` rows prove a closed direction; a grep is a convenience and must not count rustdoc links or inline `#[cfg(test)]` sites. Then `cargo xtask atlas conform --tighten --only <owned-path>` per owned path. A bench, allocation or CPU figure compares only within one setup: build and run the merge base and the branch back to back, in one detached worktree with one `CARGO_TARGET_DIR`, with at least three alternating warm runs per build, since the first run of either reads cold caches. A base figure recorded earlier in the run is a hint, not a baseline.
 
 ## Ending a pass
 
