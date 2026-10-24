@@ -50,20 +50,34 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `report_to` | `launcher` | see [which runs a fleet owes](#which-runs-a-fleet-owes) for `nobody` |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving. The duration limits only the caller's join |
 
-The pass-through fields are `--prompt-file`, `--model`, `--tier`, `--agent` (a re-base onto another profile or kind), `--effort`, `--fast`/`--no-fast`, `--isolation`, `--yolo`, `--description`, `--max-turns`, and trailing argv. The doorway omits `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output and input formats, retries, and verification. Each stays reachable through `rimz agents`. The retired `--detach` flag still parses and refuses (`reject_detach`).
-
-A child never runs looser than its parent, on two axes:
-
-- Isolation is capped by the [subagent cap](../sandbox.md#choosing-the-isolation), at launch and at parent-message resume.
-- Permission mode is capped by the caller's durable `AgentState.mode`, ranked plan < ask < auto < yolo on `PermissionMode`, with an unrecorded mode read as auto. Before finalization, `plan::plan_supervised_launch` refuses an explicit grant above that ceiling and lowers a higher default (auto, profile, or mode cell) to an explicit choice. `SupervisedLaunch.permission_clamp` carries the lowered mode and its source to the CLI note. Finalization records the capped mode on the cell, so the agent and run records both carry it.
+The pass-through fields are `--prompt-file`, `--model`, `--tier`, `--agent` (a re-base onto another profile or kind), `--effort`, `--fast`/`--no-fast`, `--isolation`, `--yolo`, `--cwd` ([below](#the-child-works-where-its-parent-works)), `--description`, `--max-turns`, and trailing argv. The doorway omits `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output and input formats, retries, and verification. Each stays reachable through `rimz agents`. The retired `--detach` flag still parses and refuses (`reject_detach`).
 
 A launch prints the minted petname and returns. Its stderr receipt, shared with `rimz agents -p --bg` through `supervised::output::write_background_receipt`, names the fleet report, the agent-visible response path, and the `wait` command that blocks instead. `--wait` leaves the background run unchanged and passes the petname to the shared `agents_cmd::wait_agent` join. `--wait=DURATION` adds a caller-side deadline without changing the child's timeout. `--json` on a single launch requires `--wait`.
 
 Launch resolution and the `profiles` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`. A profile named in the wrong section produces an error that names both. Commands and teams are shared between the two, but `profiles` never lists teams, because one launch produces one agent.
 
+### The parent caps a child's posture
+
+The planner caps a launched child's posture at its parent's on two axes, isolation and permission mode, at launch and again at parent-message resume. The caps keep an agent tree consistent and are not containment. They judge only the posture RimZ plans: trailing argv is appended after the permission step (`plan::finalize_agent_cell`), so a provider switch such as Claude's `--dangerously-skip-permissions` reaches the child unchecked.
+
+Isolation follows the [subagent cap](../sandbox.md#the-subagent-cap), which `sandbox.md` owns with the isolation levels. `plan::cap_child_isolation` reads the launching process's ambient isolation, so it needs no caller row.
+
+Permission mode is capped in `harness/plan.rs::cap_child_permission`, called from `plan::plan_supervised_launch` before finalization renders argv. The ceiling is the caller's recorded `AgentState.mode`, never an environment value, ranked plan < ask < auto < yolo (`PermissionMode::rank` in `agents/definition.rs`), with an unrecorded mode read as auto. A request at or below the ceiling passes unchanged, and a launch with no resolved caller is not capped.
+
+| Source of a mode above the ceiling | Result |
+| --- | --- |
+| `--yolo` | Refused with `ChildPermissionErr::Explicit`, which names the parent's mode and the fix: a parent launched with `--yolo` or a `mode: yolo` definition. |
+| A profile's `mode:` (`PermissionClampSource::ProfileDefault`), a mode cell such as `codex-yolo` (`ModeCell`), or the auto default (`AutoDefault`) | Lowered to the ceiling. The planner turns the default into an explicit choice, so finalization strips the profile's permission args, adds the ceiling's, and records the ceiling on the cell, the agent record, and the run record. `SupervisedLaunch.permission_clamp` carries the lowered mode and its source to the stderr note (`cli/supervised.rs::note_permission_clamp`). |
+
+Parent-message resume ([resuming an ended child](#resuming-an-ended-child)) rechecks the replayed mode with `plan::check_child_permission_mode` against the parent's current recorded mode, and refuses with `ChildPermissionErr::Resume` instead of lowering it. The fix it names is a new child. The same path reruns `plan::cap_child_isolation` on the child's recorded override and its re-read profile default.
+
+A yolo child that resolves to scoped isolation gets a stderr note that `sudo` and setuid binaries do not work in the view, with `--isolation host` as the fix (`SupervisedLaunch.yolo_sandbox`, `cli/supervised.rs::note_yolo_sandbox`). The note is skipped under a scoped parent, where the cap refuses that fix, and at parent-message resume. Why the view blocks escalation is in [sandbox.md](../sandbox.md#the-launch-plan).
+
+Both caps apply only where the planner sees `subagent` set, and at parent-message resume. Peers (`rimz agents`, interactive or `-p`), teams, loop fires, workflow steps, restart, fork, and cohort resume are uncapped.
+
 ## Fanout
 
-`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag, which wins over the configured default. Fanout-level `--keep` applies to every task. Permission mode, isolation, wait, retention, and passthrough argv are not per-task fields, and the task format rejects unknown fields. Every task's default permission mode still passes the planner's parent cap.
+`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag, which wins over the configured default. Fanout-level `--keep` applies to every task. Permission mode, isolation, wait, retention, and passthrough argv are not per-task fields, and the task format rejects unknown fields. Every task still passes the planner's [parent caps](#the-parent-caps-a-childs-posture).
 
 The whole array is validated before the first side effect: parsing, required fields, and every deadline duration. A validation failure launches nothing. Pane opens then run one at a time in the caller process, so two backend splits never race against the same anchor pane. Each child process starts as soon as its pane opens, so the children run in parallel.
 
@@ -470,7 +484,7 @@ Text fan-out claims after each printed reply, and JSON claims only after the sel
 
 For an ended child, [`cli/message/dispatch.rs`](../../../crates/rimz/src/cli/message/dispatch.rs), `recipient_miss`, calls `resume_child` in [`cli/subagents/resume.rs`](../../../crates/rimz/src/cli/subagents/resume.rs) before reporting a miss. It resolves the caller through ancestry against the audit projection, and the target only among that caller's launched children, so a user shell, peer, or sibling cannot resume it this way.
 
-Before it queues anything or opens a pane, `resume_child` checks, in order: the recorded cwd, subagent-profile posture, scoped skills and capability, trust, login, provider session resume support, and the resolved login's [health](./fleet.md#every-path-that-builds-a-launch-layout). After posture resolution, `plan::check_child_permission_mode` refuses a replayed mode above the parent's current recorded ceiling (unrecorded is auto), naming both modes and asking for a new child. Resume never lowers the saved grant. A missing session, unsupported resume, or degraded posture is a miss with its reason, never a fresh launch.
+Before it queues anything or opens a pane, `resume_child` checks, in order: the recorded cwd, subagent-profile posture, scoped skills and capability, trust, login, provider session resume support, and the resolved login's [health](./fleet.md#every-path-that-builds-a-launch-layout). After posture resolution it applies the [parent caps](#the-parent-caps-a-childs-posture), which refuse a replayed mode above the parent's current one and never lower the saved grant. A missing session, unsupported resume, or degraded posture is a miss with its reason, never a fresh launch.
 
 The request reuses the child's session, launch identity, newest run, and keep policy, and takes cwd from the child without taking checkout ownership. Placement uses the parent's session and the ordinary subagent zone fallbacks. Under the zone lock, an already-live card returns to normal dispatch. Otherwise the follow-up is queued for the named ended child before the split, and the queue commit decides:
 

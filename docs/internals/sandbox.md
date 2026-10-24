@@ -36,7 +36,7 @@ A subagent launched without its own `--isolation` inherits its parent's recorded
 
 A host parent, or a parent with no ambient isolation, imposes no cap. The cap keeps an agent tree consistent and is not containment: ordinary agent launches, teams, forks, and loops are outside it. Each scoped child opens its own pane through the multiplexer, builds its own view from its own profile, and shares the parent's temp unit.
 
-The same planner caps a subagent's permission mode against the caller's recorded `AgentState.mode`, never an environment value. An unrecorded mode counts as auto, ordered plan < ask < auto < yolo. An explicit `--yolo` above the ceiling refuses, and a higher default lowers with a returned note before finalization renders argv. Parent-message resume rechecks the replayed mode through `harness::plan::check_child_permission_mode` and refuses instead of lowering it. This cap is consistency too: passthrough argv, peers, teams, loops, workflows, restart, fork, cohort resume, and launches without a caller are outside it. A yolo child in scoped isolation gets a note that `sudo` and setuid binaries cannot escalate in the view, naming the host override, except under a scoped parent, where that fix is unavailable. The launch-side rule is in [subagents.md](./harness/subagents.md#what-a-launch-desugars-to).
+The same planner caps the child's permission mode and notes a yolo child that resolves to scoped isolation. Both rules, and the launches outside either cap, are in [subagents.md](./harness/subagents.md#the-parent-caps-a-childs-posture).
 
 ## Provider command sandboxes
 
