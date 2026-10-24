@@ -201,6 +201,7 @@ pub(super) fn normalized_host(raw: &str) -> Option<String> {
 
 fn found_account(account_id: String, credentials_updated_at_ms: Option<u64>) -> AccountProbe {
     AccountProbe::Found(AgentAccount {
+        profile_fingerprint: None,
         scope: Default::default(),
         plan: None,
         account_id: Some(account_id),

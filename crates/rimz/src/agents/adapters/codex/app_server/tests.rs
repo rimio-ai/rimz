@@ -994,6 +994,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
         }),
         pr: None,
         account: Some(AgentAccount {
+            profile_fingerprint: None,
             scope: Default::default(),
             plan: Some("pro".to_owned()),
             account_id: None,

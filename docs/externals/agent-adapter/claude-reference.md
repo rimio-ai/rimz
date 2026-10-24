@@ -766,6 +766,8 @@ The file lives at `/etc/claude-code/managed-settings.json` on Linux and WSL, `/L
 
 Identity fields depend on the login. A `claude.ai` login includes `email`, `orgId`, `orgName`, and `subscriptionType`, each nullable. A stored Console login can include the three identity fields. A gateway login adds only `email`. Ordinary environment API-key logins omit those identity fields and `subscriptionType`.
 
+In the [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310), auth status prints saved `oauthAccount.emailAddress` and `organizationUuid` as `email` and `orgId`. Sign-in populates those from the profile's `account.email` and `organization.uuid`.
+
 `projectsDirectory` can be null when project or local `env.CLAUDE_CONFIG_DIR` disagrees with the directory resolved by the process.
 
 `forceLoginMethod: "gateway"` and `forceLoginGatewayUrl` are honored in user settings without managed settings from 2.1.295 ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21295)). Managed `availableModelsMatch: "exact"` restricts an allowlist entry to its named model version from 2.1.283. Managed `deniedModels` blocks models even when `availableModels` permits them ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21283)).
@@ -788,6 +790,10 @@ The file holds a root `claudeAiOauth` object; the docs publish no schema. Token 
 | `rateLimitTier` | cached rate-limit tier; observed Max values are `default_claude_max_5x` and `default_claude_max_20x` |
 
 The 2.1.306 bundle takes `rateLimitTier` from `/api/oauth/profile`'s `organization.rate_limit_tier` and stores it beside `subscriptionType` on sign-in, token refresh, and profile re-verification. Its 20x check requires both `subscriptionType === "max"` and `rateLimitTier === "default_claude_max_20x"`. These are cached metadata, not a fresh profile read; [issue 87419](https://github.com/anthropics/claude-code/issues/87419) records a credential tier lagging the profile until another login.
+
+### OAuth profile endpoint
+
+`GET https://api.anthropic.com/api/oauth/profile` carries `account.email`, `organization.uuid`, `organization.organization_type`, and `organization.rate_limit_tier`. The [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310) maps `claude_pro`, `claude_max`, `claude_team`, and `claude_enterprise` to their subscription families; its Max 20x check also requires `default_claude_max_20x`. The Max 5x tier is `default_claude_max_5x`. An observed Pro response carried `organization_type = "claude_pro"` and `rate_limit_tier = "default_claude_ai"`; the latter alone does not establish Pro. The bundle does not use `subscription_status` or `has_claude_*` to select the plan. This is observed client protocol, not a published API contract.
 
 ### OAuth usage endpoint
 

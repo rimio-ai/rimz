@@ -693,9 +693,12 @@ pub struct SubagentObservation {
 /// every session of one provider shares it — so the sidebar's provider
 /// dashboard reads it from the freshest session, never paints it per row.
 /// Source-agnostic: Codex fills it from the app-server `account/rateLimits/read`
-/// plan type, Claude from `claude auth status`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// plan type, Claude from `claude auth status` and a bound live profile answer.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentAccount {
+    /// Opaque profile owner binding; never a display or diagnostic identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_fingerprint: Option<String>,
     /// Provider and variant identity used by account-usage caches. Kind-wide is
     /// omitted so snapshots written before this field remain byte-compatible.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
@@ -733,6 +736,24 @@ pub struct AgentAccount {
     /// probes leave it unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_updated_at_ms: Option<u64>,
+}
+
+impl std::fmt::Debug for AgentAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentAccount")
+            .field(
+                "profile_fingerprint",
+                &self.profile_fingerprint.as_ref().map(|_| "<redacted>"),
+            )
+            .field("scope", &self.scope)
+            .field("plan", &self.plan)
+            .field("account_id", &self.account_id)
+            .field("metered", &self.metered)
+            .field("version", &self.version)
+            .field("sub_provider", &self.sub_provider)
+            .field("credentials_updated_at_ms", &self.credentials_updated_at_ms)
+            .finish()
+    }
 }
 
 /// Temporal coverage for a cost total. Cumulative session totals are additive;

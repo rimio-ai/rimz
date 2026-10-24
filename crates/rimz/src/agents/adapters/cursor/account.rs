@@ -91,6 +91,7 @@ fn probe_with(
     }
     let plan = non_blank(about.subscription_tier);
     AccountProbe::Found(AgentAccount {
+        profile_fingerprint: None,
         account_id: status_email.or(about_email),
         metered: plan.as_ref().map(|_| true),
         plan,

@@ -117,6 +117,7 @@ impl AuthRecord {
             .or_else(|| self.organization_id.as_deref().and_then(non_empty))
             .map(ToOwned::to_owned);
         AgentAccount {
+            profile_fingerprint: None,
             scope: ProviderAccountScope::KindWide,
             plan: Some(self.auth_mode.label().to_owned()),
             account_id,

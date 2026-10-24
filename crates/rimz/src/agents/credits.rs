@@ -216,6 +216,21 @@ pub(super) fn oauth_http_post_json<T: Serialize>(
     oauth_http_request(url, headers, Some(&body), breadcrumb)
 }
 
+/// Bounded GET without retries, for best-effort profile reads on the account cadence.
+pub(super) fn oauth_http_get_once(
+    url: &str,
+    headers: &[(&str, String)],
+    breadcrumb: &str,
+) -> std::result::Result<String, OAuthHttpErr> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "{}",
+        breadcrumb,
+    );
+    oauth_http_request_once(url, headers, None)
+}
+
 /// Bounded, non-retrying JSON POST for claims whose idempotency is unverified.
 pub(super) fn oauth_http_post_json_once<T: Serialize>(
     url: &str,
