@@ -22,6 +22,634 @@ fn main() {
     divan::main();
 }
 
+struct HookFixture {
+    _sandbox: rimz::testkit::sandbox::TestSandbox,
+    home_root: TempDir,
+    runtime_root: TempDir,
+    binary: PathBuf,
+}
+
+impl HookFixture {
+    fn new() -> Self {
+        let home_root = tempfile::Builder::new()
+            .prefix("rimz-test-home-")
+            .tempdir()
+            .unwrap();
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let binary = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("rimz");
+        let sandbox = rimz::testkit::sandbox::TestSandbox::arm(
+            rimz::testkit::sandbox::SandboxSpec {
+                home_root: home_root.path().into(),
+                runtime_root: runtime_root.path().into(),
+            },
+            &binary.with_file_name("rimz-test-reaper"),
+        )
+        .unwrap();
+        Self {
+            _sandbox: sandbox,
+            home_root,
+            runtime_root,
+            binary,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[divan::bench(sample_count = 1, sample_size = 1)]
+fn drainer_latency(bencher: Bencher) {
+    latency::run(bencher);
+}
+
+#[cfg(target_os = "linux")]
+mod latency {
+    use super::*;
+    use std::io::{BufRead as _, Write as _};
+    use std::os::unix::net::UnixStream;
+    use std::path::Path;
+    use std::process::{Child, Command, Output, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread::{self, JoinHandle};
+    use std::time::{Duration, Instant};
+
+    use rimz::agents::{AgentContext, AgentLifecycleObservation, LifecycleSignal};
+    use rimz::disk::lock::SharedAppendLock;
+    use rimz::harness::hook_drain::{Connection, DrainReceipt};
+    use rimz::ids::{AgentKind, EventId};
+    use rimz::store::event::{EventEnvelope, EventKind};
+    use rimz::store::{agent_context, event_log, ingress};
+    use serde_json::{Value, json};
+
+    const SAMPLES: usize = 300;
+    const WAIT: Duration = Duration::from_secs(120);
+
+    struct Fixture {
+        owners: SessionOwners,
+        _roots: HookFixture,
+        binary: PathBuf,
+        project: PathBuf,
+        env: BTreeMap<String, String>,
+        store: rimz::Store,
+    }
+
+    struct SessionOwners(Vec<Child>);
+
+    impl Drop for SessionOwners {
+        fn drop(&mut self) {
+            for child in &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            assert!(
+                std::env::var_os("RIMZ_HOOK_BUDGET_HOME").is_none(),
+                "generated fixture only"
+            );
+            let roots = HookFixture::new();
+            let binary = std::env::var_os("RIMZ_HOOK_BUDGET_BIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| roots.binary.clone());
+            assert!(
+                binary.is_absolute() && binary.is_file(),
+                "absolute CLI binary required"
+            );
+            let binary = binary.canonicalize().unwrap();
+            let root = roots.home_root.path();
+            let home = root.join("state");
+            let project = root.join("repo");
+            std::fs::create_dir(&project).unwrap();
+            let paths = rimz::StatePaths::for_project_root_under(&project, &home).unwrap();
+            let runtime = rimz::RuntimePaths::for_state_under(&paths, roots.runtime_root.path());
+            let mut env = BTreeMap::new();
+            for (key, path) in [
+                ("HOME", root.to_path_buf()),
+                ("RIMZ_HOME", home.clone()),
+                ("XDG_CONFIG_HOME", root.join("config")),
+                ("XDG_DATA_HOME", root.join("data")),
+                ("XDG_CACHE_HOME", root.join("cache")),
+                ("XDG_STATE_HOME", root.join("xdg-state")),
+                ("CLAUDE_CONFIG_DIR", root.join("claude")),
+                ("CODEX_HOME", root.join("codex")),
+                ("TMPDIR", root.join("tmp")),
+                ("XDG_RUNTIME_DIR", roots.runtime_root.path().into()),
+            ] {
+                std::fs::create_dir_all(&path).unwrap();
+                env.insert(key.to_owned(), path.to_str().unwrap().to_owned());
+            }
+            env.extend([
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("SHELL".into(), "/bin/sh".into()),
+                ("RIMZ_WORKSPACE_ID".into(), paths.workspace_id.to_string()),
+                ("RIMZ_PROJECT_ROOT".into(), project.to_str().unwrap().into()),
+                ("RIMZ_BIN".into(), binary.to_str().unwrap().into()),
+                ("RIMZ_RUNTIME_ENV".into(), "1".into()),
+                ("RIMZ_TEST_HOOK_DRAIN_TIMING".into(), "1".into()),
+            ]);
+            // `systemd-run --user` reaches the manager only through
+            // `$XDG_RUNTIME_DIR/systemd`, so the private runtime root links the caller's.
+            if let Some(manager) = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(|dir| PathBuf::from(dir).join("systemd"))
+                .filter(|dir| dir.is_dir())
+            {
+                std::os::unix::fs::symlink(manager, roots.runtime_root.path().join("systemd"))
+                    .unwrap();
+            }
+            for args in [
+                &["init", "--quiet"][..],
+                &[
+                    "-c",
+                    "user.name=RimZ bench",
+                    "-c",
+                    "user.email=bench@invalid",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "fixture",
+                ][..],
+            ] {
+                let output = Command::new("git")
+                    .env_clear()
+                    .envs(&env)
+                    .current_dir(&project)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+            }
+            let store = rimz::Store::open(paths, runtime).unwrap();
+            let resolved =
+                rimz::WorkspaceResolver::resolve_under(&project, Some(project.clone()), &home)
+                    .unwrap();
+            store.record_workspace(&resolved).unwrap();
+            rimz::testkit::fleet::seed_history_carryover(
+                &store,
+                HISTORY_CARRYOVER,
+                CARRYOVER_PROMPT_BYTES,
+            )
+            .unwrap();
+            for index in 0..HISTORY_CARRYOVER {
+                let id = format!("history-{index}");
+                let observation =
+                    AgentLifecycleObservation::new(Some(id.clone().into()), LifecycleSignal::Ended);
+                event_log::append(
+                    &store.paths().events_log,
+                    &EventEnvelope::agent_lifecycle(
+                        store.paths().workspace_id.clone(),
+                        id,
+                        "claude",
+                        "SessionEnd",
+                        &observation,
+                    ),
+                )
+                .unwrap();
+            }
+            let fixture = Self {
+                owners: SessionOwners(Vec::new()),
+                _roots: roots,
+                binary,
+                project,
+                env,
+                store,
+            };
+            let mut fixture = fixture;
+            for index in 0..SAMPLES {
+                let owner = Command::new("sleep")
+                    .arg("86400")
+                    .env_clear()
+                    .envs(&fixture.env)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                fixture.owners.0.push(owner);
+                let session = format!("latency-{index}");
+                let frame = fixture.frame(index, json!({
+                    "hook_event_name": "SessionStart", "session_id": session, "source": "startup",
+                }));
+                let output = output(
+                    fixture.command(index).args(["hooks", "apply"]),
+                    &serde_json::to_vec(&frame).unwrap(),
+                );
+                assert!(output.status.success(), "registration {index}: {output:?}");
+                agent_context::write(
+                    fixture.store.runtime_paths(),
+                    "claude",
+                    &session,
+                    &AgentContext::new("claude", jiff::Timestamp::now()),
+                    None,
+                )
+                .unwrap();
+            }
+            let snapshot = fixture.store.snapshot_cached().unwrap();
+            let live: Vec<_> = snapshot
+                .agents
+                .iter()
+                .filter(|agent| agent.ended_at.is_none())
+                .collect();
+            assert_eq!(live.len(), SAMPLES);
+            for index in 0..SAMPLES {
+                let id = format!("latency-{index}");
+                assert!(live.iter().any(|agent| {
+                    agent.agent_id.as_str() == id && !agent.is_provider_subagent()
+                }));
+            }
+            let rollup = bytes(&fixture.store.paths().rollup_cache);
+            assert!(
+                rollup >= 2 * 1024 * 1024,
+                "retained multi-MB rollup required: {rollup}"
+            );
+            let sidecars: Vec<_> =
+                std::fs::read_dir(&fixture.store.runtime_paths().agent_context_dir)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().metadata().unwrap().len())
+                    .collect();
+            assert_eq!(sidecars.len(), SAMPLES);
+            let version = output(fixture.command(0).arg("--version"), &[]);
+            assert!(version.status.success(), "{version:?}");
+            emit(json!({"kind": "fixture", "binary": fixture.binary,
+                "build_id": rimz::build_id::of_file(&fixture.binary).unwrap(),
+                "version": String::from_utf8(version.stdout).unwrap().trim(),
+                "live_roots": live.len(), "owner_processes": fixture.owners.0.len(),
+                "history_rows": HISTORY_CARRYOVER, "rollup_bytes": rollup,
+                "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
+                "derived_carryover_bytes": bytes(&fixture.store.paths().carryover_cache),
+                "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()}));
+            assert!(
+                !fixture
+                    .store
+                    .runtime_paths()
+                    .hook_drainer_socket_path()
+                    .exists()
+            );
+            fixture
+        }
+
+        fn command(&self, index: usize) -> Command {
+            let mut command = Command::new(&self.binary);
+            command
+                .env_clear()
+                .envs(&self.env)
+                .env("RIMZ_AGENT_PID", self.owners.0[index].id().to_string())
+                .env("TMUX_PANE", format!("%{}", index + 1))
+                .current_dir(&self.project)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        }
+
+        fn frame(&self, index: usize, mut payload: Value) -> ingress::HookIngress {
+            payload["cwd"] = json!(self.project);
+            let mut env = self.env.clone();
+            env.insert(
+                "RIMZ_AGENT_PID".into(),
+                self.owners.0[index].id().to_string(),
+            );
+            // The view reaps older paneless roots in the same worktree, even with distinct pids.
+            env.insert("TMUX_PANE".into(), format!("%{}", index + 1));
+            ingress::HookIngress {
+                boot_id: rimz::proc::boot_id(),
+                schema_version: "1".into(),
+                event_id: EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: AgentKind::new_unchecked("claude"),
+                event: Some(payload["hook_event_name"].as_str().unwrap().into()),
+                payload: payload.to_string(),
+                cwd: self.project.clone(),
+                hook_pid: std::process::id(),
+                env,
+            }
+        }
+
+        fn append_receipt(&self, frame: &ingress::HookIngress) -> StopSample {
+            let start = Instant::now();
+            let lock = SharedAppendLock::acquire(&self.store.paths().hook_ingress_lock).unwrap();
+            let through = ingress::append(self.store.paths(), frame, &lock).unwrap();
+            drop(lock);
+            let receipt = Connection::connect(&self.store)
+                .unwrap()
+                .reply(through, frame.event_id.clone(), WAIT)
+                .unwrap();
+            let wall = micros(start.elapsed());
+            assert!(
+                receipt.applied >= through && receipt.epoch.is_some(),
+                "{receipt:?} does not cover {through}"
+            );
+            StopSample {
+                ingress: frame.event_id.clone(),
+                through,
+                receipt,
+                wall,
+            }
+        }
+    }
+
+    struct StopSample {
+        ingress: EventId,
+        through: u64,
+        receipt: DrainReceipt,
+        wall: u64,
+    }
+
+    fn output(command: &mut Command, payload: &[u8]) -> Output {
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn bytes(path: &Path) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    fn micros(duration: Duration) -> u64 {
+        duration.as_micros().try_into().unwrap()
+    }
+
+    fn emit(row: Value) {
+        // Divan can leave its tree label unterminated before fixture setup.
+        writeln!(io::stdout().lock(), "\n{}", json!({"drainer_latency": row})).unwrap();
+    }
+
+    fn distribution(samples: &[u64]) -> Value {
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        json!({"p50": sorted[(sorted.len() * 50).div_ceil(100) - 1],
+            "p99": sorted[(sorted.len() * 99).div_ceil(100) - 1], "max": sorted.last().unwrap()})
+    }
+
+    fn timings(path: &Path) -> Vec<Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|record| record.get("hook_drain_timing").cloned())
+            .collect()
+    }
+
+    #[derive(serde::Serialize)]
+    struct Placement {
+        pid: u32,
+        cgroup: String,
+        cpu_weight: Option<u64>,
+    }
+
+    fn placement(pid: u32) -> Option<Placement> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+        let cgroup = text
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))?
+            .to_owned();
+        let weight = Path::new("/sys/fs/cgroup")
+            .join(cgroup.trim_start_matches('/'))
+            .join("cpu.weight");
+        Some(Placement {
+            pid,
+            cgroup,
+            cpu_weight: std::fs::read_to_string(weight)
+                .ok()
+                .and_then(|text| text.trim().parse().ok()),
+        })
+    }
+
+    struct ChildSampler {
+        stop: Arc<AtomicBool>,
+        worker: Option<JoinHandle<BTreeMap<u32, Placement>>>,
+    }
+
+    impl ChildSampler {
+        fn start(pid: u32) -> Self {
+            let stop = Arc::new(AtomicBool::new(false));
+            let done = Arc::clone(&stop);
+            let worker = thread::spawn(move || {
+                let mut seen = BTreeMap::new();
+                while !done.load(Ordering::Relaxed) {
+                    let children =
+                        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+                            .unwrap_or_default();
+                    for child in children
+                        .split_whitespace()
+                        .filter_map(|id| id.parse::<u32>().ok())
+                    {
+                        if seen.contains_key(&child) {
+                            continue;
+                        }
+                        let cmdline =
+                            std::fs::read(format!("/proc/{child}/cmdline")).unwrap_or_default();
+                        let argv: Vec<_> = cmdline.split(|byte| *byte == 0).collect();
+                        if argv
+                            .windows(2)
+                            .any(|pair| pair == [b"hooks".as_slice(), b"apply".as_slice()])
+                            && let Some(place) = placement(child)
+                        {
+                            seen.insert(child, place);
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                seen
+            });
+            Self {
+                stop,
+                worker: Some(worker),
+            }
+        }
+
+        fn finish(mut self) -> BTreeMap<u32, Placement> {
+            self.stop.store(true, Ordering::Relaxed);
+            self.worker.take().unwrap().join().unwrap()
+        }
+    }
+
+    impl Drop for ChildSampler {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    pub(super) fn run(bencher: Bencher) {
+        let fixture = Fixture::new();
+        bencher.bench_local(|| {
+            emit(json!({
+                "kind": "runner_placement", "placement": placement(std::process::id()).unwrap(),
+            }));
+            let cold_start = Instant::now();
+            let cold = json!({
+                "hook_event_name": "SessionStart", "session_id": "latency-0",
+                "source": "startup", "cwd": fixture.project,
+            });
+            let result = output(
+                fixture
+                    .command(0)
+                    .args(["hooks", "feed", "--source", "claude"]),
+                &serde_json::to_vec(&cold).unwrap(),
+            );
+            let foreground = micros(cold_start.elapsed());
+            assert!(result.status.success(), "{result:?}");
+            let deadline = Instant::now() + WAIT;
+            let mut lease = loop {
+                match UnixStream::connect(fixture.store.runtime_paths().hook_drainer_socket_path())
+                {
+                    Ok(stream) => break stream,
+                    Err(error) => {
+                        assert!(Instant::now() < deadline, "drainer readiness: {error}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            };
+            lease.set_read_timeout(Some(WAIT)).unwrap();
+            lease.set_write_timeout(Some(WAIT)).unwrap();
+            writeln!(
+                lease,
+                "{}",
+                json!({
+                    "through": 0, "reply_for": null, "epoch": null, "stop": false, "lease": true,
+                })
+            )
+            .unwrap();
+            let mut line = String::new();
+            io::BufReader::new(&lease).read_line(&mut line).unwrap();
+            let _: DrainReceipt = serde_json::from_str(&line).unwrap();
+            let pid =
+                nix::sys::socket::getsockopt(&lease, nix::sys::socket::sockopt::PeerCredentials)
+                    .unwrap()
+                    .pid()
+                    .try_into()
+                    .unwrap();
+            let drainer = placement(pid).unwrap();
+            let sampler = ChildSampler::start(pid);
+            let log = fixture.store.paths().hook_drainer_log();
+            loop {
+                if timings(&log).iter().any(|record| {
+                    record["hook_event"] == "SessionStart" && record["applied"] == true
+                }) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "testkit C7 cold timing absent");
+                thread::sleep(Duration::from_millis(5));
+            }
+            emit(json!({
+                "kind": "cold", "foreground_wall_us": foreground,
+                "ready_wall_us": micros(cold_start.elapsed()), "drainer": drainer,
+            }));
+            let mut stops = Vec::new();
+            for index in 0..SAMPLES {
+                let frame = fixture.frame(
+                    index,
+                    json!({
+                        "hook_event_name": "Stop", "session_id": format!("latency-{index}"),
+                        "turn_id": format!("stop-{index}"), "last_assistant_message": "done",
+                    }),
+                );
+                stops.push(fixture.append_receipt(&frame));
+            }
+            let mut prompt_walls = Vec::new();
+            let mut misses = 0;
+            for index in 0..SAMPLES {
+                let session = format!("latency-{index}");
+                let payload = serde_json::to_vec(&json!({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session,
+                    "prompt": "check the repository", "cwd": fixture.project,
+                }))
+                .unwrap();
+                let start = Instant::now();
+                let result = output(
+                    fixture
+                        .command(index)
+                        .args(["hooks", "feed", "--source", "claude"]),
+                    &payload,
+                );
+                let wall = micros(start.elapsed());
+                let reply = serde_json::from_slice::<Value>(&result.stdout).ok();
+                let replied = result.status.success()
+                    && reply.as_ref().is_some_and(|reply| {
+                        reply["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+                            && reply["hookSpecificOutput"]["additionalContext"]
+                                .as_str()
+                                .is_some_and(|text| !text.trim().is_empty())
+                    });
+                misses += usize::from(!replied);
+                prompt_walls.push(wall);
+                emit(json!({
+                    "kind": "prompt", "session": session, "wall_us": wall, "replied": replied,
+                    "status": result.status.code(), "stdout_bytes": result.stdout.len(),
+                }));
+                assert!(result.status.success(), "prompt {index}: {result:?}");
+            }
+            let fence = fixture.frame(0, cold);
+            fixture.append_receipt(&fence);
+            let mut records = HashMap::new();
+            for record in timings(&log) {
+                let id = record["ingress"].as_str().unwrap().to_owned();
+                assert!(records.insert(id, record).is_none(), "duplicate C7 ingress");
+            }
+            let events = event_log::read_all(&fixture.store.paths().events_log).unwrap();
+            let mut claims = Vec::new();
+            let mut receipts = Vec::new();
+            for sample in stops {
+                let record = records
+                    .get(&sample.ingress.to_string())
+                    .expect("missing measured C7 ingress");
+                assert_eq!(record["hook_event"], "Stop");
+                assert_eq!(record["applied"], true);
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| {
+                            event.ingress.as_ref() == Some(&sample.ingress)
+                                && matches!(event.kind(), EventKind::AgentLifecycle(_))
+                        })
+                        .count(),
+                    1
+                );
+                let claim = record["claim_to_applied_us"].as_u64().unwrap();
+                claims.push(claim);
+                receipts.push(sample.wall);
+                emit(json!({
+                    "kind": "stop", "ingress": sample.ingress, "through": sample.through,
+                    "receipt": sample.receipt, "claim_to_applied_us": claim,
+                    "append_to_receipt_us": sample.wall,
+                }));
+            }
+            let children = sampler.finish();
+            assert!(!children.is_empty(), "no apply placement sampled");
+            for child in children.values() {
+                emit(json!({"kind": "apply_placement", "placement": child}));
+                assert_eq!(
+                    child.cgroup, drainer.cgroup,
+                    "apply must inherit the drainer"
+                );
+            }
+            emit(json!({
+                "kind": "summary", "stop_samples": claims.len(),
+                "prompt_samples": prompt_walls.len(), "prompt_reply_misses": misses,
+                "claim_to_applied_us": distribution(&claims),
+                "append_to_receipt_us": distribution(&receipts),
+                "prompt_wall_us": distribution(&prompt_walls),
+                "apply_children_sampled": children.len(),
+            }));
+            drop(lease);
+        });
+    }
+}
+
 #[divan::bench(sample_count = 1, sample_size = 1)]
 #[expect(
     clippy::print_stdout,
@@ -72,19 +700,9 @@ fn hook_stop_budget(bencher: Bencher) {
         samples[(samples.len() * pct).div_ceil(100) - 1]
     }
 
-    let home_root = tempfile::Builder::new()
-        .prefix("rimz-test-home-")
-        .tempdir()
-        .unwrap();
-    let runtime_root = tempfile::Builder::new().prefix("rr").tempdir().unwrap();
-    let root = home_root.path();
-    let binary = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("rimz");
+    let fixture = HookFixture::new();
+    let root = fixture.home_root.path();
+    let binary = fixture.binary.clone();
     assert!(
         binary.is_file(),
         "build rimz in the bench profile before measuring"
@@ -95,7 +713,7 @@ fn hook_stop_budget(bencher: Bencher) {
     } else {
         "state"
     });
-    let runtime = runtime_root.path();
+    let runtime = fixture.runtime_root.path();
     let (project_root, paths) = if let Some(source) = copied_home.as_ref() {
         assert!(
             Command::new("cp")
@@ -127,14 +745,6 @@ fn hook_stop_budget(bencher: Bencher) {
         )
     };
     let runtime_paths = rimz::RuntimePaths::for_state_under(&paths, runtime);
-    let _sandbox = rimz::testkit::sandbox::TestSandbox::arm(
-        rimz::testkit::sandbox::SandboxSpec {
-            home_root: root.into(),
-            runtime_root: runtime.into(),
-        },
-        &binary.with_file_name("rimz-test-reaper"),
-    )
-    .unwrap();
     let store = rimz::Store::open(paths.clone(), runtime_paths).unwrap();
     if copied_home.is_none() {
         let resolved =
