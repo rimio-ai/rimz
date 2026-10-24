@@ -466,6 +466,39 @@ mod tests {
     }
 
     #[test]
+    fn dropped_ingress_runs_obey_identity_and_kind_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = sink(dir.path());
+        let first = crate::ids::EventId::new();
+        let run = |first| {
+            let decoded = serde_json::from_value::<DiagEvent>(serde_json::json!({
+                "kind": "hook_ingress_dropped", "dropped": 3500,
+                "first_ingress": first, "last_ingress": crate::ids::EventId::new(),
+            }));
+            assert!(decoded.is_ok(), "drop run must decode: {decoded:?}");
+            decoded.unwrap()
+        };
+        sink.emit_at_ms(run(first.clone()), 1_000);
+        sink.emit_at_ms(run(first.clone()), 15_000);
+        let records = diag_records(&sink);
+        assert_eq!(
+            records.len(),
+            1,
+            "repeated first ingress shares an identity"
+        );
+        sink.emit_at_ms(run(first), 32_000);
+        assert_eq!(diag_records(&sink)[1].suppressed_since_last, 1);
+        for _ in 0..DIAG_KIND_CEILING + 3 {
+            sink.emit_at_ms(run(crate::ids::EventId::new()), 32_000);
+        }
+        assert_eq!(diag_records(&sink).len(), DIAG_KIND_CEILING as usize + 1);
+        sink.emit_at_ms(run(crate::ids::EventId::new()), 63_000);
+        let records = diag_records(&sink);
+        assert_eq!(records.len(), DIAG_KIND_CEILING as usize + 2);
+        assert_eq!(records.last().unwrap().suppressed_since_last, 4);
+    }
+
+    #[test]
     fn kind_ceiling_bounds_keyed_and_unlimited_storms() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());

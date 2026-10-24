@@ -175,6 +175,10 @@ fn hook_diagnostics_round_trip_with_distinct_failure_and_room_lag_identities() {
     let ingress = crate::ids::EventId::new();
     for (wire, identity) in [
         (
+            serde_json::json!({"kind": "hook_ingress_dropped", "dropped": 3, "first_ingress": ingress, "last_ingress": crate::ids::EventId::new()}),
+            format!("hook_ingress_dropped:{ingress}"),
+        ),
+        (
             serde_json::json!({"kind": "hook_drain_lag", "ingress": ingress, "hook_event": "Stop", "lag_ms": 60_000, "pending_bytes": 123}),
             "hook_drain_lag".to_owned(),
         ),
@@ -200,6 +204,33 @@ fn hook_diagnostics_round_trip_with_distinct_failure_and_room_lag_identities() {
         assert!(!event.summary().is_empty());
         assert_eq!(serde_json::to_value(event).unwrap(), wire);
     }
+}
+
+#[test]
+fn dropped_ingress_runs_keep_the_first_identity_and_summarize_the_range() {
+    let first = crate::ids::EventId::new();
+    let last = crate::ids::EventId::new();
+    let wire = serde_json::json!({
+        "kind": "hook_ingress_dropped", "dropped": 3500,
+        "first_ingress": first, "last_ingress": last,
+    });
+    let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+    assert!(decoded.is_ok(), "drop run must decode: {decoded:?}");
+    let event = decoded.unwrap();
+    assert_eq!(event.severity(), DiagSeverity::Warn);
+    assert_eq!(
+        event.identity_key(),
+        format!("hook_ingress_dropped:{first}")
+    );
+    for evidence in ["3500".to_owned(), first.to_string(), last.to_string()] {
+        assert!(event.summary().contains(&evidence), "missing {evidence}");
+    }
+    assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+    let mut repeated = wire;
+    repeated["dropped"] = serde_json::json!(3501);
+    repeated["last_ingress"] = serde_json::json!(crate::ids::EventId::new());
+    let repeated = serde_json::from_value::<DiagEvent>(repeated).unwrap();
+    assert_eq!(event.identity_key(), repeated.identity_key());
 }
 
 #[test]

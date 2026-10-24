@@ -253,6 +253,7 @@ mod tests {
             ),
         ] {
             let frame = rimz::store::ingress::HookIngress {
+                boot_id: None,
                 schema_version: "1".into(),
                 event_id: rimz::ids::EventId::new(),
                 ts: jiff::Timestamp::from_second(second).unwrap(),

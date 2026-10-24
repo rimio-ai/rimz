@@ -1,6 +1,10 @@
-//! Durable hook ingress frames and the drainer's byte cursor.
+//! Hook ingress frames and the drainer's boot-aware byte cursor.
 //!
 //! Appends share the blocking ingress lock, cursor writes the workspace lock. Length snapshots and truncation take ingress exclusively; truncation holds both, workspace then ingress. Ingress is pending work, separate from the event log that readers fold; only a fully applied and unclaimed tail may be truncated.
+//!
+//! Known same-boot claims and applications are cache-class; unknown boots keep
+//! durable cursor writes. Other-boot frames are dropped before application.
+//! Skips, drops and the reset after synced truncation are cache-class too.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -67,6 +71,8 @@ pub(crate) fn stop_drainer(runtime: &RuntimePaths) -> Result<DrainerStop, EventL
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookIngress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_id: Option<String>,
     pub schema_version: String,
     pub event_id: EventId,
     pub ts: Timestamp,
@@ -239,6 +245,7 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
 }
 
 /// Publish the cursor durably while the caller holds `paths.workspace_lock`.
+/// The drainer uses this for claims and applications without a known matching boot.
 #[must_use = "durability barrier; check the result"]
 pub fn write_cursor(
     paths: &StatePaths,
@@ -253,7 +260,20 @@ pub fn write_cursor(
     Ok(())
 }
 
-/// Truncate in place and reset the cursor while the caller holds the workspace lock, acquiring the ingress lock second. Only `applied == claimed == len` permits truncation; empty or unfinished logs return `false`.
+/// Publish a cursor that is safe to lose, without fsync, under the workspace lock.
+#[must_use = "atomicity barrier; check the result"]
+pub(crate) fn write_cursor_cache(
+    paths: &StatePaths,
+    cursor: &HookDrainCursor,
+    _lock: &WorkspaceLock,
+) -> Result<(), EventLogErr> {
+    atomic::write_temp_then_rename_cache(&paths.hook_drain_cursor, cursor)?;
+    Ok(())
+}
+
+/// Truncate in place with fdatasync, then reset the cursor cache-class under the
+/// workspace lock, acquiring ingress second. Only `applied == claimed == len`
+/// permits truncation; empty or unfinished logs return `false`.
 #[must_use = "durability barrier; check the result"]
 pub fn truncate_drained(paths: &StatePaths, lock: &WorkspaceLock) -> Result<bool, EventLogErr> {
     let _ingress = WorkspaceLock::acquire(&paths.hook_ingress_lock)
@@ -267,7 +287,7 @@ pub fn truncate_drained(paths: &StatePaths, lock: &WorkspaceLock) -> Result<bool
         return Ok(false);
     }
     atomic::truncate_file(&paths.hook_ingress_log, 0)?;
-    write_cursor(paths, &HookDrainCursor::default(), lock)?;
+    write_cursor_cache(paths, &HookDrainCursor::default(), lock)?;
     Ok(true)
 }
 

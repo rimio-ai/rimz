@@ -55,6 +55,7 @@ fn pending_ingress_holds_only_newer_same_kind_frames_until_applied() {
         let (_dir, store) = fixture();
         let (agent, stop) = rested();
         let frame = HookIngress {
+            boot_id: None,
             schema_version: "1".into(),
             event_id: crate::ids::EventId::new(),
             ts: ts(at),

@@ -325,6 +325,11 @@ pub enum DiagEvent {
         start: u64,
         end: u64,
     },
+    HookIngressDropped {
+        dropped: u64,
+        first_ingress: EventId,
+        last_ingress: EventId,
+    },
     FrameRejected {
         reason: FrameRejectReason,
         prior_pane_count: usize,
@@ -747,6 +752,7 @@ impl DiagEvent {
             | Self::HookApplyFailed { .. }
             | Self::HookIngressSkipped { .. }
             | Self::HookIngressTruncated { .. }
+            | Self::HookIngressDropped { .. }
             | Self::FrameRejected { .. }
             | Self::PaneCountDrop { .. }
             | Self::PaneCarryForward { .. }
@@ -855,6 +861,7 @@ impl DiagEvent {
             Self::HookApplyFailed { .. } => "hook_apply_failed",
             Self::HookIngressSkipped { .. } => "hook_ingress_skipped",
             Self::HookIngressTruncated { .. } => "hook_ingress_truncated",
+            Self::HookIngressDropped { .. } => "hook_ingress_dropped",
             Self::ModelCatalogRefreshFailed { .. } => "model_catalog_refresh_failed",
             Self::FrameRejected { .. } => "frame_rejected",
             Self::ResolutionFallback { .. } => "resolution_fallback",
@@ -922,7 +929,13 @@ impl DiagEvent {
                 format!("{}:{run}:{node}:{seq}", self.kind_name())
             }
             Self::HookDrainLag { .. } => self.kind_name().to_owned(),
-            Self::HookApplyFailed { ingress, .. } => format!("{}:{ingress}", self.kind_name()),
+            Self::HookApplyFailed { ingress, .. }
+            | Self::HookIngressDropped {
+                first_ingress: ingress,
+                ..
+            } => {
+                format!("{}:{ingress}", self.kind_name())
+            }
             Self::HookIngressSkipped { start, end, .. }
             | Self::HookIngressTruncated { start, end } => {
                 format!("{}:{start}:{end}", self.kind_name())
@@ -1317,6 +1330,15 @@ impl DiagEvent {
             }
             Self::HookIngressTruncated { start, end } => {
                 format!("truncated torn hook ingress tail at bytes {start}..{end}")
+            }
+            Self::HookIngressDropped {
+                dropped,
+                first_ingress,
+                last_ingress,
+            } => {
+                format!(
+                    "dropped {dropped} hook ingress frames from other boots ({first_ingress}..{last_ingress})"
+                )
             }
             Self::ModelCatalogRefreshFailed {
                 login,

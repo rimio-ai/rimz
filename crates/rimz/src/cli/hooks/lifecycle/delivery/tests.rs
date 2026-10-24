@@ -109,6 +109,7 @@ fn idle_stop_turn(
     let before = std::fs::read(&store.paths().idle_stop_requests).unwrap();
     let payload = serde_json::json!({"session_id": id, "prompt": prompt});
     let mut frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
         ts: jiff::Timestamp::from_second(1_000 + frame_offset).unwrap(),
@@ -267,6 +268,7 @@ fn failed_idle_stop_withdrawal_keeps_the_rest_of_the_frame() {
     }
     let payload = serde_json::json!({"session_id": id, "prompt": "keep working"});
     let frame = rimz::store::ingress::HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: rimz::ids::EventId::new(),
         ts: jiff::Timestamp::from_second(1_001).unwrap(),

@@ -1506,7 +1506,12 @@ reason = "The detached focus helper opens the provider's pty for a non-consuming
 [[verdict]]
 kind = "item"
 key = "proc::boot_id"
-reason = "The process reader owns cached Linux boot identity shared by daemon PID validation and rollup generation mirrors."
+reason = "The process reader owns cached Linux boot identity shared by provider records, rollup mirrors and hook ingress."
+
+[[verdict]]
+kind = "item"
+key = "store::ingress::write_cursor_cache"
+reason = "The drainer publishes boot-safe claims, applications, skips and drops atomically without fsync; durable unknown-boot cursor writes remain separate."
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

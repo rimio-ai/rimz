@@ -36,7 +36,7 @@ Four boundaries decide where new code goes:
 | [`writer.rs`](../../crates/rimz/src/store/writer.rs) | Public mutation intents and outcomes, the `commit` and `commit_boundary` primitives, and the off-lock tail. `writer/` splits the implementation into `debounce`, `lifecycle`, `publish`, `queue`, `reap`, and `reset`. |
 | [`event.rs`](../../crates/rimz/src/store/event.rs) | `EventEnvelope`, the typed `EventKind` decode, `EVENT_SCHEMA_VERSION`, and the persisted signal vocabulary. |
 | [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive publication and retention. |
-| [`ingress.rs`](../../crates/rimz/src/store/ingress.rs) | Raw hook frames over the event log's frame codec, the durable drain cursor, repair, and locked truncate-and-reset ([Hook ingress](#hook-ingress)). |
+| [`ingress.rs`](../../crates/rimz/src/store/ingress.rs) | Raw hook frames over the event log's frame codec, the boot-aware drain cursor, repair, and locked truncate-and-reset ([Hook ingress](#hook-ingress)). |
 | [`follow.rs`](../../crates/rimz/src/store/follow.rs) | The read-only lifecycle and signal follower over the event log. |
 | [`snapshot/`](../../crates/rimz/src/store/snapshot/mod.rs) | The canonical snapshot schema and read side: `fold.rs` resumable rollup and carryover, `project.rs` lifecycle reducer, `assemble.rs` read entry points, then pane binding and the view-model projection ([sidebar.md](./sidebar/sidebar.md#where-the-code-lives)). |
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
@@ -105,7 +105,7 @@ log/events.log.jsonl                          framed event log
 log/hook-ingress.log.jsonl                    pending raw hook frames
 log/hook-drainer.log                          drainer diagnostics
 log/archive/events.<uuidv7>.jsonl             rotated logs
-records/hook-drain.json                       applied/claimed ingress byte cursor, frame ids, and claim-time event-log extent
+records/hook-drain.json                       applied/claimed cursor with boot-aware write classes, frame ids, claim extent
 records/agents-carryover.json                 agent rollup carried across rotation
 records/messages/messages.jsonl               live message queue
 records/loop-instances.json                   loop and wait rows
@@ -333,21 +333,25 @@ Staging folds against a fresh, untrimmed read of the raw carryover, never the pa
 
 Appenders share `locks/hook-ingress.lock` through `crates/rimz/src/disk/lock.rs::SharedAppendLock`, blocking in the kernel rather than polling. Each encoded frame goes to an `O_APPEND` file as one buffer, over the event log's frame codec. The ingress lock is independent of the workspace lock, so neither lifecycle folds nor other appenders delay a hook's lock acquisition.
 
+Linux frames carry an optional `boot_id` from the cached native boot identity. When both boot ids are known, each maximal consecutive run of frames from other boots within one read is dropped before application or recovery. Under the workspace lock, after ownership validation, the drainer emits one normally rate-limited `hook_ingress_dropped` diagnostic with `dropped`, `first_ingress` and `last_ingress`, then makes one cache-class cursor publication with both offsets and ids at the run's last frame and responds once. A run spanning reads gets one record per read; a crash can repeat its evidence. Pending work from any earlier boot is discarded, including after a clean reboot. An unstamped frame, or a drainer without a boot id, retains the existing application and recovery path.
+
 Shared appenders can tear a line: a killed or short append leaves a partial frame ahead of later frames. Before applying pending ingress, the drainer takes the workspace lock and then the ingress lock exclusively for its repair read (`store::ingress::repair_and_read`). It truncates an unterminated tail and resynchronizes at the next newline after a corrupt terminated record. Good frames after corruption still apply, including a whole frame that a later appender wrote onto the same line as a torn one. The drainer advances past skipped records and leaves typed repair evidence in the [main diagnostic log](./diagnostics.md#hook-drain-evidence). It releases the ingress lock before it applies frames.
 
 `records/hook-drain.json` is the drain cursor. It records `applied` and `claimed` byte offsets, their frame ids, and the event-log extent at claim time, for crash recovery. Cursor writes take only the workspace lock.
 
 - An absent cursor starts at zero.
 - A nonzero offset must end at a row carrying the recorded id, and skipped corrupt rows carry no id.
-- An invalid offset or a mismatched id resets the cursor to zero. That covers a lost truncation reset followed by log regrowth.
+- An invalid offset or a mismatched id resets the cursor to zero. That covers a lost truncation reset followed by log regrowth. A malformed cursor still errors.
 - Validation seeks backward to the rows ending at the two offsets, reading only those rows plus bounded boundary-search blocks, so a cursor check costs O(frame) whatever the ingress history.
-- Only `applied == claimed == len` permits in-place truncation and a durable cursor reset, under the workspace lock and then the exclusive ingress lock.
+- Only `applied == claimed == len` permits in-place truncation, under the workspace lock and then the exclusive ingress lock. Truncation retains its fdatasync and finishes before the cache-class cursor reset.
+
+Claim and applied publications are durable only for unstamped frames or when the drainer cannot identify its boot. Same-boot claims and applications, corrupt-row skips, other-boot drops and resets use atomic rename without fsync. This assumes replace-on-rename leaves the complete old or new cursor after power loss (as on ZFS and ext4); elsewhere a torn cursor errors as before. Lost cursor writes cannot reapply stamped frames after reboot because surviving older-boot frames drop.
 
 The file and its cursor outlive ordinary maintenance. GC and event-log rotation leave both alone, and the lock sweep keeps a held shared ingress lock. Reset and teardown first stop the drainer under its spawn and lifetime guards. Reset then removes ingress and cursor under the workspace lock and then the ingress lock. Reload uses the same stop after it records the new room build, releases both guards at once, and nudges a successor without deleting ingress or cursor. At either stop the drainer answers satisfied clients, cached replies included, before it exits, and unsatisfied clients retry against the successor or drain inline.
 
 The drainer's apply child stages a frame's events in its locked lifecycle phase and publishes them with one ordered-batch append under the workspace lock, through `crates/rimz/src/store/event_log.rs::append_batch`. The staged records are encoded into one buffer and appended with one write, without replacing the file or syncing each commit. Transaction-local reads fold the staged events, while other readers see only committed bytes. Derived envelopes carry an optional `ingress` id, the source frame's id, without changing the event schema version.
 
-A frame applies again after a crash, so each effect declares how it replays:
+A frame can apply again after a process crash, so each effect declares how it replays:
 
 - Ingress lifecycle payloads keep the recorded transition and ping edge for redo. A short write can leave a leading part of a lifecycle batch, which redo then treats as applied.
 - Keyed native answers, conversation entries, root-session active-time updates, locally priced costs, and standing subscription arming replay.
@@ -391,7 +395,7 @@ Mutations that replace, cut, or forget the active log run `Store::commit_boundar
 
 ### Write classes
 
-Every disk write falls into one of nine classes, and one line sorts them: **durable records and cold metadata fsync, and hot appends and disposable caches do not.** A cache rebuilds, and a group sync or an audit tolerance bounds what an append can lose.
+Every disk write falls into one of ten classes, and one line sorts them: **durable records and cold metadata fsync; hot appends and disposable caches do not; the drain cursor fsyncs only the writes for a frame a reboot would not drop.** A cache rebuilds, and a group sync or an audit tolerance bounds what an append can lose.
 
 | Class | Files | Discipline | After a power cut |
 | --- | --- | --- | --- |
@@ -403,7 +407,8 @@ Every disk write falls into one of nine classes, and one line sorts them: **dura
 | Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `out/<reader>/<wait-name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count. A file pattern match also includes a matched-line preview. |
 | Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort exception among records: it is not rebuildable history. | Caches rebuild or refresh. Losing the roster's latest write can narrow recovery. |
 | Usage appends | `records/lsp-usage.jsonl` | One `O_APPEND` write under a shared append lock, no fsync. Compaction tries the exclusive lock without waiting and durably replaces counted rows. | Trailing appends can be lost, and compacted counts survive. Malformed rows are skipped. |
-| Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `out/<reader>/<name>[.<n>\|.<run_id>].output` child and peer responses, `workspace.json`, `records/agents-carryover.json`, `records/loop-instances.json`, `records/idle-stop.json`, `records/pending-recovery.json`, `records/hook-drain.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. A child or peer response goes through `crates/rimz/src/harness/run.rs::publish_response`. | Survives. |
+| Drain cursor | `records/hook-drain.json` | Claim and applied writes for unstamped frames or an unknown drainer boot use temp file, fsync, rename and directory sync. Same-boot claim/applied writes, corrupt-row skips, other-boot drops and post-truncation resets use cache-class rename without fsync. Truncation retains fdatasync before reset. | Surviving stamped frames from an older boot drop before application, regardless of the surviving cursor. Unstamped recovery stays unchanged. |
+| Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `out/<reader>/<name>[.<n>\|.<run_id>].output` child and peer responses, `workspace.json`, `records/agents-carryover.json`, `records/loop-instances.json`, `records/idle-stop.json`, `records/pending-recovery.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. A child or peer response goes through `crates/rimz/src/harness/run.rs::publish_response`. | Survives. |
 
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else. It matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.
 

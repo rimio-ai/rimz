@@ -14,6 +14,7 @@ fn paths(dir: &std::path::Path) -> StatePaths {
 
 fn frame() -> HookIngress {
     HookIngress {
+        boot_id: None,
         schema_version: "1".into(),
         event_id: EventId::new(),
         ts: "2026-01-01T00:00:00Z".parse().unwrap(),
@@ -29,6 +30,23 @@ fn frame() -> HookIngress {
 fn seed(paths: &StatePaths, frame: &HookIngress) -> u64 {
     let lock = SharedAppendLock::acquire(&paths.hook_ingress_lock).unwrap();
     append(paths, frame, &lock).unwrap()
+}
+
+#[test]
+fn boot_identity_round_trips_and_absence_is_unstamped() {
+    for boot in [None, Some("boot-a")] {
+        let mut wire = serde_json::to_value(frame()).unwrap();
+        if let Some(boot) = boot {
+            wire["boot_id"] = serde_json::json!(boot);
+        }
+        let decoded: HookIngress = serde_json::from_value(wire.clone()).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(
+            encoded.get("boot_id"),
+            wire.get("boot_id"),
+            "boot identity must survive the frame codec"
+        );
+    }
 }
 
 #[test]
