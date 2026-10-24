@@ -162,7 +162,7 @@ fn hello(instance_id: &SidebarInstanceId) -> Hello {
         ),
         baseline_pane: None,
         supervisor_build: Some("build-a".to_owned()),
-        tick_seconds: None,
+        tick_seconds: 1,
         refresh_ms: None,
     }
 }

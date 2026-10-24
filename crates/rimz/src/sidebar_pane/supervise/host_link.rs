@@ -173,7 +173,7 @@ pub(super) fn hello_for(
         pane_id: config.own_pane.clone(),
         baseline_pane: baseline_pane.cloned(),
         supervisor_build: supervisor_build.map(str::to_owned),
-        tick_seconds: Some(config.tick_seconds),
+        tick_seconds: config.tick_seconds,
         refresh_ms: config.refresh_ms_override,
     }
 }

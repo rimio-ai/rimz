@@ -30,8 +30,7 @@ pub(super) struct Hello {
     pub(super) supervisor_build: Option<String>,
     /// The pane's launch-argv cadence overrides, which the host's own argv
     /// cannot carry for it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) tick_seconds: Option<u64>,
+    pub(super) tick_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) refresh_ms: Option<u16>,
 }
@@ -181,7 +180,7 @@ mod tests {
             pane_id: PaneId::from_parts(crate::MuxName::Tmux, "%7"),
             baseline_pane: Some(PaneId::from_parts(crate::MuxName::Tmux, "%6")),
             supervisor_build: Some("build-a".to_owned()),
-            tick_seconds: Some(2),
+            tick_seconds: 2,
             refresh_ms: Some(250),
         }
     }
@@ -273,6 +272,11 @@ mod tests {
     #[test]
     fn a_hello_without_a_pane_id_is_malformed() {
         assert_hello_requires("pane_id");
+    }
+
+    #[test]
+    fn a_hello_without_a_tick_is_malformed() {
+        assert_hello_requires("tick_seconds");
     }
 
     #[test]
