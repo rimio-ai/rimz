@@ -87,7 +87,7 @@ The renderer threads, in `crates/rimz/src/sidebar_pane/`:
 | [`app/inbox.rs`](../../../crates/rimz/src/sidebar_pane/app/inbox.rs) | The bounded input and room lanes of each attachment. |
 | [`app/focus_push.rs`](../../../crates/rimz/src/sidebar_pane/app/focus_push.rs) | Click-ordered jump leases, the priority focus push, and its verdict trace. |
 | [`app/cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The heavy-lane refresher. |
-| [`app/hidden_views.rs`](../../../crates/rimz/src/sidebar_pane/app/hidden_views.rs) | Paced tmux hidden-view geometry repair. |
+| [`app/hidden_views.rs`](../../../crates/rimz/src/sidebar_pane/app/hidden_views.rs) | Debounced tmux hidden-view geometry repair. |
 | [`app/tmux_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/tmux_watch.rs), [`app/transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs) | The two host-run push channels. |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs), [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | The last-known-good commit gate and the debounced degraded-health verdict. |
 
@@ -158,7 +158,7 @@ Every other failure to reach the host follows one notice-and-retry path: a faile
 | `host reply unreadable` | `reply_unreadable` |
 | `host went away` | `lost` |
 
-Each failed round emits the identity-rate-limited `sidebar_host_unavailable` record with the cause, reason, attached duration when lost, and upcoming retry delay ([diagnostic fields](../diagnostics.md#event-taxonomy)). A lost host costs even a mature attachment a one-second notice before retrying.
+Each failed round emits the identity-rate-limited `sidebar_host_unavailable` record with the cause, reason, attached duration when lost, and upcoming retry delay ([diagnostic fields](../diagnostics.md#supervisor-kinds)). A lost host costs even a mature attachment a one-second notice before retrying.
 
 Terminal modes survive every exit except a confirmed self-close. Self-close restores them. SIGTERM, pane-gone cleanup, and build exec preserve them for the pane handoff. An attachment's close removes its runtime files, and a stopping supervisor also removes its per-instance files.
 
@@ -176,7 +176,7 @@ The host leaves in three ways:
 
 A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build.
 
-Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `r` action after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes. Attachment-local deferred fetches are not cleared first, so a later deferred fetch can cost one extra fold.
+Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `r` action after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes.
 
 ### Shared lanes
 
@@ -200,11 +200,11 @@ Three host-wide samples serve every attachment:
 
 ## One fetch cycle
 
-An attachment's loop reads no data itself. It blocks in `recv_timeout` on its bounded wake channel, using the timeout as its frame clock, and asks the host's fetch worker for folds. Shared folding and side effects run on the worker. Local projection and the clock-only decision run when a view reduces.
+An attachment's loop reads no data itself. It blocks in `recv_timeout` on its bounded wake channel, using the timeout as its frame clock, and requests folds for pane-local observations. Shared folding and side effects run on the worker. Local projection and the clock-only decision run when a view reduces.
 
 ### Requests
 
-A `FetchRequest` carries a mode, an optional pane-cache floor, one flag, and the instant the renderer learned what it asks to fold:
+A `FetchRequest` carries a mode and an optional pane-cache floor:
 
 | Field | Meaning |
 | --- | --- |
@@ -212,8 +212,6 @@ A `FetchRequest` carries a mode, an optional pane-cache floor, one flag, and the
 | `FreshPanes` mode | The producer produces regardless of frame age. Raised by agent birth and death. |
 | `HardRefresh` mode | The host produces regardless of frame age. Raised by reload and manual recovery. |
 | `min_pane_cache_ms` | A floor that rejects any pane cache older than the signal that asked for it, which is how birth and death beat the pane TTL. |
-| `force_fold` | A renderer-local timer wants a fold from current caches even when nothing on disk changed. |
-| `observed_at` | When the renderer observed the cause. A cycle that started later already covers it. |
 
 The plane requests at most one fold per room event as it records it (`RoomEvents::dispatch` in [`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): fresh panes for topology and agent birth or death, none for width, filter, notification, focus actions, or other overlays, and ordinary otherwise.
 
@@ -248,15 +246,15 @@ A cursor replays what its consumer has not seen: the newest unseen final success
 
 Replay compares before it applies. `Cursor::replay` projects the fold through the seed's routine for the reducing attachment's own pane and refresh override, then compares the result with its last successful projected baseline. Equality includes the shared focus anchor and body lens, and ignores only the snapshot clock, generation time, pane observation and production stamps, and the input sampling instant. Equal content with live permission applies clock-only: it advances clocks, stamps, the self-close watchdog, and paint scheduling, and skips full fusion, gate and health commits, receipts and dwell, selection, filter, order, and freeze reconciliation, spend rolls, self-close, anchor observations, and focus-repair retry. Idle presence ages with that clock. Every request still runs a worker cycle, and final-fold notification evaluation, unread persistence and pruning, and link recovery still run.
 
-Clock-only permission is read live at replay and is blocked by any of: a failure, a gate episode, an active overlay, a freeze, a read dwell, an empty-tab confirmation, a pending focus repair, or an input obligation. Completion is independent of content reuse, and a rejected final still defers its follow-up.
+Clock-only permission is read live at replay and is blocked by any of: a failure, a gate episode, an active overlay, a freeze, a read dwell, an empty-tab confirmation, a pending focus repair, or an input obligation. Completion is independent of content reuse. A rejected final requests nothing, and the gate asks again once its deadline is due.
 
-Each shared view has its own cursor and baseline. A pane that reduces with no routed view uses its own Scratch scope, with a separate cursor and baseline. Seeds do not prime the Scratch baseline, and a shared drain clears it, so the next Scratch reduction is full once. Local input invalidates the Scratch baseline, and identity-free nudges do not. Another pane's forced fold does not force equal Scratch content to a full reduction.
+Each shared view has its own cursor and baseline. A pane that reduces with no routed view uses its own Scratch scope, with a separate cursor and baseline. Seeds do not prime the Scratch baseline, and a shared drain clears it, so the next Scratch reduction is full once. Local input invalidates the Scratch baseline, and identity-free nudges do not.
 
 Before publication, the worker compares shared collections once against the preceding fold and reuses equal Arcs. Replay checks their identity before small metadata, and pane-local exclusions or older baselines fall back to structural equality. Shared views project and compare under the views lock, and the worker never compares a consumer's baseline. A co-viewer whose view is current does not reduce again.
 
 ### Hidden attachments and reveal
 
-A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It consumes completion, and refreshes fetch and self-close backstops, only when completion is present. `FetchUpdate::preview_for` reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
+A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It consumes completion and refreshes the self-close watchdog only when completion is present. `FetchUpdate::preview_for` reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
 
 These conditions apply a hidden publication at once instead of deferring it:
 
@@ -276,7 +274,7 @@ An arrival arms the tab-read dwell and holds the last painted order, not a hidde
 
 A client view is one human client's presentation state, kept by the host so that it follows the client between tabs. `crates/rimz/src/sidebar_pane/app/views.rs::Views` owns fetch content, the seed fold, shared replay baselines, membership, and retention. `crates/rimz/src/sidebar_pane/render/ui_state.rs::ViewState` holds the portable presentation, and `crates/rimz/src/sidebar_pane/app/view_state.rs::ViewContext` its reconciliation state. Selection, scroll, relative row anchors, open cards and toggles, freeze, spend rolls, receipts, and tab-read dwell travel together. Full views live in memory only: the attach wire, snapshots, and the room filter format carry none of it.
 
-A painting attachment borrows its view under the plane's one mutex. Only that painter consumes one-shots or writes back geometry-derived placement, and scratch renders cannot. Terminal writes, mux commands, read-mark I/O, asset loads, and other module locks stay outside this guard. After unlocked preparation, the painter re-reads routing and the current fold before composing.
+The pane loop reaches a view only through `crates/rimz/src/sidebar_pane/app/loop_state/shared.rs::ViewAccess`, which lends it explicitly to `crates/rimz/src/sidebar_pane/app/loop_state.rs::PaneState`. Each borrow takes its overlay cut before locking the plane's one mutex. Only the painter consumes one-shots or writes back geometry-derived placement, and scratch renders cannot. Terminal writes, mux commands, read-mark I/O, asset loads, and other module locks stay outside this guard. After unlocked preparation (asset loads between a paint's two borrows, or the fold a stale paint loads), the painter re-reads routing and the latest fold before composing.
 
 A resolved client sample changes membership by four rules:
 
@@ -690,7 +688,7 @@ A fitted push also carries the expected rows per destination pane. Both cached-f
 
 A resize paint hold, empty-tab confirmation, or exit can prevent acknowledgement, and the wait cap still permits dispatch. If all handles drop, including a failed destination delivery, dispatch can proceed before the cap. While a lease is active, a loop ignores early or obsolete focus datagrams until the current pushed nonce is registered, and ordinary paints also wait for that nonce to fold. The push carries the durable anchor, so this avoids painting an older request before the current request thread reaches its store.
 
-Every handshake records its source outcome and per-peer stages in [`audit/focus.log.jsonl`](../diagnostics.md#where-diagnostics-land), after dispatch and bounded late-report collection. A `FocusIntent` missed outside this push path waits for the next event or pull while the file stays unresolved. If it was already retired, the first native-focus fold moves the highlight without revealing the card.
+Every handshake records its source outcome and per-peer stages in [`audit/focus.log.jsonl`](../diagnostics.md#push-handshakes), after dispatch and bounded late-report collection. A `FocusIntent` missed outside this push path waits for the next event or pull while the file stays unresolved. If it was already retired, the first native-focus fold moves the highlight without revealing the card.
 
 Automatic repairs append to the account-global `focus-repairs.log.jsonl` at command acceptance (`AcceptedUnconfirmed`) or failure, and again when observation confirms, supersedes, or invalidates the action. Dispatch records carry the final live fence sample in `observed` and the request count in `attempts`. Abandonment and later resolution records use zero attempts and no fence sample. Records without these fields read as an empty sample and one attempt.
 
@@ -761,6 +759,6 @@ Each degradation has one owner, and none leaves a wrong verdict that outlives th
 | Clock skew | Event expiry uses receiver time, so no event lives forever. | A future-stamped event can mis-order an overlay across several pulls, and expires `EVENT_STORE_TTL` (12 s) after receipt. |
 | Cold host: no fold yet | Memory starts empty with each host. | The placeholder remains until the first fold. |
 | Panicking produce | The panic guard catches the unwind and discards the fold cursor. | One failed outcome. The next cycle refolds cold. |
-| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and its data backstop keeps requesting folds until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
+| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and the worker's data backstop keeps folding until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
 
 Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. Flicker, duplicate rows, or a phantom external group each map to a record in `diag.log.jsonl`. `rimz doctor` shows the recent tail, and [diagnostics.md](../diagnostics.md) names the taxonomy.
