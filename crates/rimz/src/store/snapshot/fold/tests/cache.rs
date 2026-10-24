@@ -40,7 +40,7 @@ fn pre_workflow_cache_refolds_attempt_identity() {
     )
     .unwrap();
     write_rollup_cache(
-        &paths.rollup_cache,
+        &paths,
         &RollupCache {
             version: 33,
             extent: event_log::LogExtent {
@@ -77,7 +77,7 @@ fn pre_molt_rollup_cache_refolds_the_succession_link() {
         serde_json::json!({"agent_id": "launch_new", "agent_name": "successor", "molted_from": "launch_old"}),
     )).unwrap();
     write_rollup_cache(
-        &paths.rollup_cache,
+        &paths,
         &RollupCache {
             // The last version written without `molted_from`.
             version: 30,
@@ -158,7 +158,7 @@ fn picker_revive_links_survive_rollup_cache_and_carryover() {
             .unwrap();
             resumed
         } else {
-            write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+            write_rollup_cache(&paths, &cache).unwrap();
             paths
         };
         event_log::append(
@@ -363,7 +363,7 @@ fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
     )
     .unwrap();
     let (checkpoint, _, _) = catch_up_rollup(&paths).unwrap();
-    write_rollup_cache(&paths.rollup_cache, &checkpoint).unwrap();
+    write_rollup_cache(&paths, &checkpoint).unwrap();
     event_log::append(
         &paths.events_log,
         &EventEnvelope::session_rebirth(workspace, "session"),
@@ -399,10 +399,16 @@ fn pre_rebirth_registration_names_agree_with_a_persisted_checkpoint() {
 #[test]
 fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rollup.json");
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let path = paths.rollup_cache.clone();
     let nonce = "00000000000000000000000000000000";
-    let stale = dir.path().join(format!("rollup.json.tmp.1.{nonce}"));
-    let other = dir.path().join(format!("other.json.tmp.1.{nonce}"));
+    let stale = paths
+        .snapshots_dir
+        .join(format!("rollup.json.tmp.1.{nonce}"));
+    let other = paths
+        .snapshots_dir
+        .join(format!("other.json.tmp.1.{nonce}"));
     std::fs::write(&stale, b"stale").unwrap();
     std::fs::write(&other, b"other").unwrap();
     let old = SystemTime::now() - Duration::from_secs(3_700);
@@ -416,7 +422,7 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
         .unwrap();
 
     write_rollup_cache(
-        &path,
+        &paths,
         &RollupCache {
             version: ROLLUP_CACHE_VERSION,
             extent: event_log::LogExtent {
@@ -495,15 +501,11 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
     };
 
     // A shape from a different version reads as absent.
-    write_rollup_cache(&paths.rollup_cache, &ghost_cache(36, 0)).unwrap();
+    write_rollup_cache(&paths, &ghost_cache(36, 0)).unwrap();
     assert_cold("version mismatch");
 
     // An extent past the live log is a rotation this cache predates.
-    write_rollup_cache(
-        &paths.rollup_cache,
-        &ghost_cache(ROLLUP_CACHE_VERSION, full_len + 999),
-    )
-    .unwrap();
+    write_rollup_cache(&paths, &ghost_cache(ROLLUP_CACHE_VERSION, full_len + 999)).unwrap();
     assert_cold("extent past the log");
 }
 
@@ -558,7 +560,9 @@ fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
 #[test]
 fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_identity() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rollup.json");
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let path = paths.rollup_cache.clone();
     let cache_with = |id: &str| RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {
@@ -570,7 +574,7 @@ fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_id
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
     };
-    write_rollup_cache(&path, &cache_with("aaaa")).unwrap();
+    write_rollup_cache(&paths, &cache_with("aaaa")).unwrap();
     let first = read_rollup_cache(&path).unwrap();
     assert_eq!(first.raw_agents[0].agent_id, "aaaa");
 
@@ -596,7 +600,7 @@ fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_id
 
     // A different-length republish changes the identity even when both writes
     // land in one filesystem mtime tick, so the read re-parses.
-    write_rollup_cache(&path, &cache_with("cccc-longer")).unwrap();
+    write_rollup_cache(&paths, &cache_with("cccc-longer")).unwrap();
     let miss = read_rollup_cache(&path).unwrap();
     assert_eq!(
         miss.raw_agents[0].agent_id, "cccc-longer",
@@ -677,7 +681,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
     // its held fold — it never re-reads `rollup.json`, so the ghost cannot
     // leak into the merge.
     write_rollup_cache(
-        &paths.rollup_cache,
+        &paths,
         &RollupCache {
             version: ROLLUP_CACHE_VERSION,
             extent: event_log::LogExtent {
@@ -733,7 +737,7 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
             .all(|agent| agent.pane.is_none() && agent.kind_ordinal.is_some()),
         "the rebirth fold clears stale pane stamps and backfills card identity"
     );
-    write_rollup_cache(&paths.rollup_cache, &rebirth_cache).unwrap();
+    write_rollup_cache(&paths, &rebirth_cache).unwrap();
 
     event_log::append(
         &paths.events_log,

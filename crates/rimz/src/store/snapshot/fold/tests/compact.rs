@@ -148,7 +148,7 @@ fn compact_command_events_stamp_carryover_agents_after_rotation() {
         assert_eq!(agent.last_compact_command_tokens, Some(210_000));
         assert!(agent.compacted_awaiting_prompt.is_some());
         let marker = agent.compacted_awaiting_prompt;
-        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
         let (advanced, agents, _) = catch_up_rollup(&paths).unwrap();
         assert_eq!(advanced.extent, cache.extent);
         let agent = agents
@@ -219,7 +219,7 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
     event_log::append(&paths.events_log, &sent).unwrap();
 
     let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
-    write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+    write_rollup_cache(&paths, &cache).unwrap();
     let (_, advanced, _) = catch_up_rollup(&paths).unwrap();
     for agents in [agents, advanced] {
         let predecessor = agents
@@ -271,7 +271,7 @@ fn compact_marker_without_native_turn_starts_persists_but_does_not_latch() {
         )
         .unwrap();
         let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
-        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
         assert!(agents[0].compacted_awaiting_prompt.is_some());
         assert!(!agents[0].compaction_unprompted(Timestamp::now()));
     }
@@ -305,7 +305,7 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
     ] {
         event_log::append(&paths.events_log, &sent).unwrap();
         let (cache, _, _) = catch_up_rollup(&paths).unwrap();
-        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        write_rollup_cache(&paths, &cache).unwrap();
         event_log::append(
             &paths.events_log,
             &lifecycle_at(&workspace, "claude", "boundary", "sess-a", signal),
@@ -412,7 +412,7 @@ fn fold_signals(
     }
     if let Some(status) = cached_status {
         write_rollup_cache(
-            &paths.rollup_cache,
+            &paths,
             &RollupCache {
                 version: 34,
                 extent: event_log::LogExtent {

@@ -98,7 +98,7 @@ proptest::proptest! {
             event_log::append(&paths.events_log, event).unwrap();
         }
         let (prefix_cache, _, _) = catch_up_rollup(&paths).unwrap();
-        write_rollup_cache(&paths.rollup_cache, &prefix_cache).unwrap();
+        write_rollup_cache(&paths, &prefix_cache).unwrap();
         let mut cursor = RollupCursor::new();
         cursor.fold(&paths).unwrap();
         // Cases share this thread, so the thread's held fold also crosses
