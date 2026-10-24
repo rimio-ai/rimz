@@ -51,7 +51,8 @@ pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
         gate: DeliveryGate::Done,
         pane_id: stall.parent.pane.as_ref().map(|pane| pane.pane_id.clone()),
     }
-    .record(&ctx.workspace);
+    .record(&ctx.workspace)
+    .with_about_run(Some(run.run_id.clone()));
     if let Err(err) = ctx
         .store
         .queue_message(&message, &ctx.workspace.session_name)

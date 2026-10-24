@@ -2788,6 +2788,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
     let queued = notices();
     assert_eq!(queued.len(), 1, "one notice per park: {queued:?}");
     assert_eq!(queued[0].agent_id, parent_id);
+    assert_eq!(queued[0].about_run, Some(run.run_id.clone()));
     assert!(
         queued[0].text.contains("@still-silver") && queued[0].text.contains("Usage limit reached"),
         "{}",
@@ -2824,6 +2825,38 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
         Some(resumed_at)
     );
     assert!(!producer_owes_notice());
+
+    let queued = notices();
+    assert!(
+        queued
+            .iter()
+            .all(|message| message.about_run.as_ref() == Some(&run.run_id))
+    );
+    rimz::harness::run::cancel(store.paths(), &run.run_id).unwrap();
+    for message in &queued {
+        env.rimz()
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                message.message_id.as_str(),
+            ])
+            .assert()
+            .success();
+    }
+    assert!(notices().is_empty());
+    let history = store.list_message_history().unwrap();
+    for message in queued {
+        let retired = history
+            .iter()
+            .find(|row| row.message_id == message.message_id)
+            .unwrap();
+        assert_eq!(
+            retired.status,
+            rimz::store::message::MessageStatus::Canceled
+        );
+        assert_eq!(retired.last_sent_at, None);
+    }
 }
 
 #[cfg(unix)]
@@ -3003,6 +3036,7 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
     let queued = notices();
     assert_eq!(queued.len(), 1, "one notice per run");
     assert_eq!(queued[0].agent_id, parent_id);
+    assert_eq!(queued[0].about_run, Some(run.run_id.clone()));
     assert_eq!(queued[0].gate, DeliveryGate::Done);
     assert!(matches!(queued[0].sender, MessageSender::Harness { .. }));
     assert_eq!(

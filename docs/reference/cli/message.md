@@ -159,8 +159,8 @@ Read plan.md when the planner finishes.
 | `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |
-| `SUBAGENT_PAUSED` | A [subagent stopped on a provider limit](./subagents.md#a-child-paused-on-a-provider-limit), sent to its parent once per stop | `@rimz` |
-| `SUBAGENT_STALLED` | A [subagent silent mid-turn or not yet started past the stall window](./subagents.md#a-child-silent-past-the-stall-window), sent to its parent once per run | `@rimz` |
+| `SUBAGENT_PAUSED` | A [subagent parked on a provider limit](./subagents.md#a-child-paused-on-a-provider-limit), queued for its parent once per park; withdrawn if its run ends before delivery | `@rimz` |
+| `SUBAGENT_STALLED` | A [subagent silent mid-turn or not yet started past the stall window](./subagents.md#a-child-silent-past-the-stall-window), queued for its parent once per run; withdrawn if its run ends before delivery | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message remains queued past five minutes with a receiver not working, or twenty minutes with a busy receiver, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent | `@rimz` |
@@ -227,7 +227,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `delivered` | The agent acknowledged it: a turn started with the prompt, or compaction started for a command. |
 | `timed_out` | The agent never acknowledged it. A command is never resent, because repeating `/compact` can discard context. |
 | `errored` | Delivery could not happen, for example the address matched no agent. |
-| `canceled` | `message cancel` or `message clear` stopped it. |
+| `canceled` | `message cancel` or `message clear` stopped it, a fleet digest was fully joined, or a pause/stall notice's child run ended before delivery. `message show` keeps the reason in its timeline. |
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
 | `expired` | An automatic command remained queued for ten minutes without delivery, or a resumed child did not register by its follow-up's deadline. Automatic commands stop blocking later messages even before the next sweep records expiry; registration expiry is recorded only while the card is absent or ended no later than enqueue. Other prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |

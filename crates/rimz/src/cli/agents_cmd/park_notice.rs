@@ -1,4 +1,5 @@
-//! Detached helper that tells a parent, once per park, that a child stopped on a provider limit.
+//! Detached helper that queues a notice for a parent, once per park, that a child stopped on a
+//! provider limit.
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
@@ -51,7 +52,8 @@ pub(super) fn run(request: ParkNoticeRequest) -> Result<()> {
         gate: DeliveryGate::Done,
         pane_id: park.parent.pane.as_ref().map(|pane| pane.pane_id.clone()),
     }
-    .record(&ctx.workspace);
+    .record(&ctx.workspace)
+    .with_about_run(Some(run.run_id.clone()));
     if let Err(err) = ctx
         .store
         .queue_message(&message, &ctx.workspace.session_name)

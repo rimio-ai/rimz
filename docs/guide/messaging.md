@@ -247,7 +247,7 @@ The inbox shows conversation by default: your sends and attributed agent sends. 
 
 When something is stuck the loop is always the same: `list` to find the record, `show` to name the blocker, then `steer`, `edit`, or `cancel` to clear it.
 
-Ten statuses cover a record's whole life. `queued` and `claimed` are still live; `sent` means the bytes reached the pane and `delivered` that the prompt's turn started; `canceled` means you stopped it and `archived` that the receiver, its channel, or a watched agent ended first; `expired` means an automatic command waited ten minutes without reaching the pane, or a resumed child missed its follow-up's registration deadline; `timed_out`, `errored`, and `abandoned` are the three failures. [cli/message.md](../reference/cli/message.md#message-statuses) defines each. A finished record keeps its text in the recent history, which is what lets `show` print it and `requeue` send it again; `requeue` refuses a record whose text has aged out of that history. Your other prompts and operator compaction commands never expire.
+Ten statuses cover a record's whole life. `queued` and `claimed` are still live; `sent` means the bytes reached the pane and `delivered` that the prompt's turn started; `canceled` means you stopped it, or RimZ withdrew a notice that no longer applied (a fully joined digest, or a pause or stall notice whose child run ended first), and `archived` that the receiver, its channel, or a watched agent ended first; `expired` means an automatic command waited ten minutes without reaching the pane, or a resumed child missed its follow-up's registration deadline; `timed_out`, `errored`, and `abandoned` are the three failures. [cli/message.md](../reference/cli/message.md#message-statuses) defines each. A finished record keeps its text in the recent history, which is what lets `show` print it and `requeue` send it again; `requeue` refuses a record whose text has aged out of that history. Your other prompts and operator compaction commands never expire.
 
 A message can remain `sent` while RimZ catches up with the agent's hooks. If a hook from that provider, recorded after the send and inside its confirmation window, is still waiting to be processed, RimZ waits rather than sending another copy or timing out a command.
 
@@ -274,8 +274,8 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
-- `SUBAGENT_PAUSED`, sent to a parent once each time one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stops on a provider usage limit.
-- `SUBAGENT_STALLED`, sent to a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn or has not started its first turn past the same stall window.
+- `SUBAGENT_PAUSED`, queued for a parent once per park when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stops on a provider usage limit. If the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`.
+- `SUBAGENT_STALLED`, queued for a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn or has not started its first turn past the same stall window. It too is withdrawn and reads `canceled` if the run ends before delivery.
 - `MESSAGE_UNDELIVERED`, sent once to an agent sender when its message ends without delivery.
 - `MESSAGE_QUEUED`, sent once to an agent sender when its message stays queued past five minutes with a receiver not working, or twenty minutes with a receiver busy in a turn.
 - `DEADLINE`, the warnings and the stop request a subagent receives as its work deadline nears.

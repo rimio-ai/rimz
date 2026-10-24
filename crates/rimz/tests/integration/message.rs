@@ -7219,6 +7219,409 @@ fn sweep_cancels_joined_subagent_report_without_pane_write() {
 }
 
 #[test]
+fn sweep_cancels_paused_notice_for_an_ended_run() {
+    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentPaused, false);
+}
+
+#[test]
+fn deliver_cancels_paused_notice_for_an_ended_run() {
+    assert_ended_run_notice_canceled("deliver", HarnessNotice::SubagentPaused, false);
+}
+
+#[test]
+fn sweep_cancels_stalled_notice_for_an_ended_run() {
+    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentStalled, false);
+}
+
+#[test]
+fn deliver_cancels_stalled_notice_for_an_ended_run() {
+    assert_ended_run_notice_canceled("deliver", HarnessNotice::SubagentStalled, false);
+}
+
+#[test]
+fn sweep_retires_run_notice_while_the_parent_is_mid_turn() {
+    assert_ended_run_notice_canceled("sweep", HarnessNotice::SubagentPaused, true);
+}
+
+fn run_notice_fixture(notice: HarnessNotice) -> (Env, MessageRecord, PathBuf) {
+    let (env, mut message, pane_fixture) = subagent_report_fixture(&[false]);
+    let store = env.store();
+    let mut run = rimz::harness::run::list(store.paths()).unwrap().remove(0);
+    run.status = rimz::store::run::RunStatus::Running;
+    run.completed_at = None;
+    run.report_message_id = None;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    message.sender = MessageSender::Harness { notice };
+    message.about_run = Some(run.run_id);
+    message.text = "child needs attention".to_owned();
+    (env, message, pane_fixture)
+}
+
+fn run_notice_delivery(
+    env: &Env,
+    message: &MessageRecord,
+    pane_fixture: &Path,
+    trace_log: &Path,
+    command: &str,
+) -> std::process::Command {
+    let mut delivery = traced_rimz(env, trace_log);
+    delivery
+        .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+        .args(["message", command]);
+    if command == "deliver" {
+        delivery.arg("--message-id");
+    }
+    if command != "sweep" {
+        delivery.arg(message.message_id.as_str());
+    }
+    delivery
+}
+
+fn assert_ended_run_notice_canceled(command: &str, notice: HarnessNotice, busy: bool) {
+    let (env, message, pane_fixture) = run_notice_fixture(notice);
+    queue_messages(&env, &[&message]);
+    let store = env.store();
+    rimz::harness::run::cancel(store.paths(), message.about_run.as_ref().unwrap()).unwrap();
+    if busy {
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                message.kind.as_str(),
+                "UserPromptSubmit",
+                &AgentLifecycleObservation::new(
+                    Some(message.agent_id.clone()),
+                    LifecycleSignal::TurnStarted { turn_id: None },
+                ),
+            ))
+            .unwrap();
+    }
+    let trace_log = env.project_root.join("run-notice-trace.log");
+    run_success(
+        &mut run_notice_delivery(&env, &message, &pane_fixture, &trace_log, command),
+        "retire notice for an ended run",
+    );
+    assert_no_report_pane_write(&trace_log);
+    assert_run_notice_canceled(&env, &message, 0, "child run canceled before delivery");
+}
+
+fn assert_run_notice_canceled(env: &Env, message: &MessageRecord, attempts: u32, reason: &str) {
+    let store = env.store();
+    assert!(
+        store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .all(|row| row.message_id != message.message_id)
+    );
+    let history = store.list_message_history().unwrap();
+    let row = history
+        .iter()
+        .find(|row| row.message_id == message.message_id)
+        .unwrap();
+    assert_eq!(row.status, MessageStatus::Canceled);
+    assert_eq!(row.attempts, attempts);
+    assert_eq!(row.last_sent_at, None);
+    assert_eq!(row.about_run, message.about_run);
+    let events = env.read_events();
+    assert!(
+        events.iter().any(|event| event.method == "message.canceled"
+            && event.params_value()["message_id"] == message.message_id.as_str()
+            && event.params_value()["reason"] == reason),
+        "{events:?}"
+    );
+    let shown = run_success(
+        env.rimz()
+            .args(["message", "show", message.message_id.as_str(), "--json"]),
+        "explain retired notice",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["message"]["status"], "canceled");
+    assert_eq!(
+        shown["message"]["about_run"],
+        serde_json::to_value(&message.about_run).unwrap()
+    );
+    assert!(
+        shown["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["reason"] == reason)
+    );
+}
+
+#[test]
+fn delivery_preserves_notices_for_open_runs() {
+    for (notice, header) in [
+        (HarnessNotice::SubagentPaused, "SUBAGENT_PAUSED"),
+        (HarnessNotice::SubagentStalled, "SUBAGENT_STALLED"),
+    ] {
+        let (env, message, pane_fixture) = run_notice_fixture(notice);
+        queue_messages(&env, &[&message]);
+        let trace_log = env.project_root.join("open-run-notice-trace.log");
+        run_success(
+            &mut run_notice_delivery(&env, &message, &pane_fixture, &trace_log, "deliver"),
+            "deliver notice for an open run",
+        );
+        assert_text_then_enter(
+            &trace_log,
+            &format!("Type: {header}\nFrom: @rimz\nContent:\n{}", message.text),
+        );
+        assert_eq!(
+            message_by_id(&env, &message.message_id).status,
+            MessageStatus::Sent
+        );
+    }
+}
+
+#[test]
+fn delivery_retires_notices_for_missing_runs() {
+    let (env, mut message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+    message.about_run = Some(rimz::ids::RunId::new());
+    queue_messages(&env, &[&message]);
+    let trace_log = env.project_root.join("gone-run-notice-trace.log");
+    run_success(
+        &mut run_notice_delivery(&env, &message, &pane_fixture, &trace_log, "deliver"),
+        "retire notice for a missing run",
+    );
+    assert_no_report_pane_write(&trace_log);
+    assert_run_notice_canceled(&env, &message, 0, "child run gone before delivery");
+}
+
+#[test]
+fn delivery_warns_and_keeps_its_claim_when_the_linked_run_is_unreadable() {
+    let (env, message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentStalled);
+    queue_messages(&env, &[&message]);
+    let after = DeliveryRendezvous::new(&env, "after");
+    let trace_log = env.project_root.join("unreadable-run-notice-trace.log");
+    let child = run_notice_delivery(&env, &message, &pane_fixture, &trace_log, "deliver")
+        .env("RIMZ_TEST_DELIVERY_AFTER_CLAIM", &after.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = after.arrive();
+    let run_id = message.about_run.as_ref().unwrap();
+    std::fs::write(
+        env.store().paths().runs_dir.join(format!("{run_id}.json")),
+        b"{not a run}\n",
+    )
+    .unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let warning = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        warning.contains(message.message_id.as_str()) && warning.contains(run_id.as_str()),
+        "{warning}"
+    );
+    assert_text_then_enter(
+        &trace_log,
+        &format!(
+            "Type: SUBAGENT_STALLED\nFrom: @rimz\nContent:\n{}",
+            message.text
+        ),
+    );
+    let sent = message_by_id(&env, &message.message_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 1);
+    let events = env.read_events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.queued")
+            .count(),
+        1,
+        "{events:?}"
+    );
+}
+
+#[test]
+fn delivery_filters_ended_run_notices_from_a_batch() {
+    let (env, moot, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+    let store = env.store();
+    let mut live_run =
+        rimz::harness::run::load(store.paths(), moot.about_run.as_ref().unwrap()).unwrap();
+    live_run.run_id = rimz::ids::RunId::new();
+    rimz::harness::run::create(store.paths(), &live_run).unwrap();
+    let mut live = moot.clone();
+    live.message_id = fixed_message_id(3);
+    live.about_run = Some(live_run.run_id);
+    live.sender = MessageSender::Harness {
+        notice: HarnessNotice::SubagentStalled,
+    };
+    live.text = "live child needs attention".to_owned();
+    let mut head = moot.clone();
+    head.message_id = fixed_message_id(1);
+    head.about_run = None;
+    head.sender = MessageSender::Human;
+    head.channel = None;
+    head.text = "human head".to_owned();
+    queue_messages(&env, &[&head, &moot, &live]);
+    rimz::harness::run::cancel(store.paths(), moot.about_run.as_ref().unwrap()).unwrap();
+    let trace_log = env.project_root.join("run-notice-batch-trace.log");
+    run_success(
+        &mut run_notice_delivery(&env, &head, &pane_fixture, &trace_log, "deliver"),
+        "filter ended child from a mixed batch",
+    );
+    let prompt = format!(
+        "{}\n\nType: SUBAGENT_STALLED\nFrom: @rimz\nContent:\n{}",
+        user_message(&head.text),
+        live.text
+    );
+    assert_text_then_enter(&trace_log, &prompt);
+    assert_eq!(
+        trace_lines(&trace_log)
+            .iter()
+            .filter(|line| is_enter_key(line))
+            .count(),
+        1
+    );
+    for message in [&head, &live] {
+        let sent = message_by_id(&env, &message.message_id);
+        assert_eq!(sent.status, MessageStatus::Sent);
+        assert_eq!(sent.batch_id, Some(head.message_id.clone()));
+    }
+    assert_run_notice_canceled(&env, &moot, 1, "child run canceled before delivery");
+}
+
+#[test]
+fn delivery_rechecks_run_end_between_scan_and_claim() {
+    let mut outcomes = Vec::new();
+    for command in ["sweep", "deliver", "steer", "interrupt"] {
+        let (env, message, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+        queue_messages(&env, &[&message]);
+        let before = DeliveryRendezvous::new(&env, "before");
+        let trace_log = env.project_root.join("run-notice-race-trace.log");
+        let child = run_notice_delivery(&env, &message, &pane_fixture, &trace_log, command)
+            .env("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        rimz::harness::run::cancel(env.store().paths(), message.about_run.as_ref().unwrap())
+            .unwrap();
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        let (live, history) = env.store().list_messages_and_history().unwrap();
+        let row = live
+            .into_iter()
+            .chain(history)
+            .find(|row| row.message_id == message.message_id)
+            .unwrap();
+        let no_write = trace_lines(&trace_log).iter().all(|line| {
+            !line.contains("\taction\twrite\t") && !line.contains("\taction\twrite-chars\t")
+        });
+        let events = env.read_events();
+        let no_sent = events.iter().all(|event| event.method != "message.sent");
+        let exit_matches = if matches!(command, "steer" | "interrupt") {
+            output.status.code() == Some(1)
+                && String::from_utf8_lossy(&output.stderr).trim()
+                    == format!("error: message {} is no longer queued", message.message_id)
+        } else {
+            output.status.success()
+        };
+        outcomes.push((
+            command,
+            row.status,
+            row.attempts,
+            row.last_sent_at.is_none(),
+            no_write,
+            no_sent,
+            exit_matches,
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        ["sweep", "deliver", "steer", "interrupt"].map(|command| (
+            command,
+            MessageStatus::Canceled,
+            1,
+            true,
+            true,
+            true,
+            true
+        ))
+    );
+}
+
+#[test]
+fn delivery_rebases_batches_after_retiring_their_head() {
+    let mut outcomes = Vec::new();
+    for survivors in 0..=2 {
+        let (env, head, pane_fixture) = run_notice_fixture(HarnessNotice::SubagentPaused);
+        let followers: Vec<_> = (0..survivors)
+            .map(|index| {
+                let mut record = head.clone();
+                record.message_id = fixed_message_id(3 + index);
+                record.about_run = None;
+                record.sender = MessageSender::Human;
+                record.channel = None;
+                record.text = format!("survivor {index}");
+                record
+            })
+            .collect();
+        let mut queued = vec![&head];
+        queued.extend(&followers);
+        queue_messages(&env, &queued);
+        let before = DeliveryRendezvous::new(&env, "before");
+        let trace_log = env.project_root.join("run-notice-batch-head-trace.log");
+        let child = run_notice_delivery(&env, &head, &pane_fixture, &trace_log, "deliver")
+            .env("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before.path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        rimz::harness::run::cancel(env.store().paths(), head.about_run.as_ref().unwrap()).unwrap();
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let (mut rows, history) = env.store().list_messages_and_history().unwrap();
+        rows.extend(history);
+        let retired = rows
+            .iter()
+            .find(|row| row.message_id == head.message_id)
+            .unwrap();
+        let batch_id = (survivors > 1).then(|| followers[0].message_id.clone());
+        let batch_matches = followers.iter().all(|message| {
+            let sent = rows
+                .iter()
+                .find(|row| row.message_id == message.message_id)
+                .unwrap();
+            sent.status == MessageStatus::Sent && sent.batch_id == batch_id
+        });
+        let prompt = followers
+            .iter()
+            .map(|message| user_message(&message.text))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let lines = trace_lines(&trace_log);
+        let paste_matches = if survivors == 0 {
+            lines.iter().all(|line| !line.contains("\taction\twrite\t"))
+        } else {
+            lines.iter().filter(|line| is_paste(line, &prompt)).count() == 1
+                && lines.iter().filter(|line| is_enter_key(line)).count() == 1
+        };
+        outcomes.push((
+            survivors,
+            retired.status,
+            retired.last_sent_at.is_none(),
+            batch_matches,
+            paste_matches,
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        (0..=2)
+            .map(|survivors| (survivors, MessageStatus::Canceled, true, true, true))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn deliver_cancels_joined_subagent_report_without_pane_write() {
     assert_joined_subagent_report_canceled(true);
 }

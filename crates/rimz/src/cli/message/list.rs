@@ -31,6 +31,8 @@ impl LaneScope {
 pub(super) struct MessageListRow {
     pub(super) message_id: MessageId,
     #[serde(skip_serializing_if = "Option::is_none")]
+    about_run: Option<rimz::ids::RunId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) address: Option<String>,
     pub(super) kind: AgentKind,
     pub(super) agent_id: AgentSessionId,
@@ -78,6 +80,7 @@ impl MessageListRow {
     pub(super) fn from_record(message: MessageRecord) -> Self {
         Self {
             message_id: message.message_id,
+            about_run: message.about_run,
             address: message.address,
             kind: message.kind,
             agent_id: message.agent_id,
@@ -120,6 +123,7 @@ impl MessageListRow {
             .or_else(|| (payload.status == MessageStatus::Delivered).then_some(event.timestamp));
         Some(Self {
             message_id: payload.message_id,
+            about_run: None,
             address: payload.address,
             kind: payload.kind,
             agent_id: payload.agent_id,
