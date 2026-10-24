@@ -339,5 +339,69 @@ pub fn run_tab_title(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn execute_run(
+    backend: &dyn MuxBackend,
+    workspace: &crate::ResolvedWorkspace,
+    store: &crate::Store,
+    batch: &AgentLaunchBatch,
+    mut request: PlacementRequest,
+    run_id: &crate::RunId,
+    force_new_tab: bool,
+    subagent: bool,
+) -> Result<()> {
+    let target = own_pane_id(request.mux);
+    let strategy = run_placement(force_new_tab, target.is_some(), subagent);
+    let mut zone_guard = None;
+    let mut started = std::time::Instant::now();
+    let identity = &batch.identities()[0];
+    match strategy {
+        RunPlacement::SubagentZone => {
+            zone_guard = Some(lock_subagent_zone(store).context("opening run pane")?);
+            started = std::time::Instant::now();
+            match split_into_subagent_zone(
+                backend,
+                store,
+                workspace,
+                &request.cwd,
+                request.identity_env,
+                request.sidebar,
+                single_pane(&request.panes)?,
+                &identity.name,
+                identity.launch.channel.as_deref(),
+                request.tab_anchor,
+                run_id,
+            ) {
+                SubagentZoneOpen::Opened => {}
+                SubagentZoneOpen::Failed(error) => return Err(error).context("opening run pane"),
+            }
+        }
+        RunPlacement::Split | RunPlacement::Tab => {
+            request.placement = if strategy == RunPlacement::Split {
+                Placement::NewPane
+            } else {
+                Placement::NewTab
+            };
+            execute(backend, store, batch, request, || {})?;
+        }
+    }
+    if subagent {
+        wait_for_subagent_pane_bind(
+            store,
+            workspace,
+            PaneBindWait {
+                run_id,
+                launch_id: &identity.agent_id,
+                kind: &identity.kind,
+                caller: crate::diag::record::SubagentPaneBindCaller::Launch,
+                open: started.elapsed(),
+            },
+        );
+    }
+    drop(zone_guard);
+    crate::harness::assist_log::record_tier_fallbacks(batch.identities());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

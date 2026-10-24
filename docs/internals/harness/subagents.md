@@ -42,7 +42,7 @@ The doorway is a usability boundary, not a security one. It uses the supervised 
 | `print` | always `true` | selects RimZ's supervised run, not provider print mode, so interactive providers can take follow-up turns |
 | `bg` | always `true` | single launch and fanout share one background composition |
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
-| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Execution reads it as `self_cleanup_on_completion && !keep` (`cli/supervised/run.rs::execute_attempt`) |
+| `self_cleanup_on_completion` | always `true` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane. Execution reads it as `self_cleanup_on_completion && !keep` (`crates/rimz/src/launcher/execute.rs::open_fresh`) |
 | `keep` | `--keep`, default false | turns automatic completion cleanup off and holds the pane past provider exit until the parent ends or Ctrl-C, under a live parent watch |
 | `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, never for a terminal run awaiting receipt |
 | `warn` | `--warn`, else `[agents.subagents] warn`, default `["6m", "3m"]` | normalized offsets before the soft bound |
@@ -62,16 +62,16 @@ The planner caps a launched child's posture at its parent's on two axes, isolati
 
 Isolation follows the [subagent cap](../sandbox.md#the-subagent-cap), which `sandbox.md` owns with the isolation levels. `plan::cap_child_isolation` reads the launching process's ambient isolation, so it needs no caller row.
 
-Permission mode is capped in `harness/plan.rs::cap_child_permission`, called from `plan::plan_supervised_launch` before finalization renders argv. The ceiling is the caller's recorded `AgentState.mode`, never an environment value, ranked plan < ask < auto < yolo (`PermissionMode::rank` in `agents/definition.rs`), with an unrecorded mode read as auto. A request at or below the ceiling passes unchanged, and a launch with no resolved caller is not capped.
+Permission mode is capped in `crates/rimz/src/harness/plan.rs::cap_child_permission`, called from `plan::plan_supervised_launch` before finalization renders argv. The ceiling is the caller's recorded `AgentState.mode`, never an environment value, ranked plan < ask < auto < yolo (`PermissionMode::rank` in `agents/definition.rs`), with an unrecorded mode read as auto. A request at or below the ceiling passes unchanged, and a launch with no resolved caller is not capped.
 
 | Source of a mode above the ceiling | Result |
 | --- | --- |
 | `--yolo` | Refused with `ChildPermissionErr::Explicit`, which names the parent's mode and the fix: a parent launched with `--yolo` or a `mode: yolo` definition. |
-| A profile's `mode:` (`PermissionClampSource::ProfileDefault`), a mode cell such as `codex-yolo` (`ModeCell`), or the auto default (`AutoDefault`) | Lowered to the ceiling. The planner turns the default into an explicit choice, so finalization strips the profile's permission args, adds the ceiling's, and records the ceiling on the cell, the agent record, and the run record. `SupervisedLaunch.permission_clamp` carries the lowered mode and its source to the stderr note (`cli/supervised.rs::note_permission_clamp`). |
+| A profile's `mode:` (`PermissionClampSource::ProfileDefault`), a mode cell such as `codex-yolo` (`ModeCell`), or the auto default (`AutoDefault`) | Lowered to the ceiling. The planner turns the default into an explicit choice, so finalization strips the profile's permission args, adds the ceiling's, and records the ceiling on the cell, the agent record, and the run record. `SupervisedLaunch.permission_clamp` carries the lowered mode and its source to the stderr note (`launcher::Notice::PermissionClamp`, rendered by `cli::launch_interaction`). |
 
 Parent-message resume ([resuming an ended child](#resuming-an-ended-child)) rechecks the replayed mode with `plan::check_child_permission_mode` against the parent's current recorded mode, and refuses with `ChildPermissionErr::Resume` instead of lowering it. The fix it names is a new child. The same path reruns `plan::cap_child_isolation` on the child's recorded override and its re-read profile default.
 
-A yolo child that resolves to scoped isolation gets a stderr note that `sudo` and setuid binaries do not work in the view, with `--isolation host` as the fix (`SupervisedLaunch.yolo_sandbox`, `cli/supervised.rs::note_yolo_sandbox`). The note is skipped under a scoped parent, where the cap refuses that fix, and at parent-message resume. Why the view blocks escalation is in [sandbox.md](../sandbox.md#the-launch-plan).
+A yolo child that resolves to scoped isolation gets a stderr note that `sudo` and setuid binaries do not work in the view, with `--isolation host` as the fix (`SupervisedLaunch.yolo_sandbox`, `launcher::Notice::YoloSandbox`, rendered by `cli::launch_interaction`). The note is skipped under a scoped parent, where the cap refuses that fix, and at parent-message resume. Why the view blocks escalation is in [sandbox.md](../sandbox.md#the-launch-plan).
 
 Both caps apply only where the planner sees `subagent` set, and at parent-message resume. Peers (`rimz agents`, interactive or `-p`), teams, loop fires, workflow steps, restart, fork, and cohort resume are uncapped.
 
@@ -113,7 +113,7 @@ Provider preflight then runs against the chosen checkout. Besides hook installat
 
 ## Pane zones
 
-With an ambient pane, a subagent launch uses `RunPlacement::SubagentZone`, a placement reserved for this doorway and absent from the general placement flags and config. `select_subagent_zone_strategy` ([`cli/supervised/pane.rs`](../../../crates/rimz/src/cli/supervised/pane.rs)) picks the first strategy whose condition holds:
+With an ambient pane, a subagent launch uses `RunPlacement::SubagentZone`, a placement reserved for this doorway and absent from the general placement flags and config. `select_subagent_zone_strategy` ([`launcher/placement/zone.rs`](../../../crates/rimz/src/launcher/placement/zone.rs)) picks the first strategy whose condition holds:
 
 | Order | Condition | Strategy |
 | --- | --- | --- |
@@ -188,7 +188,7 @@ Three independent layers keep a child from launching work of its own. Each cover
 
 The launch planner refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch whose durable caller is a launched child (`SubagentCaller` above). That blocks another RimZ process.
 
-Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the subagent profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
+Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the subagent profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`launcher/resolve.rs`](../../../crates/rimz/src/launcher/resolve.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
 
 Where the provider exposes a verified native restriction, the exec compiler also disables its delegation tool, after profile arguments and configured environment are applied:
 

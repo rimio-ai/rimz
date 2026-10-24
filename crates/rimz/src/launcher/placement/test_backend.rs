@@ -1,7 +1,10 @@
 use super::rimz_api as rimz;
-use super::{Duration, MuxName, PaneId, PaneRef, RuntimePaths};
+use rimz::RuntimePaths;
+use rimz::ids::{MuxName, PaneId};
 use rimz::mux as m;
+use rimz::pane::PaneRef;
 use std::sync::Mutex;
+use std::time::Duration;
 
 #[derive(Default)]
 pub(super) struct Backend {
@@ -13,6 +16,7 @@ pub(super) struct Backend {
     pub(super) append_outcomes:
         Mutex<std::collections::VecDeque<Result<m::CompanionPaneAppend, m::CompanionAppendErr>>>,
     pub(super) captures: Mutex<Vec<(Option<u16>, bool)>>,
+    pub(super) on_open: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl m::MuxBackend for Backend {
@@ -64,6 +68,9 @@ impl m::MuxBackend for Backend {
             }))
     }
     fn open_tab(&self, opts: &m::TabOptions) -> m::Result<()> {
+        if let Some(on_open) = &self.on_open {
+            on_open();
+        }
         self.tabs.lock().unwrap().push(opts.clone());
         if let Some(error) = self.tab_error.lock().unwrap().take() {
             return Err(error);

@@ -1,19 +1,16 @@
 //! Command-neutral supervised-run effects and presentation.
 
-use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::ValueEnum;
 
 use crate::cli::GlobalFlags;
-use rimz::agents::{AgentDefinition, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
+use rimz::agents::AgentDefinition;
 use rimz::harness::run::RunCancellation;
-use rimz::mux::PaneCmd;
 use rimz::store::run::RunRecord;
 use rimz::utils::time::{DurationUnit, parse_duration_units};
-use rimz::workspace::WorkspaceResolver;
 
 pub(super) mod output;
 pub(super) mod pane;
@@ -60,72 +57,6 @@ use output::RunStreamEvent;
 use pane::{latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
 use stream::{stream_attached_run, stream_blocking_run};
-
-fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
-    WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving current workspace")
-}
-
-fn preflight_agent(
-    adapter: &AgentDefinition,
-    launch: &rimz::worktree::LaunchCheckout,
-    login: &rimz::agents::ProviderLogin,
-    home_fix: &str,
-) -> Result<()> {
-    let definition = adapter.spec();
-    let kind = definition.kind;
-    let login_env = login.env(&rimz::agents::ambient_env());
-    match preflight_hooks(adapter, &login_env, TurnLifecycleNeed::Wired) {
-        Ok(()) => {}
-        Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
-            "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",
-            reason
-        ),
-        Err(HookPreflightErr::HooksMissing) => bail!(
-            "`rimz agents -p` requires {kind} hooks so the supervised turn can report completion; run `rimz hooks install {kind}`"
-        ),
-        Err(HookPreflightErr::HooksUntrusted { hooks, fix }) => bail!(
-            "{kind} hooks are installed but not trusted ({}); {}",
-            hooks,
-            fix
-        ),
-        Err(HookPreflightErr::HooksDisabled { reason, fix }) => {
-            bail!("`rimz agents -p` cannot supervise {kind}: {reason}; {fix}")
-        }
-    }
-    match rimz::agents::preflight_launch_dir(
-        adapter,
-        &launch.cwd,
-        launch.repo_root.as_deref(),
-        &login_env,
-        rimz::agents::LaunchDirMode::Supervised,
-    ) {
-        Ok(()) => Ok(()),
-        Err(error @ rimz::agents::LaunchDirRefusal::Home { .. }) => bail!("{error}; {home_fix}"),
-        Err(error) => bail!("`rimz agents -p` supervised launch refused: {error}"),
-    }
-}
-
-fn preflight_program(
-    adapter: &AgentDefinition,
-    process: &rimz::harness::launch::CompiledAgentProcess,
-    cwd: &Path,
-) -> Result<()> {
-    let mut launch_env = rimz::agents::ambient_env();
-    launch_env.extend(process.env.clone());
-    if let Some(error) = adapter.launch_blocker(cwd, &launch_env, &process.provider_argv) {
-        return Err(error.into());
-    }
-    let program = &process.provider_program;
-    let path = process
-        .resolve_program_after_shell_rc()
-        .with_context(|| format!("checking `{program}` after shell startup"))?;
-    let Some(path) = path else {
-        bail!("finding `{program}` on PATH after shell startup");
-    };
-    rimz::agents::version::check_launch_version_floor(adapter, &path)?;
-    Ok(())
-}
 
 /// Why a supervised stop did not end with the run terminal and no nameable pane left.
 #[derive(Debug, thiserror::Error)]
@@ -222,21 +153,6 @@ fn stamp_stopped_subagent_end(
         .context("recording stopped subagent end")
 }
 
-fn run_pane_cmd(
-    runtime: &rimz::RuntimePaths,
-    request: &rimz::harness::launch::ExecRequest,
-) -> Result<PaneCmd> {
-    let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), runtime, request)?;
-    Ok(PaneCmd {
-        argv,
-        name: Some(request.kind.to_string()),
-    })
-}
-
-pub(in crate::cli) fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool, bool) {
-    (self_cleanup_on_completion, self_cleanup_on_completion)
-}
-
 pub(in crate::cli) fn note_isolation_clamp(
     profile: &str,
     source: &rimz::harness::plan::ClampSource,
@@ -249,37 +165,10 @@ pub(in crate::cli) fn note_isolation_clamp(
     Ok(())
 }
 
-fn note_permission_clamp(
-    profile: &str,
-    clamp: &rimz::harness::plan::PermissionClamp,
-) -> Result<()> {
-    use std::io::Write as _;
-    writeln!(
-        std::io::stderr(),
-        "rimz: {profile} runs in {} mode: {} asks for {}, and a subagent never runs looser than its parent",
-        clamp.mode,
-        clamp.source,
-        clamp.requested,
-    )?;
-    Ok(())
-}
-
-fn note_yolo_sandbox(profile: &str) -> Result<()> {
-    use std::io::Write as _;
-    writeln!(
-        std::io::stderr(),
-        "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
-    )?;
-    Ok(())
-}
-
-fn install_run_interrupt_flag() -> Result<RunCancellation> {
-    let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
+fn run_interrupt_flag() -> RunCancellation {
+    RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(RunCancellation::new)
-        .clone();
-    flag.reset();
-    install_run_interrupt_handlers(flag.clone())?;
-    Ok(flag)
+        .clone()
 }
 
 #[cfg(unix)]

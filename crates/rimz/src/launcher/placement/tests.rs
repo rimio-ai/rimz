@@ -1110,9 +1110,7 @@ fn launched_child(id: &str, parent: &AgentState, pane_id: &str, registered_at: i
     child
 }
 
-use crate as rimz_api;
-#[path = "test_backend.rs"]
-mod fake_backend;
+use crate::launcher::test_backend as fake_backend;
 
 mod zone_backend {
     pub(super) use super::fake_backend::Backend;

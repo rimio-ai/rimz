@@ -28,7 +28,7 @@ pub(super) fn inspect(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn check(
+pub(super) fn check(
     workspace: &crate::ResolvedWorkspace,
     config: &crate::config::MachineConfig,
     root: Option<&Path>,
@@ -293,13 +293,26 @@ pub fn explicit_removal_protections(
     mux: Option<crate::ids::MuxName>,
 ) -> crate::worktree::ProtectionSet {
     let mut workspace_ids = std::collections::HashSet::new();
-    let workspaces = repo_roots.iter().filter_map(|repo_root| match crate::workspace::WorkspaceResolver::resolve(repo_root, root.map(Path::to_path_buf)) {
-        Ok(workspace) => workspace_ids.insert(workspace.workspace_id.clone()).then_some(workspace),
-        Err(err) => {
-            tracing::debug!(path = %repo_root.display(), error = %err, "could not resolve workspace while gathering worktree protection facts");
-            None
-        }
-    }).collect::<Vec<_>>();
+    let workspaces = repo_roots
+        .iter()
+        .filter_map(|repo_root| {
+            match crate::workspace::WorkspaceResolver::resolve(
+                repo_root,
+                root.map(Path::to_path_buf),
+            ) {
+                Ok(workspace) => workspace_ids
+                    .insert(workspace.workspace_id.clone())
+                    .then_some(workspace),
+                Err(err) => {
+                    tracing::debug!(
+                        path = %repo_root.display(), error = %err,
+                        "could not resolve workspace while gathering worktree protection facts",
+                    );
+                    None
+                }
+            }
+        })
+        .collect::<Vec<_>>();
     runtime_protections(&workspaces, mux, crate::worktree::Occupancy::ProvenLive)
 }
 

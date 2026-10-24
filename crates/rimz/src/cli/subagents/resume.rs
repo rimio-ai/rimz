@@ -308,7 +308,8 @@ fn resume_request(
 ) -> ExecRequest {
     let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
-    let (close_pane_on_exit, exit_on_run_completion) = supervised::run_exit_policy(!run.keep);
+    let (close_pane_on_exit, exit_on_run_completion) =
+        rimz::harness::plan::run_exit_policy(!run.keep);
     ExecRequest {
         run_id: Some(run.run_id.clone()),
         subagent: true,

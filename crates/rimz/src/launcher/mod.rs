@@ -2,12 +2,25 @@
 
 pub mod checkout;
 pub mod context;
+mod execute;
 pub mod lsp_admission;
 pub mod placement;
 mod reconcile;
+mod supervised;
+use execute::{FreshLaunch, PreparedState, SettledLayout};
+pub use execute::{
+    LeaderRun, OpenedRun, PreparedLaunch, RunCompletion, SupervisedContext, execute,
+};
+pub use supervised::prepare_supervised;
 pub mod resolve;
 pub mod trust;
 pub mod worktree_entry;
+
+#[cfg(test)]
+use crate as rimz_api;
+#[cfg(test)]
+#[path = "placement/test_backend.rs"]
+mod test_backend;
 
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeSet, HashSet};
@@ -87,6 +100,7 @@ pub enum Selection {
 #[derive(Clone, Copy, Debug)]
 pub enum RoomEntry {
     Live,
+    Birth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +137,7 @@ pub struct OpenedLayout {
     pub in_place: bool,
     pub pick_session: bool,
     pub peer: Option<crate::store::run::RunRecord>,
+    pub run: Option<OpenedRun>,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +159,19 @@ pub enum Notice<'a> {
         channel: Option<&'a str>,
         cwd: &'a std::path::Path,
         project: &'a std::path::Path,
+    },
+    IsolationClamp {
+        profile: &'a str,
+        source: &'a crate::harness::plan::ClampSource,
+    },
+    PermissionClamp {
+        profile: &'a str,
+        clamp: &'a crate::harness::plan::PermissionClamp,
+    },
+    YoloSandbox(&'a str),
+    RoomReset {
+        session: &'a str,
+        report: &'a crate::room::RoomResetReport,
     },
     ResumeAnnouncement(&'a crate::harness::plan::CohortResumePlan),
     ResumeReceipt {
@@ -256,7 +284,7 @@ const LAUNCH_PLACEMENT_ERRORS: PlacementErrors = PlacementErrors {
     same_pane: "running the agent in the current pane",
 };
 
-pub struct PreparedLaunch {
+struct PreparedLayout {
     request: LayoutRequest,
     effective: crate::config::effective::LaunchAgents,
     snapshot: Option<crate::store::snapshot::SidebarSnapshot>,
@@ -569,35 +597,38 @@ pub fn prepare_layout(
         }
     }
     Ok(Preparation::Prepared(Box::new(PreparedLaunch {
-        request: args,
-        effective,
-        snapshot,
-        projection,
-        layout,
-        teams,
-        team_name,
-        inferred_lane,
-        default_lane,
-        matching_overrides,
-        explicit_worktree_name,
-        ancestry,
-        focus,
-        receipt_leader_index,
-        prompt_agent_index,
-        checked_folder_trust,
-        noticed_hook_trust,
-        preflighted_logins,
-        empty_dir,
-        placement,
-        resume_scope,
+        state: PreparedState::Layout(Box::new(PreparedLayout {
+            request: args,
+            effective,
+            snapshot,
+            projection,
+            layout,
+            teams,
+            team_name,
+            inferred_lane,
+            default_lane,
+            matching_overrides,
+            explicit_worktree_name,
+            ancestry,
+            focus,
+            receipt_leader_index,
+            prompt_agent_index,
+            checked_folder_trust,
+            noticed_hook_trust,
+            preflighted_logins,
+            empty_dir,
+            placement,
+            resume_scope,
+        })),
+        leader_run: None,
     })))
 }
 
-pub fn execute(
-    prepared: PreparedLaunch,
+fn settle_layout(
+    prepared: PreparedLayout,
     interaction: &mut dyn Interaction,
-) -> Result<LaunchOutcome> {
-    let PreparedLaunch {
+) -> Result<SettledLayout> {
+    let PreparedLayout {
         request: args,
         effective,
         snapshot,
@@ -638,7 +669,6 @@ pub fn execute(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
-    let in_place = placement == Placement::SamePane;
     let pick_session = args.launch.selection == Selection::Picker;
     if let Some(scope) = resume_scope {
         launch_resume_layout(
@@ -656,7 +686,7 @@ pub fn execute(
             noticed_hook_trust,
             interaction,
         )?;
-        return Ok(LaunchOutcome::Existing);
+        return Ok(SettledLayout::Handled(LaunchOutcome::Existing));
     }
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     let prompt = args
@@ -672,11 +702,11 @@ pub fn execute(
         .or(default_lane.as_deref());
     let room = match args.entry {
         RoomEntry::Live => RoomContext::live_tab(workspace, machine_config.clone(), ctx.mux)?,
+        RoomEntry::Birth => bail!("room birth requires a leader run"),
     };
-    let mux = room.mux_name();
     let backend = room.backend();
     if worktree_launch && !checkout::confirm_cross_repo_worktree(workspace, interaction)? {
-        return Ok(LaunchOutcome::Declined);
+        return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
     }
 
     let cells = cohort_cells(&layout);
@@ -813,7 +843,7 @@ pub fn execute(
             interaction,
         )? {
             reconcile::Reconciled::Done | reconcile::Reconciled::PromptDispatched => {
-                return Ok(LaunchOutcome::Existing);
+                return Ok(SettledLayout::Handled(LaunchOutcome::Existing));
             }
             reconcile::Reconciled::Resume(path) => {
                 validate_resume_inputs(&args.launch.overrides, ResumeEntrance::Reconcile)?;
@@ -845,7 +875,7 @@ pub fn execute(
                     )?
                     .is_none()
                 {
-                    return Ok(LaunchOutcome::Declined);
+                    return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
                 }
                 return launch_resume_layout(
                     &args,
@@ -862,7 +892,7 @@ pub fn execute(
                     noticed_hook_trust,
                     interaction,
                 )
-                .map(|()| LaunchOutcome::Existing);
+                .map(|()| SettledLayout::Handled(LaunchOutcome::Existing));
             }
             reconcile::Reconciled::Absent => check_entry = true,
             reconcile::Reconciled::Continue => {}
@@ -914,7 +944,7 @@ pub fn execute(
         ),
     }?;
     let Some(mut launch) = launch else {
-        return Ok(LaunchOutcome::Declined);
+        return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
     };
     let checkout = empty_dir.as_ref().map(|_| launch.cwd.display().to_string());
     if let Some(prepared) = &empty_dir {
@@ -940,151 +970,42 @@ pub fn execute(
         team_name.as_deref(),
         explicit_channel,
     );
-    let mut launch_requests = launch_identity_requests(
-        &layout,
-        args.launch.name.as_deref(),
-        empty_dir
-            .as_ref()
-            .map(|prepared| prepared.name.as_str())
-            .or_else(|| launch.generated_name()),
-        team_name.as_deref(),
-        team.map(|team| team.roles.as_slice()),
-        room_channel.as_deref(),
-        prompt.zip(prompt_agent_index),
-        None,
-        ancestry.as_ref(),
-    )?;
-    for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
-        request.login = crate::store::writer::LaunchLogin::Pinned(login);
-        request.launch.checkout.clone_from(&checkout);
-    }
-    if let Some(index) = prompt_agent_index {
-        launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
-    }
-    let launch_batch = store.begin_agent_launch_batch(
-        &launch_requests,
-        AgentLaunchScope {
-            session_name: workspace.session_name.clone(),
-            cwd: launch.cwd.clone(),
-            branch: launch.branch.clone(),
-            description: args.launch.cohort.description.clone(),
-        },
-    )?;
-    let peer_prompt = prepare_peer_prompt(
-        store,
-        launch_batch.identities(),
-        &launch.cwd,
-        args.launch.report_to,
-    )
-    .inspect_err(|_| {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-    })?;
-    let fail_peer_prompt = || {
-        if let Some((peer, _)) = &peer_prompt {
-            match crate::harness::run::fail_peer_run(store, peer, "peer launch failed") {
-                Ok(Some(_)) => {
-                    if let Some((_, launcher)) = peer.launcher() {
-                        crate::harness::orphan_sweep::spawn_digest_helper(
-                            store.runtime_paths(),
-                            launcher.clone(),
-                        );
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => tracing::warn!(%error, "could not fail peer launch run"),
-            }
-        }
-    };
-    let cleanup_worktree = launch.owns_checkout_lifecycle();
-    let worktree_name = launch.worktree_name.clone();
-    let cwd = launch.cwd;
-    let title = room_channel.as_deref().map_or_else(
-        || {
-            crate::harness::spec::default_tab_title(
-                &layout,
-                worktree_name.as_deref(),
-                team_name.as_deref(),
-            )
-        },
-        |channel| format!("#{channel}"),
-    );
-    let sidebar = room.sidebar_options(&cwd);
-    let mut panes = compile_layout_panes(
-        &layout,
-        LayoutPaneParams {
-            runtime: store.runtime_paths(),
-            cwd: &cwd,
-            cleanup_worktree,
-            in_place,
-            pick_session,
-            resume_seeds: None,
-            launch_identities: launch_batch.identities(),
-            fallback_channel: None,
-            loop_reminder: loop_fire.map(|(_, reminder)| reminder),
-        },
-    )
-    .inspect_err(|_| {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-        fail_peer_prompt();
-    })?;
-    panes.focused_pane = team_leader_pane(&layout, team);
-    if pick_session && in_place {
-        interaction.notice(Notice::PickerReceipt {
-            kind: launch_batch.identities()[0].kind.as_str(),
-            channel: room_channel.as_deref(),
-            cwd: launch_batch.identities()[0]
-                .launch
-                .checkout
-                .as_deref()
-                .map(Path::new)
-                .unwrap_or(&cwd),
-            project: &workspace.project_root,
-        })?;
-    }
-    placement::execute(
-        backend,
-        store,
-        &launch_batch,
-        PlacementRequest {
-            placement,
-            mux,
-            tab_anchor: placement::resolve_tab_anchor(
-                placement,
-                team_name.is_some(),
-                crate::mux::own_pane_id(mux),
-                checkout::pinned_room_root().as_deref(),
-                &workspace.project_root,
-            ),
-            cwd: cwd.clone(),
-            title,
-            panes,
-            sidebar,
-            identity_env: crate::room::pane_identity_env(
-                workspace,
-                checkout.as_deref().map(Path::new).unwrap_or(&cwd),
-                room_channel.as_deref(),
-                !worktree_launch && loop_task.is_none(),
-            ),
-            focus,
-            errors: LAUNCH_PLACEMENT_ERRORS,
-        },
-        || crate::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
-    )
-    .inspect_err(|_| fail_peer_prompt())?;
-    Ok(LaunchOutcome::Opened(Box::new(OpenedLayout {
-        identities: launch_batch.identities().to_vec(),
-        leader_index: receipt_leader_index,
+    Ok(SettledLayout::Fresh(Box::new(FreshLaunch {
+        context: ctx.clone(),
+        layout,
+        launch,
+        checkout,
+        name: args.launch.name.clone(),
+        generated_name: empty_dir.map(|prepared| prepared.name),
         team: team_name
             .as_deref()
             .zip(team)
             .map(|(name, team)| (name.to_owned(), team.clone())),
         channel: room_channel,
-        cwd,
-        in_place,
+        logins: preflighted_logins,
+        ancestry,
+        focus,
+        prompt: prompt.map(str::to_owned),
+        prompt_index: prompt_agent_index,
+        leader_index: receipt_leader_index,
+        placement,
         pick_session,
-        peer: peer_prompt.map(|(_, run)| run),
+        loop_reminder: loop_fire.map(|(_, reminder)| reminder.to_owned()),
+        description: args.launch.cohort.description.clone(),
+        report_to: args.launch.report_to,
+        managed_launches: Vec::new(),
+        loop_task: loop_task.map(str::to_owned),
+        cleanup_worktree: true,
+        inherit_cwd: !worktree_launch && loop_task.is_none(),
+        force_new_tab: false,
+        room: Some(Arc::new(room)),
+        recovery: crate::room::AttendedRecovery::RequireExplicitReset,
+        entry: RoomEntry::Live,
+        soft_name: false,
+        throttle_turn: None,
     })))
 }
+
 pub enum ResumeEntrance {
     Flag,
     Reconcile,
@@ -1621,6 +1542,7 @@ fn launch_resume_layout(
             launch_identities: launch_batch.identities(),
             fallback_channel: channel.as_deref(),
             loop_reminder: None,
+            leader_run: None,
         },
     )?;
     panes.focused_pane = team_leader_pane(&layout, team);

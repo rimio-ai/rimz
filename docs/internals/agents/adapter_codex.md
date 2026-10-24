@@ -203,7 +203,7 @@ Each actual failed fetch, a fetched catalog with no selectable family included, 
 
 ### Directory trust preflight
 
-An undecided launch directory stops Codex at its trust screen before the first prompt, so a supervised `rimz agents -p` run started there would sit in `Pending` until its deadline. [`preflight_agent`](../../../crates/rimz/src/cli/supervised.rs) therefore checks Codex's `[projects]` trust for the resolved checkout after the hook preflight and before the run record, the store append, and any mux action. A `--worktree` launch has created its tree by then. A human interactive `rimz agents codex` launch only warns, because a human at the pane can answer the screen. An agent-started launch refuses.
+An undecided launch directory stops Codex at its trust screen before the first prompt, so a supervised `rimz agents -p` run started there would sit in `Pending` until its deadline. [`preflight_agent`](../../../crates/rimz/src/launcher/supervised.rs) therefore checks Codex's `[projects]` trust for the resolved checkout after the hook preflight and before the run record, the store append, and any mux action. A `--worktree` launch has created its tree by then. A human interactive `rimz agents codex` launch only warns, because a human at the pane can answer the screen. An agent-started launch refuses.
 
 [`trust_gap_at`](../../../crates/rimz/src/agents/adapters/codex/project_trust.rs) returns a `FolderTrust` decision without writing. An undecided result carries the target path, the canonical grant key, and the exact original and candidate text, or a repair instruction when no preview can be made. It follows [upstream's rules](../../externals/agent-adapter/codex-reference.md#project-directory-trust), which stay the authority:
 

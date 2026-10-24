@@ -163,6 +163,7 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
             in_place: false,
             pick_session: false,
             peer,
+            run: None,
         };
         let mut output = anstream::StripStream::new(Vec::new());
         layout

@@ -1,6 +1,4 @@
-use super::GlobalFlags;
 use anyhow::{Result, bail};
-use rimz::harness::worktree_entry::WorktreeEntry;
 use rimz::launcher::ClosedCohort as Offer;
 use rimz::launcher::worktree_entry::facts_block;
 pub(super) use rimz::launcher::worktree_entry::{PrintInput, relaunch_commands};
@@ -11,35 +9,6 @@ pub(super) enum Choice {
     Fresh,
     Remove,
     Resume,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn check(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::MachineConfig,
-    globals: &GlobalFlags,
-    store: &rimz::Store,
-    name: &str,
-    spec: &str,
-    team: Option<&str>,
-    prompt: Option<&str>,
-    fresh: bool,
-    fresh_command: Option<&str>,
-) -> Result<()> {
-    rimz::launcher::worktree_entry::check(
-        workspace,
-        config,
-        globals.root.as_deref(),
-        globals.mux,
-        store,
-        name,
-        spec,
-        team,
-        prompt,
-        fresh,
-        fresh_command,
-        &mut super::launch_interaction::CliInteraction,
-    )
 }
 
 pub(super) fn offer(offer: &Offer<'_>, terminal: bool) -> Result<Choice> {
@@ -119,6 +88,7 @@ fn canceled<T>(resume_command: Option<&str>, fresh_command: &str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::harness::worktree_entry::WorktreeEntry;
     use rimz::worktree::{LandedVerdict, WorktreeStatus};
 
     fn facts(landed: LandedVerdict, changed_files: u32) -> WorktreeEntry {
