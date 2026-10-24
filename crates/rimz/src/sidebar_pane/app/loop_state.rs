@@ -505,7 +505,10 @@ impl LoopState {
         let width_control = WidthController::new(
             runtime.clone(),
             config.room.session_name.clone(),
-            config.own_pane.clone(),
+            clock
+                .effects_enabled()
+                .then(|| config.own_pane.clone())
+                .flatten(),
             config.room.mux,
             width,
         );

@@ -366,7 +366,9 @@ pub(super) struct WidthController {
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     runtime: RuntimePaths,
     session_name: String,
-    own_pane: Option<PaneId>,
+    /// The pane this controller may resize. `None` keeps width control idle
+    /// (no probe, deadline or actuator), as a loop whose clock disables external effects requires.
+    pane: Option<PaneId>,
     mux: MuxName,
     width: crate::mux::SidebarWidth,
     convergence: WidthControl,
@@ -387,16 +389,16 @@ impl WidthController {
     pub(super) fn new(
         runtime: RuntimePaths,
         session_name: String,
-        own_pane: Option<PaneId>,
+        pane: Option<PaneId>,
         mux: MuxName,
         width: crate::mux::SidebarWidth,
     ) -> Self {
-        let baseline_probe_deadline = own_pane.as_ref().map(|_| Instant::now());
+        let baseline_probe_deadline = pane.as_ref().map(|_| Instant::now());
         Self {
             geometry: Arc::default(),
             runtime,
             session_name,
-            own_pane,
+            pane,
             mux,
             width,
             convergence: WidthControl::new(None),
@@ -442,7 +444,7 @@ impl WidthController {
         self.width = crate::mux::SidebarWidth::from_config(theme);
         if self.refresh_target(None, false).is_some() {
             self.baseline_probe_deadline = None;
-        } else if self.own_pane.is_some() {
+        } else if self.pane.is_some() {
             // A topology broadcast can arrive while the sidebar is the tab's
             // only materialized pane. Keep the proven target and retry once the
             // sibling has made the viewport measurable.
@@ -454,7 +456,7 @@ impl WidthController {
     }
 
     pub(super) fn adjust(&mut self, own_cols: u16, dir: WidthAdjust) {
-        let Some(pane) = self.own_pane.as_ref() else {
+        let Some(pane) = self.pane.as_ref() else {
             return;
         };
         // A press must not fork (docs/internals/performance.md, keypress
@@ -576,7 +578,7 @@ impl WidthController {
         trigger: SidebarWidthControlTrigger,
         diag: &DiagSink,
     ) {
-        if self.own_pane.is_none() {
+        if self.pane.is_none() {
             return;
         }
         if trigger == SidebarWidthControlTrigger::ResizeFeedback
@@ -637,7 +639,7 @@ impl WidthController {
                 }
             }
         }
-        if let (Some(pane), Some((current, target))) = (self.own_pane.clone(), nudge) {
+        if let (Some(pane), Some((current, target))) = (self.pane.clone(), nudge) {
             spawn_width_nudge(pane, &self.session_name, current, target);
         }
     }
@@ -653,7 +655,7 @@ impl WidthController {
                 .map_or(at_ms, |previous| previous.max(at_ms)),
         );
         if self.refresh_target(Some(at_ms), true).is_none() {
-            if self.own_pane.is_some() {
+            if self.pane.is_some() {
                 self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             }
             return false;
@@ -796,7 +798,7 @@ impl WidthController {
         {
             return false;
         }
-        let Some(pane) = self.own_pane.as_ref() else {
+        let Some(pane) = self.pane.as_ref() else {
             return false;
         };
         let Ok(step) = self.width_step(pane, None) else {
@@ -831,7 +833,7 @@ impl WidthController {
             self.classification_resize_at_ms = None;
             return;
         }
-        if self.own_pane.is_none() {
+        if self.pane.is_none() {
             self.classification_deadline = None;
             self.classification_resize_at_ms = None;
             return;
@@ -960,7 +962,7 @@ impl WidthController {
         floor: Option<u64>,
         remember_default: bool,
     ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
-        let pane = self.own_pane.as_ref()?;
+        let pane = self.pane.as_ref()?;
         let step = self.width_step(pane, floor).ok()?;
         let view_cols = NonZeroU16::new(step.view_cols)?;
         self.convergence.seed_native_step(step);
