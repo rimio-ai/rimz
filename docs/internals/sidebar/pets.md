@@ -28,7 +28,7 @@ The kitty graphics transport the pixel tier uses lives beside it in [`sidebar_pa
 
 ## One frame
 
-A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../crates/rimz/src/sidebar_pane/app/paint.rs). `refresh_view` builds the `PetView` from a clone of the snapshot, outside the view lock. `compose_frame` then composes the frame under the lock, and the caller writes the returned `BufferedFrame` after it releases the lock.
+A pane paints a pet in two calls on `FramePainter` in [`app/paint.rs`](../../../crates/rimz/src/sidebar_pane/app/paint.rs). `refresh_view` builds the `PetView` from clones of the snapshot and of the pane's `ViewState` (selection and animation phase), taken under the view lock and used outside it. `compose_frame` then composes the frame under the lock, and the caller writes the returned `BufferedFrame` after it releases the lock.
 
 `refresh_view` runs these steps:
 
