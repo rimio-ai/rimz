@@ -1121,7 +1121,28 @@ path = "crates/rimz/src/harness"
 # resolve_subscription and SignalResolution share loop matching with workflow wakes (+2).
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
 # DeliveryOwner, delivery_owner and watch_lost share record provenance and watcher grace (+3).
-surface-budget = 979
+# worktree_entry, WorktreeEntry, occupied, and read share launch-entry facts across CLI doorways (+4).
+surface-budget = 983
+
+[[verdict]]
+kind = "item"
+key = "harness::worktree_entry"
+reason = "Interactive and supervised worktree launches share facts and takeover occupancy."
+
+[[verdict]]
+kind = "item"
+key = "harness::worktree_entry::WorktreeEntry"
+reason = "The CLI presents Git state, the removal rule, and activity without reconstructing domain reads."
+
+[[verdict]]
+kind = "item"
+key = "harness::worktree_entry::occupied"
+reason = "Both worktree launch doorways apply the takeover occupancy rule before any Git inspection."
+
+[[verdict]]
+kind = "item"
+key = "harness::worktree_entry::read"
+reason = "Both worktree launch doorways share landed memo, Git inspection, and activity reads."
 
 [[verdict]]
 kind = "item"
