@@ -250,7 +250,7 @@ impl Rig {
                 PixelRenderCaps::default(),
                 Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
-            fetch: FetchDispatcher::new(request_tx),
+            fetch: FetchDispatcher::for_plane(request_tx),
             requests,
             terminal: terminal_with_width(80),
             focus_plane: super::super::plane::DataPlane::detached(),

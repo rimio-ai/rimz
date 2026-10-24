@@ -214,7 +214,7 @@ fn maintenance_requests_releasing_fetch_when_freeze_expires() {
 }
 
 #[test]
-fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
+fn maintenance_requests_a_fold_when_tab_read_dwell_expires() {
     let mut rig = Rig::new();
     rig.view().ctx().current.own_view = Some(own_view());
     // The user stays on the tab past the dwell.
@@ -224,10 +224,10 @@ fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
     rig.maintenance();
 
     assert!(
-        rig.next_request()
+        !rig.next_request()
             .expect("tab dwell fold request")
-            .forces_fold(),
-        "expired tab dwell must bypass the unchanged-input skip"
+            .is_fresh_panes(),
+        "expired tab dwell requests an ordinary fold"
     );
 }
 
@@ -246,17 +246,17 @@ fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
 }
 
 #[test]
-fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
+fn maintenance_requests_a_fold_when_gate_deadline_is_due() {
     let mut rig = Rig::new();
     rig.view().ctx().gate = armed_gate(2, 1_001);
 
     rig.maintenance();
 
     assert!(
-        rig.next_request()
+        !rig.next_request()
             .expect("gate deadline fold request")
-            .forces_fold(),
-        "due gate reevaluation must bypass the unchanged-input skip"
+            .is_fresh_panes(),
+        "due gate reevaluation requests an ordinary fold"
     );
 }
 

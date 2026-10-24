@@ -197,7 +197,7 @@ impl Attachment {
         // produce can never queue more than one extra run. The fetch worker
         // posts `Wakeup::Snapshot` when a result is ready; the frame/tick path
         // also drains the result channel so that wakeup stays a latency hint.
-        let mut fetch = FetchDispatcher::for_plane(subscription.requests, subscription.covered);
+        let mut fetch = FetchDispatcher::for_plane(subscription.requests);
 
         // Write the heartbeat immediately so the freshness gate never sees a gap.
         // Errors are non-fatal; the gate re-probes after the TTL.
@@ -219,9 +219,9 @@ impl Attachment {
         // can take several seconds (Zellij just started, git cold-start), and a
         // blocked main thread delays the self-close watchdog, stalling cleanup.
         // The plane's last fold renders while the correction is in flight; a
-        // host with no fold yet starts with the placeholder. Forced,
-        // because a worker other panes already share may have nothing new to fold.
-        fetch.request(FetchRequest::force_fold(), false);
+        // host with no fold yet starts with the placeholder. Every request
+        // runs a cycle, even when the shared worker has nothing new to fold.
+        fetch.request(FetchRequest::default(), false);
 
         // One fixed-timestep event loop. Events fold into the in-process model and
         // mark the frame dirty; the loop paints at most once per configured base

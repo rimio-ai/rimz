@@ -1895,14 +1895,14 @@ impl LoopState {
             )
         });
         if gate_due {
-            fetch.request(FetchRequest::force_fold(), false);
+            fetch.request(FetchRequest::default(), false);
         }
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
         // a fold so the normal clear path sweeps the unread siblings. The fold
         // disarms the deadline, so this fires at most a fetch or two.
         if dwell_due && self.watched() {
-            fetch.request(FetchRequest::force_fold(), false);
+            fetch.request(FetchRequest::default(), false);
         }
 
         // Data backstop: catch pane/git drift no store delta announced. It is

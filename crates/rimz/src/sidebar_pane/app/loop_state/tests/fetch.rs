@@ -753,8 +753,8 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         frame: Some(Arc::new(frame)),
     };
 
-    rig.fetch.request(FetchRequest::force_fold(), false);
-    assert!(rig.next_request().unwrap().forces_fold());
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
     rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.state.pane.dirty = false;
     rig.state.seed(&fold);
@@ -1099,7 +1099,6 @@ fn store_delta_requests_default_or_panes_changed_freshness() {
             expected.is_fresh_panes(),
             "{event:?}",
         );
-        assert_eq!(request.forces_fold(), expected.forces_fold(), "{event:?}");
         assert!(rig.next_request().is_none(), "one fetch for {event:?}");
     }
 }
