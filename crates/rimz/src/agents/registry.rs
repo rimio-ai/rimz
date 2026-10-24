@@ -226,12 +226,9 @@ pub(crate) fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSess
     matches.next().is_none().then_some(session)
 }
 
-/// Find a resumed session in the pane root's shallow process chain. Each step
-/// follows the one child that could host an agent. RimZ's own helpers (every
-/// `rimz` process but the exec wrapper, which labels as its kind) and children
-/// without a command line (a zombie, an unreadable process) cannot donate a
-/// session, so they are skipped; two remaining candidates abstain so sibling
-/// agents cannot donate an unrelated session identity.
+/// Find a resumed session in the pane root's shallow process chain, following
+/// [`crate::proc::sole_agent_child`] at each step so sibling agents cannot donate
+/// an unrelated session identity.
 pub(crate) fn resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
     resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
 }
@@ -247,17 +244,9 @@ fn resumed_session_id_for_root_with(
         if let Some(session) = command.as_deref().and_then(resumed_session_id_from_cmdline) {
             return Some(session);
         }
-        let mut candidates = children(pid).into_iter().filter_map(|child| {
-            cmdline(child)
-                .filter(|command| {
-                    !command.trim().is_empty() && crate::proc::program_label(command) != "rimz"
-                })
-                .map(|command| (child, Some(command)))
-        });
-        let (Some(candidate), None) = (candidates.next(), candidates.next()) else {
-            return None;
-        };
-        (pid, command) = candidate;
+        let (child, child_command) = crate::proc::sole_agent_child(children(pid), cmdline)?;
+        pid = child;
+        command = Some(child_command);
     }
     None
 }

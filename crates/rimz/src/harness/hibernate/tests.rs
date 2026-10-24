@@ -267,17 +267,28 @@ fn provider_scope_descends_past_unscoped_exec_wrapper() {
     let provider = |pid| matches!(pid, 10 | 20).then_some(pid);
     let scope_of = |pid| (pid == 20).then(|| scope.clone());
     let children = |pid| if pid == 10 { vec![20] } else { vec![] };
+    let cmdline = |pid| matches!(pid, 20 | 30).then(|| "claude".to_owned());
     assert_eq!(
-        scoped_provider(10, workspace, &provider, &scope_of, &children),
+        scoped_provider(10, workspace, &provider, &scope_of, &children, &cmdline),
         Some((20, scope.clone())),
         "an unscoped exec wrapper must not hide its scoped provider"
     );
     assert_eq!(
-        scoped_provider(20, workspace, &provider, &scope_of, &children),
+        scoped_provider(20, workspace, &provider, &scope_of, &children, &cmdline),
         Some((20, scope.clone()))
     );
-    assert!(scoped_provider(10, workspace, &provider, &scope_of, &|_| vec![20, 30]).is_none());
-    assert!(scoped_provider(10, workspace, &provider, &|_| None, &children).is_none());
+    assert!(
+        scoped_provider(
+            10,
+            workspace,
+            &provider,
+            &scope_of,
+            &|_| vec![20, 30],
+            &cmdline
+        )
+        .is_none()
+    );
+    assert!(scoped_provider(10, workspace, &provider, &|_| None, &children, &cmdline).is_none());
 }
 
 #[test]
@@ -303,19 +314,149 @@ fn provider_scope_descends_past_a_scope_inherited_from_another_room() {
         20 => Some(own.clone()),
         _ => None,
     };
+    let cmdline = |pid| matches!(pid, 20 | 30).then(|| "claude".to_owned());
     assert_eq!(
-        scoped_provider(10, workspace, &provider, &scope_of, &|pid| {
-            if pid == 10 { vec![20] } else { vec![] }
-        }),
+        scoped_provider(
+            10,
+            workspace,
+            &provider,
+            &scope_of,
+            &|pid| if pid == 10 { vec![20] } else { vec![] },
+            &cmdline,
+        ),
         Some((20, own.clone())),
         "another room's agent scope must not hide the provider's own"
     );
     for children in [vec![], vec![20, 30]] {
         assert!(
-            scoped_provider(10, workspace, &provider, &scope_of, &|_| children.clone()).is_none(),
+            scoped_provider(
+                10,
+                workspace,
+                &provider,
+                &scope_of,
+                &|_| children.clone(),
+                &cmdline,
+            )
+            .is_none(),
             "a foreign scope is never returned"
         );
     }
+}
+
+const DUTY: &str = r#"/home/me/.cargo/bin/rimz agents supervise-duty --request {"duty":"compact"}"#;
+const DRAINER: &str = "/home/me/.cargo/bin/rimz hooks drain --project-root /repo";
+
+fn exec_wrapper(kind: &str) -> String {
+    format!(
+        "/home/me/.cargo/bin/rimz agents exec {kind} --request \
+         {{\"request\":{{\"kind\":\"{kind}\",\"action\":{{\"action\":\"resume\",\
+         \"session_id\":\"session\"}}}},\"prompt_file\":null}}"
+    )
+}
+
+#[test]
+fn provider_scope_skips_helpers_and_command_line_less_children() {
+    let (_dir, store, _agent, _policy, view) = decision_fixture();
+    let workspace = &store.paths().workspace_id;
+    let scope = view.scope.unwrap();
+    let wrapper = exec_wrapper("claude");
+    let provider = |pid| matches!(pid, 10 | 20).then_some(pid);
+    let scope_of = |pid| (pid == 20).then(|| scope.clone());
+    let siblings: &[&[(u32, Option<&str>)]] = &[
+        &[(30, Some(DUTY))],
+        &[(30, Some(DRAINER))],
+        &[(30, Some(""))],
+        &[(30, None)],
+        &[
+            (30, Some(DUTY)),
+            (40, Some(DRAINER)),
+            (50, Some("")),
+            (60, None),
+        ],
+    ];
+    let mut found = Vec::new();
+    for siblings in siblings {
+        let mut children = vec![20];
+        children.extend(siblings.iter().map(|(pid, _)| *pid));
+        let cmdline = |pid| match pid {
+            10 => Some(wrapper.clone()),
+            20 => Some("claude".to_owned()),
+            _ => siblings
+                .iter()
+                .find(|(child, _)| *child == pid)
+                .and_then(|(_, command)| command.map(str::to_owned)),
+        };
+        for reverse in [false, true] {
+            if reverse {
+                children.reverse();
+            }
+            found.push(scoped_provider(
+                10,
+                workspace,
+                &provider,
+                &scope_of,
+                &|pid| if pid == 10 { children.clone() } else { vec![] },
+                &cmdline,
+            ));
+        }
+    }
+    assert_eq!(found, vec![Some((20, scope)); siblings.len() * 2]);
+}
+
+#[test]
+fn provider_scope_abstains_between_real_candidates_with_helpers() {
+    let (_dir, store, _agent, _policy, view) = decision_fixture();
+    let workspace = &store.paths().workspace_id;
+    let scope = view.scope.unwrap();
+    let wrapper = exec_wrapper("claude");
+    let provider = |pid| matches!(pid, 10 | 20).then_some(pid);
+    let scope_of = |pid| (pid == 20).then(|| scope.clone());
+    let mut found = Vec::new();
+    for sibling in ["make test", "claude --resume other-session"] {
+        let cmdline = |pid| match pid {
+            10 => Some(wrapper.clone()),
+            20 => Some("claude".to_owned()),
+            30 => Some(sibling.to_owned()),
+            40 => Some(DUTY.to_owned()),
+            _ => None,
+        };
+        for children in [vec![20, 30, 40], vec![40, 30, 20]] {
+            found.push(scoped_provider(
+                10,
+                workspace,
+                &provider,
+                &scope_of,
+                &|pid| if pid == 10 { children.clone() } else { vec![] },
+                &cmdline,
+            ));
+        }
+    }
+    assert_eq!(found, vec![None; 4]);
+}
+
+#[test]
+fn provider_scope_descends_through_nested_exec_wrapper_beside_helper() {
+    let (_dir, store, _agent, _policy, view) = decision_fixture();
+    let workspace = &store.paths().workspace_id;
+    let scope = view.scope.unwrap();
+    let wrapper = exec_wrapper("qwen");
+    let provider = |pid| matches!(pid, 10 | 20 | 30).then_some(pid);
+    let scope_of = |pid| (pid == 30).then(|| scope.clone());
+    let cmdline = |pid| match pid {
+        10 | 20 => Some(wrapper.clone()),
+        30 => Some("qwen --resume session".to_owned()),
+        40 => Some(DUTY.to_owned()),
+        _ => None,
+    };
+    let children = |pid| match pid {
+        10 => vec![20, 40],
+        20 => vec![30],
+        _ => vec![],
+    };
+    assert_eq!(
+        scoped_provider(10, workspace, &provider, &scope_of, &children, &cmdline),
+        Some((30, scope))
+    );
 }
 
 fn decision(
