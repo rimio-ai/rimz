@@ -49,6 +49,7 @@ Parsing is mostly shared. Two concerns differ by provider, and each adapter page
 | Copilot | each shutdown or model delta keyed by session plus native record id, with a timestamp-and-counters fallback | tokens through the price book; shutdown output already includes reasoning, and AI Credits stay outside USD |
 | Pi | single-file sessions | its non-negative `usage.cost.total` when present, otherwise tokens through the price book |
 | OpenCode | SQLite rows keyed by `session_id` | positive stored `cost`; zero-cost token rows through the price book |
+| Qwen | `uuid` per record, keeping the active root branch plus sidechains, and each changed file replaces its cached entries | tokens through the price book ([adapter_qwen.md](./adapter_qwen.md#pricing-a-transcript)) |
 
 A token-priced entry whose model misses the book still contributes tokens and sessions with zero dollars. The file cache records the trimmed model name and its youngest timestamp for the [unknown-model chase](#the-refresh). Sentinel names such as Claude's `<synthetic>` are skipped because they are not API model ids, and unknowns older than the 365-day window do not chase. When a chased model resolves, the file cold re-parses from byte zero, so its zero-dollar entries recover their spend on the same due walk.
 
