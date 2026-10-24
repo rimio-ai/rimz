@@ -80,6 +80,21 @@ fn main() {
 
     let cli = &args[1..];
     if has_pair(cli, "action", "new-tab") {
+        if let Ok(id) = env::var("RIMZ_TEST_ZELLIJ_COMPLETE_RUN_AT_OPEN") {
+            let paths = rimz::StatePaths::for_workspace(id.parse().unwrap()).unwrap();
+            let runtime = rimz::RuntimePaths::for_state(&paths).unwrap();
+            let mut runs = rimz::harness::run::list(&paths).unwrap();
+            assert_eq!(runs.len(), 1, "run must be published before pane open");
+            let record = &mut runs[0];
+            assert_eq!(record.status, rimz::store::run::RunStatus::Pending);
+            assert!(rimz::store::run::run_waiter_is_live(&runtime, &record.run_id).unwrap());
+            record.status = rimz::store::run::RunStatus::Completed;
+            record.last_message = Some("completed at pane open".into());
+            record.completed_at = Some(jiff::Timestamp::now());
+            rimz::harness::run::create(&paths, record).unwrap();
+            rimz::store::run::wake_run(&runtime, record);
+            writeln!(file, "completed-at-open").unwrap();
+        }
         if env::var_os("RIMZ_TEST_ZELLIJ_TRACE_TIME").is_some() {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             writeln!(file, "new-tab-at\t{}", now.as_nanos()).expect("record tab open time");
