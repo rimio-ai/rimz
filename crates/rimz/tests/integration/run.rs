@@ -24,6 +24,10 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+#[path = "run/launch_characterization.rs"]
+mod launch_characterization;
+
 #[test]
 fn run_record_json_shape_is_pinned() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace id");
