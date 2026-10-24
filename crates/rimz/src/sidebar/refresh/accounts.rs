@@ -66,8 +66,9 @@ fn profile_read_due(
 }
 
 /// The attempt takes the batch's `probed_at_ms`, the stamp the account cadence
-/// ages from, so the floor expires exactly when the login is next account-due;
-/// `now` stamps only the answer's read time.
+/// ages from, so the floor expires exactly when the login is next account-due.
+/// `now`, read before the request, stamps only the answer's read time, so a
+/// trigger stamped while the request is in flight still makes the next batch due.
 fn read_account_profile(
     account: &AgentAccount,
     previous: Option<&AccountProfileState>,
@@ -91,6 +92,7 @@ fn read_account_profile(
     ) {
         return None;
     }
+    let read_at_ms = now();
     let outcome = read();
     if outcome == AccountProfileProbe::NotAttempted {
         return None;
@@ -102,7 +104,7 @@ fn read_account_profile(
             owner: owner.to_owned(),
             basis: account.plan.clone(),
             plan,
-            read_at_ms: now(),
+            read_at_ms,
         });
     }
     Some(state)

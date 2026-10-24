@@ -428,6 +428,7 @@ fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_over
         0
     ));
     let clock = Cell::new(100);
+    let trigger_ms = Cell::new(0);
     let answered = read_account_profile(
         &account,
         Some(&state),
@@ -435,6 +436,8 @@ fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_over
         0,
         100,
         || {
+            clock.set(150);
+            trigger_ms.set(clock.get());
             clock.set(200);
             AccountProfileProbe::Answered(None)
         },
@@ -442,7 +445,18 @@ fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_over
     )
     .unwrap();
     assert_eq!(answered.attempted_at_ms, 100);
-    assert_eq!(answered.answer.as_ref().unwrap().read_at_ms, 200);
+    assert_eq!(answered.answer.as_ref().unwrap().read_at_ms, 100);
+    assert!(
+        profile_read_due(
+            false,
+            100 + floor,
+            Some(&answered),
+            Some("owner"),
+            Some("max_5x"),
+            trigger_ms.get()
+        ),
+        "a reset stamped while the request was in flight makes the next batch due"
+    );
     let mut answered_result = result();
     answered_result.profile = Some(answered);
     let cache = merge_probe_results(&previous, &BTreeSet::new(), 20, [answered_result]);
