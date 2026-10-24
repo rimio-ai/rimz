@@ -7,6 +7,7 @@ use super::launch_context::{self, escape_reminder_text};
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{LaunchParams, model_display::display_model};
+use crate::config::skill_is_callable;
 
 pub use super::launch_context::TeamReminder;
 
@@ -79,9 +80,8 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "### Subagents\n\n",
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
-    "yourself rather than launching with Skill(rimz-agents, rimz-subagents, rimz-teams); ",
-    "nothing above your caller supervises a run you start. Report the result in your final ",
-    "response: it is the answer your caller reads once this run settles."
+    "yourself. Report the result in your final response: it is the answer your caller reads ",
+    "once this run settles."
 );
 
 const SKILLS_REMINDER_BODY: &str = concat!(
@@ -127,13 +127,19 @@ pub(super) fn render(
         };
         paragraphs.push(format!("### {heading}\n\n{body}"));
     }
+    let lsp_servers = if skill_is_callable(request.skills.as_deref(), "rimz-lsp") {
+        reminders.lsp_servers.as_slice()
+    } else {
+        &[]
+    };
     if reminders.env
-        || !reminders.lsp_servers.is_empty()
+        || !lsp_servers.is_empty()
         || team_context.is_some()
         || reminders.files.is_some()
     {
         paragraphs.push(env_paragraph(
             reminders,
+            lsp_servers,
             reminders.env.then_some(shell).flatten(),
             cwd,
             team_context.as_ref(),
@@ -141,15 +147,16 @@ pub(super) fn render(
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
-    } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
+    } else if skill_is_callable(request.skills.as_deref(), "rimz-subagents")
+        && let Some(catalog) = reminders.subagent_catalog.as_ref()
+    {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
-    if request
-        .skills
-        .iter()
-        .flatten()
-        .any(|skill| skill.as_str().starts_with("rimz-"))
-    {
+    if request.skills.as_ref().is_none_or(|skills| {
+        skills
+            .iter()
+            .any(|skill| skill.as_str().starts_with("rimz-"))
+    }) {
         paragraphs.push(SKILLS_REMINDER_BODY.to_owned());
     }
     wrap(&paragraphs.join("\n\n"))
@@ -157,12 +164,12 @@ pub(super) fn render(
 
 fn env_paragraph(
     reminders: &LaunchReminders,
+    lsp_servers: &[String],
     shell: Option<&Path>,
     cwd: &Path,
     team: Option<&launch_context::TeamLaunchContext>,
 ) -> String {
     let env = reminders.env;
-    let lsp_servers = &reminders.lsp_servers;
     let mut lines = vec!["### Environment\n".to_owned()];
     if env || team.is_some() {
         lines.push(format!(

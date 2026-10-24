@@ -3353,7 +3353,9 @@ fn explain_prints_the_plan_without_side_effects() {
     assert!(!reminder.contains("git status"));
     assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
     assert!(!reminder.contains("effort"));
-    assert!(reminder.contains("- `scout`: Inspect the code"));
+    assert!(!reminder.contains("### Subagents"));
+    assert!(!reminder.contains("### Skills"));
+    assert!(!reminder.contains("Skill(rimz-"));
     assert!(reminder.ends_with("\n</system_reminder>"));
     assert!(
         provider_argv
@@ -3376,7 +3378,7 @@ fn explain_prints_the_plan_without_side_effects() {
     protocol["shell"] = "<shell>".into();
     protocol["prompt"]["artifact"] = "<runtime>/prompt/sys.<digest>.md".into();
     protocol["prompt"]["reminder"] =
-        "<system_reminder>\n<model and subagent catalog>\n</system_reminder>".into();
+        "<system_reminder>\n<model and environment>\n</system_reminder>".into();
     let protocol = serde_json::to_string(&protocol)
         .unwrap()
         .replace(env.home_root.to_str().unwrap(), "<home>");
@@ -3406,7 +3408,7 @@ fn explain_prints_the_plan_without_side_effects() {
         "artifact": "<runtime>/prompt/sys.<digest>.md",
         "channel": "--system-prompt-file",
         "composed": "Base instructions.\n\nMore instructions.\n",
-        "reminder": "<system_reminder>\n<model and subagent catalog>\n</system_reminder>",
+        "reminder": "<system_reminder>\n<model and environment>\n</system_reminder>",
         "reminder_channel": "--append-system-prompt",
         "reminder_delivered": true,
         "sources": [

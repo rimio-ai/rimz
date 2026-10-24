@@ -16,6 +16,11 @@ impl SkillName {
     }
 }
 
+/// An absent list permits every skill; a present list permits only its members.
+pub fn skill_is_callable(skills: Option<&[SkillName]>, name: &str) -> bool {
+    skills.is_none_or(|skills| skills.iter().any(|skill| skill.as_str() == name))
+}
+
 impl FromStr for SkillName {
     type Err = SkillListErr;
 

@@ -587,7 +587,13 @@ upward-dependencies = [
 # SpendOrder shares typed capacity ordering with harness and CLI.
 # AccountLabelError, validate_label, label, label_warnings, provider_title share display-only account labels (+5).
 # ConfigEditor::check_named_account_update shares account-rerun edit preflight with the CLI (+1).
-surface-budget = 211
+# skill_is_callable shares profile skill callability with launch reminders and validation (+1).
+surface-budget = 212
+
+[[verdict]]
+kind = "item"
+key = "config::skills::skill_is_callable"
+reason = "Launch reminders, native LSP denial and definition validation share one profile skill gate."
 
 [[verdict]]
 kind = "item"

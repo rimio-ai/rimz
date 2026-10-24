@@ -965,7 +965,9 @@ fn compile_agent_process_with_extra_env(
         });
     }
     let mut action = request.action.clone();
-    if reminders.lsp_configured {
+    if reminders.lsp_configured
+        && crate::config::skill_is_callable(request.skills.as_deref(), "rimz-lsp")
+    {
         adapter.disable_native_lsp_args(action.extra_args_mut());
     }
     if request.subagent {
