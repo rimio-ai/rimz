@@ -450,7 +450,7 @@ The drainer was reached only through production `hooks feed` spawning, never a d
 | Loaded A2 | 1617472 | `rimz-helper-01a16dfe1a0571b99af6c47977997ce8.scope` | 1000 | 59.162 / 211.827 |
 | Loaded B2 | 1684747 | `rimz-proof-loaded-before-2-eg1vxx6y.scope` | null | 8.412 / 164.511 |
 
-Both loaded after-runs meet the acceptance target: claim-start to applied p99 below 1 s and zero prompt misses. Their largest prompt walls, 375.457 and 377.768 ms, also stay below 1.2 s. The baselines meet these targets too, so this fixture did not reproduce the incident's seconds-to-minutes lag. Paired A/B claim median ratios are 1.548 and 1.274 (slower after); claim p99 ratios are 2.019 and 0.826, and prompt p99 ratios 1.079 and 0.647. Ambient load varied substantially. These runs establish target compliance and successful placement, not a stable wall-time speedup, individual fixes' contributions, or queue stability under concurrent arrivals.
+Both loaded after-runs meet the acceptance target: claim-start to applied p99 below 1 s and zero prompt misses. Their largest prompt walls, 375.457 and 377.768 ms, also stay below 1.2 s. The baselines meet these targets too, so this fixture did not reproduce the incident's seconds-to-minutes lag. Paired A/B claim median ratios are 1.548 and 1.274 (slower after); claim p99 ratios are 2.019 and 0.826, and prompt p99 ratios 1.079 and 0.647. Ambient load varied substantially. These runs establish target compliance and successful placement, not individual fixes' contributions or queue stability under concurrent arrivals; round 3 below supplies the loaded A/B speedup verdict.
 
 During loaded B1, the supplied fsync probe measured 300 alternating durable/cache-class replacements on the same ZFS temporary filesystem:
 
@@ -479,6 +479,47 @@ A second round on 2026-10-24 used the same fixture, coordinator and cold-build r
 Scope attribution remains unresolved: paired S/P claim-median ratios are 0.993 and 1.038, straddling 1, while claim-p99 ratios 0.715 and 0.630 favor S. S/P prompt medians are higher at 1.086 and 1.042, but prompt-p99 ratios favor S at 0.512 and 0.758. P/B claim-median ratios are 0.949 and 0.703; S/B ratios are 0.943 and 0.729. Neither head arm reproduces round 1's claim-median slowdown relative to B. The recorded load endpoints, 11.45 to 28.30, were lighter than round 1's 17.03 to 62.11, so this round does not settle the higher-load cause. The main-thread runqueue wait is lower in S than in P in both pairs (24.256 against 376.887, and 3.267 against 49.899 µs per frame), so the weight does reach the scheduler. The scope policy is unchanged.
 
 External snapshots of `/proc/<drainer>/schedstat` at the cold row and final prompt supplied the second-field runqueue-wait delta, divided by 600 frames above. This measures the main drainer thread, not apply-child wait. End-of-run cgroup `cpu.pressure`, raw samples, per-50-Stop upper medians, paired ratios, build/digest/command logs and scheduler timestamps were retained outside the repository, on the measuring host. P/B pressure includes the competing build, unlike S's helper-scope pressure. The benchmark itself was unchanged.
+
+##### Loaded A/B rerun with ambient CPU
+
+Round 3 on 2026-10-24 (UTC) rebuilt both trees on trunk `a38168dc38`: B from `test(hooks): measure drainer claim-to-applied latency`, A and the shared coordinator from `test(perf): measure drainer latency at receipts and prompt replies`. The release testkit build recipe and fixture were unchanged; build ids were `d5e1c6e0a384` (B) and `11b111749ed0` (A). Eight loaded cases ran B1, A1, A2, B2, B3, A3, A4, B4, paired consecutively. No quiet or plain-fallback arm ran. All eight passed validation on the first attempt: 300 Stops, 300 first prompts, 601 matching apply-child placements, and active rustc at both ends. Every A drainer used a distinct helper scope at weight 1000; every B drainer shared its runner/load scope.
+
+At the cold row and final prompt, the external observer also read cgroup v2 `cpu.stat` `usage_usec` for the host, case scope and drainer scope, timestamping each reading. Ambient CPU is Δhost minus Δcase, minus Δdrainer only when the drainer scope differs from the case scope. Average ambient CPUs divide that CPU time by the host samples' wall-time delta. These sequential snapshots are not atomic; they cover the observation window, as do the main-thread schedstat samples. No run was excluded for ambient load. Raw readings, CPU deltas, scope identities, binary digests, build logs and analysis were retained outside the repository, on the measuring host.
+
+Timing triples remain nearest-rank p50 / p99 / max, in milliseconds. Receipt means Stop append-start to its covering receipt.
+
+| Run | Claim p50 / p99 / max | Receipt p50 / p99 / max | Prompt p50 / p99 / max | Misses |
+| --- | ---: | ---: | ---: | ---: |
+| B1 | 87.420 / 178.569 / 186.963 | 90.519 / 190.310 / 199.687 | 136.124 / 309.445 / 344.271 | 0 |
+| A1 | 78.098 / 115.292 / 125.361 | 81.813 / 117.769 / 127.283 | 95.019 / 148.636 / 167.858 | 0 |
+| A2 | 72.831 / 100.977 / 110.688 | 78.752 / 112.647 / 130.675 | 88.313 / 148.919 / 254.912 | 0 |
+| B2 | 89.425 / 206.087 / 294.345 | 92.816 / 211.565 / 297.474 | 117.256 / 308.403 / 340.882 | 0 |
+| B3 | 96.299 / 142.045 / 245.120 | 108.356 / 147.648 / 260.511 | 154.099 / 275.366 / 410.461 | 0 |
+| A3 | 80.304 / 136.549 / 170.350 | 87.636 / 140.664 / 173.575 | 109.021 / 357.156 / 541.514 | 0 |
+| A4 | 112.330 / 218.433 / 248.400 | 136.719 / 321.267 / 364.630 | 131.279 / 351.918 / 396.852 | 0 |
+| B4 | 125.505 / 447.455 / 719.277 | 129.733 / 462.699 / 726.586 | 131.548 / 274.793 / 399.034 | 0 |
+
+| Run | Ambient CPUs | Host load, start / end | rustc, start / end | Runqueue wait, µs/frame | Target |
+| --- | ---: | ---: | ---: | ---: | --- |
+| B1 | 6.407 | 27.50 / 20.70 | 6 / 1 | 327.443 | pass |
+| A1 | 6.121 | 20.70 / 15.66 | 10 / 1 | 10.646 | pass |
+| A2 | 4.791 | 15.66 / 13.51 | 6 / 1 | 6.176 | pass |
+| B2 | 5.814 | 13.51 / 17.42 | 7 / 1 | 69.081 | pass |
+| B3 | 8.049 | 17.42 / 19.57 | 7 / 1 | 234.181 | pass |
+| A3 | 9.721 | 19.57 / 22.86 | 6 / 1 | 299.586 | pass |
+| A4 | 14.256 | 22.86 / 28.65 | 9 / 1 | 494.477 | pass |
+| B4 | 13.327 | 28.65 / 22.65 | 9 / 1 | 1368.202 | pass |
+
+Before the runs, the rule was registered: claim "faster under load" only if A's claim median is below B's in all four consecutive pairs. Ratios below are A/B, not pooled across runs.
+
+| Pair | Claim p50 ratio | Claim p99 ratio | Prompt p99 ratio |
+| --- | ---: | ---: | ---: |
+| A1/B1 | 0.893 | 0.646 | 0.480 |
+| A2/B2 | 0.814 | 0.490 | 0.483 |
+| A3/B3 | 0.834 | 0.961 | 1.297 |
+| A4/B4 | 0.895 | 0.488 | 1.281 |
+
+The rule holds: A was faster by claim median in four of four pairs, with ratios 0.814 to 0.895 and ambient load of 4.791 to 14.256 CPUs. All eight runs met the target (claim p99 below 1 s, zero prompt misses). A's claim p99 ranged from 100.977 to 218.433 ms; its largest prompt wall was 541.514 ms. Prompt p99 improved in only two pairs, so the claim-median improvement is not a uniform prompt-tail improvement. A's main-thread runqueue wait was lower than B's in three pairs and higher in A3/B3 (299.586 against 234.181 µs per frame). This establishes a loaded A/B speedup for this recipe, not the cause of round 1's slowdown or the contribution of each fix. The bench sends hooks one at a time, so it does not reproduce the incident's backlog. The before binary also met the target.
 
 ## Making a performance change
 
