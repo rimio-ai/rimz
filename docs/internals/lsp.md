@@ -118,7 +118,7 @@ The first Ready transition in `crates/rimz/src/lsp/broker.rs::run` samples RSS p
 
 ### Leases and shutdown
 
-`crates/rimz/src/cli/agents_cmd/exec.rs::run_exec` registers a lease with every live broker at its checkout (`registry::register_lease`) after `launch_plan::apply`, and `settle_after_exit` releases them on resident-wrapper paths. A lease carries an optional launch id, the wrapper pid, and its process start token. A session recovered without a launch id still takes a lease, and the wire accepts absent and null ids. A direct `exec` keeps the wrapper pid. An attached editor holds a lease without a launch id, and a fork takes its own.
+`crates/rimz/src/cli/agents_cmd/exec.rs::run_exec_inner` registers a lease with every live broker at its checkout (`registry::register_lease`) after `launch_plan::apply`, and `settle_after_exit` releases them on resident-wrapper paths. A lease carries an optional launch id, the wrapper pid, and its process start token. A session recovered without a launch id still takes a lease, and the wire accepts absent and null ids. A direct `exec` keeps the wrapper pid. An attached editor holds a lease without a launch id, and a fork takes its own.
 
 Housekeeping runs every five seconds, dormant or running. It reaps leases whose owner is dead, rejecting pid reuse through the start token, and it never reads store or pane state. It also checks that the checkout root exists, as the backstop for worktree removal, which calls `registry::stop_checkout` best-effort. When the last lease goes, a 60-second grace starts, covering the gap of an agent restart, and a new lease cancels it. A broker that never had a lease exits five minutes after it started.
 
