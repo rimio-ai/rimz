@@ -2316,7 +2316,8 @@ allowed-dependencies = []
 # Crate-visible compact duration serde adapters serve durable run records.
 # Coarse durations serve pending-wait activity and prompt-cache notices.
 # The accounts preview and provider holds share local wall-clock formatting (+1).
-surface-budget = 18
+# format_duration_bound shares exact s/ms bounds between mux errors and room probes (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"

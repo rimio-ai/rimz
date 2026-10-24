@@ -20,6 +20,7 @@ use rimz::room::session::{
 use rimz::room::{
     AttendedRecovery, NormalRebirth, RoomBirth, RoomBirthSource, RoomContext, RoomSizing,
 };
+use rimz::utils::time::format_duration_bound;
 use rimz::{RuntimePaths, workspace::record::WorkspaceRecord};
 
 use crate::cli::hooks::{HookInstallMode, ensure_detected_agent_hooks};
@@ -1147,7 +1148,7 @@ fn mux_responsive_preflight(mux: MuxName, rerun: Option<String>) -> Result<()> {
             writeln!(
                 out,
                 "note: {err}; retrying once ({}).",
-                duration_label(retry)
+                format_duration_bound(retry)
             )?;
         }
         if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) = backend.list_sessions_within(retry) {
@@ -1180,19 +1181,10 @@ fn mux_not_responding_message(
     };
     let blocker = Blocker::new(format!(
         "{mux} is not responding after {}: {err}",
-        duration_label(timeout),
+        format_duration_bound(timeout),
     ))
     .with_fix(summary, Some(reset), Surface::Plain);
     other_mux_fix(blocker, mux.other(), rerun)
-}
-
-fn duration_label(duration: std::time::Duration) -> String {
-    let millis = duration.as_millis();
-    if millis.is_multiple_of(1000) {
-        format!("{}s", millis / 1000)
-    } else {
-        format!("{millis}ms")
-    }
 }
 
 fn zellij_version_preflight(rerun: Option<String>) -> Result<()> {
