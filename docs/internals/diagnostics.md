@@ -90,7 +90,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | Event | Emitter | Evidence |
 | --- | --- | --- |
 | `frame_rejected`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `hosted_carry_dropped`, `foreign_session_pane` | `sidebar::produce::panes` | Ok-but-empty frames and missing-own-pane reads, verified shrinks, pane drops with affected views, carried and refuted panes, carry expiry, hosted-agent carry declines, foreign-session leaks |
-| `resolution_fallback` | `sidebar::produce` | A pane-resolution snapshot falling back to the rollup, with its reason |
+| `resolution_fallback` | `sidebar::produce` | A failed pane-resolution read falling back to the rollup, with its reason, when the session is live on the probed backend or its liveness is unknown; absent or exited sessions fall back quietly |
 | `duplicate_pane_id` | `sidebar::frame`, `store::snapshot::view` projection | A pane id listed twice |
 | `mixed_build_writers` | Legacy pane producers | A prior frame stamped by a different build; retained in historical logs, no longer emitted |
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `live_roster_held` | `sidebar_pane::app` | Renderer-side holds and releases, failed fetches, degraded refresh episodes, remote-link degraded and recovered episodes, a recovery-roster removal withheld because the mux did not list the session, with the agents kept |

@@ -302,7 +302,11 @@ pub fn produce_snapshot_with_refresh(
     Ok(enrich_with_refresh(snapshot, frame, state, runtime, opts))
 }
 
-/// Resolve recipients over a private fresh pane read and the event-fresh rollup, without the render spine. Just-started sessionless panes are addressable after one enumeration; unavailable muxes or failed discovery fall back to stamped panes.
+/// Resolve recipients over a private fresh pane read and the event-fresh rollup,
+/// without the render spine. Just-started sessionless panes are addressable after
+/// one enumeration; unavailable muxes or failed discovery fall back to stamped
+/// panes. A failed read records a resolution fallback only while the session is
+/// live on the probed backend or its liveness cannot be determined.
 pub fn resolution_snapshot(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -336,12 +340,17 @@ pub fn resolution_snapshot(
         });
     match result {
         Ok(snapshot) => Ok(snapshot),
-        // No live session / pane discovery failed: fall back to the rollup's own
-        // stamped panes so a bound agent still resolves, exactly as before.
         Err(err) => {
-            diag.emit(crate::diag::record::DiagEvent::ResolutionFallback {
-                reason: err.to_string(),
-            });
+            // Failed discovery uses the rollup's stamped panes. An absent or exited
+            // session is expected; live or unknown liveness stays diagnostic.
+            if !matches!(
+                crate::mux::backend_for(mux).session_liveness(&workspace.session_name),
+                Ok(crate::mux::SessionLiveness::Absent | crate::mux::SessionLiveness::Exited)
+            ) {
+                diag.emit(crate::diag::record::DiagEvent::ResolutionFallback {
+                    reason: err.to_string(),
+                });
+            }
             rollup_resolution_snapshot(store)
         }
     }
