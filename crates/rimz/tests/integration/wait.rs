@@ -262,6 +262,72 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
 }
 
 #[test]
+fn room_cards_name_the_pane_owner_like_the_arm_receipt() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let pane = crate::common::tmux_pane("%1", "claude", &env.project_root);
+    for session in ["cleared-session", "owner-session"] {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(session)),
+            LifecycleSignal::Registered,
+        );
+        observation.pane_id = Some(pane.pane_id.clone());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.worktree_branch = Some("lane".into());
+        env.store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let snapshot = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
+    assert_eq!(snapshot["agents"].as_array().unwrap().len(), 2);
+    assert_eq!(snapshot["agent_panes"][0]["agent_id"], "owner-session");
+    let pane_fixture = env.write_pane_fixture(&[pane]);
+    let run = |args: &[&str], caller: bool| {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "tmux"])
+            .args(args)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture);
+        if caller {
+            command
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "owner-session");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let receipt: serde_json::Value =
+        serde_json::from_str(&run(&["wait", "--in", "5m", "--json"], true)).unwrap();
+    assert_eq!(receipt["target"], "@claude#main");
+    let waits = run(&["wait", "list"], false);
+    let body = waits.split_once("\n\n").unwrap().1;
+    let loops = run(&["loop", "list", "--all"], false);
+    let loop_body = loops
+        .split_once("WAKE-UPS  ")
+        .unwrap()
+        .1
+        .split_once('\n')
+        .unwrap()
+        .1;
+    assert_eq!(body, loop_body);
+    assert_eq!(
+        body.lines().next().unwrap().trim(),
+        receipt["target"].as_str().unwrap()
+    );
+}
+
+#[test]
 fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
     env.record(&env.project_root);

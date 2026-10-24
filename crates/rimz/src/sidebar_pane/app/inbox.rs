@@ -7,7 +7,6 @@ use ratatui::Terminal;
 
 use super::Result;
 use super::backend::PaneBackend;
-use super::fetch::FetchDispatcher;
 use super::input::Wakeup;
 use super::loop_state::LoopState;
 
@@ -74,7 +73,6 @@ impl WakeupInbox {
     pub(super) fn dispatch_input(
         &mut self,
         state: &mut LoopState,
-        fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.has_input();
@@ -87,21 +85,19 @@ impl WakeupInbox {
             return state.on_inputs(
                 Self::scroll_from(wakeup, input, &mut self.pending_input),
                 terminal,
-                fetch,
             );
         }
-        state.on_wakeup(fetch, terminal, wakeup)
+        state.on_wakeup(terminal, wakeup)
     }
 
     pub(super) fn dispatch_next(
         &mut self,
         state: &mut LoopState,
-        fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
         timeout: Duration,
     ) -> Result<()> {
         if self.has_input() {
-            return self.dispatch_input(state, fetch, terminal);
+            return self.dispatch_input(state, terminal);
         }
         let mut wakeup = self.recv_timeout(timeout);
         // Wake hints must not delay already queued work.
@@ -112,9 +108,9 @@ impl WakeupInbox {
             wakeup = next;
         }
         if matches!(wakeup, Wakeup::Scroll { .. }) {
-            return state.on_inputs(self.scroll_run(wakeup), terminal, fetch);
+            return state.on_inputs(self.scroll_run(wakeup), terminal);
         }
-        state.on_wakeup(fetch, terminal, wakeup)
+        state.on_wakeup(terminal, wakeup)
     }
 }
 

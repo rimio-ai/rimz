@@ -85,6 +85,8 @@ Run Look for one sidebar, then its Capture twice across a displayed clock-unit b
 
 Flip back to `Review` before checks 3 and 4.
 
+Flip to `Ship` for a fresh clock under a minute.
+
 ### 3. Client views on each tab
 
 For every Sidebar block, run its Look, then its Capture. Repeat the Capture while the frame is still the pre-Look one: a capture taken a few tens of milliseconds after Look can still show `Build`. Each tab must show `Review` within 5 s of Look.
@@ -136,6 +138,13 @@ ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
 ```
 
 Expect one `sidebar host` line and one `sidebar serve` line per tab, never a child `serve` painter. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it.
+
+The host's fetch worker folds for the whole room. About once a minute it appends a `fetch_reduction_stats` record to the room's `audit/diag.log.jsonl`, and `cycles` over `interval_ms` is the room's fold rate: about one a second when idle, whatever the number of tabs. Set `ROOT` and `SESSION` from the room card:
+
+```sh
+jq -c 'select(.event.kind == "fetch_reduction_stats") | .event | {cycles, interval_ms}' \
+  "$ROOT/home/.rimz/ws/$SESSION/audit/diag.log.jsonl"
+```
 
 Six checks cover what a unit test cannot:
 
@@ -535,6 +544,8 @@ target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" 
 The room restarts the stub agent when its process is killed, so an agent leaves a tab only when its pane closes. No hand recipe makes an agent exit into a kept shell; the live `producer_*` backend tests cover that case.
 
 `a` runs a RimZ command as the agent and `rz` runs one as the plain user shell (`rz agents`). Keep each prefix in a function, not a variable: zsh does not split an unquoted variable into words, so `$PREFIX agents` fails there as one unknown command.
+
+ssh reads `~/.ssh` from your passwd home, not `$HOME`, so an SSH command a sandbox agent runs uses your real keys and config.
 
 A held room's provider has no folder-trust decision for its worktree, so the first `a subagents claude ...` refuses with `claude has no trust decision for ...` and names `rimz trust grant --agents claude` as the fix. Run that grant as `rz trust grant --agents claude`: the plain-shell prefix writes the sandbox's home, while a bare `rimz trust grant` from your shell writes your real provider config. The launch then succeeds.
 

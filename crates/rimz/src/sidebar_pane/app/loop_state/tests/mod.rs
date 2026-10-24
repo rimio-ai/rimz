@@ -90,7 +90,7 @@ impl std::io::Write for FrameOutput {
     }
 }
 
-/// One `LoopState` under test with the runtime, dispatcher, request channel,
+/// One `LoopState` under test with the runtime, request channel,
 /// and terminal it needs. Fields stay reachable: these tests drive internal
 /// state by design, and the rig only removes the wiring around that reach.
 struct Rig {
@@ -98,7 +98,7 @@ struct Rig {
     ws: WorkspaceId,
     runtime: RuntimePaths,
     state: LoopState,
-    fetch: FetchDispatcher,
+    completion: Arc<AtomicBool>,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
     focus_plane: super::super::plane::DataPlane,
@@ -235,6 +235,7 @@ impl Rig {
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
+        let completion: Arc<AtomicBool> = Arc::default();
         let views = Arc::new(Mutex::new(super::super::views::Views::default()));
         let mut rig = Self {
             state: LoopState::new(
@@ -244,13 +245,13 @@ impl Rig {
                 runtime.clone(),
                 socket_path,
                 crate::diag::DiagSink::disabled(),
-                Arc::default(),
+                FetchHandle::new(request_tx, completion.clone()),
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
                 Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
-            fetch: FetchDispatcher::new(request_tx),
+            completion,
             requests,
             terminal: terminal_with_width(80),
             focus_plane: super::super::plane::DataPlane::detached(),
@@ -277,6 +278,7 @@ impl Rig {
             self.views.clone(),
             self.state.views.events.clone(),
             super::super::fetch::Subscribers::default(),
+            std::sync::mpsc::channel().0,
         )
         .record(envelope, self.state.pane.clock.now_ms());
     }
@@ -290,8 +292,7 @@ impl Rig {
             event,
         );
         self.record_event(&envelope);
-        self.state
-            .on_event(&mut self.fetch, &mut self.terminal, envelope);
+        self.state.on_event(&mut self.terminal, envelope);
     }
 
     fn fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
@@ -323,7 +324,7 @@ impl Rig {
     /// Publish one room update and drive its consumer.
     fn deliver(&mut self, update: FetchUpdate) {
         self.send(update);
-        self.state.on_snapshot(&mut self.fetch);
+        self.state.on_snapshot();
     }
 
     fn send(&mut self, mut update: FetchUpdate) {
@@ -385,7 +386,7 @@ impl Rig {
         let mut views = self.views.lock().unwrap();
         views.publish(update);
         if completed {
-            self.state.pane.completion.store(true, Ordering::Relaxed);
+            self.completion.store(true, Ordering::Relaxed);
         }
     }
 
@@ -404,13 +405,12 @@ impl Rig {
             .pane
             .last_heartbeat
             .get_or_insert_with(Instant::now);
-        self.state
-            .run_maintenance(&mut self.fetch, &mut self.terminal);
+        self.state.run_maintenance(&mut self.terminal);
     }
 
     fn input(&mut self, action: KeyAction) {
         self.state
-            .on_input(Wakeup::Key(action), &mut self.terminal, &mut self.fetch)
+            .on_input(Wakeup::Key(action), &mut self.terminal)
             .expect("input");
     }
 
@@ -421,9 +421,11 @@ impl Rig {
     }
 
     fn step(&mut self, inbox: &mut WakeupInbox) {
-        self.state
-            .step(inbox, &mut self.fetch, &mut self.terminal)
-            .expect("step");
+        self.state.step(inbox, &mut self.terminal).expect("step");
+    }
+
+    fn request_if_idle(&mut self, request: FetchRequest) {
+        self.state.pane.fetch.request_if_idle(request);
     }
 
     fn next_request(&mut self) -> Option<FetchRequest> {

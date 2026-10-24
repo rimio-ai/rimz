@@ -206,7 +206,7 @@ fn mux_timeout_refusals_name_the_session_wide_reset_and_other_backend() {
             &rimz::mux::MuxErr::Timeout {
                 program: mux.to_string(),
                 args: "list-sessions".into(),
-                seconds: 3,
+                timeout: std::time::Duration::from_secs(3),
             },
             Some(fallback.into()),
         );

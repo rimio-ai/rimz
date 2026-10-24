@@ -861,7 +861,10 @@ exit 0
         started.elapsed()
     );
     assert!(
-        matches!(err, crate::mux::MuxErr::Timeout { seconds: 1, .. }),
+        matches!(
+            err,
+            crate::mux::MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(1)
+        ),
         "{err}"
     );
     let message = err.to_string();
@@ -1120,7 +1123,10 @@ exec sleep 30
         started.elapsed()
     );
     assert!(
-        matches!(err, crate::mux::MuxErr::Timeout { seconds: 2, .. }),
+        matches!(
+            err,
+            crate::mux::MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(2)
+        ),
         "{err}"
     );
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 2);
@@ -2057,7 +2063,11 @@ exit 0
             ..Default::default()
         });
     assert!(
-        matches!(&result, Err(MuxErr::Output { reason, .. }) if reason.contains("returned no array on every attempt")),
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::BeforeSpawn(MuxErr::Output { reason, .. }))
+                if reason.contains("returned no array on every attempt")
+        ),
         "{result:?}"
     );
     let log = shim_log(&temp);
@@ -2111,6 +2121,46 @@ esac
         1,
         "{log}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_new_pane_failure_is_spawn_error() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+case " $* " in
+  *" list-panes "*)
+    printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":120,"pane_rows":80}]\n' ;;
+  *" new-pane "*) printf 'spawn refused\n' >&2; exit 1 ;;
+esac
+"#,
+    );
+    let result =
+        ZellijBackend::with_program_for_test(&shim).append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            ..Default::default()
+        });
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::Spawn(MuxErr::Command { stderr, .. }))
+                if stderr.contains("spawn refused")
+        ),
+        "{result:?}"
+    );
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
 }
 
 #[cfg(unix)]
@@ -4877,7 +4927,10 @@ fn a_rerun_that_outlasts_the_deadline_reports_the_callers_bound() {
         .run_with_timeout(Duration::from_secs(1))
         .expect_err("the rerun hangs");
 
-    assert!(matches!(err, MuxErr::Timeout { seconds: 1, .. }), "{err:?}");
+    assert!(
+        matches!(err, MuxErr::Timeout { timeout, .. } if timeout == Duration::from_secs(1)),
+        "{err:?}"
+    );
     assert_eq!(action_runs(&temp), 2);
 }
 

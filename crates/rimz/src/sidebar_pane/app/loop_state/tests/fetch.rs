@@ -8,8 +8,10 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
+    rig.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     for phase in [FetchPhase::Interim, FetchPhase::Final] {
         snapshot.now += jiff::SignedDuration::from_secs(1);
         rig.send(FetchUpdate::Snapshot {
@@ -18,16 +20,16 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
             source: SnapshotSource::Produced,
         });
     }
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(rig.view().ctx().current.now, snapshot.now);
     assert_eq!(
         rig.state.pane.content_applications, 1,
         "coalescing must retain clock-only delivery"
     );
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
-        rig.next_request().is_some(),
-        "unchanged final completed the prior request"
+        rig.next_request().unwrap().is_fresh_panes(),
+        "unchanged final clears the latch"
     );
 }
 
@@ -158,8 +160,7 @@ fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
     rig.record_event(&envelope);
     clock.advance(Duration::from_millis(12_001));
     rig.state.events().prune(clock.now_ms());
-    rig.state
-        .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
+    rig.state.on_event(&mut rig.terminal, envelope);
     assert_eq!(
         rig.view()
             .ctx()
@@ -236,7 +237,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
         pane_id: pane_id.clone(),
         command: "vim".to_owned(),
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     // The event's own fold catches the view up to the queued equal content and fuses it, so the
     // take that follows has nothing left to apply.
     assert_eq!(
@@ -753,9 +754,10 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         frame: Some(Arc::new(frame)),
     };
 
-    rig.fetch.request(FetchRequest::force_fold(), false);
-    assert!(rig.next_request().unwrap().forces_fold());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.request_if_idle(FetchRequest::default());
+    assert!(rig.next_request().is_some());
+    rig.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     rig.state.pane.dirty = false;
     rig.state.seed(&fold);
 
@@ -808,7 +810,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     assert!(rig.view().ctx().last_focus_observation.presence_known);
     assert!(
         rig.next_request().is_none(),
-        "a seed does not complete the in-flight fetch"
+        "a seed does not clear the latch"
     );
 
     let mut correction = agent_snapshot(&rig.ws);
@@ -855,9 +857,10 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         0,
         "the changed pane set commits"
     );
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
-        "only the final correction completes the fetch"
+        "only the final correction clears the latch"
     );
 }
 
@@ -906,16 +909,14 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
         mods: KeyModifiers::NONE,
     };
     rig.state
-        .on_input(press.clone(), &mut rig.terminal, &mut rig.fetch)
+        .on_input(press.clone(), &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.view().ui().selected_index, None);
 
     let mut rebound = snapshot;
     rebound.sidebar.keys.down = "v".to_owned();
     rig.fold(rebound, SnapshotSource::Produced);
-    rig.state
-        .on_input(press, &mut rig.terminal, &mut rig.fetch)
-        .unwrap();
+    rig.state.on_input(press, &mut rig.terminal).unwrap();
     assert_eq!(rig.view().ui().selected_index, Some(0));
     assert_eq!(
         rig.view().ui().selected_pane,
@@ -929,7 +930,6 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(
@@ -947,9 +947,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .name = "unread-snapshot".into();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     rig.send(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -968,7 +969,7 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view()
             .ctx()
@@ -985,9 +986,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         "snapshot context is applied with its snapshot"
     );
     assert_eq!(rig.view().ctx().health.failure_streak, 1);
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
-            .expect("final outcome releases the queued request")
+            .expect("final outcome clears the latch")
             .is_fresh_panes()
     );
     assert!(rig.next_request().is_none());
@@ -996,9 +998,10 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
 #[test]
 fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
     let mut rig = Rig::new();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     for (name, phase) in [
         ("final-snapshot", FetchPhase::Final),
         ("interim-snapshot", FetchPhase::Interim),
@@ -1014,12 +1017,13 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
             source: SnapshotSource::Cached,
         });
     }
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view().ctx().current.rows().next().unwrap().name,
         "final-snapshot",
         "an interim must not displace the pending final snapshot"
     );
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
             .expect("completion survives an interim publication")
@@ -1030,9 +1034,10 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
 #[test]
 fn a_failed_completion_survives_a_later_interim_snapshot() {
     let mut rig = Rig::new();
-    rig.fetch.request(FetchRequest::default(), false);
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request(FetchRequest::fresh_panes(), true);
+    rig.request_if_idle(FetchRequest::fresh_panes());
+    assert!(rig.next_request().is_none());
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
     });
@@ -1041,16 +1046,17 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view().ctx().health.failure_streak,
         1,
         "an interim must not erase a pending failure"
     );
     assert_eq!(rig.view().ctx().current.rows().count(), 1);
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
-            .expect("failed final releases the request")
+            .expect("failed final clears the latch")
             .is_fresh_panes()
     );
 }
@@ -1065,61 +1071,6 @@ fn disabled_observer_extracts_no_signature() {
         (0, 0),
         "no writer means no extraction"
     );
-}
-
-#[test]
-fn store_delta_requests_default_or_panes_changed_freshness() {
-    use crate::agents::LifecycleSignal;
-
-    for (event, expected) in [
-        (store_delta(), FetchRequest::default()),
-        (SidebarEvent::PanesChanged, FetchRequest::fresh_panes()),
-        (
-            SidebarEvent::StoreDelta {
-                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-                agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
-            },
-            FetchRequest::fresh_panes(),
-        ),
-        (
-            SidebarEvent::StoreDelta {
-                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-                agent_signal: Some(LifecycleSignal::Ended.tag().to_owned()),
-            },
-            FetchRequest::fresh_panes(),
-        ),
-    ] {
-        let mut rig = Rig::new();
-
-        rig.event(event.clone());
-
-        let request = rig.requests.try_recv().expect("immediate event fetch");
-        assert_eq!(
-            request.is_fresh_panes(),
-            expected.is_fresh_panes(),
-            "{event:?}",
-        );
-        assert_eq!(request.forces_fold(), expected.forces_fold(), "{event:?}");
-        assert!(rig.next_request().is_none(), "one fetch for {event:?}");
-    }
-}
-
-#[test]
-fn lifecycle_store_delta_preserves_fresh_pane_verification() {
-    for signal in [
-        crate::agents::LifecycleSignal::Registered.tag(),
-        crate::agents::LifecycleSignal::Ended.tag(),
-    ] {
-        let mut rig = Rig::new();
-
-        rig.event(SidebarEvent::StoreDelta {
-            event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
-            agent_signal: Some(signal.to_owned()),
-        });
-
-        let request = rig.next_request().expect("immediate lifecycle fetch");
-        assert!(request.is_fresh_panes(), "signal: {signal}");
-    }
 }
 
 #[test]
@@ -1164,7 +1115,7 @@ fn only_watched_metrics_and_presence_publications_fold_immediately() {
 }
 
 #[test]
-fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
+fn room_events_send_no_pane_request() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
     for watched in [true, false] {
@@ -1176,21 +1127,15 @@ fn watched_and_hidden_renderers_fetch_identity_free_events_immediately() {
 
         rig.event(store_delta());
 
-        assert!(rig.next_request().is_some());
-        assert!(rig.fetch.next_deadline().is_none());
+        assert!(rig.next_request().is_none());
     }
 }
 
 #[test]
-fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
+fn maintenance_watchdog_requests_one_unwatched_fetch() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane);
     rig.hide();
-
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() + Duration::from_secs(1),
-    );
 
     rig.state.pane.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
     rig.maintenance();
@@ -1199,33 +1144,26 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
         rig.next_request().is_some(),
         "watchdog dispatches one fetch"
     );
-    assert!(rig.fetch.next_deadline().is_none());
     assert!(
         rig.next_request().is_none(),
-        "the deferred nudge merges into the watchdog fetch"
+        "the watchdog requests only one fetch"
     );
 }
 
 #[test]
-fn focus_resume_flushes_pending_metrics_fetch() {
+fn own_reveal_requests_fresh_panes() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let mut rig = Rig::with_own_pane(own_pane.clone());
     rig.hide();
-
-    rig.fetch.defer_until(
-        FetchRequest::default(),
-        Instant::now() + Duration::from_secs(1),
-    );
 
     rig.event(SidebarEvent::FocusChanged {
         focused: vec![own_pane],
         unfocused: Vec::new(),
     });
 
-    assert!(rig.fetch.next_deadline().is_none());
     assert!(
         rig.next_request()
-            .expect("focus flushed pending fetch")
+            .expect("own reveal requests a fetch")
             .is_fresh_panes()
     );
 }
@@ -1304,7 +1242,6 @@ fn search_commit_writes_and_dispatches_the_lens() {
                     mods: KeyModifiers::NONE,
                 },
                 &mut rig.terminal,
-                &mut rig.fetch,
             )
             .unwrap();
     }
@@ -1331,7 +1268,6 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
@@ -1376,7 +1312,6 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
                     mods: KeyModifiers::NONE,
                 },
                 &mut rig.terminal,
-                &mut rig.fetch,
             )
             .unwrap();
     }
@@ -1404,7 +1339,6 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(rig.view().ui().search_draft, None);

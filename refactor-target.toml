@@ -1277,7 +1277,13 @@ path = "crates/rimz/src/mux"
 # PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
 # MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
 # ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
-surface-budget = 297
+# CompanionAppendErr distinguishes pre-spawn fallback from an uncertain spawn (+1).
+surface-budget = 298
+
+[[verdict]]
+kind = "item"
+key = "mux::CompanionAppendErr"
+reason = "The CLI abandons companion stack placement only when the backend proves no payload ran."
 
 [[verdict]]
 kind = "item"
@@ -2310,7 +2316,8 @@ allowed-dependencies = []
 # Crate-visible compact duration serde adapters serve durable run records.
 # Coarse durations serve pending-wait activity and prompt-cache notices.
 # The accounts preview and provider holds share local wall-clock formatting (+1).
-surface-budget = 18
+# format_duration_bound shares exact s/ms bounds between mux errors and room probes (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -3304,8 +3311,8 @@ reason = "Actuator steps, explicit width intent, and settled-resize attribution 
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::app::fetch::FetchDispatcher"
-reason = "Owns single-flight coalescing while on_snapshot retains pane gate deferral and completion-driven follow-up dispatch (732161ced, 8b904eff2, 187f9f16c, a70ba54fc; pass 11)."
+key = "sidebar_pane::app::fetch::FetchHandle"
+reason = "A pane's send end and completion latch: pane-observed changes send at once, and level-triggered view deadlines send only while none of the pane's requests awaits a completed cycle (732161ced, 8c02a0b7a; room-cadence)."
 
 [[verdict]]
 kind = "item"
@@ -4015,7 +4022,7 @@ reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is requi
 [[verdict]]
 kind = "item"
 key = "diag::record::SubagentZoneLookup"
-reason = "The CLI stamps projection, caller, or pane-listing failure in the public SubagentZoneLookupFailed diagnostic payload."
+reason = "The CLI stamps projection, caller, pane-listing, or companion-stack preparation failure in the public SubagentZoneLookupFailed diagnostic payload."
 
 [[verdict]]
 kind = "item"

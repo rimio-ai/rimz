@@ -123,6 +123,8 @@ pub struct SandboxInputs<'a> {
     pub read_only: Vec<PathBuf>,
     pub tmp_dir: &'a Path,
     pub skills_dir: &'a Path,
+    pub ssh_config_file: &'a Path,
+    pub ssh_config_copies_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
     pub provider_home_env_keys: &'a [&'a str],
     /// The provider's own home that a named account's settings, and a shared
@@ -477,6 +479,18 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             .into_iter()
             .map(|target| Mount::RemountRo { target }),
     );
+    let mut copies = views.copies;
+    if let Some((copy, name, target)) =
+        rewrite::plan_ssh_config(inputs.ssh_config_copies_dir, inputs.ssh_config_file)
+    {
+        validate_path(&copy.target)?;
+        validate_path(&target)?;
+        mounts.push(Mount::RoBind {
+            source: copy.target.join(name),
+            target,
+        });
+        copies.push(copy);
+    }
     let plan = MountPlan { mounts };
     pins.insert(
         Isolation::SCOPED_HOST_PATHS_ENV.into(),
@@ -490,7 +504,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         plan,
         pins,
         skipped: views.skipped,
-        copies: views.copies,
+        copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
     })
 }
@@ -686,6 +700,8 @@ mod tests {
             read_only: Vec::new(),
             tmp_dir: unit,
             skills_dir: &state().agent_skills_dir(Some("otter")),
+            ssh_config_file: Path::new("/state/missing-ssh-config"),
+            ssh_config_copies_dir: Path::new("/state/ssh-config-copies"),
             provider_home: None,
             provider_home_env_keys: &[],
             default_home: None,
@@ -710,6 +726,8 @@ mod tests {
             read_only: vec![checkout.path().to_path_buf()],
             tmp_dir: Path::new("/state/tmp/unit"),
             skills_dir: Path::new("/state/skills"),
+            ssh_config_file: Path::new("/state/missing-ssh-config"),
+            ssh_config_copies_dir: Path::new("/state/ssh-config-copies"),
             provider_home: None,
             provider_home_env_keys: &[],
             default_home: None,

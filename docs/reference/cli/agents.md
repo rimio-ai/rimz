@@ -493,7 +493,7 @@ Tiered profiles show `model (tier)`, or `model (tier, fallback)` when resolution
 
 ### Explain a launch
 
-`rimz agents explain` prints the launch plan for one agent without launching it. It opens no pane, mints no name or launch id, writes no store record, and creates no prompt files, temp units, or skill copies.
+`rimz agents explain` prints the launch plan for one agent without launching it. It opens no pane, mints no name or launch id, writes no store record, and creates no prompt files, temp units, or scoped-view copies (skills and system SSH config).
 
 ```sh
 rimz agents explain coder --model gpt-6-astra --effort high
@@ -518,7 +518,7 @@ The default report shows:
 - the provider argv and the wrapped argv;
 - the launch's environment overrides and unset keys (not the whole ambient environment);
 - prompt sources, the composed prompt text, and how the RimZ reminder is delivered;
-- scoped-view mounts, pins, skill copies, and omissions;
+- scoped-view mounts, pins, copies (skills and system SSH config), and skill omissions;
 - the skill policy: scoped view, host provider switch with unlisted keys, or an unenforced-list warning.
 
 `--json` emits the same plan with the fields `isolation` (`host`, `scoped`, or `sandbox`), `isolation_source` (`--isolation`, `recorded --isolation` for an `@handle` target, `profile default <name>`, or `machine policy`), `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `account`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
@@ -531,7 +531,7 @@ A routed plan also carries `tier`, `tier_skipped` for usage passes, and `tier_un
 
 Explain applies the same checks as a launch. System-prompt files must be readable UTF-8, and configured isolation and skill capabilities must pass their preflights: a failure is an error, never a partial plan. The launch-chain check is the exception: when a real launch from here would fail it (a subagent caller, the chain limit, or a caller identity RimZ cannot resolve), `explain` still prints the plan, without launch ancestry, and warns that a real launch from there would be refused. A profile whose permission posture is missing or incompatible is shown without it, with a warning.
 
-Secrets from trusted project `[[agents]]` `env` values print as `<redacted>` in the environment map, the matching argv environment tokens, and scoped-view pins. Redaction goes by environment key, not by value, so paths derived from a secret value stay visible in mounts, skill copies, warnings, and errors. Everything else prints in full, and there is no flag to reveal secrets. Scoped planning uses the environment `explain` runs in plus the launch overrides, not the target pane's environment, so a different home, XDG, provider-home, or multiplexer variable can change the planned view.
+Secrets from trusted project `[[agents]]` `env` values print as `<redacted>` in the environment map, the matching argv environment tokens, and scoped-view pins. Redaction goes by environment key, not by value, so paths derived from a secret value stay visible in mounts, scoped-view copies, warnings, and errors. Everything else prints in full, and there is no flag to reveal secrets. Scoped planning uses the environment `explain` runs in plus the launch overrides, not the target pane's environment, so a different home, XDG, provider-home, or multiplexer variable can change the planned view.
 
 ### Register a third-party kind
 

@@ -33,7 +33,16 @@ fn done_keeps_running_rows_above_the_finished_cut() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let rendered = String::from_utf8(out).unwrap();
     for i in 0..7 {
         assert!(rendered.contains(&format!("running-{i}")), "{rendered}");
@@ -63,7 +72,7 @@ fn expanded_wake_ups_drop_the_unfold_hint() {
     };
     for all in [false, true] {
         let mut out = Vec::new();
-        text::write(&mut out, &model, &[&model.rooms[0]], all, None, None).unwrap();
+        text::write(&mut out, &model, &[&model.rooms[0]], all, None, None, None).unwrap();
         let rendered = String::from_utf8(out).unwrap();
         assert_eq!(
             rendered.contains("rimz loop list --all"),
@@ -98,7 +107,16 @@ fn here_marks_only_rows_that_name_a_worktree() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let rendered = String::from_utf8(out).unwrap();
     assert!(rendered.contains("card-ux"), "{rendered}");
     assert!(!rendered.contains("(here)"), "{rendered}");
@@ -164,7 +182,16 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], false, None, None).unwrap();
+    text::write(
+        &mut out,
+        &model,
+        &[&model.rooms[0]],
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let rendered = String::from_utf8(out).unwrap();
     assert!(
         rendered.contains("  live gate user: review the probe"),
@@ -210,7 +237,7 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
         warnings: Vec::new(),
     };
     let mut out = Vec::new();
-    text::write(&mut out, &model, &[&model.rooms[0]], true, None, None).unwrap();
+    text::write(&mut out, &model, &[&model.rooms[0]], true, None, None, None).unwrap();
     let rendered = String::from_utf8(out).unwrap();
     for name in ["office-sync", "✓sync", "off branch=main"] {
         assert!(

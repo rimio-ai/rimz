@@ -151,7 +151,7 @@ fn query_client_count(
         return Err(MuxErr::Timeout {
             program: engine.name().to_string(),
             args: format!("--session {session_name} action list-clients"),
-            seconds: REAP_TIMEOUT.as_secs(),
+            timeout: REAP_TIMEOUT,
         });
     }
     engine

@@ -164,6 +164,16 @@ pub fn format_duration_compact(duration: Duration) -> String {
     format!("{seconds}s")
 }
 
+/// Render a bound as whole seconds or floored whole milliseconds.
+/// Unlike [`format_duration_compact`], this is exact to the millisecond and never
+/// rolls up to minutes. It is for display, not the durable-record format.
+pub fn format_duration_bound(duration: Duration) -> String {
+    if duration.subsec_nanos() == 0 {
+        return format!("{}s", duration.as_secs());
+    }
+    format!("{}ms", duration.as_millis())
+}
+
 /// Serde adapters for compact, whole-second durations in durable records.
 pub(crate) mod duration_serde {
     use crate::utils::time::{
@@ -259,6 +269,22 @@ mod tests {
             (0, "0s"),
         ] {
             assert_eq!(format_duration_compact(Duration::from_secs(secs)), expected);
+        }
+    }
+
+    #[test]
+    fn format_duration_bound_keeps_seconds_or_floors_milliseconds() {
+        for (duration, expected) in [
+            (Duration::from_millis(500), "500ms"),
+            (Duration::from_millis(1500), "1500ms"),
+            (Duration::from_secs(8), "8s"),
+            (Duration::from_secs(60), "60s"),
+            (Duration::ZERO, "0s"),
+            (Duration::from_nanos(137_482_913), "137ms"),
+            (Duration::from_micros(400), "0ms"),
+            (Duration::from_micros(1_000_400), "1000ms"),
+        ] {
+            assert_eq!(format_duration_bound(duration), expected, "{duration:?}");
         }
     }
 

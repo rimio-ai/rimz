@@ -176,7 +176,7 @@ The host leaves in three ways:
 
 A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build.
 
-Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `r` action after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes. Attachment-local deferred fetches are not cleared first, so a later deferred fetch can cost one extra fold.
+Reload requests reach the host inbox directly: room reload words and envelopes, and a pane's `r` action after UI-mode resolution. The host drains all queued requests into one comparison per turn. An identical or missing target forces one hard refresh without blanking panes.
 
 ### Shared lanes
 
@@ -200,11 +200,11 @@ Three host-wide samples serve every attachment:
 
 ## One fetch cycle
 
-An attachment's loop reads no data itself. It blocks in `recv_timeout` on its bounded wake channel, using the timeout as its frame clock, and asks the host's fetch worker for folds. Shared folding and side effects run on the worker. Local projection and the clock-only decision run when a view reduces.
+An attachment's loop reads no data itself. It blocks in `recv_timeout` on its bounded wake channel, using the timeout as its frame clock, and requests folds for pane-local observations. Shared folding and side effects run on the worker. Local projection and the clock-only decision run when a view reduces.
 
 ### Requests
 
-A `FetchRequest` carries a mode, an optional pane-cache floor, one flag, and the instant the renderer learned what it asks to fold:
+A `FetchRequest` carries a mode and an optional pane-cache floor:
 
 | Field | Meaning |
 | --- | --- |
@@ -212,10 +212,12 @@ A `FetchRequest` carries a mode, an optional pane-cache floor, one flag, and the
 | `FreshPanes` mode | The producer produces regardless of frame age. Raised by agent birth and death. |
 | `HardRefresh` mode | The host produces regardless of frame age. Raised by reload and manual recovery. |
 | `min_pane_cache_ms` | A floor that rejects any pane cache older than the signal that asked for it, which is how birth and death beat the pane TTL. |
-| `force_fold` | A renderer-local timer wants a fold from current caches even when nothing on disk changed. |
-| `observed_at` | When the renderer observed the cause. A cycle that started later already covers it. |
 
-The dispatcher merges queued requests (strongest mode, latest pane-cache floor, `force_fold` OR'd), so a storm of deltas collapses to one run plus at most one deferred follow-up. The worker rests for `FOLD_FLOOR` (250 ms) after each cycle returns. Requests that arrive during the rest merge into the next batch, and requests the last answered cycle covers are dropped. No mode or flag bypasses the rest, and a request after at least 250 ms idle starts at once. Coverage is stamped only when the next cycle actually starts, so a request observed during the rest is answered by that cycle, never the preceding one. Disconnecting all senders still lets a batch in hand finish.
+The plane requests at most one fold per room event as it records it (`RoomEvents::dispatch` in [`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): fresh panes for topology and agent birth or death, none for width, filter, notification, focus actions, or other overlays, and ordinary otherwise.
+
+Panes send attach, own reveal or stranded focus, resize, and local read marks. Gate escape, tab-read dwell, freeze expiry, and self-close deadlines send only while no pane request awaits completion.
+
+The worker merges waiting requests (strongest mode, latest pane-cache floor), so a storm collapses to one run plus at most one follow-up. It rests for `FOLD_FLOOR` (250 ms) after each cycle returns, and requests that arrive during the rest merge into the next batch. No mode bypasses the rest, and a request after at least 250 ms idle starts at once. The worker also folds after an idle data tick since return, taking the shortest subscribed `--tick-seconds`. With no subscribers it waits. Disconnecting all senders still lets a batch in hand finish.
 
 ### The cycle
 
@@ -240,17 +242,17 @@ The host's views keep three publication slots for the room: the newest final suc
 
 A cursor replays what its consumer has not seen: the newest unseen final success, otherwise the newest unseen interim, then the newest unseen failure. Wakes are hints. Frame maintenance reads the views even when a full wake channel dropped one.
 
-Replay compares before it applies. `Cursor::replay` projects the fold through the seed's routine for the reducing attachment's own pane and refresh override, then compares the result with its last successful projected baseline. Equality includes the shared focus anchor and body lens, and ignores only the snapshot clock, generation time, pane observation and production stamps, and the input sampling instant. Equal content with live permission applies clock-only: it advances clocks, stamps, backstops, and paint scheduling, and skips full fusion, gate and health commits, receipts and dwell, selection, filter, order, and freeze reconciliation, spend rolls, self-close, anchor observations, and focus-repair retry. Idle presence ages with that clock. Every admitted request still folds, and final-fold notification evaluation, unread persistence and pruning, and link recovery still run.
+Replay compares before it applies. `Cursor::replay` projects the fold through the seed's routine for the reducing attachment's own pane and refresh override, then compares the result with its last successful projected baseline. Equality includes the shared focus anchor and body lens, and ignores only the snapshot clock, generation time, pane observation and production stamps, and the input sampling instant. Equal content with live permission applies clock-only: it advances clocks, stamps, the self-close watchdog, and paint scheduling, and skips full fusion, gate and health commits, receipts and dwell, selection, filter, order, and freeze reconciliation, spend rolls, self-close, anchor observations, and focus-repair retry. Idle presence ages with that clock. Every admitted request still folds, and final-fold notification evaluation, unread persistence and pruning, and link recovery still run.
 
-Clock-only permission is read live at replay and is blocked by any of: a failure, a gate episode, an active overlay, a freeze, a read dwell, an empty-tab confirmation, a pending focus repair, or an input obligation. Completion is independent of content reuse, and a rejected final still defers its follow-up.
+Clock-only permission is read live at replay and is blocked by any of: a failure, a gate episode, an active overlay, a freeze, a read dwell, an empty-tab confirmation, a pending focus repair, or an input obligation. Completion is independent of content reuse. A rejected final requests nothing, and the gate asks again once its deadline is due.
 
-Each shared view has its own cursor and baseline. A pane that reduces with no routed view uses its own Scratch scope, with a separate cursor and baseline. Seeds do not prime the Scratch baseline, and a shared drain clears it, so the next Scratch reduction is full once. Local input invalidates the Scratch baseline, and identity-free nudges do not. Another pane's forced fold does not force equal Scratch content to a full reduction.
+Each shared view has its own cursor and baseline. A pane that reduces with no routed view uses its own Scratch scope, with a separate cursor and baseline. Seeds do not prime the Scratch baseline, and a shared drain clears it, so the next Scratch reduction is full once. Local input invalidates the Scratch baseline, and identity-free nudges do not.
 
 Before publication, the worker compares shared collections once against the preceding fold and reuses equal Arcs. Replay checks their identity before small metadata, and pane-local exclusions or older baselines fall back to structural equality. Shared views project and compare under the views lock, and the worker never compares a consumer's baseline. A co-viewer whose view is current does not reduce again.
 
 ### Hidden attachments and reveal
 
-A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It consumes completion, and refreshes fetch and self-close backstops, only when completion is present. `FetchUpdate::preview_for` reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
+A settled hidden attachment leaves its cursor unread until reveal, with no time bound. A deferred drain builds no projection and advances neither cursor nor baseline. It consumes completion and refreshes the self-close watchdog only when completion is present. `FetchUpdate::preview_for` reads the selected unseen success, not the seed slot, which may hold an interim behind an unread final.
 
 These conditions apply a hidden publication at once instead of deferring it:
 
@@ -730,7 +732,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 
 ### The paint clock
 
-Data cadence and paint cadence are separate clocks, which is why the sidebar stays responsive while the data layer runs slow. The fetch worker's 250 ms post-cycle rest bounds data folds even under continuous requests and adds up to 250 ms of card-state latency. The production data-tick gate is separate. Input, resize, and overlay paints do not wait for the worker. The data backstop is `rimz sidebar serve --tick-seconds` (default 1): `refresh_ms` changes paint cadence, never pull cadence.
+Data cadence and paint cadence are separate clocks, which is why the sidebar stays responsive while the data layer runs slow. The fetch worker's 250 ms post-cycle rest bounds data folds even under continuous requests and adds up to 250 ms of card-state latency. The production data-tick gate is separate. Input, resize, and overlay paints do not wait for the worker. The data backstop is the fetch worker's idle tick, the shortest `rimz sidebar serve --tick-seconds` among subscribed panes (default 1): `refresh_ms` changes paint cadence, never pull cadence.
 
 The attachment's `LoopClock` owns transition time and effect policy. Production uses wall time, while the testkit scenario player drives the same loop with virtual time and external effects disabled.
 
@@ -755,6 +757,6 @@ Each degradation has one owner, and none leaves a wrong verdict that outlives th
 | Clock skew | Event expiry uses receiver time, so no event lives forever. | A future-stamped event can mis-order an overlay across several pulls, and expires `EVENT_STORE_TTL` (12 s) after receipt. |
 | Cold host: no fold yet | Memory starts empty with each host. | The placeholder remains until the first fold. |
 | Panicking produce | The panic guard catches the unwind and discards the fold cursor. | One failed outcome. The next cycle refolds cold. |
-| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and its data backstop keeps requesting folds until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
+| Unreadable store or panes | The serve loop holds its last committed frame. | A sustained failure raises the sticky health alert. The attachment stays open and the worker's data backstop keeps folding until completed production recovers ([sidebar.md → Degraded reads](./sidebar.md#degraded-reads)). |
 
 Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. Flicker, duplicate rows, or a phantom external group each map to a record in `diag.log.jsonl`. `rimz doctor` shows the recent tail, and [diagnostics.md](../diagnostics.md) names the taxonomy.

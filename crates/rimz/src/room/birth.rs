@@ -760,7 +760,7 @@ mod tests {
         let failure = Err(crate::mux::MuxErr::Timeout {
             program: "mux".to_owned(),
             args: "list".to_owned(),
-            seconds: 1,
+            timeout: Duration::from_secs(1),
         });
         assert_eq!(
             birth_session_name("rimz-old-123456", "repo-abcd", failure),

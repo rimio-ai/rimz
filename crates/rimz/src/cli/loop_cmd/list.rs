@@ -88,6 +88,7 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
         workspace
             .as_ref()
             .map(|workspace| workspace.worktree_root.as_path()),
+        globals.mux,
     )
 }
 

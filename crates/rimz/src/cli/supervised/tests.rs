@@ -437,7 +437,7 @@ fn subagent_zone_ambiguous_split_never_opens_a_second_pane() {
         rimz::mux::MuxErr::Timeout {
             program: "fake".to_owned(),
             args: "split".to_owned(),
-            seconds: 1,
+            timeout: Duration::from_secs(1),
         },
         rimz::mux::MuxErr::Output {
             program: "fake".to_owned(),
@@ -461,7 +461,7 @@ fn subagent_zone_ambiguous_split_never_opens_a_second_pane() {
 
 #[test]
 fn subagent_zone_companion_append_uses_numbered_overflow_and_definitive_errors() {
-    use rimz::mux::{CompanionPaneAppend, MuxErr};
+    use rimz::mux::{CompanionAppendErr, CompanionPaneAppend, MuxErr};
 
     for (outcomes, attempts, overflow) in [
         (vec![Ok(CompanionPaneAppend::Opened)], 1, false),
@@ -472,11 +472,11 @@ fn subagent_zone_companion_append_uses_numbered_overflow_and_definitive_errors()
         ),
         (
             vec![
-                Err(MuxErr::Command {
+                Err(CompanionAppendErr::Spawn(MuxErr::Command {
                     program: "fake".into(),
                     args: "append".into(),
                     stderr: "no room".into(),
-                }),
+                })),
                 Ok(CompanionPaneAppend::Opened),
             ],
             2,
@@ -514,7 +514,7 @@ fn subagent_zone_ambiguous_append_never_opens_a_second_pane() {
         rimz::mux::MuxErr::Timeout {
             program: "fake".into(),
             args: "append".into(),
-            seconds: 1,
+            timeout: Duration::from_secs(1),
         },
         rimz::mux::MuxErr::Output {
             program: "fake".into(),
@@ -530,7 +530,11 @@ fn subagent_zone_ambiguous_append_never_opens_a_second_pane() {
                 pane_ref("%21", "#ch subagents 2"),
             ]),
             append_outcomes: std::sync::Mutex::new(
-                [Err(error), Ok(rimz::mux::CompanionPaneAppend::Opened)].into(),
+                [
+                    Err(rimz::mux::CompanionAppendErr::Spawn(error)),
+                    Ok(rimz::mux::CompanionPaneAppend::Opened),
+                ]
+                .into(),
             ),
             ..Default::default()
         };
@@ -541,6 +545,65 @@ fn subagent_zone_ambiguous_append_never_opens_a_second_pane() {
         assert_eq!(backend.appends.lock().unwrap().len(), 1);
         assert!(backend.tabs.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn subagent_zone_before_spawn_timeout_opens_numbered_companion() {
+    assert_zone_before_spawn_fallback(rimz::mux::MuxErr::Timeout {
+        program: "fake".into(),
+        args: "append lookup".into(),
+        timeout: Duration::from_secs(1),
+    });
+}
+
+#[test]
+fn subagent_zone_before_spawn_output_error_opens_numbered_companion() {
+    assert_zone_before_spawn_fallback(rimz::mux::MuxErr::Output {
+        program: "fake".into(),
+        reason: "unreadable geometry".into(),
+    });
+}
+
+#[test]
+fn subagent_zone_before_spawn_command_error_opens_numbered_companion() {
+    assert_zone_before_spawn_fallback(rimz::mux::MuxErr::Command {
+        program: "fake".into(),
+        args: "append lookup".into(),
+        stderr: "pane disappeared".into(),
+    });
+}
+
+fn assert_zone_before_spawn_fallback(error: rimz::mux::MuxErr) {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let parent = zone_backend::register_caller(&fixture);
+    let after = parent.pane_id.clone();
+    let backend = zone_backend::Backend {
+        listed: Some(vec![
+            parent,
+            pane_ref("%20", "#ch subagents"),
+            pane_ref("%21", "#ch subagents 2"),
+        ]),
+        append_outcomes: std::sync::Mutex::new(
+            [
+                Err(rimz::mux::CompanionAppendErr::BeforeSpawn(error)),
+                Ok(rimz::mux::CompanionPaneAppend::Opened),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let result = zone_backend::open(&fixture, &backend);
+    assert!(
+        matches!(result, super::pane::SubagentZoneOpen::Opened),
+        "{result:?}"
+    );
+    assert_eq!(backend.appends.lock().unwrap().len(), 1);
+    let tabs = backend.tabs.lock().unwrap();
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].title, "#ch subagents 3");
+    assert_eq!(tabs[0].after, Some(after));
+    assert!(!tabs[0].focus);
+    assert_zone_lookup_record(&fixture, "companion_stack");
 }
 
 #[test]
@@ -601,6 +664,10 @@ fn assert_zone_fallback(lookup: &str) {
     assert_eq!(tabs[0].after, Some(after));
     assert!(!tabs[0].focus);
     assert!(matches!(result, super::pane::SubagentZoneOpen::Opened));
+    assert_zone_lookup_record(&fixture, lookup);
+}
+
+fn assert_zone_lookup_record(fixture: &RunFixture, lookup: &str) {
     let sink = rimz::diag::DiagSink::under(
         fixture.paths.root.clone(),
         fixture.workspace_id.clone(),
@@ -685,8 +752,9 @@ mod zone_backend {
         pub(super) split_error: Mutex<Option<m::MuxErr>>,
         pub(super) tab_error: Mutex<Option<m::MuxErr>>,
         pub(super) appends: Mutex<Vec<m::SplitPaneOptions>>,
-        pub(super) append_outcomes:
-            Mutex<std::collections::VecDeque<m::Result<m::CompanionPaneAppend>>>,
+        pub(super) append_outcomes: Mutex<
+            std::collections::VecDeque<Result<m::CompanionPaneAppend, m::CompanionAppendErr>>,
+        >,
         pub(super) captures: Mutex<Vec<(Option<u16>, bool)>>,
     }
 
@@ -723,7 +791,7 @@ mod zone_backend {
             Err(m::MuxErr::Timeout {
                 program: "fake".to_owned(),
                 args: "list-panes".to_owned(),
-                seconds: 1,
+                timeout: Duration::from_secs(1),
             })
         }
         fn split_pane(&self, _opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
@@ -781,7 +849,7 @@ mod zone_backend {
         fn append_companion_pane(
             &self,
             opts: m::SplitPaneOptions,
-        ) -> m::Result<m::CompanionPaneAppend> {
+        ) -> Result<m::CompanionPaneAppend, m::CompanionAppendErr> {
             self.appends.lock().unwrap().push(opts);
             self.append_outcomes
                 .lock()

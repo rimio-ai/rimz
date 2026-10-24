@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use crate::sidebar_pane::render::SectionLabel;
 use crate::{RuntimePaths, SidebarInstanceId};
 
 use super::clock::LoopClock;
-use super::fetch::{FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
+use super::fetch::{FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
 use super::inbox::WakeupInbox;
 use super::input::{KeyAction, Wakeup};
 use super::loop_state::LoopState;
@@ -152,7 +153,7 @@ struct Column {
     state: LoopState,
     terminal: Terminal<PaneBackend>,
     requests: Receiver<FetchRequest>,
-    fetch: FetchDispatcher,
+    completion: Arc<AtomicBool>,
     inbox: WakeupInbox,
     at: Duration,
     next: Duration,
@@ -236,6 +237,7 @@ impl Column {
             Surface::Text => (PixelRenderCaps::default(), None),
             Surface::Live { caps, slot } => (caps, slot),
         };
+        let completion: Arc<AtomicBool> = Arc::default();
         let mut state = LoopState::new(
             clock.clone(),
             config,
@@ -243,7 +245,7 @@ impl Column {
             runtime.clone(),
             runtime.sidebar_host_wake_socket_path(crate::MuxName::Zellij, "scenario"),
             crate::diag::DiagSink::disabled(),
-            Default::default(),
+            FetchHandle::new(tx, completion.clone()),
             Some(scenario.width),
             mpsc::sync_channel(64).0,
             caps,
@@ -262,7 +264,7 @@ impl Column {
             state,
             terminal,
             requests,
-            fetch: FetchDispatcher::new(tx),
+            completion,
             inbox: WakeupInbox::new(mpsc::channel().1),
             at: Duration::ZERO,
             next: Duration::ZERO,
@@ -294,19 +296,16 @@ impl Column {
             phase: FetchPhase::Final,
             source: SnapshotSource::Produced,
         });
-        self.state.pane.completion.store(true, Ordering::Relaxed);
+        self.completion.store(true, Ordering::Relaxed);
     }
 
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {
         let frozen = self.state.inspect_view(|ui, _| ui.freeze.is_some());
         let (mut painted, mut deadline) =
-            self.state
-                .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
+            self.state.advance(&mut self.inbox, &mut self.terminal)?;
         if self.requests.try_iter().count() > 0 {
             self.send(scenario);
-            let result =
-                self.state
-                    .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
+            let result = self.state.advance(&mut self.inbox, &mut self.terminal)?;
             painted |= result.0;
             deadline = result.1;
         }
@@ -391,8 +390,7 @@ impl Column {
     }
 
     fn input(&mut self, wakeup: Wakeup) -> Result<()> {
-        self.state
-            .on_input(wakeup, &mut self.terminal, &mut self.fetch)?;
+        self.state.on_input(wakeup, &mut self.terminal)?;
         Ok(())
     }
 

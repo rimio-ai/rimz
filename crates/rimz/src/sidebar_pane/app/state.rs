@@ -45,7 +45,7 @@ pub(super) struct RenderState {
 }
 
 /// Whether a fold asks to close an empty tab, and whether it was held as a
-/// transient regression (requiring one self-heal refetch).
+/// transient regression (held until the gate deadline).
 pub(super) struct ApplyOutcome {
     pub(super) should_exit: bool,
     pub(super) rejected: bool,

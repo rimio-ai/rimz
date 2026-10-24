@@ -11,7 +11,7 @@ The code lives in `crates/rimz/src/sandbox/`:
 | `mod.rs` | `plan` (mounts, environment pins, copies), `apply`, `bwrap_argv`, `preflight` and `preflight_launch`, `TmpView`, `SandboxErr` |
 | `linux.rs` | The bubblewrap probe and the `rimz doctor` diagnosis. |
 | `skills.rs` | The scoped skill view: the merged provider root and library, alias checks, omissions. |
-| `rewrite.rs` | The user-only skill copies: digest, marker rewrite, atomic apply. |
+| `rewrite.rs` | User-only skill copies and system SSH-config mirrors: capture, digest, rewrite, atomic apply. |
 
 `harness/launch_plan.rs` is the one caller that plans and applies a view. Two other places read a view back to host paths: `cli::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
 
@@ -72,7 +72,7 @@ Two callers soften the refusal. Room judgment (`room/judgment.rs`) records a fai
 
 ## The launch plan
 
-`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` and creates nothing. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private temp unit. Launch planning runs the two at different steps.
+`sandbox::plan` reads the environment, paths, skill directories, and skill and system SSH-config bytes into a `SandboxPlan` and creates nothing. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the captured `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private temp unit. Launch planning runs the two at different steps.
 
 The exec wrapper drives the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. It creates nothing. `launch_plan::apply` creates the launch's temp unit and the room's `shared/`, both mode `0700`, at every level, then calls `sandbox::apply` on a scoped launch. Qwen's login-shell reentry stage runs on the host without a view, and its finalized exec is the ready stage that builds one.
 
@@ -94,6 +94,7 @@ The wrapped process has four properties a contributor should expect:
 3. Host paths beneath `/tmp` or `/var/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
 4. Requested read-only paths (a workflow judge's checkout and its Git directories), then each [protected path](#protected-paths) that exists, read-only.
 5. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)). A protected path that contains the skill root is bound writable at step 4, and both it and the skill root get `--remount-ro` after the view is assembled. A read-only bind of the parent placed after the view would hide it.
+6. The [system SSH-config mirror](#system-ssh-config-mirror), when it has entries: one read-only bind of the rewritten system config at its canonical path. This follows every ancestor bind and skill-view remount so none can hide it.
 
 The command has no `--unshare-*` flag, no replacement `/proc`, and no cleared environment. `/dev` takes `--dev-bind` because an ordinary bind breaks device files such as `/dev/null`.
 
@@ -207,6 +208,31 @@ Bubblewrap's `--die-with-parent` reaches only its direct child. A detached desce
 The match is the mount, never lineage or the workspace pin. A host-isolation agent's background process, and a process that left the view, are untouched, and a process whose root cannot be read is spared. The match takes in RimZ's own detached daemons that a scoped agent's `rimz` call spawned: a language-server broker and its server, a loop run, a notify handler. The scoped pin removed the saved `TMPDIR`, so such a daemon keeps `TMPDIR=/tmp` in the agent's mount namespace, where `/tmp` is the unit. It can be the writer that fails the reset, and a hard reset run from a host shell ends it. A broker ended this way leaves a registry entry that the next `registry::sweep` keeps while any lease holder lives and removes otherwise, and a replacement broker adopts the kept leases ([lsp.md § Lost rows and revival](./lsp.md#lost-rows-and-revival)).
 
 Holders get the orphan sweep's SIGTERM, grace, SIGKILL, and exit barrier, and the reset enumerates again. A survivor refuses the reset before the store opens. Soft reset, attended auto-reset, `rimz uninstall`, and incompatible-room replacement skip this step.
+
+## System SSH-config mirror
+
+Bubblewrap's unprivileged user namespace maps only the caller's uid. Root-owned files consequently appear owned by the overflow uid, but OpenSSH requires every `Include` target, at any depth and in any `Host` or `Match` block, to be owned by root or the caller and not writable by group or others. The top-level system config is exempt; its usual `Include /etc/ssh/ssh_config.d/*.conf` otherwise fails with `Bad owner or permissions`. Fedora/RHEL nest another checked include: `50-redhat.conf` includes `/etc/crypto-policies/back-ends/openssh.config`. Mirroring the whole Include graph keeps system configuration available to SSH, git over SSH, and scp without overriding the user's SSH command or configuration.
+
+`SandboxInputs.ssh_config_file` supplies the system config file to walk. `launch_plan::compile` passes `/etc/ssh/ssh_config` and `StatePaths.ssh_config_copies_dir`, constructed as `cache/ssh-config` by the disk path module. Planning captures a snapshot without writing; application uses the same `PlannedCopy` publisher as rewritten skills. The source path remains as supplied in `copies[].source`. The root and each reached regular file get a copy, and each canonical file is visited once so cycles terminate. Only the rewritten root is bound, read-only at its canonical path, as the last mount. Its Include lines name cache copies rather than host includes: binding each included file would detach that file's mount whenever a package upgrade renamed a replacement over it.
+
+The Include reader matches the first token in any case, separated from arguments by whitespace or `=`. The `shlex` crate splits the arguments on whitespace and honours single and double quotes, and each argument is globbed. Relative arguments resolve against the input root's directory (`/etc/ssh` in production), not the including file's directory. Every Include line is followed without evaluating `Host` or `Match`. This reader does not reproduce OpenSSH's tokenizer byte for byte; escaped input paths are not supported.
+
+Each Include line in every copy becomes one `Include` line, with matches in glob order per argument. Mirrored matches name their absolute cache paths; unmirrored matches keep their absolute host paths. Paths are double-quoted, with glob metacharacters escaped, `"` written as `\"`, and a backslash as four backslashes for SSH's tokenizer and glob expansion. An argument matching nothing is dropped; a `~` argument stays verbatim. A line left with no paths becomes a comment holding the original line. Non-Include lines keep their bytes, and cycles remain cycles among the copies.
+
+| Input or Include match | Mirror behaviour |
+| --- | --- |
+| Input absent, non-regular, unreadable, or reaching no mirrorable file | No copy or mount. |
+| Argument matching nothing | No copy; drop from the rewritten line. |
+| Argument starting with `~` | No copy; keep verbatim. |
+| Regular file | Copy its bytes with Include lines rewritten and mode `& !0o022`. |
+| Symlink to a regular file | Copy its target's bytes and masked mode as a regular file, with Include lines rewritten. |
+| Dangling symlink | No copy; keep its host path. |
+| Directory, FIFO, socket, or device, including through a symlink | No copy or read; keep its host path. |
+| Unreadable regular file | No copy; keep its host path; other readable entries remain. |
+
+Copies live at `cache/ssh-config/<sha256>/`, shared by all launches in the room, outside the writable temp unit. Each filename hashes its source's canonical path, avoiding basename collisions across directories. The digest covers entry names, masked modes, and bytes rewritten against a fixed placeholder directory, in canonical-source order under the `ssh-config-v1` domain. This includes kept host paths, so a new dangling glob match changes the digest. The files are then rewritten against the final cache target. `rewrite::apply` creates the private parent only when needed, builds a temporary sibling, and renames it into place; an existing target is reused. Both resets clear these cache-class copies, and GC never age-sweeps them. Their host paths remain writable, like skill-copy sources: the view is not containment.
+
+Changes to included files reach an agent at its next launch or restart: a running view keeps its snapshot across in-place edits, package replacements, and new glob matches. The exception is the root system config itself. If a package or an admin tool renames a replacement over `/etc/ssh/ssh_config`, its bind detaches and SSH reads the host's root-owned includes again, failing with `Bad owner or permissions` until the agent restarts. Includes in the user's own `~/.ssh/config` are not walked. Skipped sources or entries add no launch warning or doctor row. `rimz agents explain` lists the copy and one root mount without publishing them. Host and provider `sandbox` isolation never build this mirror.
 
 ## Launch reminder
 

@@ -30,7 +30,7 @@ fn scroll_rig() -> (Rig, FrameOutput) {
     )
     .unwrap();
     rig.state
-        .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
+        .on_input(Wakeup::Resize, &mut rig.terminal)
         .unwrap();
     assert!(rig.state.pane.ui.drawn_scroll_max.unwrap() > 12);
     output.0.lock().unwrap().clear();
@@ -124,11 +124,7 @@ fn input_advances_the_planes_view_before_the_client_moves_tabs() {
         .insert(group);
     source
         .state
-        .on_input(
-            Wakeup::Scroll { down: true },
-            &mut source.terminal,
-            &mut source.fetch,
-        )
+        .on_input(Wakeup::Scroll { down: true }, &mut source.terminal)
         .unwrap();
     assert_eq!(
         plane
@@ -172,7 +168,7 @@ fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
         snapshot.focused_pane = Some(id(0));
         snapshot.viewed_panes = vec![id(0)];
         rig.fold(snapshot, SnapshotSource::Produced);
-        rig.state.drain_snapshot(&mut rig.fetch, false);
+        rig.state.drain_snapshot(false);
     }
     source.state.pane.dirty = true;
     paint_at(&mut source, 0);
@@ -278,7 +274,7 @@ impl SharedPanes {
             source: SnapshotSource::Produced,
         });
         for rig in &self.panes {
-            rig.state.pane.completion.store(true, Ordering::Relaxed);
+            rig.completion.store(true, Ordering::Relaxed);
         }
     }
 
@@ -292,17 +288,13 @@ impl SharedPanes {
 
     fn fold(&mut self, index: usize) {
         let rig = &mut self.panes[index];
-        rig.state.on_snapshot(&mut rig.fetch);
+        rig.state.on_snapshot();
     }
 
     fn input(&mut self, index: usize) {
         let rig = &mut self.panes[index];
         rig.state
-            .on_input(
-                Wakeup::Scroll { down: true },
-                &mut rig.terminal,
-                &mut rig.fetch,
-            )
+            .on_input(Wakeup::Scroll { down: true }, &mut rig.terminal)
             .unwrap();
     }
 
@@ -549,9 +541,7 @@ fn hidden_resize_changes_no_client_view() {
         let before = pair.view(0);
         let reductions = pair.panes[1].state.pane.content_applications;
         let rig = &mut pair.panes[1];
-        rig.state
-            .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
-            .unwrap();
+        rig.state.on_resize(&mut rig.terminal, Some(80)).unwrap();
         assert_eq!(pair.view(0).scroll_offset, before.scroll_offset);
         assert_eq!(
             pair.view(0)
@@ -1027,7 +1017,7 @@ fn source_click(mux: MuxName, cross_tab: bool) {
     let paints = source.state.pane.paints;
     source
         .state
-        .advance(&mut inbox, &mut source.fetch, &mut source.terminal)
+        .advance(&mut inbox, &mut source.terminal)
         .unwrap();
     assert!(
         source.state.pane.paints > paints,
@@ -1236,7 +1226,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
             );
             hidden
                 .state
-                .advance(&mut inbox, &mut hidden.fetch, &mut hidden.terminal)
+                .advance(&mut inbox, &mut hidden.terminal)
                 .unwrap();
             assert!(
                 hidden.view().ctx().filter_observed_at.is_some(),
@@ -1264,7 +1254,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
         start.wait();
         target
             .state
-            .on_focus_push(push, &mut target.fetch, &mut target.terminal)
+            .on_focus_push(push, &mut target.terminal)
             .unwrap();
         work.join().unwrap();
         let report = assert_push_report(&ack, &target, PushVerdict::Painted, true);
@@ -1374,11 +1364,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
     destination.state.pane.next_frame = Instant::now();
     destination
         .state
-        .step(
-            &mut inbox,
-            &mut destination.fetch,
-            &mut destination.terminal,
-        )
+        .step(&mut inbox, &mut destination.terminal)
         .unwrap();
     assert_push_report(&ack, &destination, PushVerdict::Painted, true);
     assert_eq!(paints(&output), 1, "only the pushed placement paints");
@@ -1473,7 +1459,7 @@ fn arrival_freezes_the_painted_order_not_a_hidden_fold() {
         .unwrap()
         .status = crate::agents::AgentStatus::Waiting;
     rig.fold(reranked.clone(), SnapshotSource::Produced);
-    rig.state.drain_snapshot(&mut rig.fetch, false);
+    rig.state.drain_snapshot(false);
     assert_eq!(
         rig.view().ctx().current.worktree_groups[0].rows[0].id,
         "agent-1"
@@ -1595,12 +1581,7 @@ fn row_click_resolves_painted_identity_through_an_unpainted_fold() {
 
 fn dispatch(rig: &mut Rig, inbox: &mut WakeupInbox) {
     inbox
-        .dispatch_next(
-            &mut rig.state,
-            &mut rig.fetch,
-            &mut rig.terminal,
-            Duration::ZERO,
-        )
+        .dispatch_next(&mut rig.state, &mut rig.terminal, Duration::ZERO)
         .unwrap();
 }
 
@@ -1867,7 +1848,7 @@ fn assert_shared_placement_from_history(previous: usize) {
     let (push, ack) = focus_push(&mut destination, anchor);
     destination
         .state
-        .on_focus_push(push, &mut destination.fetch, &mut destination.terminal)
+        .on_focus_push(push, &mut destination.terminal)
         .unwrap();
 
     assert_eq!(destination.view().ui().selected_pane, Some(target_pane));
@@ -1925,9 +1906,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     let placement = anchor.placement.clone().unwrap();
     let (push, ack) = focus_push(&mut rig, anchor.clone());
     assert!(!rig.runtime.focus_anchor_path().exists());
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(rig.view().ui().selected_pane, Some(target.clone()));
     assert!(
         rig.state.watched(),
@@ -1983,9 +1962,7 @@ fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
             .pane
             .paint_hold
             .engage(Instant::now(), crate::utils::time::unix_now_ms());
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         rig.paint(true);
         assert_eq!(paints(&output), 0);
         assert_eq!(
@@ -2012,16 +1989,12 @@ fn a_late_duplicate_push_uses_the_painted_frame_unless_the_destination_is_exitin
     for exit in [false, true] {
         let (mut rig, output, anchor) = hidden_destination();
         let (push, ack) = focus_push(&mut rig, anchor.clone());
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         rig.paint(true);
         assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         rig.state.pane.should_exit = exit;
         let (push, ack) = focus_push(&mut rig, anchor);
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         if exit {
             assert_push_report(&ack, &rig, PushVerdict::Exiting, false);
         } else {
@@ -2074,26 +2047,20 @@ fn fitted_grow_hold(resize_first: bool) {
         )])));
         if resize_first {
             pty.resize(80, 30);
-            rig.state
-                .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
-                .unwrap();
+            rig.state.on_resize(&mut rig.terminal, Some(80)).unwrap();
             assert!(
                 rig.state.pane.paint_hold.is_engaged(),
                 "without a push the stale legit bound holds the grow"
             );
         }
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         let painted_before_resize = !resize_first && !own_pane;
         if painted_before_resize {
             assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         }
         if !resize_first {
             pty.resize(80, 30);
-            rig.state
-                .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
-                .unwrap();
+            rig.state.on_resize(&mut rig.terminal, Some(80)).unwrap();
         }
         assert_eq!(
             rig.state.pane.paint_hold.is_engaged(),
@@ -2146,9 +2113,7 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
         if !cached {
             rig.state.pane.clock.advance(Duration::from_millis(23));
         }
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
 
         assert_eq!(rig.view().ui().selected_pane, Some(anchor.pane_id));
         assert!(rig.view().ui().focus_placement.is_none());
@@ -2167,9 +2132,7 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
 fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport() {
     let (mut rig, _, anchor) = hidden_destination();
     let (push, ack) = focus_push(&mut rig, anchor.clone());
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     rig.paint(true);
     assert_push_report(&ack, &rig, PushVerdict::Painted, true);
     rig.terminal = Terminal::with_options(
@@ -2187,9 +2150,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
             cols: None,
         },
     )])));
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(
         ack.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty),
@@ -2218,9 +2179,7 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
                 cols: None,
             },
         )])));
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         rig.paint(true);
         if own_rows {
             assert_eq!(
@@ -2236,7 +2195,7 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
             )
             .unwrap();
             rig.state
-                .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
+                .on_input(Wakeup::Resize, &mut rig.terminal)
                 .unwrap();
         }
         assert_push_report(&ack, &rig, PushVerdict::Painted, true);
@@ -2251,17 +2210,13 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
         .paint_hold
         .engage(Instant::now(), crate::utils::time::unix_now_ms());
     let (first, first_ack) = focus_push(&mut rig, anchor.clone());
-    rig.state
-        .on_focus_push(first, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(first, &mut rig.terminal).unwrap();
     rig.paint(true);
     let mut newer = anchor;
     newer.nonce = crate::ids::FocusNonce::new();
     newer.issued_at_ms += 1;
     let (second, second_ack) = focus_push(&mut rig, newer);
-    rig.state
-        .on_focus_push(second, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(second, &mut rig.terminal).unwrap();
     let first = assert_push_report(&first_ack, &rig, PushVerdict::Superseded, true);
     assert_eq!(first.blocked_by, Some(PushBlock::PaintHold));
     rig.paint(true);
@@ -2278,17 +2233,13 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
             .paint_hold
             .engage(Instant::now(), crate::utils::time::unix_now_ms());
         let (push, ack) = focus_push(&mut rig, anchor.clone());
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         let mut newer = anchor;
         newer.nonce = FocusNonce::new();
         newer.pane_id = pane("terminal_0", "tab_0", false).pane_id;
         let (push, newer_ack) = focus_push(&mut rig, newer);
         if nonowner_push {
-            rig.state
-                .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-                .unwrap();
+            rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
             assert_push_report(&newer_ack, &rig, PushVerdict::NotDestination, false);
         } else {
             drop(push);
@@ -2313,9 +2264,7 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
         .engage(Instant::now(), crate::utils::time::unix_now_ms());
     let row_id = anchor.placement.as_ref().unwrap().row_id.clone();
     let (push, ack) = focus_push(&mut rig, anchor);
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     rig.view().ui().drawn_selection = None;
     rig.observe_paint(Instant::now());
     rig.view().ui().drawn_selection = Some(row_id);
@@ -2715,11 +2664,7 @@ fn wheel_run_matches_per_tick_paints_at_both_edges() {
         for down in directions {
             single
                 .state
-                .on_input(
-                    Wakeup::Scroll { down },
-                    &mut single.terminal,
-                    &mut single.fetch,
-                )
+                .on_input(Wakeup::Scroll { down }, &mut single.terminal)
                 .unwrap();
         }
         assert_eq!(
@@ -2773,7 +2718,7 @@ fn hidden_redraw_stays_dirty_until_watched() {
     rig.view().ctx().current.worktree_groups = cards;
     // A wheel run is viewing evidence and paints; a relayout alone is not.
     rig.state
-        .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
+        .on_input(Wakeup::Resize, &mut rig.terminal)
         .unwrap();
     assert!(rig.state.pane.dirty);
     assert!(output.0.lock().unwrap().is_empty());

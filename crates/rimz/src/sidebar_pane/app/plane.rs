@@ -18,7 +18,7 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
+    FetchHandle, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
     spawn_fetch_worker,
 };
 use super::input::Wakeup;
@@ -33,7 +33,6 @@ pub(in crate::sidebar_pane) struct DataPlane {
     request_tx: Sender<FetchRequest>,
     pub(super) subscribers: Subscribers,
     host_data: Arc<Mutex<HostData>>,
-    covered: Covered,
     observe_tx: SyncSender<ObserveMsg>,
     fit: Option<super::focus_push::FitView>,
     /// The plane's threads, until the first pane starts them.
@@ -48,6 +47,7 @@ pub(in crate::sidebar_pane) struct RoomEvents {
     views: Arc<Mutex<super::views::Views>>,
     events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
     subscribers: Subscribers,
+    requests: Sender<FetchRequest>,
 }
 
 impl RoomEvents {
@@ -56,12 +56,14 @@ impl RoomEvents {
         views: Arc<Mutex<super::views::Views>>,
         events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
         subscribers: Subscribers,
+        requests: Sender<FetchRequest>,
     ) -> Self {
         Self {
             runtime: runtime.clone(),
             views,
             events,
             subscribers,
+            requests,
         }
     }
 
@@ -76,10 +78,26 @@ impl RoomEvents {
 
     pub(in crate::sidebar_pane) fn dispatch(&self, envelope: SidebarEventEnvelope) {
         self.record(&envelope, unix_now_ms());
+        if let Some(request) = fold_request(&envelope.event) {
+            let _ = self.requests.send(request);
+        }
         for subscriber in lock(&self.subscribers).values() {
             let _ = subscriber.wake.try_send(Wakeup::Event(envelope.clone()));
         }
         crate::harness::hibernate::wake_focused(&self.runtime, &envelope.event);
+    }
+}
+
+fn fold_request(event: &SidebarEvent) -> Option<FetchRequest> {
+    match event {
+        event if event.requests_producer_verification() => Some(FetchRequest::fresh_panes()),
+        SidebarEvent::WidthTargetChanged
+        | SidebarEvent::BodyFilterChanged
+        | SidebarEvent::Notify { .. }
+        | SidebarEvent::FocusStranded { .. }
+        | SidebarEvent::FocusIntent { .. } => None,
+        event if event.is_overlay() => None,
+        _ => Some(FetchRequest::default()),
     }
 }
 
@@ -90,6 +108,7 @@ impl DataPlane {
             self.views.clone(),
             self.events.clone(),
             self.subscribers.clone(),
+            self.request_tx.clone(),
         )
     }
 
@@ -119,7 +138,6 @@ impl DataPlane {
             .then(|| observe::RoomObserver::new(plane.observe_tx.clone(), plane.events.clone()));
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
-        let covered = plane.covered.clone();
         let host_data = plane.host_data.clone();
         let room_events = plane.room_events(&runtime);
         let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
@@ -149,7 +167,6 @@ impl DataPlane {
                 last_projection,
                 request_rx,
                 subscribers.clone(),
-                covered,
                 host_data.clone(),
                 observer,
             );
@@ -166,8 +183,8 @@ impl DataPlane {
                         .map(|eldest| data_tick(Some(eldest), &template))
                 },
             );
-            // tmux fast path: record control-mode events once and fan out in memory. Panes ask
-            // the producer to verify structural changes; the poll stays the presence backstop.
+            // tmux fast path: record control-mode events once and fan out in memory. The plane
+            // asks the producer to verify structural changes; the poll stays the presence backstop.
             // Zellij reaches the room socket through its presence plugin.
             if let Some((sweep, rx)) = hidden {
                 hidden_views::spawn(rx, config.session_name.clone(), diag, runtime.clone());
@@ -200,7 +217,6 @@ impl DataPlane {
             request_tx,
             subscribers: Subscribers::default(),
             host_data,
-            covered: Covered::default(),
             observe_tx,
             fit: None,
             lanes: Mutex::new(None),
@@ -253,9 +269,7 @@ impl DataPlane {
             start();
         }
         Subscription {
-            requests: self.request_tx.clone(),
-            covered: self.covered.clone(),
-            completion,
+            fetch: FetchHandle::new(self.request_tx.clone(), completion),
             observe: self.observe_tx.clone(),
             seed,
             revision,
@@ -343,9 +357,7 @@ impl DataPlane {
 
 /// One pane's ends of the plane.
 pub(in crate::sidebar_pane) struct Subscription {
-    pub(super) requests: Sender<FetchRequest>,
-    pub(super) covered: Covered,
-    pub(super) completion: Arc<AtomicBool>,
+    pub(super) fetch: FetchHandle,
     pub(super) revision: u64,
     pub(super) observe: SyncSender<ObserveMsg>,
     pub(super) seed: Option<Arc<WorkspaceFold>>,

@@ -1,4 +1,4 @@
-//! The maintenance sweep's force-folds and watchdogs, and the idle
+//! The maintenance sweep's folds and watchdogs, and the idle
 //! `frame_timing` verdict that decides how long the loop may sleep.
 
 use super::*;
@@ -214,7 +214,7 @@ fn maintenance_requests_releasing_fetch_when_freeze_expires() {
 }
 
 #[test]
-fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
+fn maintenance_requests_a_fold_when_tab_read_dwell_expires() {
     let mut rig = Rig::new();
     rig.view().ctx().current.own_view = Some(own_view());
     // The user stays on the tab past the dwell.
@@ -224,10 +224,10 @@ fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
     rig.maintenance();
 
     assert!(
-        rig.next_request()
+        !rig.next_request()
             .expect("tab dwell fold request")
-            .forces_fold(),
-        "expired tab dwell must bypass the unchanged-input skip"
+            .is_fresh_panes(),
+        "expired tab dwell requests an ordinary fold"
     );
 }
 
@@ -246,73 +246,42 @@ fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
 }
 
 #[test]
-fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
+fn maintenance_requests_a_fold_when_gate_deadline_is_due() {
     let mut rig = Rig::new();
     rig.view().ctx().gate = armed_gate(2, 1_001);
 
     rig.maintenance();
 
     assert!(
-        rig.next_request()
+        !rig.next_request()
             .expect("gate deadline fold request")
-            .forces_fold(),
-        "due gate reevaluation must bypass the unchanged-input skip"
+            .is_fresh_panes(),
+        "due gate reevaluation requests an ordinary fold"
     );
 }
 
 #[test]
-fn rejected_final_defers_one_gate_deadline_reevaluation() {
+fn rejected_final_requests_nothing_until_the_gate_deadline() {
     let mut rig = Rig::new();
     rig.view().ctx().current = agent_snapshot(&rig.ws);
-
-    let fold_started = Instant::now();
     rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
-    let first_fold = fold_started.elapsed();
 
     assert_eq!(
         rig.view().ctx().gate.rule,
         Some(crate::diag::record::GateRule::FramelessOverFrame)
     );
-    assert!(
-        rig.next_request().is_none(),
-        "a rejected final must not immediately feed another fetch"
-    );
-    let deadline = rig
-        .fetch
-        .next_deadline()
-        .expect("one deferred reevaluation");
-    assert!(
-        deadline > Instant::now(),
-        "the reevaluation waits for the gate escape hatch"
-    );
+    assert!(rig.next_request().is_none());
+    rig.maintenance();
+    assert!(rig.next_request().is_none());
 
-    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
-    assert!(
-        rig.next_request().is_none(),
-        "repeated rejected finals remain one deferred fetch"
+    let age = crate::sidebar::timing::ACCEPT_REGRESSION_AFTER + Duration::from_millis(1);
+    rig.view().ctx().gate.rejecting_since = Some(
+        Timestamp::from_millisecond(Timestamp::now().as_millisecond() - age.as_millis() as i64)
+            .unwrap(),
     );
-    // Each rejection derives the same absolute deadline from two clocks read
-    // one after the other: an `Instant` plus a gate remainder the wall clock
-    // quantizes to whole milliseconds. A stall between those reads in the
-    // first fold lands its deadline late by the stall, so re-arming, which
-    // keeps the earlier deadline, may pull it forward by up to the first
-    // fold's duration plus one quantum. It never moves later: a second
-    // reevaluation of its own would sit seconds out.
-    let rearmed = rig
-        .fetch
-        .next_deadline()
-        .expect("the deferred reevaluation survives");
-    assert!(
-        rearmed <= deadline,
-        "re-arming never pushes the first gate deadline out; moved by {:?}",
-        rearmed.saturating_duration_since(deadline)
-    );
-    let pulled_forward = deadline.saturating_duration_since(rearmed);
-    assert!(
-        pulled_forward <= first_fold + Duration::from_millis(1),
-        "the first gate deadline remains authoritative; pulled forward by \
-         {pulled_forward:?} after a {first_fold:?} first fold"
-    );
+    rig.maintenance();
+    assert!(rig.next_request().is_some());
+    assert!(rig.next_request().is_none());
 }
 
 #[test]

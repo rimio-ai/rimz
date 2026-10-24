@@ -586,7 +586,7 @@ mod tests {
                 Err(crate::mux::MuxErr::Timeout {
                     program: "zellij".to_owned(),
                     args: "list-sessions".to_owned(),
-                    seconds: 1,
+                    timeout: Duration::from_secs(1),
                 })
             },
             3,

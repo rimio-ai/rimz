@@ -118,6 +118,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{SidebarConfig, ZellijConfig};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
+use crate::utils::time::format_duration_bound;
 
 /// Best-effort tab chrome must never inherit the full structural-command wait.
 /// Healthy local renames complete in milliseconds; a stuck backend may drop a
@@ -224,13 +225,14 @@ pub enum MuxErr {
         socket: PathBuf,
     },
     #[error(
-        "multiplexer command `{program} {}` did not finish within {seconds}s; killed",
-        args_summary(args)
+        "multiplexer command `{program} {}` did not finish within {}; killed",
+        args_summary(args),
+        format_duration_bound(*timeout)
     )]
     Timeout {
         program: String,
         args: String,
-        seconds: u64,
+        timeout: Duration,
     },
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -734,6 +736,8 @@ impl SplitPaneOptions {
 }
 
 /// A companion append never asks the caller to retry after opening a pane.
+/// Errors distinguish preparation, when no payload ran, from a failed spawn
+/// command or reply, when a payload may be running; see [`CompanionAppendErr`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompanionPaneAppend {
     /// The payload was spawned, even when the backend printed no pane id.
@@ -741,6 +745,17 @@ pub enum CompanionPaneAppend {
     /// No payload ran: no work pane, an unsuitable layout, insufficient stack
     /// room, or background placement unavailable on this backend version.
     Full,
+}
+
+/// The phase of a companion append failure, preserving the underlying mux error.
+#[derive(Debug, thiserror::Error)]
+pub enum CompanionAppendErr {
+    /// A step before the spawn command failed; no payload ran.
+    #[error(transparent)]
+    BeforeSpawn(MuxErr),
+    /// The spawn command or reading its reply failed; a payload may be running.
+    #[error(transparent)]
+    Spawn(MuxErr),
 }
 
 /// Mux context used to resolve a pane split.
@@ -1122,7 +1137,13 @@ pub trait MuxBackend: Send + Sync {
     /// the backend splits its bottom-most work pane only when the open member
     /// will retain at least 10 content rows. No balancing or geometry confirmation
     /// follows the split. Zoomed, fullscreen, suppressed and mixed layouts are full.
-    fn append_companion_pane(&self, opts: SplitPaneOptions) -> Result<CompanionPaneAppend>;
+    /// [`CompanionAppendErr::BeforeSpawn`] guarantees no payload ran;
+    /// [`CompanionAppendErr::Spawn`] means the spawn command or reading its reply
+    /// failed and a payload may be running.
+    fn append_companion_pane(
+        &self,
+        opts: SplitPaneOptions,
+    ) -> std::result::Result<CompanionPaneAppend, CompanionAppendErr>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
     /// room pane pass `Some(session)`; with `None` the Zellij backend names the
     /// caller's own `ZELLIJ_SESSION_NAME` and returns
@@ -1546,7 +1567,7 @@ mod tests {
                 MuxErr::Timeout {
                     program: "zellij".to_owned(),
                     args: "attach --create rimz-room options --default-mode locked".to_owned(),
-                    seconds: 8,
+                    timeout: Duration::from_secs(8),
                 },
                 vec!["zellij attach rimz-room ..."],
                 vec!["--default-mode"],
@@ -1586,5 +1607,35 @@ mod tests {
                 assert!(matches!(err, MuxErr::Command { args, .. } if args == stored_args));
             }
         }
+
+        let timeouts = [
+            (Duration::from_millis(500), "500ms"),
+            (Duration::from_millis(1500), "1500ms"),
+            (Duration::from_secs(8), "8s"),
+            (Duration::from_secs(60), "60s"),
+            (Duration::from_nanos(137_482_913), "137ms"),
+            (Duration::from_micros(400), "0ms"),
+        ];
+        let rendered: Vec<_> = timeouts
+            .iter()
+            .map(|(timeout, _)| {
+                MuxErr::Timeout {
+                    program: "zellij".to_owned(),
+                    args: args.clone(),
+                    timeout: *timeout,
+                }
+                .to_string()
+            })
+            .collect();
+        let expected: Vec<_> = timeouts
+            .iter()
+            .map(|(_, bound)| {
+                format!(
+                    "multiplexer command `zellij attach rimz-room ...` did not finish within {bound}; killed"
+                )
+            })
+            .collect();
+        assert_eq!(rendered, expected);
+        assert!(!rendered[0].contains("0s"), "{}", rendered[0]);
     }
 }

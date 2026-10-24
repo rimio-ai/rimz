@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
-use crate::sidebar_pane::app::fetch::{FetchPhase, FetchUpdate, SnapshotSource};
+use crate::sidebar_pane::app::fetch::{FetchHandle, FetchPhase, FetchUpdate, SnapshotSource};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -358,6 +358,7 @@ fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
 
 struct ApplyHarness {
     state: LoopState,
+    completion: std::sync::Arc<std::sync::atomic::AtomicBool>,
     views: std::sync::Arc<std::sync::Mutex<Views>>,
     own: PaneId,
 }
@@ -392,6 +393,7 @@ impl ApplyHarness {
         config.own_pane = Some(own.clone());
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
+        let completion: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
         let mut state = LoopState::new(
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
@@ -399,7 +401,7 @@ impl ApplyHarness {
             runtime,
             socket_path,
             diag,
-            Default::default(),
+            FetchHandle::new(std::sync::mpsc::channel().0, completion.clone()),
             None,
             observe_tx,
             PixelRenderCaps::default(),
@@ -408,7 +410,12 @@ impl ApplyHarness {
         state.views.scratch_for_test().1.current = snapshot(ws);
         let views = std::sync::Arc::default();
         state.share_views(std::sync::Arc::clone(&views), 0);
-        Self { state, views, own }
+        Self {
+            state,
+            completion,
+            views,
+            own,
+        }
     }
 
     /// Deliver a snapshot through the attachment's entry; returns whether the gate rejected it.
@@ -440,9 +447,7 @@ impl ApplyHarness {
         {
             let mut views = self.views.lock().unwrap();
             views.publish(outcome.clone());
-            self.state
-                .pane
-                .completion
+            self.completion
                 .store(outcome.is_final(), std::sync::atomic::Ordering::Relaxed);
         }
         self.state.apply_latest_snapshot(outcome)

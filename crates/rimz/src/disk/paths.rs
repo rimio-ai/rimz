@@ -205,6 +205,7 @@ pub struct StatePaths {
     /// RimZ-written results, one `<reader>/` directory per agent they report to.
     pub out_dir: PathBuf,
     pub skills_dir: PathBuf,
+    pub ssh_config_copies_dir: PathBuf,
     pub events_log: PathBuf,
     pub hook_ingress_log: PathBuf,
     pub hook_ingress_lock: PathBuf,
@@ -426,6 +427,7 @@ impl StatePaths {
             team_notes_dir: Class::TeamNotes.path_under(&root),
             out_dir: Class::Out.path_under(&root),
             skills_dir: cache_dir.join("skills"),
+            ssh_config_copies_dir: cache_dir.join("ssh-config"),
             tmp_dir,
             events_log: history.events_log,
             hook_ingress_log: Class::Log.path_under(&root).join("hook-ingress.log.jsonl"),
