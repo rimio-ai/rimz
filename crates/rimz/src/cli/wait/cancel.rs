@@ -19,7 +19,7 @@ pub(super) fn run(
     let agent = caller_agent(&snapshot, caller.as_ref())?.context(
         "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
     )?;
-    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
     let names = if all {
         pending
             .into_iter()
@@ -38,7 +38,7 @@ pub(super) fn run(
         catalog.remove(name)?;
         stop_watcher(ctx.runtime(), name)?;
     }
-    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
     if json {
         return super::super::render::json(
             &serde_json::json!({ "canceled": names, "pending": pending }),

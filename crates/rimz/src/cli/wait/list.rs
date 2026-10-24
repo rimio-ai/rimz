@@ -20,9 +20,9 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.resolution_snapshot()?;
     let agent = caller_agent(&snapshot, caller.as_ref())?;
     let rows = if agent.is_some() {
-        pending_rows(&ctx, agent, &snapshot.agents)?
+        pending_rows(&ctx, agent, &snapshot)?
     } else {
-        room_rows(&ctx, &snapshot.agents)?
+        room_rows(&ctx, &snapshot)?
     };
     if json {
         return ui::json(&rows);
@@ -33,7 +33,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn pending_rows(
     ctx: &Ctx,
     agent: Option<&AgentState>,
-    agents: &[AgentState],
+    snapshot: &SidebarSnapshot,
 ) -> Result<Vec<WakeRow>> {
     let session = agent.map(|agent| (agent.kind.clone(), agent.agent_id.clone()));
     let root = &ctx.workspace.project_root;
@@ -61,12 +61,12 @@ pub(super) fn pending_rows(
             } else {
                 None
             };
-            Ok(WakeRow::new(name, entry, state, pid, agents, now))
+            Ok(WakeRow::new(name, entry, state, pid, Some(snapshot), now))
         })
         .collect()
 }
 
-fn room_rows(ctx: &Ctx, agents: &[AgentState]) -> Result<Vec<WakeRow>> {
+fn room_rows(ctx: &Ctx, snapshot: &SidebarSnapshot) -> Result<Vec<WakeRow>> {
     let root = &ctx.workspace.project_root;
     let catalog = TaskCatalog::load_room(root)?;
     let arming = arming::load();
@@ -85,7 +85,7 @@ fn room_rows(ctx: &Ctx, agents: &[AgentState]) -> Result<Vec<WakeRow>> {
                 .as_ref()
                 .and_then(|_| watcher_info(ctx.runtime(), name).ok().flatten())
                 .map(|info| info.pid);
-            WakeRow::new(name, entry, state, pid, agents, now)
+            WakeRow::new(name, entry, state, pid, Some(snapshot), now)
         })
         .collect())
 }
@@ -117,11 +117,13 @@ pub(super) fn write_rows(
     if rows.is_empty() {
         return Ok(());
     }
-    let agents = ctx
-        .store
-        .runtime_projection(rimz::RuntimeScope::Runtime)
-        .map(|projection| projection.agents)
-        .unwrap_or_default();
     writeln!(out)?;
-    wake_view::write_room(out, &rows, &agents, None, &ctx.workspace.worktree_root, now)
+    wake_view::write_room(
+        out,
+        &rows,
+        Some(snapshot),
+        None,
+        &ctx.workspace.worktree_root,
+        now,
+    )
 }

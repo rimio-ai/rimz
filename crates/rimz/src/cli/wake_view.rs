@@ -63,7 +63,7 @@ impl WakeRow {
         entry: &TaskEntry,
         arm_state: ArmState,
         watcher_pid: Option<u32>,
-        agents: &[AgentState],
+        snapshot: Option<&SidebarSnapshot>,
         now: Timestamp,
     ) -> Self {
         let parsed = schedule::parse_trigger(name, entry);
@@ -127,7 +127,9 @@ impl WakeRow {
                 WakeState::Paused
             }
         };
-        let peers = peers(agents);
+        let peers = snapshot
+            .map(rimz::address::addressable_agents)
+            .unwrap_or_default();
         let parent = entry.wait.as_ref().and_then(|target| {
             let agent = peers
                 .iter()
@@ -295,13 +297,6 @@ fn wait_count(count: usize) -> String {
     }
 }
 
-fn peers(agents: &[AgentState]) -> Vec<&AgentState> {
-    agents
-        .iter()
-        .filter(|agent| !agent.is_provider_subagent())
-        .collect()
-}
-
 pub(super) fn write_self(
     out: &mut impl Write,
     agent: &AgentState,
@@ -353,7 +348,7 @@ pub(super) fn write_self(
 pub(super) fn write_room(
     out: &mut impl Write,
     rows: &[WakeRow],
-    agents: &[AgentState],
+    snapshot: Option<&SidebarSnapshot>,
     caller: Option<&(AgentKind, AgentSessionId)>,
     current_root: &Path,
     now: Timestamp,
@@ -376,9 +371,12 @@ pub(super) fn write_room(
             cards.push(vec![row]);
         }
     }
+    let agents = snapshot
+        .map(rimz::address::addressable_agents)
+        .unwrap_or_default();
     let mut cards = cards
         .into_iter()
-        .map(|card| (card_header(card[0], agents, caller), card))
+        .map(|card| (card_header(card[0], &agents, caller), card))
         .collect::<Vec<_>>();
     cards.sort_by(|(a_header, a), (b_header, b)| {
         a[0].priority()
@@ -423,10 +421,9 @@ pub(super) fn write_room(
 
 fn card_header(
     row: &WakeRow,
-    agents: &[AgentState],
+    peers: &[&AgentState],
     caller: Option<&(AgentKind, AgentSessionId)>,
 ) -> String {
-    let peers = peers(agents);
     let target = row.entry.wait.as_ref();
     let agent = target.and_then(|target| {
         peers
@@ -447,7 +444,7 @@ fn card_header(
         let mut labels = chain
             .iter()
             .map(|ancestor| {
-                rimz::address::agent_handle(ancestor, &peers, !ancestor.is_launched_child())
+                rimz::address::agent_handle(ancestor, peers, !ancestor.is_launched_child())
             })
             .collect::<Vec<_>>();
         if agent.is_launched_child()
@@ -662,8 +659,7 @@ pub(super) fn action_text(
 mod tests {
     use super::*;
 
-    #[test]
-    fn self_header_ignores_a_pane_shadowed_root() {
+    fn pane_shadowed_snapshot() -> SidebarSnapshot {
         let now = Timestamp::from_second(2_000).unwrap();
         let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%1");
         let mut owner = rimz::testkit::agent_state("claude", "owner", now);
@@ -695,11 +691,101 @@ mod tests {
             worktree_branch: owner.worktree_branch.clone(),
         }]
         .into();
+        snapshot
+    }
 
+    fn self_wait_row(snapshot: &SidebarSnapshot, kind: &str, session: &str) -> WakeRow {
+        WakeRow::new(
+            "wait-owner",
+            &TaskEntry {
+                root: "/repo".into(),
+                signal: Some("deploy.done".into()),
+                wait: Some(rimz::config::TaskTarget {
+                    kind: AgentKind::new_unchecked(kind),
+                    session: session.into(),
+                    handle: "@stored#lane".into(),
+                }),
+                wait_meta: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "armed_at": snapshot.generated_at,
+                    }))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            },
+            ArmState::Live,
+            None,
+            Some(snapshot),
+            snapshot.generated_at,
+        )
+    }
+
+    fn room_text(snapshot: &SidebarSnapshot, row: WakeRow) -> String {
+        let mut out = Vec::new();
+        write_room(
+            &mut out,
+            &[row],
+            Some(snapshot),
+            None,
+            Path::new("/repo"),
+            snapshot.generated_at,
+        )
+        .unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn self_header_ignores_a_pane_shadowed_root() {
+        let snapshot = pane_shadowed_snapshot();
         let mut out = Vec::new();
         let owner = &snapshot.agents[0];
-        write_self(&mut out, owner, &snapshot, &[], Path::new("/repo"), now).unwrap();
+        write_self(
+            &mut out,
+            owner,
+            &snapshot,
+            &[],
+            Path::new("/repo"),
+            snapshot.generated_at,
+        )
+        .unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "@claude#lane · no waits\n");
+    }
+
+    #[test]
+    fn room_header_ignores_a_pane_shadowed_root() {
+        let snapshot = pane_shadowed_snapshot();
+        let rendered = room_text(&snapshot, self_wait_row(&snapshot, "claude", "owner"));
+        assert_eq!(rendered.lines().next(), Some("  @claude#lane"));
+    }
+
+    #[test]
+    fn child_header_and_json_parent_ignore_a_pane_shadowed_root() {
+        let mut snapshot = pane_shadowed_snapshot();
+        let mut child = rimz::testkit::agent_state("codex", "child", snapshot.generated_at);
+        child.channel = Some("lane".into());
+        child.profile = Some("reviewer".into());
+        child.name = Some("modern-notch".into());
+        child.parent_agent_id = Some("owner".into());
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child.launch_depth = Some(1);
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(child);
+        let row = self_wait_row(&snapshot, "codex", "child");
+        let json = serde_json::to_value(&row).unwrap();
+        let rendered = room_text(&snapshot, row);
+        assert_eq!(
+            (rendered.lines().next(), json["parent"].as_str()),
+            (
+                Some("  @claude#lane › @reviewer (@modern-notch)"),
+                Some("@claude#lane")
+            )
+        );
+    }
+
+    #[test]
+    fn shadowed_room_target_uses_its_stored_handle() {
+        let snapshot = pane_shadowed_snapshot();
+        let rendered = room_text(&snapshot, self_wait_row(&snapshot, "claude", "cleared"));
+        assert_eq!(rendered.lines().next(), Some("  @stored#lane"));
     }
 
     #[test]
@@ -723,11 +809,11 @@ mod tests {
                 },
                 ArmState::Live,
                 None,
-                &[],
+                None,
                 now,
             ));
             let mut out = Vec::new();
-            write_room(&mut out, &rows, &[], None, Path::new("/repo"), now).unwrap();
+            write_room(&mut out, &rows, None, None, Path::new("/repo"), now).unwrap();
             let rendered = String::from_utf8(out).unwrap();
             let count = (index + 1).min(2);
             let suffix = if count == 1 { "worktree" } else { "worktrees" };

@@ -10,6 +10,7 @@ pub(super) fn write(
     all: bool,
     width: Option<usize>,
     current_root: Option<&Path>,
+    mux: Option<rimz::ids::MuxName>,
 ) -> Result<()> {
     let total = model
         .rooms
@@ -38,7 +39,7 @@ pub(super) fn write(
         routine_rows(out, room, model.now, width)?;
         waiting_rows(out, room, model.now, width)?;
         done_rows(out, room, model.now, all, width)?;
-        wake_ups(out, room, model.now, all, current_root)?;
+        wake_ups(out, room, model.now, all, current_root, mux)?;
     }
     if !all && model.caller_root.is_some() {
         let elsewhere = model
@@ -439,6 +440,7 @@ fn wake_ups(
     now: Timestamp,
     all: bool,
     current_root: Option<&Path>,
+    mux: Option<rimz::ids::MuxName>,
 ) -> Result<()> {
     use crate::cli::wake_view::{self, WakeRow};
 
@@ -466,18 +468,16 @@ fn wake_ups(
     if !all {
         return Ok(());
     }
-    let agents = if rows
+    let snapshot = if rows
         .iter()
         .any(|row| row.owner_class() == schedule::DeliveryOwner::SelfWait)
     {
         StatePaths::for_project_root(&room.root)
             .ok()
-            .and_then(|paths| crate::cli::open_existing_store_at(paths).ok().flatten())
-            .and_then(|store| store.runtime_projection(rimz::RuntimeScope::Runtime).ok())
-            .map(|projection| projection.agents)
-            .unwrap_or_default()
+            .and_then(|paths| crate::cli::ctx::Ctx::for_workspace(paths.workspace_id, mux).ok())
+            .and_then(|ctx| ctx.resolution_snapshot().ok())
     } else {
-        Vec::new()
+        None
     };
     let wakes = rows
         .iter()
@@ -490,7 +490,7 @@ fn wake_ups(
                     .as_ref()
                     .map_or(ArmState::Live, |timing| timing.arm_state()),
                 row.watcher_pid,
-                &agents,
+                snapshot.as_ref(),
                 now,
             ))
         })
@@ -503,7 +503,7 @@ fn wake_ups(
     wake_view::write_room(
         out,
         &wakes,
-        &agents,
+        snapshot.as_ref(),
         caller.as_ref(),
         current_root.unwrap_or(&room.root),
         now,
