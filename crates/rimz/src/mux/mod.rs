@@ -118,6 +118,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{SidebarConfig, ZellijConfig};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
+use crate::utils::time::format_duration_bound;
 
 /// Best-effort tab chrome must never inherit the full structural-command wait.
 /// Healthy local renames complete in milliseconds; a stuck backend may drop a
@@ -226,7 +227,7 @@ pub enum MuxErr {
     #[error(
         "multiplexer command `{program} {}` did not finish within {}; killed",
         args_summary(args),
-        timeout_summary(*timeout)
+        format_duration_bound(*timeout)
     )]
     Timeout {
         program: String,
@@ -238,14 +239,6 @@ pub enum MuxErr {
 }
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
-
-fn timeout_summary(timeout: Duration) -> String {
-    let millis = timeout.as_millis();
-    if timeout.subsec_nanos() == 0 {
-        return format!("{}s", millis / 1000);
-    }
-    format!("{millis}ms")
-}
 
 fn args_summary(args: &str) -> String {
     let mut tokens = args.split_whitespace();
