@@ -5,10 +5,12 @@ use std::time::Instant;
 
 use crate::RuntimePaths;
 use crate::agents::account::{
-    AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache, ProviderRecord,
-    RecordedLogin, read_accounts_cache, read_rate_limits_cache,
+    AccountProbe, AccountProfileAnswer, AccountProfileState, AccountsCache,
+    INFORMATIONAL_PROBE_TIMEOUT, ProviderRecord, RecordedLogin, read_accounts_cache,
+    read_rate_limits_cache,
 };
 use crate::agents::capabilities::AccountProfileProbe;
+use crate::agents::credits::OAUTH_HTTP_TIMEOUT_SECS;
 use crate::agents::spending::read_provider_spending_cache;
 use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
@@ -19,9 +21,8 @@ use crate::utils::time::unix_now_ms;
 use super::trace::{TraceEvent, duration_ms};
 use super::{SidebarSnapshot, trace};
 
-/// Poll cadence and budget for the accounts single-flight: a loser waits up to
-/// `STEP * STEPS` for the elected prober's publish, then serves current cache
-/// truth while the prober finishes.
+/// Unforced contenders wait up to `STEP * STEPS` for the elected prober's
+/// publication, then serve current cache truth while the prober finishes.
 const ACCOUNTS_WAIT_STEP: Duration = Duration::from_millis(20);
 const ACCOUNTS_WAIT_STEPS: u32 = 15;
 
@@ -179,14 +180,16 @@ fn produce_accounts_with(
         runtime,
         &provider_logins(snapshot, logins),
         false,
+        Duration::ZERO,
         probe,
     );
     accounts_with_context_versions(&cache, &context_versions, logins)
 }
 
 /// Query the requested logins through the shared account-cache single-flight.
-/// A forced query bypasses per-login TTLs for this call while
-/// preserving cache publication and contention behavior.
+/// A forced query bypasses per-login TTLs and waits behind a live producer,
+/// then performs its own probes and profile reads. Only a producer outliving
+/// the batch-derived wait bound makes it serve the current cache instead.
 pub fn query_provider_accounts(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
@@ -198,11 +201,22 @@ pub fn query_provider_accounts(
         Vec::new(),
         jiff::Timestamp::now(),
     );
+    let waves = logins
+        .len()
+        .max(crate::agents::known_kinds().count())
+        .div_ceil(MAX_PARALLEL_ACCOUNT_PROBES) as u32;
+    // Two batch budgets leave room for credential lookup, publication, and
+    // scheduling between the bounded account, version, and profile calls.
+    let forced_wait = (INFORMATIONAL_PROBE_TIMEOUT * 2
+        + Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS))
+        * waves
+        * 2;
     query_provider_accounts_with(
         &snapshot,
         runtime,
         logins,
         force,
+        forced_wait,
         |snapshot, runtime, due, cache, policy| {
             probe_accounts(snapshot, runtime, logins, set, due, cache, policy)
         },
@@ -214,6 +228,7 @@ fn query_provider_accounts_with(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
     force: bool,
+    forced_wait: Duration,
     probe: impl Fn(
         &SidebarSnapshot,
         &RuntimePaths,
@@ -239,12 +254,23 @@ fn query_provider_accounts_with(
             .then_some(cache)
     };
     let coordination_started = Instant::now();
-    match crate::disk::single_flight::coordinate(
-        &lock_path,
-        ACCOUNTS_WAIT_STEP,
-        ACCOUNTS_WAIT_STEPS,
-        fresh,
-    ) {
+    let coordination = loop {
+        let coordination = crate::disk::single_flight::coordinate(
+            &lock_path,
+            ACCOUNTS_WAIT_STEP,
+            if force { 0 } else { ACCOUNTS_WAIT_STEPS },
+            fresh,
+        );
+        let contended = matches!(
+            coordination,
+            crate::disk::single_flight::Coordination::ContentionTimeout
+        );
+        if !force || !contended || coordination_started.elapsed() >= forced_wait {
+            break coordination;
+        }
+        std::thread::sleep(ACCOUNTS_WAIT_STEP);
+    };
+    match coordination {
         crate::disk::single_flight::Coordination::Shared(cache) => cache,
         crate::disk::single_flight::Coordination::Produce(_guard) => {
             let cache = read_accounts_cache(&path);
@@ -281,9 +307,9 @@ fn query_provider_accounts_with(
             };
             probe(snapshot, runtime, &due, &cache, policy)
         }
-        // A live producer still owns publication. Serve current cache truth and
-        // let the next tick observe its atomic write instead of duplicating the
-        // cold subprocess batch.
+        // A live producer still owns publication. The short unforced wait
+        // avoids duplicate cold batches; a forced caller reaches this only
+        // when the producer outlives its batch-derived wait bound.
         crate::disk::single_flight::Coordination::ContentionTimeout => {
             let wait_ms = duration_ms(coordination_started.elapsed());
             trace::record(runtime, || TraceEvent::Contention {

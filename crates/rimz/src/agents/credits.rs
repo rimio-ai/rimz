@@ -177,7 +177,7 @@ pub(super) fn trusted_usage_url(url: &str, official_host: &str) -> bool {
     }
 }
 
-pub(super) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
+pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
 pub(super) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
 const OAUTH_HTTP_ATTEMPTS: u32 = 3;
 const OAUTH_HTTP_RETRY_BACKOFF_MS: u64 = 300;
