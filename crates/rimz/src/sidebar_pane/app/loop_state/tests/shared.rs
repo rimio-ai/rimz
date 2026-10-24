@@ -203,7 +203,7 @@ fn lagging_view_keeps_success_before_failure() {
             rig = Rig::with_own_pane(own);
             rig.share_views(views);
         }
-        rig.state.on_snapshot(&mut rig.fetch);
+        rig.state.on_snapshot();
         rig.state
             .draw_frame(&mut rig.terminal, Instant::now(), false)
             .unwrap();
@@ -224,7 +224,7 @@ fn lagging_view_keeps_success_before_failure() {
                 error: "failed again".into(),
             },
         );
-        rig.state.on_snapshot(&mut rig.fetch);
+        rig.state.on_snapshot();
         assert!(rig.state.inspect_view(|_, view| {
             view.health
                 .alert
@@ -249,7 +249,7 @@ fn lagging_view_keeps_pending_final_over_interim() {
         *phase = FetchPhase::Interim;
     }
     publish(&mut rig, interim);
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.state
             .inspect_view(|_, view| view.current.display_name.clone()),
@@ -435,7 +435,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
         release.send(()).unwrap();
         target
             .state
-            .on_focus_push(push, &mut target.fetch, &mut target.terminal)
+            .on_focus_push(push, &mut target.terminal)
             .unwrap();
         let elapsed = painted
             .lock()

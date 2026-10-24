@@ -90,7 +90,7 @@ impl std::io::Write for FrameOutput {
     }
 }
 
-/// One `LoopState` under test with the runtime, dispatcher, request channel,
+/// One `LoopState` under test with the runtime, request channel,
 /// and terminal it needs. Fields stay reachable: these tests drive internal
 /// state by design, and the rig only removes the wiring around that reach.
 struct Rig {
@@ -98,7 +98,6 @@ struct Rig {
     ws: WorkspaceId,
     runtime: RuntimePaths,
     state: LoopState,
-    fetch: FetchHandle,
     completion: Arc<AtomicBool>,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
@@ -246,12 +245,12 @@ impl Rig {
                 runtime.clone(),
                 socket_path,
                 crate::diag::DiagSink::disabled(),
+                FetchHandle::new(request_tx, completion.clone()),
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
                 Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
-            fetch: FetchHandle::new(request_tx, completion.clone()),
             completion,
             requests,
             terminal: terminal_with_width(80),
@@ -292,8 +291,7 @@ impl Rig {
             event,
         );
         self.record_event(&envelope);
-        self.state
-            .on_event(&mut self.fetch, &mut self.terminal, envelope);
+        self.state.on_event(&mut self.terminal, envelope);
     }
 
     fn fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
@@ -325,7 +323,7 @@ impl Rig {
     /// Publish one room update and drive its consumer.
     fn deliver(&mut self, update: FetchUpdate) {
         self.send(update);
-        self.state.on_snapshot(&mut self.fetch);
+        self.state.on_snapshot();
     }
 
     fn send(&mut self, mut update: FetchUpdate) {
@@ -406,13 +404,12 @@ impl Rig {
             .pane
             .last_heartbeat
             .get_or_insert_with(Instant::now);
-        self.state
-            .run_maintenance(&mut self.fetch, &mut self.terminal);
+        self.state.run_maintenance(&mut self.terminal);
     }
 
     fn input(&mut self, action: KeyAction) {
         self.state
-            .on_input(Wakeup::Key(action), &mut self.terminal, &mut self.fetch)
+            .on_input(Wakeup::Key(action), &mut self.terminal)
             .expect("input");
     }
 
@@ -423,9 +420,11 @@ impl Rig {
     }
 
     fn step(&mut self, inbox: &mut WakeupInbox) {
-        self.state
-            .step(inbox, &mut self.fetch, &mut self.terminal)
-            .expect("step");
+        self.state.step(inbox, &mut self.terminal).expect("step");
+    }
+
+    fn request_if_idle(&mut self, request: FetchRequest) {
+        self.state.pane.fetch.request_if_idle(request);
     }
 
     fn next_request(&mut self) -> Option<FetchRequest> {

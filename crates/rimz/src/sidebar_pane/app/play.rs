@@ -153,7 +153,6 @@ struct Column {
     state: LoopState,
     terminal: Terminal<PaneBackend>,
     requests: Receiver<FetchRequest>,
-    fetch: FetchHandle,
     completion: Arc<AtomicBool>,
     inbox: WakeupInbox,
     at: Duration,
@@ -246,6 +245,7 @@ impl Column {
             runtime.clone(),
             runtime.sidebar_host_wake_socket_path(crate::MuxName::Zellij, "scenario"),
             crate::diag::DiagSink::disabled(),
+            FetchHandle::new(tx, completion.clone()),
             Some(scenario.width),
             mpsc::sync_channel(64).0,
             caps,
@@ -264,7 +264,6 @@ impl Column {
             state,
             terminal,
             requests,
-            fetch: FetchHandle::new(tx, completion.clone()),
             completion,
             inbox: WakeupInbox::new(mpsc::channel().1),
             at: Duration::ZERO,
@@ -303,13 +302,10 @@ impl Column {
     fn advance(&mut self, scenario: &Scenario) -> Result<bool> {
         let frozen = self.state.inspect_view(|ui, _| ui.freeze.is_some());
         let (mut painted, mut deadline) =
-            self.state
-                .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
+            self.state.advance(&mut self.inbox, &mut self.terminal)?;
         if self.requests.try_iter().count() > 0 {
             self.send(scenario);
-            let result =
-                self.state
-                    .advance(&mut self.inbox, &mut self.fetch, &mut self.terminal)?;
+            let result = self.state.advance(&mut self.inbox, &mut self.terminal)?;
             painted |= result.0;
             deadline = result.1;
         }
@@ -394,8 +390,7 @@ impl Column {
     }
 
     fn input(&mut self, wakeup: Wakeup) -> Result<()> {
-        self.state
-            .on_input(wakeup, &mut self.terminal, &mut self.fetch)?;
+        self.state.on_input(wakeup, &mut self.terminal)?;
         Ok(())
     }
 

@@ -188,7 +188,7 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
     let source = cycles
         .renderers
         .iter()
-        .position(|(renderer, _)| {
+        .position(|renderer| {
             renderer
                 .views
                 .mirror()
@@ -203,20 +203,19 @@ fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views
     let destination = 1 - source;
     let mut terminal =
         ratatui::Terminal::new(super::super::backend::PaneBackend::captured(40, 60)).unwrap();
-    let (renderer, dispatcher) = &mut cycles.renderers[source];
+    let renderer = &mut cycles.renderers[source];
     renderer
         .on_input(
             super::super::input::Wakeup::Key(super::super::input::KeyAction::Help),
             &mut terminal,
-            dispatcher,
         )
         .unwrap();
-    let before = cycles.renderers[destination].0.pane.content_applications;
+    let before = cycles.renderers[destination].pane.content_applications;
     for _ in 0..3 {
         cycles.run_cycle();
     }
     assert_eq!(
-        cycles.renderers[destination].0.pane.content_applications,
+        cycles.renderers[destination].pane.content_applications,
         before
     );
     {
@@ -282,7 +281,7 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
     let before = cycles
         .renderers
         .iter()
-        .map(|(renderer, _)| renderer.pane.content_applications)
+        .map(|renderer| renderer.pane.content_applications)
         .collect::<Vec<_>>();
     assert!(
         before.iter().all(|count| *count > 0),
@@ -305,7 +304,7 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
             cycles
                 .renderers
                 .iter()
-                .map(|(renderer, _)| renderer.pane.content_applications)
+                .map(|renderer| renderer.pane.content_applications)
                 .collect::<Vec<_>>(),
             before,
             "{event:?}: identity-free nudges must not force content onto idle consumers"
@@ -342,8 +341,8 @@ fn fetch_window_records_reductions_once_per_window() {
     let reader = Replay::new(&cycles.sink.host_data, subscriber);
     let mut config = cycles.worker.config.clone();
     config.own_pane = subscriber.own_pane.clone();
-    let (mut co_viewer, mut dispatcher) = consumer(config, fixture.runtime.clone(), reader);
-    co_viewer.on_snapshot(&mut dispatcher);
+    let mut co_viewer = consumer(config, fixture.runtime.clone(), reader);
+    co_viewer.on_snapshot();
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
     assert_eq!(views.lock().unwrap().reductions.content, 2);
     assert_eq!(views.lock().unwrap().reductions.unchanged, 0);
@@ -450,9 +449,9 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
             ));
         }
         previous = Some(fold);
-        for (renderer, dispatcher) in &mut renderers {
+        for renderer in &mut renderers {
             let before = renderer.views.mirror().now;
-            renderer.on_snapshot(dispatcher);
+            renderer.on_snapshot();
             assert!(
                 renderer.views.mirror().now > before,
                 "clock advances on cycle {cycle}"
@@ -469,11 +468,7 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
     }
 }
 
-fn consumer(
-    config: ServeConfig,
-    runtime: RuntimePaths,
-    reader: Replay,
-) -> (LoopState, FetchHandle) {
+fn consumer(config: ServeConfig, runtime: RuntimePaths, reader: Replay) -> LoopState {
     if let Some(own) = &config.own_pane {
         let mut views = reader.views.lock().unwrap();
         if views.peek(own).is_none() {
@@ -489,19 +484,17 @@ fn consumer(
         runtime,
         PathBuf::new(),
         crate::diag::DiagSink::disabled(),
+        FetchHandle::new(std::sync::mpsc::channel().0, reader.completion),
         None,
         std::sync::mpsc::sync_channel(1).0,
         Default::default(),
         None,
     );
     state.share_views(reader.views, reader.cursor.lock().unwrap().revision);
-    (
-        state,
-        FetchHandle::new(std::sync::mpsc::channel().0, reader.completion),
-    )
+    state
 }
 
-fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchHandle)> {
+fn consumers(cycles: &mut IdleCycleFixture) -> Vec<LoopState> {
     cycles.sink.begin_cycle();
     cycles.cursors.clear();
     cycles
@@ -549,8 +542,8 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
     let mut renderers = consumers(&mut cycles);
     for _ in 0..2 {
         cycles.run_cycle();
-        for (renderer, dispatcher) in &mut renderers {
-            renderer.on_snapshot(dispatcher);
+        for renderer in &mut renderers {
+            renderer.on_snapshot();
             assert_eq!(renderer.pane.content_applications, 1);
         }
     }
@@ -563,8 +556,8 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
     subscribe(&cycles.sink.subscribers, new_subscriber);
     renderers.push(consumer(config, fixture.runtime.clone(), rx));
     cycles.run_cycle();
-    for (renderer, dispatcher) in &mut renderers {
-        renderer.on_snapshot(dispatcher);
+    for renderer in &mut renderers {
+        renderer.on_snapshot();
         assert_eq!(
             renderer.pane.content_applications, 1,
             "new subscriber gets content while established consumers stay idle"
@@ -595,8 +588,8 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
             _ => unreachable!(),
         }
         cycles.run_cycle();
-        for (renderer, dispatcher) in &mut renderers {
-            renderer.on_snapshot(dispatcher);
+        for renderer in &mut renderers {
+            renderer.on_snapshot();
             if change == "context" {
                 let agent = renderer
                     .views
@@ -682,8 +675,8 @@ fn clock_thresholds_reach_every_consumer_as_content() {
                 phase: FetchPhase::Final,
                 source: SnapshotSource::Cached,
             });
-            for (renderer, dispatcher) in &mut renderers {
-                renderer.on_snapshot(dispatcher);
+            for renderer in &mut renderers {
+                renderer.on_snapshot();
                 assert_eq!(renderer.pane.content_applications, step as u64 + 1);
                 if presence {
                     assert_eq!(
@@ -1099,8 +1092,8 @@ fn refresh_override_stamps_folded_snapshot() {
         let mut config = fixture.worker().config;
         config.own_pane = reader.own_pane.clone();
         config.refresh_ms_override = Some(50);
-        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), reader);
-        renderer.on_snapshot(&mut dispatcher);
+        let mut renderer = consumer(config, fixture.runtime.clone(), reader);
+        renderer.on_snapshot();
         assert_eq!(renderer.views.mirror().theme.display.refresh_ms, 50);
         assert_eq!(
             renderer.views.mirror().theme.display.resolved_refresh_ms(),
@@ -2165,8 +2158,8 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
     for (own, rx) in updates {
         let mut config = worker.config.clone();
         config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
-        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
-        renderer.on_snapshot(&mut dispatcher);
+        let mut renderer = consumer(config, fixture.runtime.clone(), rx);
+        renderer.on_snapshot();
         assert_eq!(
             renderer
                 .views
@@ -2209,8 +2202,8 @@ fn a_failed_final_is_not_replaced_by_its_projected_interim() {
         error: "producer failed after the interim fold".into(),
     });
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
-    let (renderer, dispatcher) = &mut cycles.renderers[0];
-    renderer.on_snapshot(dispatcher);
+    let renderer = &mut cycles.renderers[0];
+    renderer.on_snapshot();
     assert_eq!(
         views
             .lock()
@@ -2259,7 +2252,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         .renderers
         .iter()
         .enumerate()
-        .find_map(|(index, (r, _))| {
+        .find_map(|(index, r)| {
             r.views
                 .mirror()
                 .own_view
@@ -2275,7 +2268,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         .expect("a hidden pane");
     assert_eq!(hidden, 0, "the eldest pane is hidden too");
     assert_eq!(
-        cycles.renderers[hidden].0.pane.projections, 1,
+        cycles.renderers[hidden].pane.projections, 1,
         "a hidden pane projects on its first reduction"
     );
     let views = cycles.sink.host_data.lock().unwrap().views.clone();
@@ -2288,7 +2281,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
         cycles.run_cycle();
     }
     assert_eq!(
-        cycles.renderers[hidden].0.pane.projections, 1,
+        cycles.renderers[hidden].pane.projections, 1,
         "hidden equal folds never project"
     );
     let guard = views.lock().unwrap();
@@ -2300,7 +2293,6 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     );
     drop(guard);
     let own = cycles.renderers[hidden]
-        .0
         .views
         .mirror()
         .own_view
@@ -2314,12 +2306,11 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     }
     cycles.run_cycle();
     assert_eq!(
-        cycles.renderers[hidden].0.pane.projections, 2,
+        cycles.renderers[hidden].pane.projections, 2,
         "reveal projects the unread fold once"
     );
     assert!(
         cycles.renderers[hidden]
-            .0
             .views
             .mirror()
             .viewed_panes
@@ -2502,6 +2493,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
             fixture.runtime.clone(),
             PathBuf::from("missing.sock"),
             crate::diag::DiagSink::disabled(),
+            FetchHandle::new(std::sync::mpsc::channel().0, Arc::default()),
             None,
             tx.clone(),
             crate::sidebar_pane::pixel::PixelRenderCaps::default(),
@@ -2580,6 +2572,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
                 runtime,
                 PathBuf::from("missing.sock"),
                 crate::diag::DiagSink::disabled(),
+                FetchHandle::new(std::sync::mpsc::channel().0, Arc::default()),
                 None,
                 std::sync::mpsc::sync_channel(64).0,
                 crate::sidebar_pane::pixel::PixelRenderCaps::default(),

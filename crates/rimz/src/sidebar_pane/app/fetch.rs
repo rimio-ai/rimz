@@ -480,7 +480,7 @@ pub struct IdleCycleFixture {
     sink: ResultSink,
     state: StatePaths,
     cursors: Vec<super::views::Cursor>,
-    renderers: Vec<(super::loop_state::LoopState, FetchHandle)>,
+    renderers: Vec<super::loop_state::LoopState>,
 }
 
 #[cfg(feature = "testkit")]
@@ -563,16 +563,14 @@ impl IdleCycleFixture {
                     self.worker.runtime.clone(),
                     std::path::PathBuf::new(),
                     crate::diag::DiagSink::disabled(),
+                    FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
                     None,
                     std::sync::mpsc::sync_channel(1).0,
                     Default::default(),
                     None,
                 );
                 renderer.share_views(views.clone(), 0);
-                (
-                    renderer,
-                    FetchHandle::new(std::sync::mpsc::channel().0, subscriber.completion.clone()),
-                )
+                renderer
             })
             .collect();
         self.cursors.clear();
@@ -582,7 +580,7 @@ impl IdleCycleFixture {
     pub fn paint_fanout(&mut self) {
         let mut watched = 0;
         let mut prior = None;
-        for (renderer, _) in &mut self.renderers {
+        for renderer in &mut self.renderers {
             assert!(renderer.views.mirror().own_view.is_some());
             if renderer.bench_frame_timing(true) {
                 watched += 1;
@@ -592,7 +590,7 @@ impl IdleCycleFixture {
         assert_eq!(watched, 1);
         self.run_content_cycle();
         let prior = prior.expect("one watched renderer");
-        for (renderer, _) in &mut self.renderers {
+        for renderer in &mut self.renderers {
             if renderer.bench_frame_timing(false) {
                 assert_ne!(
                     prior.worktree_groups,
@@ -632,8 +630,8 @@ impl IdleCycleFixture {
             crate::utils::time::unix_now_ms(),
             event,
         );
-        for (renderer, dispatcher) in &mut self.renderers {
-            renderer.on_event(dispatcher, &mut terminal, envelope.clone());
+        for renderer in &mut self.renderers {
+            renderer.on_event(&mut terminal, envelope.clone());
         }
     }
 
@@ -658,7 +656,7 @@ impl IdleCycleFixture {
             pane.metrics.io_bps = Some(0);
         }
         self.run_cycle();
-        for (renderer, _) in &mut self.renderers {
+        for renderer in &mut self.renderers {
             renderer.bench_frame_timing(false);
             renderer.bench_frame_timing(false);
         }
@@ -694,9 +692,9 @@ impl IdleCycleFixture {
             }
             cursor.revision = views.revision;
         }
-        for (renderer, dispatcher) in &mut self.renderers {
+        for renderer in &mut self.renderers {
             let before = renderer.views.mirror().now;
-            renderer.on_snapshot(dispatcher);
+            renderer.on_snapshot();
             assert!(
                 renderer.views.mirror().now >= before,
                 "renderer clock never regresses"
