@@ -214,7 +214,6 @@ pub(super) struct PaneState {
     dirty: bool,
     paint_hold: PaintHold,
     next_frame: Instant,
-    fetched_at: Instant,
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
@@ -566,7 +565,6 @@ impl LoopState {
                 dirty: true,
                 paint_hold: PaintHold::default(),
                 next_frame: now,
-                fetched_at: now,
                 last_self_close_check: now,
                 last_heartbeat: None,
                 prev_width: initial_width,
@@ -746,8 +744,7 @@ impl LoopState {
                 .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
         if deferred {
             if completed {
-                self.pane.fetched_at = self.pane.clock.now();
-                self.pane.last_self_close_check = self.pane.fetched_at;
+                self.pane.last_self_close_check = self.pane.clock.now();
             }
         } else {
             for update in pending {
@@ -1855,19 +1852,6 @@ impl LoopState {
             self.pane.fetch.request_if_idle(FetchRequest::default());
         }
 
-        // Data backstop: catch pane/git drift no store delta announced. It is
-        // self-gated to the data tick; an armed clamp-deferred nudge merges
-        // into this fold instead of waiting to echo it.
-        if self
-            .pane
-            .clock
-            .now()
-            .saturating_duration_since(self.pane.fetched_at)
-            >= tick_for(self.pane.config.tick_seconds)
-        {
-            self.pane.fetch.request_if_idle(FetchRequest::default());
-        }
-
         // Heartbeat: fast in-process atomic write on the main thread so the
         // exit path never races a background writer.
         if self.pane.clock.effects_enabled() && heartbeat_write_due(self.pane.last_heartbeat) {
@@ -2347,7 +2331,6 @@ impl PaneState {
             hold_expired_since_paint: _,
             optimistic_watch_until: _,
             // Maintenance stamps, read against `current`.
-            fetched_at: _,
             last_self_close_check: _,
             last_heartbeat: _,
             // Baseline reporting, read from `ui` outside the fold.
@@ -2426,7 +2409,6 @@ impl PaneState {
             clock.apply(&mut v.context.current);
             v.context.last_focus_observation.panes_observed_at_ms =
                 v.context.current.panes_observed_at_ms;
-            self.fetched_at = self.clock.now();
             self.last_self_close_check = self.clock.now();
             self.dirty = true;
             v.context.fold_inputs = None;
@@ -2474,7 +2456,6 @@ impl PaneState {
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
             FetchUpdate::Fold { .. } => unreachable!("projected before reduction"),
         };
-        self.fetched_at = self.clock.now();
         let rejected = self.fold_outcome(v, prepared, update, true, seed, fused_event_sent_at_ms);
         v.context.fold_inputs = None;
         if snapshot_ok {

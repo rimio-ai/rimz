@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1402,29 +1402,42 @@ impl FetchWorker {
         )
             -> std::result::Result<StatePaths, crate::disk::paths::PathErr>,
     ) {
-        drive(&request_rx, FOLD_FLOOR, |request| {
-            // Re-resolved every cycle so `workspace migrate` repoints reads
-            // without restarting the renderer.
-            match resolve_state(self.config.workspace_id.clone()) {
-                Ok(state) => {
-                    let tick = self.meter.begin();
-                    self.run_cycle(&state, request, &mut sink);
-                    if let Some(event) = self.meter.finish(
-                        tick,
-                        crate::utils::time::unix_now_ms(),
-                        Default::default(),
-                    ) {
-                        crate::sidebar::meter::report(&self.diag, event);
+        let subscribers = sink.subscribers.clone();
+        drive(
+            &request_rx,
+            FOLD_FLOOR,
+            || {
+                subscribers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .values()
+                    .map(|subscriber| tick_for(subscriber.tick_seconds))
+                    .min()
+            },
+            |request| {
+                // Re-resolved every cycle so `workspace migrate` repoints reads
+                // without restarting the renderer.
+                match resolve_state(self.config.workspace_id.clone()) {
+                    Ok(state) => {
+                        let tick = self.meter.begin();
+                        self.run_cycle(&state, request, &mut sink);
+                        if let Some(event) = self.meter.finish(
+                            tick,
+                            crate::utils::time::unix_now_ms(),
+                            Default::default(),
+                        ) {
+                            crate::sidebar::meter::report(&self.diag, event);
+                        }
+                    }
+                    Err(err) => {
+                        sink.begin_cycle();
+                        sink.publish(FetchUpdate::Failed {
+                            error: format!("resolving workspace state paths: {err}"),
+                        });
                     }
                 }
-                Err(err) => {
-                    sink.begin_cycle();
-                    sink.publish(FetchUpdate::Failed {
-                        error: format!("resolving workspace state paths: {err}"),
-                    });
-                }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -1458,16 +1471,33 @@ const FOLD_FLOOR: Duration = Duration::from_millis(250);
 /// Run one cycle per batch, starting none sooner than `fold_floor` after the
 /// previous one returned, whatever the request's mode. Every request waiting
 /// at the drain joins the batch; later arrivals run the next cycle. A batch
-/// in hand still runs after every sender disconnects.
+/// in hand still runs after every sender disconnects. After the first cycle,
+/// an idle backstop tick runs an ordinary cycle. No subscribers (`None`), or a
+/// tick no `Instant` can reach, means blocking for a request; timeouts re-read
+/// membership before firing.
 fn drive(
-    requests: &std::sync::mpsc::Receiver<FetchRequest>,
+    requests: &Receiver<FetchRequest>,
     fold_floor: Duration,
+    mut backstop: impl FnMut() -> Option<Duration>,
     mut cycle: impl FnMut(FetchRequest),
 ) {
-    let mut next_cycle_at: Option<Instant> = None;
-    while let Ok(mut request) = requests.recv() {
+    let mut returned_at: Option<Instant> = None;
+    loop {
+        let received =
+            match returned_at.and_then(|last| backstop().and_then(|tick| last.checked_add(tick))) {
+                Some(deadline) => {
+                    requests.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                }
+                None => requests.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+        let mut request = match received {
+            Ok(request) => request,
+            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Timeout) if backstop().is_none() => continue,
+            Err(RecvTimeoutError::Timeout) => FetchRequest::default(),
+        };
         if let Some(rest) =
-            next_cycle_at.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+            returned_at.and_then(|last| (last + fold_floor).checked_duration_since(Instant::now()))
         {
             std::thread::sleep(rest);
         }
@@ -1475,7 +1505,7 @@ fn drive(
             request.merge(waiting);
         }
         cycle(request);
-        next_cycle_at = Some(Instant::now() + fold_floor);
+        returned_at = Some(Instant::now());
     }
 }
 
