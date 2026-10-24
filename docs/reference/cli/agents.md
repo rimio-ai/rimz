@@ -478,7 +478,7 @@ The `KEEP-WARM` column shows resolved `max` and `while` values. JSON rows carry 
 
 ### Discover agent profiles
 
-`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. A nonempty permission-rule list adds `  allowed-tools: Bash(git *), Read` after the description; JSON includes `"allowed_tools": ["Bash(git *)", "Read"]`, omitted when unset or empty. Subagent and team profile listings show the same detail. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams list`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
+`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. A nonempty permission-rule list adds `  allowed-tools: Bash(git *), Read` after the description; JSON includes `"allowed_tools": ["Bash(git *)", "Read"]`, omitted when unset or empty. Subagent and team profile listings show the same detail. A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under its kind's name. A built-in or plugin agent kind with no kind base is launchable but not listed, and teams are listed by [`rimz teams list`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
 
 ```sh
 rimz agents profiles
