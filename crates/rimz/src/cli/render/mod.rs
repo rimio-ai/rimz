@@ -644,12 +644,7 @@ pub(crate) fn compact_count(value: u64) -> String {
 }
 
 pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
-    let age = now.duration_since(ts);
-    if age.is_negative() {
-        return "now".to_owned();
-    }
-    let secs = age.as_secs().max(0) as u64;
-    format!("{} ago", age_label(secs))
+    rimz::theme::fmt::rel_age(ts, now)
 }
 
 /// The state word `lsp list`, `lsp status`, and `doctor` print for a registry state.
@@ -668,15 +663,7 @@ pub(crate) fn lsp_state_label(state: &rimz::lsp::registry::State) -> String {
 }
 
 pub(crate) fn age_label(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3_600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3_600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
+    rimz::theme::fmt::age_label(secs)
 }
 
 /// Descending non-zero units from days to seconds, no separators: `4m12s`, `1h3m`, `0s`.

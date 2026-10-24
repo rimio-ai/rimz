@@ -203,8 +203,8 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
             agent,
             &peers,
             focus,
-            Some(crate::cli::folder_trust::Unattended::Team),
-            || Some(crate::cli::folder_trust::Unattended::Team),
+            Some(rimz::launcher::trust::Unattended::Team),
+            || Some(rimz::launcher::trust::Unattended::Team),
         ) {
             Ok(message) => writeln!(out, "{message}")?,
             Err(err) => {

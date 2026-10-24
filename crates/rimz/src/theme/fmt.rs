@@ -93,6 +93,28 @@ pub fn duration_label(mins: u64) -> String {
     }
 }
 
+/// An age in its largest whole unit: `42s`, `5m`, `3h`, `2d`.
+pub fn age_label(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
+/// How long before `now` a stamp was, `5m ago`, or `now` for a future stamp.
+pub fn rel_age(at: Timestamp, now: Timestamp) -> String {
+    let age = now.duration_since(at);
+    if age.is_negative() {
+        return "now".to_owned();
+    }
+    format!("{} ago", age_label(age.as_secs().max(0) as u64))
+}
+
 /// Active agent-time: seconds or minutes below an hour, two units above.
 pub fn active_duration(seconds: u64) -> String {
     if seconds < 60 {

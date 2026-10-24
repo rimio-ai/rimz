@@ -806,7 +806,7 @@ fn preflight_recovery(
     let paths = rimz::StatePaths::for_workspace(workspace_id.clone())?;
     rimz::harness::hibernate::reconcile_at(&paths, workspace_id)?;
     for root in plan.checkout_roots() {
-        if let Err(error) = crate::cli::lsp_admission::admit(root, &machine_config()) {
+        if let Err(error) = crate::cli::launch_interaction::admit_lsp(root, &machine_config()) {
             tracing::warn!(%error, "language-server admission skipped; recovering without it");
         }
     }
@@ -878,7 +878,7 @@ fn folder_trust_offer<'a>(
 fn warn_restricted_folder_trust(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
     for row in rows {
         if let rimz::agents::FolderTrust::Restricted { key } = &row.trust {
-            crate::cli::folder_trust::preflight(
+            crate::cli::launch_interaction::preflight(
                 row.kind,
                 key,
                 Some(rimz::agents::FolderTrust::Restricted { key: key.clone() }),

@@ -24,7 +24,7 @@ This page owns the process model in [`lsp/`](../../crates/rimz/src/lsp/mod.rs) a
 | `lsp/query.rs`, `lsp/query/client.rs` | Symbol resolution, query composition, compact output |
 | `lsp/check.rs`, `lsp/check/` | Notes anchor checks, `--fix`, and `rimz lsp show` |
 | `lsp/attach.rs` | The editor stdio bridge |
-| `cli/lsp.rs`, `cli/lsp_admission.rs` | The `rimz lsp` verbs, and pre-pane admission at launch |
+| `cli/lsp.rs`, `launcher/lsp_admission.rs` | The `rimz lsp` verbs, and pre-pane admission at launch |
 
 ## Why RimZ owns this
 
@@ -67,12 +67,12 @@ A reason that ends the server leaves the broker dormant, and the next agent quer
 
 ### Which launches register a broker
 
-`crates/rimz/src/cli/lsp_admission.rs::admit` registers brokers for one checkout. Each launch path calls it after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per distinct checkout its panes open in:
+`crates/rimz/src/launcher/lsp_admission.rs::admit` registers brokers for one checkout. Each launch path calls it after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per distinct checkout its panes open in:
 
 | Caller | Checkouts |
 | --- | --- |
-| `crates/rimz/src/cli/agents_cmd/launch.rs::launch_resolved` (`rimz agents`, `rimz teams`) | The launch's cwd |
-| `crates/rimz/src/cli/agents_cmd/launch.rs::launch_resume_layout` (cohort resume) | Each resumed empty-dir agent's recorded checkout, then the cohort's cwd |
+| `crates/rimz/src/launcher/mod.rs::execute` (`rimz agents`, `rimz teams`) | The launch's cwd |
+| `crates/rimz/src/launcher/mod.rs::launch_resume_layout` (cohort resume) | Each resumed empty-dir agent's recorded checkout, then the cohort's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_selected` | Each resumed tab's cwd |
 | `crates/rimz/src/cli/agents_cmd/resume.rs::resume_lane` | Each distinct target cwd |
 | `crates/rimz/src/cli/supervised/run.rs::prepare_supervised` (`-p` runs) | The launch's cwd, after provider preflights, skipped for a subagent |
@@ -190,7 +190,7 @@ The owning broker appends one `crates/rimz/src/lsp/history.rs::Record` per serve
 
 Admission takes the maximum of the last five records for the same project, server, and settings hash that reached Ready at least once (`ready_ms` present and non-null). Without such a lifetime it falls back to `memory-estimate`. A partial lifetime stays recorded but takes no slot in the window, and a later return to Indexing does not disqualify a lifetime that reached Ready. Records without a project are skipped. The watchdog remains the backstop for an estimate that is too low.
 
-The project is the workspace's `launch_repo_root()`, resolved by `crates/rimz/src/cli/lsp_admission.rs::admit`, so every checkout of one project shares learned costs while the registry key stays checkout and server. The settings hash covers the command argv and the canonical initialization options ([Configuration](#configuration)).
+The project is the workspace's `launch_repo_root()`, resolved by `crates/rimz/src/launcher/lsp_admission.rs::admit`, so every checkout of one project shares learned costs while the registry key stays checkout and server. The settings hash covers the command argv and the canonical initialization options ([Configuration](#configuration)).
 
 ## The broker
 

@@ -1,5 +1,7 @@
 use super::*;
 use crate::cli::supervised;
+use rimz::launcher::placement::{RunPlacement, run_placement, run_tab_title};
+use rimz::launcher::resolve::{check_supervised_subagent_allowed, launch_login, supervised_prompt};
 
 use crate::cli::render;
 use rimz::agents::PermissionMode;
@@ -18,81 +20,8 @@ use rimz::store::{
     writer::AgentLaunchBatch, writer::AgentLaunchName, writer::AgentLaunchScope,
     writer::LaunchLogin,
 };
-use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RunPlacement {
-    Split,
-    SubagentZone,
-    Tab,
-}
-
-/// A supervised `-p` run normally splits the current tab so focus stays with
-/// the caller. Subagents use their dedicated zone; forced and out-of-pane
-/// launches open a new tab.
-pub(super) fn run_placement(
-    force_new_tab: bool,
-    has_ambient_pane: bool,
-    subagent: bool,
-) -> RunPlacement {
-    if force_new_tab || !has_ambient_pane {
-        RunPlacement::Tab
-    } else if subagent {
-        RunPlacement::SubagentZone
-    } else {
-        RunPlacement::Split
-    }
-}
-
-pub(super) fn run_tab_title(
-    store: &rimz::Store,
-    channel: Option<&str>,
-    subagent: bool,
-    kind: &AgentKind,
-) -> String {
-    if subagent {
-        supervised::pane::subagent_companion_title(store, channel)
-    } else {
-        format!("run {kind}")
-    }
-}
-
-pub(super) fn supervised_prompt<'a>(
-    request: &'a SupervisedRunRequest,
-    adapter: &rimz::agents::AgentDefinition,
-) -> Cow<'a, str> {
-    if request.subagent && adapter.append_system_text_channel().is_none() {
-        Cow::Owned(format!(
-            "{}\n\n{}",
-            request.prompt,
-            rimz::harness::launch_reminders::subagent_reminder()
-        ))
-    } else {
-        Cow::Borrowed(&request.prompt)
-    }
-}
-
-pub(super) fn check_supervised_subagent_allowed(
-    request: &SupervisedRunRequest,
-    caller: Option<&rimz::agents::AgentState>,
-    profiles: &rimz::config::ProfilesConfig,
-) -> Result<()> {
-    if !request.subagent {
-        return Ok(());
-    }
-    let Some(caller) = caller else {
-        return Ok(());
-    };
-    rimz::harness::subagent_policy::check_allowed(
-        caller,
-        profiles,
-        &request.spec,
-        request.agent.as_deref(),
-    )?;
-    Ok(())
-}
 
 pub(in crate::cli) fn run_print(
     request: SupervisedRunRequest,
@@ -322,30 +251,32 @@ fn open_attempt_pane(
             })
             .map(|_| ())
             .map_err(anyhow::Error::from),
-        RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
-            Ok(guard) => {
-                subagent_zone_guard = Some(guard);
-                let sidebar = room.sidebar_options(&prepared.launch.cwd);
-                open_started = std::time::Instant::now();
-                match supervised::pane::split_into_subagent_zone(
-                    room.backend(),
-                    &prepared.store,
-                    &prepared.workspace,
-                    &prepared.launch.cwd,
-                    env.clone(),
-                    sidebar,
-                    pane,
-                    &launch_identity.name,
-                    prepared.room_channel.as_deref(),
-                    tab_anchor.clone(),
-                    run_id,
-                ) {
-                    supervised::pane::SubagentZoneOpen::Opened => Ok(()),
-                    supervised::pane::SubagentZoneOpen::Failed(err) => Err(err.into()),
+        RunPlacement::SubagentZone => {
+            match rimz::launcher::placement::lock_subagent_zone(&prepared.store) {
+                Ok(guard) => {
+                    subagent_zone_guard = Some(guard);
+                    let sidebar = room.sidebar_options(&prepared.launch.cwd);
+                    open_started = std::time::Instant::now();
+                    match rimz::launcher::placement::split_into_subagent_zone(
+                        room.backend(),
+                        &prepared.store,
+                        &prepared.workspace,
+                        &prepared.launch.cwd,
+                        env.clone(),
+                        sidebar,
+                        pane,
+                        &launch_identity.name,
+                        prepared.room_channel.as_deref(),
+                        tab_anchor.clone(),
+                        run_id,
+                    ) {
+                        rimz::launcher::placement::SubagentZoneOpen::Opened => Ok(()),
+                        rimz::launcher::placement::SubagentZoneOpen::Failed(err) => Err(err.into()),
+                    }
                 }
+                Err(err) => Err(anyhow::Error::from(err)),
             }
-            Err(err) => Err(anyhow::Error::from(err)),
-        },
+        }
         RunPlacement::Tab => tab(run_tab_title(
             &prepared.store,
             prepared.room_channel.as_deref(),
@@ -365,10 +296,10 @@ fn open_attempt_pane(
         return Err(err);
     }
     if request.subagent {
-        supervised::pane::wait_for_subagent_pane_bind(
+        rimz::launcher::placement::wait_for_subagent_pane_bind(
             &prepared.store,
             &prepared.workspace,
-            supervised::pane::PaneBindWait {
+            rimz::launcher::placement::PaneBindWait {
                 run_id,
                 launch_id: &launch_identity.agent_id,
                 kind: &launch_identity.kind,
@@ -379,22 +310,6 @@ fn open_attempt_pane(
     }
     drop(subagent_zone_guard);
     Ok(())
-}
-
-/// The account a supervised launch of `kind` runs under: the request's pin,
-/// else a subagent's same-kind parent's account, else the room default.
-pub(super) fn launch_login(
-    request: &SupervisedRunRequest,
-    caller: Option<&rimz::agents::AgentState>,
-    kind: &AgentKind,
-) -> LaunchLogin {
-    if request.login != LaunchLogin::RoomDefault {
-        return request.login.clone();
-    }
-    match caller.filter(|caller| request.subagent && &caller.kind == kind) {
-        Some(caller) => LaunchLogin::Pinned(caller.login.clone().unwrap_or_default()),
-        None => LaunchLogin::RoomDefault,
-    }
 }
 
 fn prepare_supervised(
@@ -639,7 +554,7 @@ fn prepare_supervised(
     supervised::preflight_agent(adapter, &launch, &login, home_fix)?;
     supervised::preflight_program(adapter, &process, &launch.cwd)?;
     if !request.subagent {
-        crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
+        crate::cli::launch_interaction::admit_lsp(&launch.cwd, &machine_config)?;
     }
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {

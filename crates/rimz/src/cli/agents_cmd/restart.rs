@@ -34,7 +34,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let message = restart_resolved(&ctx, &agent, &peers, focus, None, || {
         caller
             .as_ref()
-            .map(|_| crate::cli::folder_trust::Unattended::Agent)
+            .map(|_| rimz::launcher::trust::Unattended::Agent)
     })?;
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
@@ -45,8 +45,8 @@ pub(in crate::cli) fn restart_resolved(
     agent: &AgentState,
     peers: &[&AgentState],
     focus: LaunchFocus,
-    unattended: Option<crate::cli::folder_trust::Unattended>,
-    hook_unattended: impl FnOnce() -> Option<crate::cli::folder_trust::Unattended>,
+    unattended: Option<rimz::launcher::trust::Unattended>,
+    hook_unattended: impl FnOnce() -> Option<rimz::launcher::trust::Unattended>,
 ) -> Result<String> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -97,7 +97,7 @@ pub(in crate::cli) fn restart_resolved(
     let (action, login, fresh_reason) = relaunch_action(agent, &logins, &catalog, &cwd)?;
     let provider_login =
         rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?;
-    crate::cli::folder_trust::preflight_hooks(
+    crate::cli::launch_interaction::preflight_hooks(
         provider_login.health(&rimz::agents::ambient_env()),
         hook_unattended,
         || {
@@ -115,7 +115,7 @@ pub(in crate::cli) fn restart_resolved(
     } else {
         None
     };
-    crate::cli::folder_trust::preflight(
+    crate::cli::launch_interaction::preflight(
         agent.kind.as_str(),
         &cwd,
         adapter.folder_trust(

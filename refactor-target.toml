@@ -418,12 +418,12 @@ reason = "One saved-untrusted remediation shared by library refusal errors and C
 
 [[verdict]]
 kind = "item"
-key = "cli::folder_trust::preflight"
-reason = "One warning/refusal presentation for launch, relaunch, resident takeover and room start."
+key = "launcher::trust::preflight"
+reason = "One warning/refusal verdict for launch, relaunch, resident takeover and room start; the CLI renders returned notices."
 
 [[verdict]]
 kind = "item"
-key = "cli::folder_trust::preflight_hooks"
+key = "launcher::trust::preflight_hooks"
 reason = "Pane-opening commands share the watched/unattended hook-trust verdict and per-account notice deduplication."
 
 [[verdict]]
@@ -438,8 +438,8 @@ reason = "Launch consent policy consumes the provider's in-pane trust choice wit
 
 [[verdict]]
 kind = "item"
-key = "cli::folder_trust::Unattended"
-reason = "CLI-private team/loop context types the shared folder-trust refusal without changing its wording."
+key = "launcher::trust::Unattended"
+reason = "Starter context types the shared folder-trust refusal without changing its wording."
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -575,11 +575,12 @@ path = "crates/rimz/src/cli"
 # `main` maps the scenes' shared usage error to exit 2 (+1).
 # The `accounts use` line is built once for both commands' switch hints (+1).
 # The position's standing and its in-room check serve providers and accounts list (+1).
-# Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
+# Ctx shares cached channel provenance with create-on-miss through launcher context.
 # Explicit child statuses reach main through the shared exit-code error.
 # anchor_caller_workspace shares agent-started placement across launch paths (+1).
 # open_existing_store_at supplies read-only per-room wake-card enrichment (+1).
-surface-budget = 35
+# Launch checkout and caller/lane facts move into the library (-4).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -1287,17 +1288,424 @@ surface-budget = 72
 [[module]]
 path = "crates/rimz/src/launcher"
 # Checkout creation moves out of the CLI with its store-creator admission.
-surface-budget = 3
+# Layout prepare/execute, typed interaction, shared placement and admission move here (+77).
+# Managed worktree entry, runtime protections, offers and relaunch guidance move here (+12).
+surface-budget = 92
 
 [[verdict]]
 kind = "item"
-key = "launcher::checkout::record_creation"
-reason = "Launch-checkout creation owns its workspace record and created signal."
+key = "launcher::worktree_entry"
+reason = "The shared launcher owns managed-checkout entry consent and protected recreation."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::PrintInput"
+reason = "Supervised retry guidance preserves positional prompt and input mode without recording stdin."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::check"
+reason = "The supervised CLI driver shares the launcher's managed-checkout entry gate."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::facts_block"
+reason = "Attended and unattended entry offers render the same recorded checkout facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::relaunch_commands"
+reason = "Layout and supervised entry refusals share safe relaunch command rendering."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::explicit_removal_protections"
+reason = "Launcher recreation and explicit CLI removal share freshly gathered runtime holders."
+
+[[verdict]]
+kind = "item"
+key = "launcher::worktree_entry::runtime_protections"
+reason = "CLI cleanup and launch recreation share best-effort runtime occupancy collection."
+
+[[verdict]]
+kind = "item"
+key = "launcher"
+reason = "The library owns shared launch preparation, admission and pane execution."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout"
+reason = "Launch and relaunch adapters share checkout admission, settlement and host-path translation."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance."
+
+[[verdict]]
+kind = "item"
+key = "launcher::lsp_admission"
+reason = "Launch and room recovery callers share LSP admission without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement"
+reason = "Fresh, resumed, forked and supervised launch callers share placement and child-zone effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve"
+reason = "Launch, explain and molt share read-only layout and posture resolution."
+
+[[verdict]]
+kind = "item"
+key = "launcher::trust"
+reason = "Launch and relaunch callers share trust verdicts while consent UI stays in the CLI."
 
 [[verdict]]
 kind = "item"
 key = "launcher::checkout::emit_worktree_created"
 reason = "Explicit worktree creation and launch checkout creation share the same signal."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LaunchContext"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LayoutRequest"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LayoutLaunch"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::CohortRequest"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LaunchOverrides"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Selection"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::RoomEntry"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Starter"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::ResidentLoop"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Preparation"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::LaunchOutcome"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::OpenedLayout"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::PreparedLaunch"
+reason = "Layout commands and resident loops share typed requests, preparation and launch facts without terminal output."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Interaction"
+reason = "One launch interaction preserves typed notices and the existing unattended decisions."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Notice"
+reason = "One launch interaction preserves typed notices and the existing unattended decisions."
+
+[[verdict]]
+kind = "item"
+key = "launcher::ClosedCohort"
+reason = "One launch interaction preserves typed notices and the existing unattended decisions."
+
+[[verdict]]
+kind = "item"
+key = "launcher::CohortChoice"
+reason = "One launch interaction preserves typed notices and the existing unattended decisions."
+
+[[verdict]]
+kind = "item"
+key = "launcher::Unattended"
+reason = "One launch interaction preserves typed notices and the existing unattended decisions."
+
+[[verdict]]
+kind = "item"
+key = "launcher::prepare_layout"
+reason = "Preparation precedes resident takeover; execution owns live-room layout effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::execute"
+reason = "Preparation precedes resident takeover; execution owns live-room layout effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::ResumeEntrance"
+reason = "CLI resume and cohort reconciliation share override admission and its guidance."
+
+[[verdict]]
+kind = "item"
+key = "launcher::validate_resume_inputs"
+reason = "CLI resume and cohort reconciliation share override admission and its guidance."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::admit_launch_worktree_name"
+reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::resolve_launch_checkout"
+reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::caller_host_path"
+reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::confirm_cross_repo_worktree"
+reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::pinned_room_root"
+reason = "Layout, supervised and checkout callers share admission, settlement and verified host-path facts."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::CurrentChannel"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::current_channel"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::current_channel_with"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::directory_channel"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::sender_for"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::resolve_caller"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::context::resolve_caller_from"
+reason = "Reconciliation and command adapters share caller attribution and lane provenance, including existing explicit-input test seams."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::Placement"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::resolve_placement"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::resolve_fork_placement"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::resolve_tab_anchor"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::apply_in_place_downgrade"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::resume_outside_launch_dir"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::PlacementRequest"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::PlacementErrors"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::execute"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::RunPlacement"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::run_placement"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::run_tab_title"
+reason = "Fresh, resumed, forked and supervised callers share placement policy and backend effects."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::PaneBindWait"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::SubagentZoneOpen"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::lock_subagent_zone"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::split_into_subagent_zone"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::wait_for_subagent_pane_bind"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::placement::zone::launch_has_bound_pane"
+reason = "Supervised launches and resumed children share the durable zone lock, unambiguous open and pane-bind wait."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::FinalizedLaunch"
+reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::resolve_finalized_layout"
+reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::launch_override_preset"
+reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::resolve_launch_prompt_file"
+reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::resolve_launch_prompt_files"
+reason = "Launch, explain and molt share read-only resolution and prompt-file admission; CLI flags are parsed before this boundary."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::supervised_prompt"
+reason = "The supervised front end reuses selection and prompt policy in its library home."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::check_supervised_subagent_allowed"
+reason = "The supervised front end reuses selection and prompt policy in its library home."
+
+[[verdict]]
+kind = "item"
+key = "launcher::resolve::launch_login"
+reason = "The supervised front end reuses selection and prompt policy in its library home."
+
+[[verdict]]
+kind = "item"
+key = "launcher::trust::TrustNotice"
+reason = "Trust verdicts return notice values without writing to a terminal."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::CliInteraction"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::LayoutReceipt"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::admit_lsp"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::write_wait"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::preflight_hooks"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::launch_interaction::preflight"
+reason = "Shared terminal presentation adapts library decisions, notices and receipt facts for command callers."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::launch_resolve::typed_overrides"
+reason = "The CLI maps flags once into the launcher's typed posture."
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -2034,7 +2442,18 @@ upward-dependencies = ["agents"]
 # fmt::dollars_estimate gives selected cache lines a two-significant-figure money vocabulary (+1).
 # fmt::active_duration shares agent-time formatting between attribution and stats (+1).
 # BrandColor::shade shares provider-relative model tones with renderers (+1).
-surface-budget = 37
+# fmt::age_label and fmt::rel_age give CLI reports and launcher entry facts one age vocabulary (+2).
+surface-budget = 39
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::age_label"
+reason = "CLI reports and the launcher's worktree entry facts share one largest-unit age label."
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::rel_age"
+reason = "CLI reports and the launcher's worktree entry facts share one relative-age phrase."
 
 [[verdict]]
 kind = "item"
@@ -2155,13 +2574,15 @@ reason = "Host condition probes and task firing share stat-gated, 60-second-boun
 [[module]]
 path = "crates/rimz/src/cli/supervised"
 # PaneBindWait carries run identity and open timing from both CLI doorways (+1).
-surface-budget = 39
+# Placement, binding and selection now belong to the library launcher (-7).
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
 # `AgentsArgs::launch_verb` lets `rimz teams <name>` launch through the explicit
 # verb, past the bare-word live-agent refusal, without a caller flag (+1).
-surface-budget = 25
+# The launch module and shared placement leave the published CLI surface (-2).
+surface-budget = 23
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
@@ -2185,8 +2606,9 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/launch.rs"
-# Resident loops share resolved-cwd launch execution and its returned identities.
-surface-budget = 6
+# Only the agents entry adapter and resume-input adapter remain (-4).
+# ResumeEntrance is re-exported for the existing CLI resume-input tests (+1).
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/cli/transcript"
@@ -5664,7 +6086,7 @@ reason = "Shares resolver-owned launch choices and facts with scene-specific CLI
 [[verdict]]
 kind = "item"
 key = "harness::spec::parse_layout_spec"
-reason = "Called by config and by binary-crate tests in cli::agents_cmd::launch, which reach the library as an external crate (pass 20a)."
+reason = "Config and launch tests share the grammar; CLI receipt tests reach the library as an external crate."
 
 [[verdict]]
 kind = "item"
@@ -7608,8 +8030,8 @@ reason = "Attach polling keeps its own exit semantics and output cadence (pass 2
 
 [[verdict]]
 kind = "item"
-key = "cli::lsp_admission::admit"
-reason = "Launch admission polling has different exit semantics and output cadence from attach (pass 26a)."
+key = "launcher::lsp_admission::admit"
+reason = "Launch admission polling is shared by every launch and recovery caller; typed notices leave cadence and terminal rendering to the CLI."
 
 [[verdict]]
 kind = "item"
@@ -7849,7 +8271,7 @@ reason = "The residual is a table of distinct resume outcomes: stamped-family re
 [[verdict]]
 kind = "item"
 key = "cli::agents_cmd::launch::launch_layout"
-reason = "Ordered preconditions remain after room and sandbox admission moved behind their providers: launch tests pin refusal before worktree, pane and provisional-store side effects. Fresh and resume tails differ in batch failure handling and receipt timing, so sharing them would need mode flags (pass 28f)."
+reason = "The CLI anchors the caller, maps posture and selection into a library request, and renders the outcome. Exact provider-id resume retains the existing explicit-session CLI entry."
 
 [[verdict]]
 kind = "item"
@@ -7858,7 +8280,7 @@ reason = "The residue is the ordered process edge: apply before chdir before the
 
 [[verdict]]
 kind = "item"
-key = "cli::agents_cmd::launch::launch_resume_layout"
+key = "launcher::launch_resume_layout"
 reason = "Ordered cohort-resume entry: plan and restore before per-seat preflight, preflight before the room probe, receipt before a same-pane exec. Its two deepenings belong to harness::resume (pass 32b)."
 
 [[verdict]]

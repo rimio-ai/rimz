@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/agents_cmd/launch/tests.rs
+source: crates/rimz/src/cli/launch_interaction/tests.rs
 expression: "String::from_utf8(output.into_inner()).unwrap()"
 ---
 launched forge in worktree #feat-x

@@ -1,14 +1,16 @@
-//! Pre-pane admission and required-server waits in the launcher's terminal.
+//! Pre-pane language-server admission and required-server waits.
 
+use crate::lsp::admission::{self, AdmissionRequest, WaitQueue};
 use anyhow::Result;
-use rimz::lsp::admission::{self, AdmissionRequest, Wait, WaitQueue};
-use rimz::utils::size::decimal_bytes as bytes;
-use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> Result<()> {
-    let workspace = rimz::workspace::WorkspaceResolver::resolve(checkout, None)?;
+pub fn admit(
+    checkout: &Path,
+    machine: &crate::config::MachineConfig,
+    interaction: &mut dyn super::Interaction,
+) -> Result<()> {
+    let workspace = crate::workspace::WorkspaceResolver::resolve(checkout, None)?;
     if machine.lsp.servers.is_empty() {
         let declares_servers =
             match std::fs::read_to_string(workspace.launch_repo_root().join(".rimz/config.toml")) {
@@ -26,11 +28,11 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
             return Ok(());
         }
     }
-    let effective = rimz::config::effective::load(machine, workspace.launch_repo_root())?;
+    let effective = crate::config::effective::load(machine, workspace.launch_repo_root())?;
     if effective.lsp_servers.is_empty() && effective.untrusted_lsp_servers.is_empty() {
         return Ok(());
     }
-    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    let runtime = crate::RuntimePaths::for_project_root(&workspace.project_root)?;
     let request = AdmissionRequest {
         root: checkout,
         project: workspace.launch_repo_root(),
@@ -44,10 +46,10 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
     loop {
         let result = admission::admit_launch(&request, &mut queue)?;
         for message in result.ignored_untrusted {
-            writeln!(super::render::err(), "rimz: {message}")?;
+            interaction.notice(super::Notice::LspIgnored(&message))?;
         }
         for message in result.startup_refused {
-            writeln!(super::render::err(), "rimz: {message}; agents use grep")?;
+            interaction.notice(super::Notice::LspRefused(&message))?;
         }
         if result.wait_for_required.is_empty() {
             return Ok(());
@@ -63,21 +65,8 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
         }
         shown = positions;
         for wait in result.wait_for_required {
-            write_wait(&wait)?;
+            interaction.notice(super::Notice::LspWait(&wait))?;
         }
         std::thread::sleep(Duration::from_secs(5));
     }
-}
-
-pub(super) fn write_wait(wait: &Wait) -> Result<()> {
-    writeln!(
-        super::render::err(),
-        "rimz: waiting to start language server {}: needs {}, {}; position {} in the queue; giving up in {}",
-        wait.shortfall.server,
-        bytes(wait.shortfall.estimate_bytes),
-        wait.shortfall.headroom(),
-        wait.position,
-        rimz::utils::time::format_duration_compact(wait.remaining)
-    )?;
-    Ok(())
 }

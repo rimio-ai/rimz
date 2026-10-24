@@ -29,9 +29,9 @@ A staged team's board and notes live in room state, under `team-notes/<run>/`, a
 
 | Caller | Mode |
 |---|---|
-| A fresh team launch (`cli/agents_cmd/launch.rs`) | `Fresh` |
-| A cohort resume (`cli/agents_cmd/launch.rs`) | `Resume` |
-| A restored team tab in lane restore or rebirth (`harness/resume.rs::materialize_team_restore_tab`) | `Resume` |
+| A fresh team launch (`crates/rimz/src/launcher/mod.rs::settle_layout`) | `Fresh` |
+| A cohort resume (`crates/rimz/src/launcher/mod.rs::launch_resume_layout`) | `Resume` |
+| A restored team tab in lane restore or rebirth (`crates/rimz/src/harness/resume.rs::materialize_team_restore_tab`) | `Resume` |
 
 It canonicalizes the checkout and takes the [board lock](#the-board-lock) before it inspects or replaces the link. An existing link counts only when it resolves to a directory directly inside this room's `team-notes/` and that directory's `run.json` names the same team. A missing, unreadable, or invalid manifest is never a match. Then the mode decides:
 
@@ -170,7 +170,7 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 | A flip into `Done` from any other stage (`on_flip`) | Completed, with the report's message id | `TEAM_REPORT`, gate `Done`, to the launcher's current row |
 | A flip out of `Done` | `reopen_team_run` opens a fresh run with the previous run's task, leader, reader, and report policy, but only when the cohort's newest run is terminal | None now. The next `Done` reports. |
 | The cohort ends: no live members, or every member's recorded process dead (`fleet::ended_team_runs`) | Completed when the board reads `Done`, otherwise failed with `cohort ended before Done` | `TEAM_REPORT` as a success or a failure |
-| `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`cli/agents_cmd/stop.rs::stop_run`) | None |
+| `agents stop` or `teams stop` reaches the leader | Canceled, as the leader's newest run (`crates/rimz/src/cli/agents_cmd/stop.rs::stop_run`) | None |
 | Restart or rebirth of the leader | Failed (`run::fail_peer_run`) | None |
 | The launcher or the leader row is gone at settlement | Completed or failed by the board | None |
 
