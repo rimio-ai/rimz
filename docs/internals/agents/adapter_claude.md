@@ -188,7 +188,7 @@ The preview sets `projects.<key>.hasTrustDialogAccepted` through `json_edit.rs`.
 
 | Field | Becomes |
 | --- | --- |
-| `is_error` with `result` or `subtype` | an error whose text passes through `claude/statusline.rs::classify_api_error`. `PausedRateLimit` and `PausedSpendLimit` become `ProviderLimit`, and every other class becomes `Other` |
+| `is_error` with `result` or `subtype` | an error whose text passes through `crates/rimz/src/agents/adapters/claude/statusline.rs::classify_api_error`. `PausedRateLimit` and `PausedSpendLimit` become `ProviderLimit`, and every other class becomes `Other` |
 | `structured_output` | the value. A result without it is an `Other` error |
 | `total_cost_usd` | the cost, kept only when finite and non-negative |
 | `usage` | input tokens (fresh plus cache-creation plus cache-read) and output tokens |
@@ -371,7 +371,7 @@ Historical tool statistics count the `tool_use` blocks on the usage-bearing assi
 
 ## Remote control
 
-RimZ hosts `claude remote-control --spawn worktree` in the room's `rimzd` view when `[remote_control] claude = true` ([rimzd.md](../rimzd.md)). The host argv always carries an env prefix: `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one, else `env -u CLAUDE_CONFIG_DIR` (`remote_control.rs::host_argv_with_login`). Passing `--spawn` also skips Claude's spawn-mode chooser. The provider side has three parts, and the upstream gates behind them are in [claude-reference.md](../../externals/agent-adapter/claude-reference.md#remote-control).
+RimZ hosts `claude remote-control --spawn worktree` in the room's `rimzd` view when `[remote_control] claude = true` ([rimzd.md](../rimzd.md)). The host argv always carries an env prefix: `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one, else `env -u CLAUDE_CONFIG_DIR` (`crates/rimz/src/agents/adapters/claude/remote_control.rs::host_argv_with_login`). Passing `--spawn` also skips Claude's spawn-mode chooser. The provider side has three parts, and the upstream gates behind them are in [claude-reference.md](../../externals/agent-adapter/claude-reference.md#remote-control).
 
 ### Hooks from remote sessions
 

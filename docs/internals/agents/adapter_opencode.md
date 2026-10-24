@@ -22,7 +22,7 @@ Only the registry reaches `OpencodeAdapter`. The modules above stay private to t
 
 ### Install
 
-The plugin is a whole file that RimZ writes, through `ManagedSource` (`OPENCODE_MANAGED_SOURCE` in `mod.rs`). It installs at `RIMZ_OPENCODE_PLUGIN` when that is set and nonempty, otherwise at `<config>/opencode/plugin/rimz.ts`, where `<config>` is `XDG_CONFIG_HOME` or `~/.config` (`mod.rs::opencode_plugin_path`). The path resolves from the process environment, not the login environment. The file's first line carries the `_rimz_managed` marker, and ownership follows the marker:
+The plugin is a whole file that RimZ writes, through `ManagedSource` (`OPENCODE_MANAGED_SOURCE` in `mod.rs`). It installs at `RIMZ_OPENCODE_PLUGIN` when that is set and nonempty, otherwise at `<config>/opencode/plugin/rimz.ts`, where `<config>` is `XDG_CONFIG_HOME` or `~/.config` (`crates/rimz/src/agents/adapters/opencode/mod.rs::opencode_plugin_path`). The path resolves from the process environment, not the login environment. The file's first line carries the `_rimz_managed` marker, and ownership follows the marker:
 
 - Install and reinstall replace a marked file byte for byte.
 - Install and preview refuse to overwrite an unmarked file, which the user owns.
@@ -37,7 +37,7 @@ OpenCode calls the plugin's `setup(ctx)` from its default export, `{ id: "rimz",
 
 The plugin classifies each session as a root or a child. `session.created` classifies by its `parentID`. A session first seen through another event or hook is classified through `ctx.session.get({sessionID}).parentID`, which covers a plugin reload and events that arrive before the creation event. A failed lookup leaves the session unclassified, and the plugin drops its events instead of crediting them to the root. The plugin also drops events from another `location.directory` and events for the `global` session.
 
-Each envelope goes to RimZ as one `rimz hooks feed --source opencode` child, which reads the JSON line on stdin. The plugin discards the child's stdout and stderr, so a RimZ reply never reaches OpenCode. Every envelope carries the session id, the session directory as `cwd` and `worktree_path`, and the remembered title, version, model, effort, display name, window, and token split. `payloads.rs::parse_payload` is tolerant: a field of the wrong type degrades the whole envelope to an empty record.
+Each envelope goes to RimZ as one `rimz hooks feed --source opencode` child, which reads the JSON line on stdin. The plugin discards the child's stdout and stderr, so a RimZ reply never reaches OpenCode. Every envelope carries the session id, the session directory as `cwd` and `worktree_path`, and the remembered title, version, model, effort, display name, window, and token split. `crates/rimz/src/agents/adapters/opencode/payloads.rs::parse_payload` is tolerant: a field of the wrong type degrades the whole envelope to an empty record.
 
 Cleanup runs when OpenCode disposes the activation. It aborts the subscription, sends `session_ended` with reason `dispose` for every root, disposes the hook registrations, and waits at most 1.5 seconds for the pending sends and the disposals to settle. Every handler checks for disposal again after each `await`. A handler that throws does not end the subscription. Pane liveness and the reaper cover a crash, where no cleanup runs ([instances.md](./instances.md#session-death)).
 
@@ -73,7 +73,7 @@ The default shared OpenCode server is outside this contract. Its environment and
 | `session.deleted`, root | `session_ended`, reason `deleted` | `Ended` |
 | activation cleanup | `session_ended` per root, reason `dispose` | `Ended` |
 
-`decode_hook` in `mod.rs` maps the wire event to the signal. The tool tables in `OPENCODE_DESCRIPTOR` count `bash`, `edit`, `write`, `apply_patch`, and `patch` as mutating, and all of them except `bash` as editing. On `session_idle` and `session_error`, `decode_hook` reads the session's last assistant message from the database as the final message (`transcript.rs::last_assistant_message`). The plugin sends no transcript path, so the observation names the newest database (`database::newest_file`).
+`decode_hook` in `mod.rs` maps the wire event to the signal. The tool tables in `OPENCODE_DESCRIPTOR` count `bash`, `edit`, `write`, `apply_patch`, and `patch` as mutating, and all of them except `bash` as editing. On `session_idle` and `session_error`, `decode_hook` reads the session's last assistant message from the database as the final message (`crates/rimz/src/agents/adapters/opencode/transcript.rs::last_assistant_message`). The plugin sends no transcript path, so the observation names the newest database (`database::newest_file`).
 
 ### Sessions
 
@@ -127,13 +127,13 @@ The plugin's gauge is a per-session record of the model, its window, and the lat
 - The total is input, output, cache read, and cache write.
 - A positive total replaces the whole split, zero-valued fields included. An all-zero split keeps the last measurement.
 
-`ctx.model.list()` gives the display name and the window: a positive `limit.input`, otherwise a positive `limit.context`, otherwise none. One activation reads the catalog once, and reads it again after an empty or failed result. When an envelope carries no window, `mod.rs::context_window_for` supplies 1M for an id containing `[1m]` or a Claude id containing `1m`, 200k for any other Claude id, and nothing for other models. The gauge counts input-side tokens only ([model.md](./model.md#enrichment)).
+`ctx.model.list()` gives the display name and the window: a positive `limit.input`, otherwise a positive `limit.context`, otherwise none. One activation reads the catalog once, and reads it again after an empty or failed result. When an envelope carries no window, `crates/rimz/src/agents/adapters/opencode/mod.rs::context_window_for` supplies 1M for an id containing `[1m]` or a Claude id containing `1m`, 200k for any other Claude id, and nothing for other models. The gauge counts input-side tokens only ([model.md](./model.md#enrichment)).
 
 `ctx.session.get` refreshes the title, agent, and model at registration, at each prompt, and at each root execution boundary. The refresh runs in the background, so a slow lookup never holds a terminal envelope. The plugin never stores OpenCode's placeholder titles, `New session - ...` and `Child session - ...`. The version comes from `session.created` alone, because session lookup returns none.
 
 ## Transcript
 
-`transcript.rs::read_messages` reads `session_message` rows for one session id only, since every OpenCode agent on the machine shares the database. It takes a user row's `data.text` and the `text` entries of an assistant row's `data.content[]`. Reasoning, tool content, and other record types stay out. Full reads order by `time_created`, then `rowid`.
+`crates/rimz/src/agents/adapters/opencode/transcript.rs::read_messages` reads `session_message` rows for one session id only, since every OpenCode agent on the machine shares the database. It takes a user row's `data.text` and the `text` entries of an assistant row's `data.content[]`. Reasoning, tool content, and other record types stay out. Full reads order by `time_created`, then `rowid`.
 
 The assistant-page cursor follows `rowid` over completed assistant rows only: `time.completed`, `finish`, or `error` marks completion. The cursor never advances over a message that is still streaming, so the in-place update that completes it is still read. An imported row with an older timestamp but a higher `rowid` still counts as new. The cursor's identity includes the database path and the session id.
 
@@ -141,9 +141,9 @@ The assistant-page cursor follows `rowid` over completed assistant rows only: `t
 
 ## Account and balance
 
-Both account probes run through `crates/rimz/src/agents/delegated_account.rs`, which OpenCode shares with Pi. `account.rs::config` supplies the OpenCode inputs: `database::load_credentials`, the used provider from `database::latest_message_provider`, `key` as the API-key type, and the account-key domain `rimz/opencode-oauth-account-key/v1`. Both probes ignore the login environment, and database discovery reads the process environment, so a named login does not change what they read ([providers.md](./providers.md#logins)).
+Both account probes run through `crates/rimz/src/agents/delegated_account.rs`, which OpenCode shares with Pi. `crates/rimz/src/agents/adapters/opencode/account.rs::config` supplies the OpenCode inputs: `database::load_credentials`, the used provider from `database::latest_message_provider`, `key` as the API-key type, and the account-key domain `rimz/opencode-oauth-account-key/v1`. Both probes ignore the login environment, and database discovery reads the process environment, so a named login does not change what they read ([providers.md](./providers.md#logins)).
 
-`database.rs::credentials_in_file` reads the newest database's `credential` table, ordered by `active DESC, time_created DESC, id DESC`, and keeps the first row that parses for each `integration_id`. The credential stamp is the largest `time_updated`, in milliseconds, of the rows kept. Session writes therefore never invalidate the OAuth usage cache. A missing database or `credential` table reads as logged out. A database that exists but fails to read is unavailable.
+`crates/rimz/src/agents/adapters/opencode/database.rs::credentials_in_file` reads the newest database's `credential` table, ordered by `active DESC, time_created DESC, id DESC`, and keeps the first row that parses for each `integration_id`. The credential stamp is the largest `time_updated`, in milliseconds, of the rows kept. Session writes therefore never invalidate the OAuth usage cache. A missing database or `credential` table reads as logged out. A database that exists but fails to read is unavailable.
 
 The account probe and the usage probe select the credential differently:
 
@@ -162,18 +162,18 @@ The account probe maps `oauth` to metered, `key` to unmetered, and `external` to
 | `openai`, `openai-codex` | Codex OAuth usage | `openai` OAuth |
 | any other | none | none |
 
-`delegated_account.rs::quota_surface` owns the table. An API-key, external, or unsupported credential carries no OAuth scope ([providers.md](./providers.md#account-scope)). The plugin wires no response-header enrichment, so the out-of-band usage probe is the only source of the bars ([providers.md](./providers.md#the-out-of-band-probe)).
+`crates/rimz/src/agents/delegated_account.rs::quota_surface` owns the table. An API-key, external, or unsupported credential carries no OAuth scope ([providers.md](./providers.md#account-scope)). The plugin wires no response-header enrichment, so the out-of-band usage probe is the only source of the bars ([providers.md](./providers.md#the-out-of-band-probe)).
 
 ## Cost
 
-`database.rs::files` finds one database per data directory. The data directory is `RIMZ_OPENCODE_DATA_DIR` (a comma-separated list) when set, otherwise `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`. A directory's candidates are `opencode.db` and every `opencode-<channel>.db` whose channel holds only ASCII letters, digits, `_`, and `-`. The candidate with the newest logical stat wins, where the logical stat is the main file plus its optional WAL (`database::logical_stat`). Ties go to `opencode.db`, then to channel names in lexical order. Credentials and the hook's transcript path take the newest database across directories (`database::newest_file`). Every access is read-only. A WAL change invalidates the spend and live-cost caches, and a shared-memory file change does not.
+`crates/rimz/src/agents/adapters/opencode/database.rs::files` finds one database per data directory. The data directory is `RIMZ_OPENCODE_DATA_DIR` (a comma-separated list) when set, otherwise `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`. A directory's candidates are `opencode.db` and every `opencode-<channel>.db` whose channel holds only ASCII letters, digits, `_`, and `-`. The candidate with the newest logical stat wins, where the logical stat is the main file plus its optional WAL (`database::logical_stat`). Ties go to `opencode.db`, then to channel names in lexical order. Credentials and the hook's transcript path take the newest database across directories (`database::newest_file`). Every access is read-only. A WAL change invalidates the spend and live-cost caches, and a shared-memory file change does not.
 
-`spend.rs::parse` reads `assistant` and `compaction` rows from `session_message`, joined to `session_v2.directory` for the origin. OpenCode updates rows in place, so every parse cold-folds the whole table and returns `SpendUpdate::Replace` for that database's cache set ([spending.md](./spending.md#the-incremental-cache)). Each row keeps its `session_id`. A row's figures follow these rules:
+`crates/rimz/src/agents/adapters/opencode/spend.rs::parse` reads `assistant` and `compaction` rows from `session_message`, joined to `session_v2.directory` for the origin. OpenCode updates rows in place, so every parse cold-folds the whole table and returns `SpendUpdate::Replace` for that database's cache set ([spending.md](./spending.md#the-incremental-cache)). Each row keeps its `session_id`. A row's figures follow these rules:
 
 - An assistant row needs `model.id`, `model.providerID`, and a token object with a nonzero split, or it is dropped, whatever its cost.
 - A compaction row needs tokens or a positive cost. It takes its own model, otherwise the session's latest assistant model, and the row's `time_created`. Compaction rows never reach the transcript or the used-provider choice.
 - Output adds reasoning. A reported `total` above the itemized sum adds the difference to output.
-- A positive stored `cost` is authoritative. A zero cost is priced from tokens, with reasoning at the output rate and both cache rates. The price lookup tries the model id, a few aliases, and each name prefixed with the provider (`spend.rs::model_candidates`).
+- A positive stored `cost` is authoritative. A zero cost is priced from tokens, with reasoning at the output rate and both cache rates. The price lookup tries the model id, a few aliases, and each name prefixed with the provider (`crates/rimz/src/agents/adapters/opencode/spend.rs::model_candidates`).
 - An unknown model keeps its tokens at zero dollars until a pricing refresh.
 - Token, time, and cost fields accept numeric strings.
 - Tool counts come from each assistant row's `tool` content entries, by `name`. Live tool counts come from `tool_after`.
