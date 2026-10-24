@@ -23,6 +23,7 @@ pub struct SubagentProfile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubagentCatalog {
     Disabled,
+    /// Never empty: `catalog` returns `Disabled` when nothing survives its filter.
     Available(Vec<SubagentProfile>),
 }
 
@@ -60,6 +61,9 @@ pub fn catalog(
     if let Some(allowed) = allowed {
         specs.retain(|spec| allowed.contains(&spec.name));
     }
+    if specs.is_empty() {
+        return SubagentCatalog::Disabled;
+    }
     SubagentCatalog::Available(specs)
 }
 
@@ -75,7 +79,6 @@ const AVAILABLE_PREAMBLE: &str = concat!(
 pub(super) fn reminder(catalog: &SubagentCatalog) -> String {
     match catalog {
         SubagentCatalog::Disabled => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
-        SubagentCatalog::Available(specs) if specs.is_empty() => "### Subagents\n\nNo subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
@@ -286,6 +289,38 @@ mod tests {
     }
 
     #[test]
+    fn catalog_without_profiles_or_commands_is_disabled() {
+        let (_, profiles) = caller(None);
+        assert_eq!(
+            catalog(
+                Some("planner"),
+                &profiles,
+                &ProfilesConfig::default(),
+                &CommandsConfig::default(),
+            ),
+            SubagentCatalog::Disabled
+        );
+    }
+
+    #[test]
+    fn catalog_with_no_matching_allowed_specs_is_disabled() {
+        let (_, profiles) = caller(Some(vec!["missing"]));
+        let commands = CommandsConfig(BTreeMap::from([(
+            "lint".to_owned(),
+            "cargo clippy".to_owned(),
+        )]));
+        assert_eq!(
+            catalog(
+                Some("planner"),
+                &profiles,
+                &ProfilesConfig::default(),
+                &commands,
+            ),
+            SubagentCatalog::Disabled
+        );
+    }
+
+    #[test]
     fn reminder_renders_available_specs_and_disabled_policy() {
         let available = SubagentCatalog::Available(vec![
             SubagentProfile {
@@ -317,10 +352,6 @@ mod tests {
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),
             "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools."
-        );
-        assert_eq!(
-            reminder(&SubagentCatalog::Available(Vec::new())),
-            "### Subagents\n\nNo subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions."
         );
     }
 }

@@ -300,7 +300,7 @@ Agent kinds are launchable directly but are not listed. Direct profiles belong t
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
-At launch, RimZ also gives each agent this same filtered catalog in its appended system prompt, on providers that support one. The catalog says so when delegation is disabled or nothing is configured.
+At launch, RimZ also gives each non-child agent this same filtered catalog in its appended system prompt, on providers that support one, when its [skills list](../../guide/configuration.md#skills) makes `rimz-subagents` callable. The catalog says delegation is disabled when the profile allows none or no entries are available. A skills list that leaves out `rimz-subagents` gets no catalog paragraph.
 
 ## Children cannot delegate
 

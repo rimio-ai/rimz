@@ -128,8 +128,8 @@ pub use scheme::{SchemeSwatch, scheme_swatches};
 use sentry::SentryConfig;
 pub use sidebar::SidebarConfig;
 pub(crate) use sidebar::SidebarKeys;
-pub use skills::SkillName;
 pub(crate) use skills::{SkillListErr, deserialize_optional_skill_list, validate_skill_list};
+pub use skills::{SkillName, skill_is_callable};
 pub(crate) use theme::InlinePalette;
 #[cfg(test)]
 pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};

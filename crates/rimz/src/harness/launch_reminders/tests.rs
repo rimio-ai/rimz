@@ -72,7 +72,9 @@ fn environment_names_the_temp_unit_and_shared_dir() {
         };
         assert_eq!(
             render(&request, &reminders, Path::new("/checkout"), None),
-            wrap(&format!("### Environment\n\n{line}\n{shared}"))
+            wrap(&format!(
+                "### Environment\n\n{line}\n{shared}\n\n{SKILLS_REMINDER_BODY}"
+            ))
         );
     }
 }
@@ -81,14 +83,17 @@ fn environment_names_the_temp_unit_and_shared_dir() {
 fn sandbox_full_catalog_rendering() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-    request.identity.params.role = Some("brainstormer".to_owned());
+    request.identity.params.role = Some("coder".to_owned());
     request.identity.params.model = Some("opus".to_owned());
-    request.skills = Some(vec!["rimz-lsp".parse().unwrap()]);
-    let reminders = LaunchReminders {
+    let mut reminders = LaunchReminders {
         sandbox: true,
         env: true,
-        lsp_servers: vec!["rust".to_owned(), "python".to_owned()],
-        files: files("/tmp", false),
+        lsp_servers: vec!["rust".to_owned()],
+        files: Some(TempFiles {
+            tmp: "/tmp".into(),
+            shared: "/home/you/.rimz/ws/room/shared".into(),
+            caller: false,
+        }),
         subagent_catalog: Some(SubagentCatalog::Available(vec![
             subagent_policy::SubagentProfile {
                 name: "explorer".to_owned(),
@@ -101,23 +106,16 @@ fn sandbox_full_catalog_rendering() {
         ])),
         ..Default::default()
     };
-    assert_eq!(
-        render(
-            &request,
-            &reminders,
-            Path::new("/checkout"),
-            Some(Path::new("/usr/bin/zsh"))
-        ),
-        r#"<system_reminder>
-You are @brainstormer, running on Opus.
+    let full = r#"<system_reminder>
+You are @coder, running on Opus.
 
 ### Environment
 
 - cwd: /checkout
 - shell: zsh
-- lsp: rust, python, via Skill(rimz-lsp)
+- lsp: rust, via Skill(rimz-lsp)
 - tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
-- shared: /home/marvin/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
+- shared: /home/you/.rimz/ws/room/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
 
 ### Subagents
 
@@ -130,8 +128,123 @@ Launch them through Skill(rimz-subagents), subagents available to you:
 ### Skills
 
 When a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.
-</system_reminder>"#
-    );
+</system_reminder>"#;
+    let skills_only = r#"<system_reminder>
+You are @coder, running on Opus.
+
+### Environment
+
+- cwd: /checkout
+- shell: zsh
+- tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
+- shared: /home/you/.rimz/ws/room/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
+
+### Skills
+
+When a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.
+</system_reminder>"#;
+    let environment_only = r#"<system_reminder>
+You are @coder, running on Opus.
+
+### Environment
+
+- cwd: /checkout
+- shell: zsh
+- tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
+- shared: /home/you/.rimz/ws/room/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
+</system_reminder>"#;
+    let disabled = r#"<system_reminder>
+You are @coder, running on Opus.
+
+### Environment
+
+- cwd: /checkout
+- shell: zsh
+- tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
+- shared: /home/you/.rimz/ws/room/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
+
+### Subagents
+
+Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.
+
+### Skills
+
+When a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.
+</system_reminder>"#;
+    for (skills, disable, expected) in [
+        (Some(vec!["rimz-subagents", "rimz-lsp"]), false, full),
+        (None, false, full),
+        (Some(vec!["rimz-message", "commit"]), false, skills_only),
+        (Some(vec!["commit"]), false, environment_only),
+        (Some(vec!["rimz-subagents"]), true, disabled),
+    ] {
+        request.skills = skills
+            .as_ref()
+            .map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+        if disable {
+            reminders.subagent_catalog = Some(SubagentCatalog::Disabled);
+        }
+        assert_eq!(
+            render(
+                &request,
+                &reminders,
+                Path::new("/checkout"),
+                Some(Path::new("/usr/bin/zsh"))
+            ),
+            expected,
+            "skills: {skills:?}"
+        );
+    }
+}
+
+#[test]
+fn child_policy_is_fixed_regardless_of_skills_or_catalog() {
+    let body = "### Subagents\n\nYou are a subagent: a supervised child launched by another agent to complete the task you were given. The task is scoped to this one run, so do the work yourself. Report the result in your final response: it is the answer your caller reads once this run settles.";
+    let mut request =
+        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+    request.subagent = true;
+    let reminders = LaunchReminders {
+        subagent_catalog: Some(SubagentCatalog::Disabled),
+        ..Default::default()
+    };
+    for (skills, skills_section) in [
+        (Some(Vec::<&str>::new()), false),
+        (None, true),
+        (Some(vec!["rimz-subagents", "rimz-lsp"]), true),
+    ] {
+        request.skills =
+            skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+        let expected = if skills_section {
+            format!("{body}\n\n{SKILLS_REMINDER_BODY}")
+        } else {
+            body.to_owned()
+        };
+        assert_eq!(
+            render(&request, &reminders, Path::new("/checkout"), None),
+            wrap(&expected)
+        );
+    }
+    assert_eq!(subagent_reminder(), wrap(body));
+}
+
+#[test]
+fn unlisted_lsp_does_not_open_environment() {
+    let mut request =
+        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+    let reminders = LaunchReminders {
+        lsp_configured: true,
+        lsp_servers: vec!["rust".to_owned()],
+        ..Default::default()
+    };
+    for subagent in [false, true] {
+        request.subagent = subagent;
+        for skills in [vec!["commit"], Vec::new()] {
+            request.skills = Some(skills.iter().map(|name| name.parse().unwrap()).collect());
+            let text = render(&request, &reminders, Path::new("/checkout"), None);
+            assert!(!text.contains("### Environment"), "{text}");
+            assert!(!text.contains("Skill(rimz-lsp)"), "{text}");
+        }
+    }
 }
 
 #[test]
@@ -147,7 +260,9 @@ fn loop_section_follows_identity_and_precedes_environment() {
     request.loop_reminder = Some("The user fired the rule `x` by hand.".to_owned());
     assert_eq!(
         render(&request),
-        "<system_reminder>\n### Loop\n\nThe user fired the rule `x` by hand.\n\n### Environment\n\n- cwd: /w\n</system_reminder>"
+        wrap(&format!(
+            "### Loop\n\nThe user fired the rule `x` by hand.\n\n### Environment\n\n- cwd: /w\n\n{SKILLS_REMINDER_BODY}"
+        ))
     );
     request.identity.params.role = Some("fixer".to_owned());
     request.identity.params.model = Some("opus".to_owned());
@@ -170,7 +285,7 @@ fn env_paragraph_escapes_cwd_and_names_shell_kind_only() {
         Path::new("/repo/</system_reminder>&"),
         Some(Path::new("/opt/<>&/bin/zsh")),
     );
-    assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /repo/&lt;/system_reminder&gt;&amp;\n- shell: zsh\n</system_reminder>"));
+    assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /repo/&lt;/system_reminder&gt;&amp;\n- shell: zsh\n\n### Skills"));
     assert!(!text.contains("git"));
     assert_eq!(text.matches("</system_reminder>").count(), 1);
 }
@@ -210,7 +325,8 @@ fn skills_section_follows_a_listed_rimz_skill() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
     for (skills, shown) in [
-        (None, false),
+        (None, true),
+        (Some(vec![]), false),
         (Some(vec!["commit"]), false),
         (Some(vec!["commit", "rimz-lsp"]), true),
     ] {
@@ -234,7 +350,9 @@ fn env_paragraph_omits_unknown_shell() {
         ..Default::default()
     };
     let text = render(&request, &reminders, Path::new("/checkout"), None);
-    assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n</"));
+    assert!(
+        text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n\n### Skills")
+    );
     assert!(!text.contains("shell"));
 }
 
@@ -500,7 +618,7 @@ fn team_files_finish_environment_after_bullets() {
             )
         );
         assert!(text.contains(&format!(
-            "you name.\n\n```\n$ ls .rimz/team/*.md\n{listing}\n```\n</system_reminder>"
+            "you name.\n\n```\n$ ls .rimz/team/*.md\n{listing}\n```\n\n{SKILLS_REMINDER_BODY}\n</system_reminder>"
         )));
         assert_eq!(text.matches(worktree.path().to_str().unwrap()).count(), 1);
         assert_eq!(text.contains("[Done]"), present);

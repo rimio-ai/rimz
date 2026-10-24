@@ -494,7 +494,7 @@ fn headless_provider_argv(kind: &str) {
               "--model",
               "small",
               "--append-system-prompt",
-              "<system_reminder>\n\n</system_reminder>",
+              "<system_reminder>\n### Skills\n\nWhen a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.\n</system_reminder>",
               "--settings",
               "{\"disableAllHooks\":true,\"theme\":\"dark\"}",
               "-p",
@@ -513,7 +513,7 @@ fn headless_provider_argv(kind: &str) {
               "--model",
               "small",
               "-c",
-              "developer_instructions=\"\"\"\n<system_reminder>\n\n</system_reminder>\"\"\"",
+              "developer_instructions=\"\"\"\n<system_reminder>\n### Skills\n\nWhen a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.\n</system_reminder>\"\"\"",
               "-c",
               "features.hooks=false",
               "exec",
@@ -1216,28 +1216,37 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
     ] {
         for subagent in [false, true] {
             for configured in [false, true] {
-                let mut invocation = request("claude", action.clone());
-                invocation.subagent = subagent;
-                let process = compile_agent_process_with_extra_env(
-                    None,
-                    Path::new("/checkout"),
-                    &invocation,
-                    Path::new("/checkout"),
-                    &BTreeMap::new(),
-                    &LaunchReminders {
-                        lsp_configured: configured,
-                        ..LaunchReminders::default()
-                    },
-                )
-                .expect("process");
-                assert_eq!(
-                    process.provider_argv.iter().any(|arg| arg == "LSP"),
-                    configured
-                );
-                assert_eq!(
-                    process.provider_argv.iter().any(|arg| arg == "Agent"),
-                    subagent
-                );
+                for (skills, callable) in [
+                    (None, true),
+                    (Some(vec!["rimz-lsp"]), true),
+                    (Some(vec!["commit"]), false),
+                    (Some(vec![]), false),
+                ] {
+                    let mut invocation = request("claude", action.clone());
+                    invocation.subagent = subagent;
+                    invocation.skills = skills
+                        .map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+                    let process = compile_agent_process_with_extra_env(
+                        None,
+                        Path::new("/checkout"),
+                        &invocation,
+                        Path::new("/checkout"),
+                        &BTreeMap::new(),
+                        &LaunchReminders {
+                            lsp_configured: configured,
+                            ..LaunchReminders::default()
+                        },
+                    )
+                    .expect("process");
+                    assert_eq!(
+                        process.provider_argv.iter().any(|arg| arg == "LSP"),
+                        configured && callable
+                    );
+                    assert_eq!(
+                        process.provider_argv.iter().any(|arg| arg == "Agent"),
+                        subagent
+                    );
+                }
             }
         }
     }
@@ -1584,6 +1593,9 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
             .trim_start_matches("<system_reminder>\n")
             .trim_end_matches("\n</system_reminder>")
             .to_owned();
+        let (team_reminder, skills_reminder) = team_reminder
+            .rsplit_once("\n\n### Skills\n\n")
+            .expect("unrestricted launch has skills guidance");
         assert!(
             team_reminder.contains("Members: @planner, @coder (you)."),
             "{team_reminder}"
@@ -1610,7 +1622,9 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         assert_eq!(occurrences[0].value.matches("<system_reminder>").count(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
-            wrap(&format!("{team_reminder}\n\n{catalog_reminder}"))
+            wrap(&format!(
+                "{team_reminder}\n\n{catalog_reminder}\n\n### Skills\n\n{skills_reminder}"
+            ))
         );
     }
 }

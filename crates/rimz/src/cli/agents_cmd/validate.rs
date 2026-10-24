@@ -316,6 +316,17 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
         .rows
         .iter()
         .filter(|row| {
+            let profiles = if row.namespace == "subagents" {
+                &loaded.subagent_profiles
+            } else {
+                &loaded.agent_profiles
+            };
+            let Some(profile) = profiles.0.get(&row.name) else {
+                return false;
+            };
+            if !rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp") {
+                return false;
+            }
             loaded
                 .tools
                 .get(&row.name)
@@ -637,10 +648,23 @@ mod tests {
     #[test]
     fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
         let mut loaded = LoadedDefinitions::default();
-        for (name, tools) in [
-            ("navigator", ["Bash", "LSP"]),
-            ("writer", ["Write", "Read"]),
+        for (name, namespace, tools, skills) in [
+            ("navigator", "agents", ["Bash", "LSP"], None),
+            ("writer", "agents", ["Write", "Read"], None),
+            ("native", "agents", ["Bash", "LSP"], Some(vec!["commit"])),
+            ("empty", "agents", ["Bash", "LSP"], Some(vec![])),
+            ("child", "subagents", ["Bash", "LSP"], Some(vec!["commit"])),
+            ("team.lead", "team", ["Bash", "LSP"], Some(vec!["commit"])),
         ] {
+            let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+            profile.skills =
+                skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
+            let profiles = if namespace == "subagents" {
+                &mut loaded.subagent_profiles
+            } else {
+                &mut loaded.agent_profiles
+            };
+            profiles.0.insert(name.into(), profile);
             loaded
                 .tools
                 .insert(name.into(), tools.map(str::to_owned).to_vec());
@@ -649,7 +673,7 @@ mod tests {
                 tier: None,
                 tier_fallback: None,
                 name: name.into(),
-                namespace: "agents".into(),
+                namespace: namespace.into(),
                 kind: "claude".into(),
                 model: None,
                 effort: None,
