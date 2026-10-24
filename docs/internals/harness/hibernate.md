@@ -17,7 +17,7 @@ Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hiber
 | `crates/rimz/src/config/agents.rs` | `HibernateConfig` and the validated `Schedule`. |
 | `crates/rimz/src/store/hibernate.rs` | The durable record `records/hibernation.json`, whose schema [store.md](../store.md) owns. |
 | `crates/rimz/src/diag/hibernate.rs` | The wake diagnostics in `audit/hibernate.log.jsonl`. |
-| `crates/rimz/src/child_process.rs` | The helper-scope escape in `spawn_detached_reaped`. |
+| `crates/rimz/src/child_process.rs` | The helper-scope escape in `spawn_detached_reaped` and the weighted drainer scope in `spawn_hook_drainer`. |
 | `crates/rimz/src/cli/agents_cmd/hibernate.rs` | The hidden `agents hibernate`, `agents wake`, and `agents wake-refault` helper commands. |
 
 ## Rules a change keeps
@@ -74,7 +74,9 @@ Qwen's login-shell reentry (`AgentProcessStage::LoginShellReentry`, for a pendin
 
 A detached helper started from inside an agent scope, such as a hook or a `rimz` command the agent runs, would freeze with the agent and count as a foreign process. `crates/rimz/src/child_process.rs::spawn_detached_reaped` prevents this. When `/proc/self/cgroup` names a `rimz-agent-*.scope`, it prefixes the command with `systemd-run --user --scope --quiet --collect --unit rimz-helper-<uuid>.scope --`.
 
-The caller supplies the program and a `configure` callback instead of a built `Command`. The callback can run twice, so a plain retry keeps the arguments, environment, working directory, and log descriptors. The parent holds the child for at most two seconds, until `/proc/<pid>/cgroup` shows a `rimz-helper-*.scope`. A successful early exit needs no retry. A failed exit or an unconfirmed move kills and reaps the wrapper, then retries without the scope and logs a debug line. Only a confirmed child passes to the shared reaper. Agent-owned background commands (`spawn_detached_reaped_as_agent`) keep the inherited agent scope.
+On Linux `crates/rimz/src/child_process.rs::spawn_hook_drainer` requests its own helper scope with `CPUWeight=1000` from every spawner, including a session or an existing helper scope. Apply children inherit that scope, and their ordinary detached helpers stay in it because they escape only agent scopes. It shares command construction with `spawn_detached_reaped`.
+
+The caller supplies the program and a `configure` callback instead of a built `Command`. The callback can run twice, so a plain retry keeps the arguments, environment, working directory, and log descriptors. The parent holds the child for at most two seconds, until `/proc/<pid>/cgroup` shows the exact requested `rimz-helper-*.scope`, never accepting an inherited helper scope as the move. A successful early exit needs no retry. A failed exit or an unconfirmed move kills and reaps the wrapper, then retries without the scope and logs a debug line. Only a confirmed child passes to the shared reaper. Agent-owned background commands (`spawn_detached_reaped_as_agent`) keep the inherited agent scope.
 
 A helper started inside a scoped agent runs `systemd-run` inside the bubblewrap view. The view binds the host root and keeps `XDG_RUNTIME_DIR`, so the user bus at `/run/user/<uid>/bus` stays reachable without an extra bind. The user manager must still be reachable on the host, which the `user manager` check covers.
 

@@ -563,7 +563,8 @@ path = "crates/rimz/src/child_process.rs"
 # LSP and SSH supervisors share the bounded stderr tail and its two methods (+3).
 # Detached helper callers share the cwd anchor (+1).
 # Hook env rebuilds share clear_env_preserving_coverage (+1).
-surface-budget = 29
+# Hook drainer spawning requests its own weighted scope from every spawner (+1).
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -7107,6 +7108,11 @@ reason = "Pass 24a: nothing in this module can narrow. read_all and read_for_key
 kind = "item"
 key = "child_process::clear_env_preserving_coverage"
 reason = "CLI hook apply and owner-env restoration share the instrumentation-preserving child environment reset."
+
+[[verdict]]
+kind = "item"
+key = "child_process::spawn_hook_drainer"
+reason = "The elected hook drainer always requests a weighted helper scope, unlike ordinary agent-escape helpers."
 
 [[verdict]]
 kind = "item"

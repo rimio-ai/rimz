@@ -458,24 +458,20 @@ fn spawn(store: &Store) -> Result<(), HookDrainErr> {
         .create(true)
         .append(true)
         .open(log_path)?;
-    crate::child_process::spawn_detached_reaped(
-        binary,
-        |command| {
-            crate::child_process::anchor_detached_command(command, runtime)
-                .args(["hooks", "drain", "--project-root"])
-                .arg(&record.project_root)
-                .stderr(log.try_clone()?);
-            for name in HOOK_ENV_NAMES {
-                command.env_remove(name);
-            }
-            command.envs(crate::workspace::pin_env(
-                &store.paths().workspace_id,
-                &record.project_root,
-            ));
-            Ok(())
-        },
-        "hook-drainer",
-    )?;
+    crate::child_process::spawn_hook_drainer(binary, |command| {
+        crate::child_process::anchor_detached_command(command, runtime)
+            .args(["hooks", "drain", "--project-root"])
+            .arg(&record.project_root)
+            .stderr(log.try_clone()?);
+        for name in HOOK_ENV_NAMES {
+            command.env_remove(name);
+        }
+        command.envs(crate::workspace::pin_env(
+            &store.paths().workspace_id,
+            &record.project_root,
+        ));
+        Ok(())
+    })?;
     Ok(())
 }
 
