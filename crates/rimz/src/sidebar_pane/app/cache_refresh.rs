@@ -16,7 +16,7 @@ use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
-use super::ServeConfig;
+use super::RoomConfig;
 use super::fetch::HostData;
 use super::timing::tick_for;
 
@@ -24,7 +24,7 @@ const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
 
 /// Read the room's live data tick, or skip work while no pane subscribes.
 pub(super) fn spawn(
-    config: ServeConfig,
+    config: RoomConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,
@@ -34,7 +34,7 @@ pub(super) fn spawn(
 }
 
 fn refresh_loop(
-    config: ServeConfig,
+    config: RoomConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     data: Arc<Mutex<HostData>>,

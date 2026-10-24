@@ -142,7 +142,7 @@ fn pane_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
     let (mut source, _) = scroll_rig();
     let (mut destination, output) = scroll_rig();
     for (rig, own, working) in [(&mut source, 99, 0), (&mut destination, 98, 19)] {
-        rig.state.pane.config.mux = mux;
+        rig.state.pane.config.room.mux = mux;
         let id = |index| {
             PaneId::from_parts(
                 mux,
@@ -225,7 +225,7 @@ impl SharedPanes {
     }
 
     pub(super) fn sample(&mut self, clients: &[(u32, usize)]) {
-        let mux = self.panes[0].state.pane.config.mux;
+        let mux = self.panes[0].state.pane.config.room.mux;
         let mut panes = Vec::new();
         for (index, rig) in self.panes.iter().enumerate() {
             let own = rig.state.pane.config.own_pane.as_ref().unwrap();
@@ -714,7 +714,7 @@ fn glide_arrival_snaps_to_target_in_the_receiving_geometry() {
 
 fn offscreen_focus_marker(mux: MuxName) -> (Rig, Instant) {
     let (mut rig, _) = scroll_rig();
-    rig.state.pane.config.mux = mux;
+    rig.state.pane.config.room.mux = mux;
     let mut focused = rig.state.views.mirror().clone();
     focused.focused_pane = focused.worktree_groups[0].rows[19]
         .pane
@@ -1063,7 +1063,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
         let diag = crate::diag::DiagSink::under(
             source._dir.path().to_owned(),
             source.ws.clone(),
-            &source.state.pane.config.session_name,
+            &source.state.pane.config.room.session_name,
             Some(source.state.pane.config.instance_id.clone()),
         );
         let peers = source

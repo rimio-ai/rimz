@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 
 use super::AttachFailure;
 use crate::disk::lock::WorkspaceLock;
-use crate::sidebar_pane::app::ServeConfig;
+use crate::sidebar_pane::app::{RoomConfig, ServeConfig};
 use crate::sidebar_pane::attach::{self, Control, ControlLine, Hello, PROTOCOL, Reply};
 use crate::{RuntimePaths, StatePaths};
 
@@ -41,7 +41,7 @@ const HOST_PANE_ENV_REMOVALS: &[&str] = &[
 
 /// The leading `sidebar host` is what `malloc_arena_cap` in the binary's
 /// `main.rs` matches to give the host its larger arena cap; keep the two in step.
-pub(super) fn host_args(config: &ServeConfig) -> Vec<OsString> {
+pub(super) fn host_args(config: &RoomConfig) -> Vec<OsString> {
     [
         "sidebar",
         "host",
@@ -62,7 +62,7 @@ pub(super) fn host_args(config: &ServeConfig) -> Vec<OsString> {
 /// its reason there too.
 pub(super) fn spawn_host(
     exe: &Path,
-    config: &ServeConfig,
+    config: &RoomConfig,
     runtime: &RuntimePaths,
     state: &StatePaths,
     log: &Path,
@@ -93,7 +93,7 @@ pub(super) fn spawn_host(
 
 fn configure_host_command(
     command: &mut Command,
-    config: &ServeConfig,
+    config: &RoomConfig,
     runtime: &RuntimePaths,
     state: &StatePaths,
 ) -> io::Result<()> {
@@ -127,7 +127,7 @@ fn configure_host_command(
 /// starts the host and the rest wait for its socket. `Ok(None)` means the
 /// socket did not answer within `wait`; `Err` preserves the start failure.
 pub(super) fn connect(
-    config: &ServeConfig,
+    config: &RoomConfig,
     runtime: &RuntimePaths,
     wait: Duration,
     start_host: impl FnOnce() -> io::Result<()>,

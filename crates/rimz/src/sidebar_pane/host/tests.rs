@@ -28,11 +28,11 @@ impl Room {
         let workspace_id: WorkspaceId = workspace();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let template = serve_config(&workspace_id);
+        let room = serve_config(&workspace_id).room;
         let plane = DataPlane::detached();
-        let socket_path = runtime.sidebar_host_socket_path(template.mux, &template.session_name);
+        let socket_path = runtime.sidebar_host_socket_path(room.mux, &room.session_name);
         let host = Host::new(
-            template,
+            room,
             runtime.clone(),
             crate::diag::DiagSink::disabled(),
             plane,
@@ -61,7 +61,7 @@ impl Room {
             lock(&self.host.attachments).is_empty()
         });
         self.host = Host::new(
-            self.host.template.clone(),
+            self.host.room.clone(),
             self.runtime.clone(),
             crate::diag::DiagSink::disabled(),
             DataPlane::detached(),
@@ -113,10 +113,9 @@ impl Room {
 
     fn wake(&self, pane: &Pane, word: &[u8]) {
         if word.first() == Some(&b'{') {
-            let path = self.runtime.sidebar_host_wake_socket_path(
-                self.host.template.mux,
-                &self.host.template.session_name,
-            );
+            let path = self
+                .runtime
+                .sidebar_host_wake_socket_path(self.host.room.mux, &self.host.room.session_name);
             if !path.exists() {
                 self.host.receive_room(bind_wake_socket(&path).unwrap());
             }
@@ -389,10 +388,8 @@ fn an_accepted_pane_is_painted_through_its_fd_and_reports_its_size() {
     );
     assert_eq!(
         heartbeat.wakeup_socket,
-        room.runtime.sidebar_host_wake_socket_path(
-            room.host.template.mux,
-            &room.host.template.session_name
-        )
+        room.runtime
+            .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name)
     );
 
     pty.resize(40, 30);
@@ -872,12 +869,12 @@ fn listen(room: &Room) -> UnixListener {
 fn a_host_with_no_pane_for_the_grace_leaves_and_takes_its_socket() {
     let room = Room::with_timing(brisk());
     let listener = listen(&room);
-    let wake =
-        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
-            room.host.template.mux,
-            &room.host.template.session_name,
-        ))
-        .unwrap();
+    let wake = bind_wake_socket(
+        &room
+            .runtime
+            .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name),
+    )
+    .unwrap();
     let started = Instant::now();
 
     room.host.serve(listener, wake, || None);
@@ -890,12 +887,12 @@ fn a_host_with_no_pane_for_the_grace_leaves_and_takes_its_socket() {
 fn a_host_outlives_the_grace_while_a_pane_is_attached() {
     let room = Room::with_timing(brisk());
     let listener = listen(&room);
-    let wake =
-        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
-            room.host.template.mux,
-            &room.host.template.session_name,
-        ))
-        .unwrap();
+    let wake = bind_wake_socket(
+        &room
+            .runtime
+            .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name),
+    )
+    .unwrap();
     let host = room.host.clone();
     let serving = std::thread::spawn(move || host.serve(listener, wake, || None));
 
@@ -928,12 +925,12 @@ fn reloads_every_pane_then_ends(via_socket: bool) {
             |_| reload::ReloadAction::Reexec(PathBuf::from("next-build"));
     }
     let listener = listen(&room);
-    let wake =
-        bind_wake_socket(&room.runtime.sidebar_host_wake_socket_path(
-            room.host.template.mux,
-            &room.host.template.session_name,
-        ))
-        .unwrap();
+    let wake = bind_wake_socket(
+        &room
+            .runtime
+            .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name),
+    )
+    .unwrap();
     let host = room.host.clone();
     let recorded = Arc::new(Mutex::new(Some("build-a".to_owned())));
     let seen = recorded.clone();
@@ -978,7 +975,7 @@ fn reloads_every_pane_then_ends(via_socket: bool) {
     assert!(
         !room
             .runtime
-            .sidebar_host_wake_socket_path(room.host.template.mux, &room.host.template.session_name)
+            .sidebar_host_wake_socket_path(room.host.room.mux, &room.host.room.session_name)
             .exists()
     );
     assert!(
@@ -1002,8 +999,7 @@ fn a_silent_connection_reads_nothing_back() {
 #[test]
 fn a_pane_that_stopped_reading_does_not_hold_the_host_leaving() {
     let room = Room::new();
-    let mut config = room.host.template.clone();
-    config.instance_id = SidebarInstanceId::new();
+    let config = room.host.config_for(&hello(&SidebarInstanceId::new()));
     let attachment = Attachment::open(
         config.clone(),
         &room.runtime,
@@ -1133,7 +1129,7 @@ fn a_room_click_reaches_only_the_named_attachment() {
     Arc::get_mut(&mut room.host).unwrap().diag = crate::diag::DiagSink::under(
         room._dir.path().to_owned(),
         workspace(),
-        &room.host.template.session_name,
+        &room.host.room.session_name,
         None,
     );
     let id = SidebarInstanceId::new();

@@ -2,7 +2,7 @@
 
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
-use crate::sidebar_pane::app::ServeConfig;
+use crate::sidebar_pane::app::{RoomConfig, ServeConfig};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use jiff::Timestamp;
@@ -145,14 +145,17 @@ pub(in crate::sidebar_pane) fn publish_fold(
 
 pub(crate) fn serve_config(ws: &WorkspaceId) -> ServeConfig {
     ServeConfig {
-        workspace_id: ws.clone(),
-        mux: crate::MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
+        room: RoomConfig {
+            workspace_id: ws.clone(),
+            mux: crate::MuxName::Zellij,
+            session_name: "rimz-test".to_owned(),
+            tick_seconds: 1,
+            timezone: jiff::tz::TimeZone::UTC,
+            notification_prefs: crate::config::NotificationsPrefs::default(),
+        },
         instance_id: SidebarInstanceId::new(),
         tick_seconds: 1,
         refresh_ms_override: None,
-        timezone: jiff::tz::TimeZone::UTC,
-        notification_prefs: crate::config::NotificationsPrefs::default(),
         own_pane: None,
     }
 }

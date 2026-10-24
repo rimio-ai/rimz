@@ -71,7 +71,7 @@ fn pre_push_stops_keep_the_click_sequence_and_stage() {
         Some(Err(
             crate::mux::focus_anchor::FocusActionError::ClientSample(
                 crate::mux::MuxErr::SessionNotFound {
-                    session: rig.source.session_name.clone(),
+                    session: rig.source.room.session_name.clone(),
                 },
             ),
         )),
@@ -142,7 +142,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
     let request = |label| {
         let nonce = crate::mux::focus_anchor::request_action_with_test_sample(
             &runtime,
-            &rig.source.session_name,
+            &rig.source.room.session_name,
             crate::mux::focus_anchor::FocusActionRequest {
                 pane_id: a.clone(),
                 origin: crate::mux::focus_anchor::FocusOrigin::User,
@@ -342,7 +342,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
             })));
         let anchor = crate::mux::focus_anchor::FocusAnchor {
             nonce: crate::ids::FocusNonce::new(),
-            session_name: source.session_name,
+            session_name: source.room.session_name,
             pane_id: crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_2"),
             origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
@@ -594,7 +594,7 @@ impl TraceRig {
         let diag = DiagSink::under(
             dir.path().to_owned(),
             workspace(),
-            &source.session_name,
+            &source.room.session_name,
             Some(source.instance_id.clone()),
         );
         let plane = DataPlane::detached();
@@ -610,7 +610,7 @@ impl TraceRig {
     fn anchor(&self) -> FocusAnchor {
         FocusAnchor {
             nonce: crate::ids::FocusNonce::new(),
-            session_name: self.source.session_name.clone(),
+            session_name: self.source.room.session_name.clone(),
             pane_id: crate::PaneId::from_parts(crate::MuxName::Tmux, "%3"),
             origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
@@ -777,7 +777,7 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
             row["workspace_id"],
             serde_json::to_value(workspace()).unwrap()
         );
-        assert_eq!(row["session_name"], rig.source.session_name);
+        assert_eq!(row["session_name"], rig.source.room.session_name);
         let event = &row["event"];
         assert_eq!(event["kind"], "push_handshake");
         assert_eq!(event["nonce"], anchor.nonce.to_string());
@@ -1018,7 +1018,7 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
             })));
         let anchor = FocusAnchor {
             nonce: crate::ids::FocusNonce::new(),
-            session_name: destination.session_name,
+            session_name: destination.room.session_name,
             pane_id: PaneId::from_parts(crate::MuxName::Tmux, "%1"),
             origin: FocusOrigin::User,
             repair_generation: None,

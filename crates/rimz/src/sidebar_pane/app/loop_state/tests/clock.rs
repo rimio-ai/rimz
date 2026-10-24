@@ -115,9 +115,9 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         own_view_is_daemon: false,
     });
     rig.fold(snapshot, SnapshotSource::Produced);
-    rig.state.pane.config.notification_prefs.enabled = true;
-    rig.state.pane.config.notification_prefs.remind_secs = 1;
-    rig.state.pane.config.notification_prefs.command = Some("exit 99".into());
+    rig.state.pane.config.room.notification_prefs.enabled = true;
+    rig.state.pane.config.room.notification_prefs.remind_secs = 1;
+    rig.state.pane.config.room.notification_prefs.command = Some("exit 99".into());
     clock.advance(Duration::from_secs(1));
     assert_eq!(
         rig.state.pane.clock.timestamp(),

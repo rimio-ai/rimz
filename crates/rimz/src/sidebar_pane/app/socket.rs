@@ -31,10 +31,10 @@ pub(super) fn write_heartbeat(
 ) -> Result<()> {
     crate::wakeup::heartbeat::write_heartbeat(
         runtime,
-        config.workspace_id.clone(),
+        config.room.workspace_id.clone(),
         &config.instance_id,
-        config.mux,
-        &config.session_name,
+        config.room.mux,
+        &config.room.session_name,
         socket_path,
         config.own_pane.clone(),
         size,

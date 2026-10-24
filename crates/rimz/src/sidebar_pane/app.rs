@@ -78,19 +78,26 @@ thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// One session's settings, shared by the host, the data plane and every pane.
 #[derive(Clone, Debug)]
-pub struct ServeConfig {
+pub struct RoomConfig {
     pub workspace_id: WorkspaceId,
     pub mux: MuxName,
     pub session_name: String,
+    pub tick_seconds: u64,
+    pub timezone: jiff::tz::TimeZone,
+    pub notification_prefs: NotificationsPrefs,
+}
+
+#[derive(Clone, Debug)]
+pub struct ServeConfig {
+    pub room: RoomConfig,
     pub instance_id: SidebarInstanceId,
     pub tick_seconds: u64,
     /// One-shot render-cadence override from the launch argv. It is applied to
     /// this renderer's folded snapshots only; shared producer caches stay
     /// config-shaped so recovery can fall back to `[sidebar].refresh_ms`.
     pub refresh_ms_override: Option<u16>,
-    pub timezone: jiff::tz::TimeZone,
-    pub notification_prefs: NotificationsPrefs,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than

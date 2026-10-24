@@ -2309,7 +2309,8 @@ reason = "The sidebar frame CLI prints matching physical rows from the library's
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
 # FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
-surface-budget = 14
+# RoomConfig separates room-owned settings from pane identity (+1).
+surface-budget = 15
 
 [[verdict]]
 kind = "item"
@@ -3858,6 +3859,11 @@ reason = "JsonRpcTransport member forwarding to the WebSocket send; the seam is 
 kind = "pass-through"
 key = "agents::adapters::codex::app_server::transport::FramedTransport::drop"
 reason = "Drop for FramedTransport stops the child app-server (stop_child) on every exit path; RAII teardown belongs here (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::RoomConfig"
+reason = "The CLI builds room-owned settings for the host separately from each pane's identity and cadence."
 
 [[verdict]]
 kind = "item"

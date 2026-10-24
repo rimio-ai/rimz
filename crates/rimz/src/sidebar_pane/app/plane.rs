@@ -22,7 +22,7 @@ use super::fetch::{
     spawn_fetch_worker,
 };
 use super::input::Wakeup;
-use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
+use super::{RoomConfig, ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
     pub(super) views: Arc<Mutex<super::views::Views>>,
@@ -128,7 +128,7 @@ impl DataPlane {
 
     /// Threads start with the first pane and live as long as the host. Fetch and production run off every render loop, so animation and input never block on them.
     pub(in crate::sidebar_pane) fn start(
-        config: &ServeConfig,
+        config: &RoomConfig,
         runtime: &RuntimePaths,
         diag: &crate::diag::DiagSink,
     ) -> Self {
@@ -170,18 +170,12 @@ impl DataPlane {
                 host_data.clone(),
                 observer,
             );
-            let template = config.clone();
             cache_refresh::spawn(
                 config.clone(),
                 runtime.clone(),
                 diag.clone(),
                 host_data,
-                move || {
-                    lock(&subscribers)
-                        .values()
-                        .next()
-                        .map(|eldest| data_tick(Some(eldest), &template))
-                },
+                move || lock(&subscribers).values().next().map(data_tick),
             );
             // tmux fast path: record control-mode events once and fan out in memory. The plane
             // asks the producer to verify structural changes; the poll stays the presence backstop.

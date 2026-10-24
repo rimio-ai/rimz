@@ -107,10 +107,10 @@ impl Drop for StopSignal {
 pub fn run(config: ServeConfig) -> Result<()> {
     use std::io::IsTerminal;
 
-    let mut record_watch = RecordWatch::new(&config.workspace_id);
+    let mut record_watch = RecordWatch::new(&config.room.workspace_id);
     if crate::workspace::record::read(&record_watch.record_path).is_err() {
         let no_room = crate::workspace::WorkspaceErr::NoRoom {
-            location: format!("for workspace {}", config.workspace_id),
+            location: format!("for workspace {}", config.room.workspace_id),
         };
         let _ = writeln!(io::stderr(), "rimz sidebar serve: {no_room}; stopping");
         return Ok(());
@@ -118,17 +118,17 @@ pub fn run(config: ServeConfig) -> Result<()> {
     if !io::stdout().is_terminal() {
         return Err(SidebarSuperviseErr::NotTerminal);
     }
-    let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
-    let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
+    let runtime = crate::RuntimePaths::for_workspace(config.room.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(config.room.workspace_id.clone())?;
     runtime.ensure_dirs()?;
     #[cfg(feature = "testkit")]
     thread::sleep(duration_override(TEST_HOLD_DELAY_MS_ENV, Duration::ZERO));
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
     if let Some(pane) = &config.own_pane
-        && let Err(error) = crate::mux::backend_for(config.mux).close_pane_on_exit(pane)
+        && let Err(error) = crate::mux::backend_for(config.room.mux).close_pane_on_exit(pane)
     {
         tracing::warn!(
-            session = %config.session_name,
+            session = %config.room.session_name,
             error = %error,
             "sidebar pane retention pin failed; continuing with the user's setting",
         );
@@ -165,7 +165,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             remove_orphan_runtime_files(&config);
             return Ok(());
         }
-        let target = crate::reload::recorded_reexec_target(&config.workspace_id);
+        let target = crate::reload::recorded_reexec_target(&config.room.workspace_id);
         exec_state.observe(&target, supervisor_build);
         // Atomic installs can leave this image unlinked. Start the host from
         // the durable room target, even when its bytes match this supervisor.
@@ -339,9 +339,9 @@ fn attach_to_host(
     use std::os::fd::AsFd;
 
     let stdout = io::stdout();
-    let log = state.sidebar_host_log(config.mux, &config.session_name);
-    let stream = host_link::connect(config, runtime, host_link::HOST_WAIT, || {
-        host_link::spawn_host(exe, config, runtime, state, &log)
+    let log = state.sidebar_host_log(config.room.mux, &config.room.session_name);
+    let stream = host_link::connect(&config.room, runtime, host_link::HOST_WAIT, || {
+        host_link::spawn_host(exe, &config.room, runtime, state, &log)
     })
     .map_err(|error| AttachFailure::StartFailed { error, log })?
     .ok_or(AttachFailure::NoAnswer)?;
@@ -630,9 +630,9 @@ impl PaneWatchdog {
     fn from_config(config: &ServeConfig) -> Option<Self> {
         Some(Self {
             pane: config.own_pane.clone()?,
-            mux: config.mux,
-            session_name: config.session_name.clone(),
-            workspace_id: config.workspace_id.clone(),
+            mux: config.room.mux,
+            session_name: config.room.session_name.clone(),
+            workspace_id: config.room.workspace_id.clone(),
             next_probe: Instant::now() + pane_probe_interval(),
             strikes: 0,
             last_observed_at_ms: None,
@@ -837,8 +837,8 @@ fn confirm_self_close(
             if floating_siblings == 0 {
                 return SelfCloseConfirmation::Close;
             }
-            match crate::mux::backend_for(config.mux)
-                .close_view_floating_panes(&config.session_name, &watchdog.pane)
+            match crate::mux::backend_for(config.room.mux)
+                .close_view_floating_panes(&config.room.session_name, &watchdog.pane)
             {
                 Ok(_) => SelfCloseConfirmation::Close,
                 Err(err) => SelfCloseConfirmation::Keep {
@@ -1027,14 +1027,14 @@ fn record_confirmed_self_close(diag: &crate::diag::DiagSink) {
 
 fn diag_sink(config: &ServeConfig) -> crate::diag::DiagSink {
     crate::diag::DiagSink::for_workspace(
-        config.workspace_id.clone(),
-        config.session_name.clone(),
+        config.room.workspace_id.clone(),
+        config.room.session_name.clone(),
         Some(config.instance_id.clone()),
     )
 }
 
 fn remove_orphan_runtime_files(config: &ServeConfig) {
-    let runtime = match crate::RuntimePaths::for_workspace(config.workspace_id.clone()) {
+    let runtime = match crate::RuntimePaths::for_workspace(config.room.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
             debug!(error = %err, "sidebar supervisor orphan runtime cleanup unavailable");

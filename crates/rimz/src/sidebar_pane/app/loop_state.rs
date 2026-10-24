@@ -493,20 +493,20 @@ impl LoopState {
     ) -> Self {
         let snapshot_now = clock.timestamp();
         let current = SidebarSnapshot::build_with_agents(
-            config.workspace_id.clone(),
+            config.room.workspace_id.clone(),
             Vec::new(),
             snapshot_now,
         );
         let now = clock.now();
-        let pixel_wrap = config.mux == MuxName::Tmux;
+        let pixel_wrap = config.room.mux == MuxName::Tmux;
         let width = crate::mux::SidebarWidth::from_config(
             &crate::config::MachineConfig::load_lenient().theme,
         );
         let width_control = WidthController::new(
             runtime.clone(),
-            config.session_name.clone(),
+            config.room.session_name.clone(),
             config.own_pane.clone(),
-            config.mux,
+            config.room.mux,
             width,
         );
         let make_up_filter = crate::sidebar::body_filter::load(&runtime);
@@ -961,7 +961,7 @@ impl LoopState {
             self.fold_focus_intent(push.anchor.clone());
             push.peer.folded_ms = Some(push.elapsed_ms());
         }
-        if push.anchor.session_name != self.pane.config.session_name
+        if push.anchor.session_name != self.pane.config.room.session_name
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
             push.finish(PushVerdict::NotDestination);
@@ -1283,7 +1283,7 @@ impl LoopState {
             &self.pane.clock,
             self.pane.clock.now(),
             target,
-            &self.pane.config.session_name,
+            &self.pane.config.room.session_name,
             self.pane.runtime.clone(),
             crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
             expected,
@@ -1333,7 +1333,7 @@ impl LoopState {
                 at: self.pane.clock.timestamp(),
                 nonce: None,
                 workspace_id: self.pane.runtime.workspace_id.clone(),
-                session_name: self.pane.config.session_name.clone(),
+                session_name: self.pane.config.room.session_name.clone(),
                 generation: repair.generation,
                 evidence: repair.clients.clone(),
                 observed: Vec::new(),
@@ -1575,7 +1575,7 @@ impl LoopState {
                         &self.pane.clock,
                         clicked,
                         pane,
-                        &self.pane.config.session_name,
+                        &self.pane.config.room.session_name,
                         self.pane.runtime.clone(),
                         crate::mux::focus_anchor::FocusOrigin::User,
                         None,
@@ -1615,8 +1615,8 @@ impl LoopState {
             && let Some(room_events) = &self.room_events
         {
             room_events.dispatch(SidebarEventEnvelope::new(
-                self.pane.config.workspace_id.clone(),
-                Some(self.pane.config.session_name.clone()),
+                self.pane.config.room.workspace_id.clone(),
+                Some(self.pane.config.room.session_name.clone()),
                 self.pane.clock.now_ms(),
                 SidebarEvent::BodyFilterChanged,
             ));
@@ -1809,8 +1809,8 @@ impl LoopState {
         let room_caps = self.pane.room_caps.clone();
         if self.pane.clock.effects_enabled() {
             self.refresh_pet_render_caps_if_stale_with(
-                self.pane.config.mux,
-                &self.pane.config.session_name.clone(),
+                self.pane.config.room.mux,
+                &self.pane.config.room.session_name.clone(),
                 self.pane.clock.now(),
                 terminal,
                 |mux, session_name, prev| {
@@ -1861,7 +1861,7 @@ impl LoopState {
                 terminal.backend().pane_size(),
             ) {
                 warn!(
-                    session = %self.pane.config.session_name,
+                    session = %self.pane.config.room.session_name,
                     error = %err,
                     "heartbeat write failed",
                 );
@@ -2535,7 +2535,7 @@ impl PaneState {
         prepared: &FoldPreparation,
         anchor: crate::mux::focus_anchor::FocusAnchor,
     ) {
-        if anchor.session_name != self.config.session_name
+        if anchor.session_name != self.config.room.session_name
             || v.context.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
         {
             return;
@@ -2885,7 +2885,7 @@ impl PaneState {
                 focused: focused_pane,
                 cleared,
                 filter,
-                mux: self.config.mux,
+                mux: self.config.room.mux,
                 clock: &self.clock,
                 now,
                 parked,
@@ -2956,7 +2956,7 @@ impl PaneState {
             .flatten();
         let own_pane = v.target.shared_id().and(self.config.own_pane.as_ref());
         v.context
-            .observe_focus_anchor(&self.config.session_name, observed, loaded, own_pane)
+            .observe_focus_anchor(&self.config.room.session_name, observed, loaded, own_pane)
     }
 
     fn focus_placement(

@@ -191,7 +191,7 @@ fn a_cold_plane_has_no_seed() {
 fn a_warm_plane_returns_its_fold_before_later_delivery() {
     let plane = DataPlane::detached();
     let config = serve_config(&workspace());
-    let mut remembered = snapshot(&config.workspace_id);
+    let mut remembered = snapshot(&config.room.workspace_id);
     remembered.display_name = "seed".into();
     plane.remember(WorkspaceFold {
         workspace: WorkspaceSnapshot(remembered.clone()),

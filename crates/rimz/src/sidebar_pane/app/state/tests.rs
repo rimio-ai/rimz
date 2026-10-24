@@ -388,10 +388,11 @@ impl ApplyHarness {
     ) -> Self {
         let mut config = serve_config(ws);
         config.instance_id = instance_id.clone();
-        config.mux = crate::MuxName::Tmux;
+        config.room.mux = crate::MuxName::Tmux;
         let own = PaneId::from_parts(crate::MuxName::Tmux, "%sidebar");
         config.own_pane = Some(own.clone());
-        let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
+        let socket_path =
+            runtime.sidebar_host_wake_socket_path(config.room.mux, &config.room.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let completion: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
         let mut state = LoopState::new(

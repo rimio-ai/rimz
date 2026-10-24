@@ -123,16 +123,16 @@ impl Attachment {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .detect(
-                config.mux,
-                &config.session_name,
+                config.room.mux,
+                &config.room.session_name,
                 PixelRenderCaps::default(),
                 config.own_pane.as_ref(),
             );
-        if config.mux == MuxName::Tmux
+        if config.room.mux == MuxName::Tmux
             && let Err(err) = escalate_own_pane_passthrough(config.own_pane.as_ref())
         {
             warn!(
-                session = %config.session_name,
+                session = %config.room.session_name,
                 error = %err,
                 "sidebar pane passthrough escalation failed",
             );
@@ -144,7 +144,7 @@ impl Attachment {
 
         let initial_width = terminal.size().map(|s| s.width).ok();
         let host_wake_path =
-            runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
+            runtime.sidebar_host_wake_socket_path(config.room.mux, &config.room.session_name);
         let pixel_lease = match PixelLease::acquire(&runtime) {
             Ok(Some(lease)) => Some(lease),
             Ok(None) => {
@@ -187,7 +187,7 @@ impl Attachment {
         // tmux births through its live absolute-column hook; its resize wakeups
         // own later convergence, avoiding a startup resize that can reflow the
         // sidebar's scrollback before the self-close paint hold is armed.
-        if initial_width.is_some() && config.mux == MuxName::Zellij {
+        if initial_width.is_some() && config.room.mux == MuxName::Zellij {
             state.run_width_control(
                 &mut terminal,
                 crate::diag::record::SidebarWidthControlTrigger::Retarget,
@@ -202,7 +202,7 @@ impl Attachment {
             terminal.backend().pane_size(),
         ) {
             warn!(
-                session = %config.session_name,
+                session = %config.room.session_name,
                 error = %err,
                 "initial heartbeat write failed",
             );
@@ -246,7 +246,7 @@ impl Attachment {
         loop_result?;
         if state.pane.should_exit {
             debug!(
-                session = %config.session_name,
+                session = %config.room.session_name,
                 "sidebar tab emptied; exiting so the pane closes itself",
             );
             return Ok(AttachmentExit::SelfClose);

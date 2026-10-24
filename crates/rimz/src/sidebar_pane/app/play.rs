@@ -24,7 +24,7 @@ use super::fetch::{FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotS
 use super::inbox::WakeupInbox;
 use super::input::{KeyAction, Wakeup};
 use super::loop_state::LoopState;
-use super::{PaneBackend, ServeConfig};
+use super::{PaneBackend, RoomConfig, ServeConfig};
 
 mod live;
 #[cfg(test)]
@@ -223,14 +223,17 @@ impl Column {
         let (tx, requests) = mpsc::channel();
         let height = height.unwrap_or(scenario.height);
         let config = ServeConfig {
-            workspace_id: snapshot.workspace_id.clone(),
-            mux: crate::MuxName::Zellij,
-            session_name: "scenario".into(),
+            room: RoomConfig {
+                workspace_id: snapshot.workspace_id.clone(),
+                mux: crate::MuxName::Zellij,
+                session_name: "scenario".into(),
+                tick_seconds: 1,
+                timezone: jiff::tz::TimeZone::UTC,
+                notification_prefs: Default::default(),
+            },
             instance_id: SidebarInstanceId::new(),
             tick_seconds: 1,
             refresh_ms_override: None,
-            timezone: jiff::tz::TimeZone::UTC,
-            notification_prefs: Default::default(),
             own_pane: None,
         };
         let (caps, slot) = match surface {
