@@ -120,20 +120,21 @@ pub(super) fn settle_launch_checkout(
 }
 
 fn record_creation(workspace: &crate::ResolvedWorkspace, marker: &crate::worktree::WorktreeMarker) {
-    let open = || -> Result<crate::Store> {
-        let paths = crate::StatePaths::for_project_root(&workspace.project_root)
-            .context("preparing store paths")?;
-        let runtime = crate::RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
-        let store = crate::Store::open(paths, runtime).context("opening store")?;
-        store
-            .record_workspace(workspace)
-            .context("recording workspace metadata")?;
-        Ok(store)
-    };
-    match open() {
+    match open_launch_store(workspace) {
         Ok(store) => emit_worktree_created(&store, workspace, marker),
         Err(error) => tracing::debug!(%error, "skipping worktree signal: store unavailable"),
     }
+}
+
+pub fn open_launch_store(workspace: &crate::ResolvedWorkspace) -> Result<crate::Store> {
+    let paths = crate::StatePaths::for_project_root(&workspace.project_root)
+        .context("preparing store paths")?;
+    let runtime = crate::RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
+    let store = crate::Store::open(paths, runtime).context("opening store")?;
+    store
+        .record_workspace(workspace)
+        .context("recording workspace metadata")?;
+    Ok(store)
 }
 
 pub fn emit_worktree_created(

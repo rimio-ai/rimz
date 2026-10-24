@@ -161,6 +161,7 @@ fn room_creators_rejects_participants_but_allows_creators_and_tests() {
     for relative in [
         "cli/ctx.rs",
         "cli/hooks.rs",
+        "cli/supervised/run.rs",
         "reload.rs",
         "harness/schedule/catalog.rs",
     ] {
@@ -178,7 +179,7 @@ fn room_creators_rejects_participants_but_allows_creators_and_tests() {
         "cli/mod.rs",
         "cli/room/start.rs",
         "cli/workspace.rs",
-        "cli/supervised/run.rs",
+        "launcher/checkout.rs",
         "room/birth.rs",
         "room/mod.rs",
         "harness/rebirth.rs",
