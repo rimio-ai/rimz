@@ -253,7 +253,7 @@ Each step names the section that owns it.
 
 A parent that is gone ends the child through the [backstops](#backstops), whatever step it is at.
 
-Failure diagnostics request the pane's last 60 lines, including scrollback (`crates/rimz/src/cli/supervised/pane.rs::capture_failure_tail`), so a collapsed stack member retains earlier output rather than only its visible row. The stored tail is capped at 4 KiB (`crates/rimz/src/harness/run.rs::FAILURE_TAIL_CAP`). Capture happens only after the last startup attempt and is not fenced to it, so recent output from earlier attempts can appear too.
+A failed child's diagnostic tail is the pane capture that [scripting.md § Completion](./scripting.md#completion-folding-lifecycle-observations) sizes and caps. It reaches into scrollback, so a collapsed stack member keeps earlier output rather than only its visible row. Capture happens only after the last startup attempt and is not fenced to it, so recent output from earlier attempts can appear too.
 
 ## Response files
 
