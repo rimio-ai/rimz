@@ -550,7 +550,10 @@ pub(crate) fn spawn_detached_program(
 /// It may run twice when a scope spawn fails, preserving configuration on retry.
 /// `label` is a static tag for tracing. Returns the spawned pid. The child
 /// gets the user's temp environment ([`restore_user_temp_env`]), since it
-/// outlives the call that starts it.
+/// outlives the call that starts it. The child stays in the caller's process
+/// group. A helper that must outlive the pane its caller runs in sets
+/// `process_group(0)` in `configure`, as `workflow::engine::spawn`, the
+/// signal wake of workflows and the exec wrapper's worktree cleanup do.
 pub fn spawn_detached_reaped(
     program: impl AsRef<OsStr>,
     configure: impl FnMut(&mut Command) -> io::Result<()>,
