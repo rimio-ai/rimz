@@ -261,6 +261,30 @@ fn maintenance_requests_force_fold_when_gate_deadline_is_due() {
 }
 
 #[test]
+fn rejected_final_requests_nothing_until_the_gate_deadline() {
+    let mut rig = Rig::new();
+    rig.view().ctx().current = agent_snapshot(&rig.ws);
+    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
+
+    assert_eq!(
+        rig.view().ctx().gate.rule,
+        Some(crate::diag::record::GateRule::FramelessOverFrame)
+    );
+    assert!(rig.next_request().is_none());
+    rig.maintenance();
+    assert!(rig.next_request().is_none());
+
+    let age = crate::sidebar::timing::ACCEPT_REGRESSION_AFTER + Duration::from_millis(1);
+    rig.view().ctx().gate.rejecting_since = Some(
+        Timestamp::from_millisecond(Timestamp::now().as_millisecond() - age.as_millis() as i64)
+            .unwrap(),
+    );
+    rig.maintenance();
+    assert!(rig.next_request().is_some());
+    assert!(rig.next_request().is_none());
+}
+
+#[test]
 fn rejected_final_defers_one_gate_deadline_reevaluation() {
     let mut rig = Rig::new();
     rig.view().ctx().current = agent_snapshot(&rig.ws);
