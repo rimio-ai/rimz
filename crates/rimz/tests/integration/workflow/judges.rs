@@ -28,6 +28,130 @@ pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
 use std::collections::BTreeMap;
 
 #[test]
+#[cfg(target_os = "linux")]
+fn scoped_judge_guard_restores_and_records_replacements() {
+    if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        crate::common::skip(&format!("bubblewrap unusable: {error}"));
+        return;
+    }
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        "",
+    );
+    fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'scoped'\n",
+    )
+    .unwrap();
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let path = env.home_root.join(".gitconfig");
+    fs::write(&path, "original").unwrap();
+    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "claude",
+        r#"
+if [ "$1" = --version ]; then echo 'claude 9.0.0'; exit 0; fi
+printf ready > "$HOME/judge-ready"
+while [ ! -f "$HOME/judge-go" ]; do sleep 0.02; done
+if (printf agent >> "$HOME/.gitconfig") 2>/dev/null; then outcome=writable; else outcome=done; fi
+printf '{"structured_output":{"outcome":"%s"}}\n' "$outcome"
+"#,
+    );
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&bin))
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !env.home_root.join("judge-ready").exists() {
+        assert!(Instant::now() < deadline, "judge did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fs::write(path.with_extension("lock"), "replacement").unwrap();
+    fs::rename(path.with_extension("lock"), &path).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let records = loop {
+        let records = workflow_diagnostics(&env, "scoped_bind_restored");
+        if !records.is_empty() {
+            break records;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "headless executor must record its repair"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["event"]["agent_kind"], "claude");
+    assert_eq!(records[0]["event"]["paths"], json!([path]));
+    fs::write(env.home_root.join("judge-go"), "go").unwrap();
+    let value = settled(&env, id, "done");
+    assert_eq!(events(&value, "evaluation")[0]["object"]["outcome"], "done");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn scoped_judge_guard_arm_refusal_names_the_limit_without_spawning() {
+    if let Err(error) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped) {
+        crate::common::skip(&format!("bubblewrap unusable: {error}"));
+        return;
+    }
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nagent='claude'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        "",
+    );
+    fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'scoped'\n",
+    )
+    .unwrap();
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    fs::write(env.home_root.join(".gitconfig"), "original").unwrap();
+    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "claude",
+        r#"
+if [ "$1" = --version ]; then echo 'claude 9.0.0'; exit 0; fi
+printf spawned > "$HOME/provider-spawned"
+printf '%s\n' '{"structured_output":{"outcome":"done"}}'
+"#,
+    );
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&bin))
+            .env("RIMZ_TEST_SCOPED_BIND_ARM_ERRNO", "24")
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap();
+    let value = until(&env, id, |value| !events(value, "evaluation").is_empty());
+    let evaluation = &events(&value, "evaluation")[0];
+    assert_eq!(evaluation["object"]["outcome"], "died", "{value}");
+    let reason = evaluation["object"]["reason"].as_str().unwrap();
+    assert_eq!(
+        reason,
+        "scoped protected-file guard: Too many open files (os error 24); raise fs.inotify.max_user_instances"
+    );
+    assert!(
+        !reason.contains("timed out") && !reason.contains("version"),
+        "{reason}"
+    );
+    assert!(!env.home_root.join("provider-spawned").exists());
+}
+
+#[test]
 fn judge_refuses_below_version_floor_before_provider_spawn() {
     let (env, _) = fixture(
         &format!("{HEADER}[checks.pr]\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"),

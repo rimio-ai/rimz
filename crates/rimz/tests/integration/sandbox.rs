@@ -31,6 +31,222 @@ fn enable(env: &Env) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn scoped_exec_guard_restores_and_records_replacements() {
+    scoped_exec_guard_replacement(false);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn scoped_exec_guard_records_helper_spawn_failure_in_doctor() {
+    scoped_exec_guard_replacement(true);
+}
+
+#[cfg(target_os = "linux")]
+fn scoped_exec_guard_replacement(fail_helper: bool) {
+    use std::time::{Duration, Instant};
+
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    enable(&env);
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let path = env.home_root.join(".gitconfig");
+    std::fs::write(&path, "original\n").unwrap();
+    let bin = crate::common::write_long_lived_agent_shim(&env, "claude");
+    crate::common::write_path_shim(
+        &bin,
+        "claude",
+        r#"
+if [ "$1" = --version ]; then echo 'claude 9.0.0'; exit 0; fi
+printf ready > "$RIMZ_TEST_GUARD_READY"
+while [ ! -f "$RIMZ_TEST_GUARD_GO" ]; do sleep 0.02; done
+if (printf agent >> "$HOME/.gitconfig") 2>/dev/null; then result=writable; else result=readonly; fi
+printf '%s' "$result" > "$RIMZ_TEST_GUARD_RESULT"
+while [ ! -f "$RIMZ_TEST_GUARD_EXIT" ]; do sleep 0.02; done
+"#,
+    );
+    let ready = env.project_root.join("guard-ready");
+    let go = env.project_root.join("guard-go");
+    let result = env.project_root.join("guard-result");
+    let exit = env.project_root.join("guard-exit");
+    let helper_dir = tempfile::tempdir_in(env.rimz_bin().parent().unwrap()).unwrap();
+    let helper = helper_dir.path().join("rimz");
+    std::fs::hard_link(env.rimz_bin(), &helper).unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    request.identity.name = Some("guard-worker".into());
+    let mut wrapper = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&bin))
+        .env("SHELL", write_fake_login_shell(&env, "guard-shell", &[]))
+        .env("RIMZ_BIN", &helper)
+        .env("RIMZ_TEST_GUARD_READY", &ready)
+        .env("RIMZ_TEST_GUARD_GO", &go)
+        .env("RIMZ_TEST_GUARD_RESULT", &result)
+        .env("RIMZ_TEST_GUARD_EXIT", &exit)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready.exists()
+        || !rimz::proc::argv(wrapper.id())
+            .is_some_and(|argv| argv.iter().any(|arg| arg == "--supervise"))
+    {
+        assert!(
+            wrapper.try_wait().unwrap().is_none(),
+            "wrapper exited before park"
+        );
+        assert!(Instant::now() < deadline, "wrapper never entered park");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if fail_helper {
+        std::fs::remove_file(&helper).unwrap();
+    }
+    let sink = rimz::diag::DiagSink::under(
+        env.store().paths().root.clone(),
+        env.workspace_id.clone(),
+        "test",
+        None,
+    );
+    let kind = if fail_helper {
+        "scoped_bind_restore_failed"
+    } else {
+        "scoped_bind_restored"
+    };
+    std::fs::write(path.with_extension("lock"), "replacement\n").unwrap();
+    std::fs::rename(path.with_extension("lock"), &path).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let event = loop {
+        let log = std::fs::read_to_string(sink.log_path().unwrap()).unwrap_or_default();
+        if let Some(event) = log
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .map(|record| record["event"].clone())
+            .find(|event| event["kind"] == kind)
+        {
+            break event;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "protected replacement must produce {kind}: {log}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(event["agent_kind"], "claude");
+    assert_eq!(event["agent_name"], "guard-worker");
+    assert_eq!(event["paths"], serde_json::json!([path]));
+    if fail_helper {
+        assert_eq!(
+            event["error"],
+            "spawning scoped bind helper: No such file or directory (os error 2)"
+        );
+        assert!(!event["error"].as_str().unwrap().contains("timed out"));
+    }
+    std::fs::write(&go, "go").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observed = loop {
+        if let Ok(value) = std::fs::read_to_string(&result)
+            && !value.is_empty()
+        {
+            break value;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "provider never attempted its write"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(observed, if fail_helper { "writable" } else { "readonly" });
+    std::fs::write(&path, "host write\n").unwrap();
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let row = report["diagnostics"]["incidents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == kind)
+        .expect("doctor must list the guard outcome");
+    assert_eq!(
+        row["state"],
+        if fail_helper {
+            "investigate"
+        } else {
+            "recovered"
+        }
+    );
+    std::fs::write(exit, "exit").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = wrapper.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "wrapper must exit with its provider"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn scoped_exec_guard_arm_refusal_names_the_limit_without_spawning() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    enable(&env);
+    let bin = crate::common::write_long_lived_agent_shim(&env, "claude");
+    crate::common::write_path_shim(
+        &bin,
+        "claude",
+        "[ \"$1\" = --version ] && exit 1; printf spawned > \"$HOME/provider-spawned\"",
+    );
+    std::fs::write(env.home_root.join(".gitconfig"), "original").unwrap();
+    for (errno, reason) in [
+        (
+            24,
+            "scoped protected-file guard: Too many open files (os error 24); raise fs.inotify.max_user_instances",
+        ),
+        (
+            28,
+            "scoped protected-file guard: No space left on device (os error 28); raise fs.inotify.max_user_watches",
+        ),
+    ] {
+        let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", path_with_front(&bin))
+            .env("SHELL", write_fake_login_shell(&env, "guard-shell", &[]))
+            .env("RIMZ_TEST_SCOPED_BIND_ARM_ERRNO", errno.to_string())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "unarmed scoped launch must refuse: {stderr}"
+        );
+        assert_eq!(stderr.lines().last().unwrap(), format!("error: {reason}"));
+        assert!(
+            !stderr.contains("running bwrap") && !stderr.contains("timed out"),
+            "{stderr}"
+        );
+        assert!(!env.home_root.join("provider-spawned").exists());
+    }
+}
+
+#[test]
 fn provider_sandbox_admits_every_provider_without_a_view() {
     for kind in rimz::agents::known_kinds() {
         assert_eq!(

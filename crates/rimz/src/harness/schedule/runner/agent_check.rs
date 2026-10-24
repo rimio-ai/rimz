@@ -242,6 +242,7 @@ pub(super) fn run(
         }
         Err(ProcessErr::Directory(error)) => return Err(error.into()),
         Err(ProcessErr::Version(error)) => return Err(error.into()),
+        Err(ProcessErr::BindGuard(error)) => return Err(error.into()),
         Err(ProcessErr::Io(error)) => (
             crate::agents::HeadlessResult {
                 error: Some(format!("running judge: {error}").into()),

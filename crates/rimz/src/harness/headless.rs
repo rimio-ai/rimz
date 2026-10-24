@@ -174,6 +174,8 @@ pub(crate) enum ProcessErr {
     Version(#[from] crate::agents::version::LaunchVersionErr),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    BindGuard(#[from] crate::sandbox::BindGuardErr),
 }
 
 pub(crate) struct AdmittedLaunch<'a> {
@@ -229,11 +231,47 @@ impl AdmittedLaunch<'_> {
         for key in &process.unset {
             command.env_remove(key);
         }
+        let state = plan.state();
+        let session = crate::workspace::record::read_optional(&state.workspace_record)
+            .ok()
+            .flatten()
+            .map(|record| record.session_name)
+            .unwrap_or_else(|| state.dir_name.as_str().to_owned());
+        let diag = crate::diag::DiagSink::under(
+            state.root.clone(),
+            state.workspace_id.clone(),
+            session,
+            None,
+        );
+        let kind = plan.request.kind.clone();
+        let name = plan.request.identity.name.clone();
+        let guard = crate::sandbox::BindGuard::arm(
+            plan.sandbox
+                .as_ref()
+                .map_or(&[], |plan| plan.guarded_entries()),
+            &crate::proc::rimz_exe(),
+            move |outcome| {
+                diag.emit(crate::diag::record::DiagEvent::scoped_bind_restore(
+                    kind.clone(),
+                    name.clone(),
+                    outcome.paths,
+                    outcome.result,
+                ));
+            },
+        )?;
+        if interrupted() {
+            return Err(ProcessErr::Io(std::io::ErrorKind::Interrupted.into()));
+        }
         Ok(crate::proc::run_bounded_output_hosted(
             &mut command,
             timeout,
             interrupted,
-            spawned,
+            |pid| {
+                if let Some(guard) = &guard {
+                    guard.point(pid);
+                }
+                spawned(pid)
+            },
         )?)
     }
 }

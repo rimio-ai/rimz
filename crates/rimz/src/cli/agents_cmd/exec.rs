@@ -421,11 +421,23 @@ fn launch_and_supervise(
         .context("reading resumed run before spawning provider")?
         .and_then(|record| resumed_run_follow_ups(request, &record));
     let drainer_lease = supervisor::drainer_lease(workspace, isolation)?;
+    let guarded_entries = plan
+        .sandbox
+        .as_ref()
+        .map_or(&[][..], |plan| plan.guarded_entries());
+    let bind_guard = rimz::sandbox::BindGuard::arm(
+        guarded_entries,
+        &rimz::proc::rimz_exe(),
+        bind_restore_sink(&diag, request),
+    )?;
     let provider_terminal = ProviderTerminal::capture();
     let spawned_at = jiff::Timestamp::now();
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
+    if let Some(guard) = &bind_guard {
+        guard.point(child.id());
+    }
     if let Some(target) = attach_target.as_ref() {
         record_own_resume_pane(
             invocation,
@@ -504,10 +516,12 @@ fn launch_and_supervise(
             entered_worktree: entered_worktree.as_deref(),
             cwd: &invocation.cwd,
             isolation,
+            guarded_entries,
         },
         &plan.park_state_file(std::process::id()),
         child,
         drainer_lease,
+        bind_guard,
         workspace,
     )?;
     settle_after_exit(
@@ -544,6 +558,24 @@ struct ParkStartup<'a> {
     entered_worktree: Option<&'a Path>,
     cwd: &'a Path,
     isolation: rimz::config::Isolation,
+    guarded_entries: &'a [PathBuf],
+}
+
+fn bind_restore_sink(
+    diag: &rimz::diag::DiagSink,
+    request: &rimz::harness::launch::ExecRequest,
+) -> impl Fn(rimz::sandbox::BindRestore) + Send + 'static {
+    let diag = diag.clone();
+    let kind = request.kind.clone();
+    let name = request.identity.name.clone();
+    move |outcome| {
+        diag.emit(rimz::diag::record::DiagEvent::scoped_bind_restore(
+            kind.clone(),
+            name.clone(),
+            outcome.paths,
+            outcome.result,
+        ));
+    }
 }
 
 struct ParkExit {

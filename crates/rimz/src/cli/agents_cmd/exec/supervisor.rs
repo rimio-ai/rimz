@@ -45,7 +45,16 @@ struct ParkState {
     isolation: rimz::config::Isolation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drainer_lease_fd: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bind_guard: Option<BindGuardHandoff>,
     workspace: rimz::ResolvedWorkspace,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BindGuardHandoff {
+    fd: i32,
+    entries: Vec<PathBuf>,
+    helper: PathBuf,
 }
 
 impl ParkState {
@@ -230,6 +239,7 @@ impl ParkState {
             cwd: startup.cwd.to_owned(),
             isolation: startup.isolation,
             drainer_lease_fd: None,
+            bind_guard: None,
             workspace: workspace.clone(),
         }
     }
@@ -261,21 +271,31 @@ pub(super) fn park(
     path: &Path,
     child: Child,
     drainer_lease: Option<rimz::harness::hook_drain::DrainerLease>,
+    bind_guard: Option<rimz::sandbox::BindGuard>,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
     #[cfg(unix)]
     let terminal = startup.terminal.clone();
+    let guarded_entries = startup.guarded_entries;
     let state = ParkState::capture(startup, workspace);
     #[cfg(unix)]
     {
         use nix::sys::signal::{Signal, raise};
         use std::os::unix::process::CommandExt as _;
         let mut state = state;
+        let mut bind_guard = bind_guard;
         let handoff = (|| -> Result<()> {
             state.drainer_lease_fd = drainer_lease
                 .as_ref()
                 .map(rimz::harness::hook_drain::DrainerLease::prepare_handoff)
                 .transpose()?;
+            if let Some(guard) = bind_guard.as_mut() {
+                state.bind_guard = Some(BindGuardHandoff {
+                    fd: guard.prepare_handoff()?,
+                    entries: guarded_entries.to_vec(),
+                    helper: rimz::proc::rimz_exe(),
+                });
+            }
             rimz::disk::atomic::write_temp_then_rename_cache(path, &state)
                 .with_context(|| format!("writing park state {}", path.display()))?;
             let _signal_mask = rimz::child_process::CleanupSignalMask::block()?;
@@ -293,6 +313,7 @@ pub(super) fn park(
             Err(error).with_context(|| format!("entering park image from {}", path.display()))
         })();
         drop(drainer_lease);
+        drop(bind_guard);
         if let Err(error) = handoff {
             let _ = writeln!(crate::cli::render::err(), "rimz: {error:#}");
         }
@@ -309,6 +330,8 @@ pub(super) fn park(
     {
         let _ = path;
         let _drainer_lease = drainer_lease;
+        let _bind_guard = bind_guard;
+        let _ = guarded_entries;
         run_loop(state, ProviderChild::Spawned(child), workspace)
     }
 }
@@ -470,10 +493,6 @@ fn run_loop(
     mut child: ProviderChild,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
-    let mut drainer_lease =
-        rimz::harness::hook_drain::DrainerLease::handover(state.drainer_lease_fd.take(), || {
-            drainer_lease(workspace, state.isolation)
-        })?;
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&paths)?;
     let diag = rimz::diag::DiagSink::under(
@@ -482,6 +501,22 @@ fn run_loop(
         workspace.session_name.clone(),
         None,
     );
+    let bind_guard = match state.bind_guard.take() {
+        Some(handoff) => rimz::sandbox::BindGuard::handover(
+            Some(handoff.fd),
+            &handoff.entries,
+            &handoff.helper,
+            bind_restore_sink(&diag, &state.request),
+        )?,
+        None => None,
+    };
+    if let Some(guard) = &bind_guard {
+        guard.point(state.provider_pid);
+    }
+    let mut drainer_lease =
+        rimz::harness::hook_drain::DrainerLease::handover(state.drainer_lease_fd.take(), || {
+            drainer_lease(workspace, state.isolation)
+        })?;
     let run_paths = state.request.run_id.as_ref().map(|run_id| RunPaths {
         run_id: run_id.clone(),
         paths: paths.clone(),
@@ -702,6 +737,11 @@ fn run_loop(
         relaunches += 1;
         spawned_at = Instant::now();
         let spawned = command.spawn();
+        if let Ok(child) = &spawned
+            && let Some(guard) = &bind_guard
+        {
+            guard.point(child.id());
+        }
         if let Err(error) =
             rimz::harness::assist_log::try_append(&rimz::harness::assist_log::AssistRecord {
                 at: jiff::Timestamp::now(),
@@ -747,6 +787,7 @@ fn run_loop(
     };
 
     drop(drainer_lease);
+    drop(bind_guard);
     Ok(state.into_exit(outcome, terminal_grace, startup_deaths, provider_terminal))
 }
 

@@ -7,6 +7,44 @@ use rimz::diag::record::{
 use rimz::ids::LinkTier;
 
 #[test]
+fn scoped_bind_repairs_recover_and_failures_need_investigation() {
+    let cases = [
+        (
+            "scoped_bind_restored",
+            model::DoctorState::Recovered,
+            model::DoctorImpact::Info,
+        ),
+        (
+            "scoped_bind_restore_failed",
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Alarm,
+        ),
+    ];
+    let results = cases.map(|(kind, state, impact)| {
+        let mut wire = serde_json::json!({
+            "kind": kind, "agent_kind": "claude", "paths": ["/home/user/.gitconfig"],
+        });
+        if kind == "scoped_bind_restore_failed" {
+            wire["error"] = "mount: permission denied".into();
+        }
+        let event = serde_json::from_value::<DiagEvent>(wire);
+        (
+            kind,
+            event.is_ok_and(|event| {
+                classify_diagnostic(&event, event.severity()) == (state, impact)
+            }),
+        )
+    });
+    assert_eq!(
+        results,
+        [
+            ("scoped_bind_restored", true),
+            ("scoped_bind_restore_failed", true)
+        ]
+    );
+}
+
+#[test]
 fn sidebar_view_repairs_are_recovered_information() {
     let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
         "kind": "sidebar_view_repaired", "view": "@0",

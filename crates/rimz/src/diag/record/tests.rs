@@ -684,6 +684,31 @@ fn agent_card_without_process_has_stable_diagnostic_identity() {
 
 #[test]
 fn severity_table_pins_conditional_and_regression_categories() {
+    let repairs = [
+        ("scoped_bind_restored", DiagSeverity::Info),
+        ("scoped_bind_restore_failed", DiagSeverity::Error),
+    ]
+    .map(|(kind, severity)| {
+        let mut wire = serde_json::json!({
+            "kind": kind, "agent_kind": "claude", "agent_name": "worker",
+            "paths": ["/home/user/.gitconfig"],
+        });
+        if severity == DiagSeverity::Error {
+            wire["error"] = "spawning scoped bind helper: missing".into();
+        }
+        let event = serde_json::from_value::<DiagEvent>(wire.clone());
+        let decoded = event.as_ref().is_ok_and(|event| {
+            event.severity() == severity && serde_json::to_value(event).unwrap() == wire
+        });
+        (kind, decoded)
+    });
+    assert_eq!(
+        repairs,
+        [
+            ("scoped_bind_restored", true),
+            ("scoped_bind_restore_failed", true)
+        ]
+    );
     let catalog_failed = |rung| DiagEvent::ModelCatalogRefreshFailed {
         agent_kind: AgentKind::new_unchecked("codex"),
         login: crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")).key(),
@@ -799,6 +824,43 @@ fn severity_table_pins_conditional_and_regression_categories() {
     ] {
         for event in events {
             assert_eq!(event.severity(), severity, "{event:?}");
+        }
+    }
+}
+
+#[test]
+fn scoped_bind_records_partition_agent_and_paths_not_error_text() {
+    for kind in ["scoped_bind_restored", "scoped_bind_restore_failed"] {
+        let mut wire = serde_json::json!({
+            "kind": kind, "agent_kind": "claude", "agent_name": "worker",
+            "paths": ["/home/user/.gitconfig"],
+        });
+        if kind == "scoped_bind_restore_failed" {
+            wire["error"] = "mount: permission denied".into();
+        }
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(
+            decoded.is_ok(),
+            "repair diagnostics must decode: {decoded:?}"
+        );
+        let event = decoded.unwrap();
+        assert!(event.summary().contains("worker"));
+        assert!(event.summary().contains("/home/user/.gitconfig"));
+        for (field, value) in [
+            ("agent_kind", serde_json::json!("codex")),
+            ("agent_name", serde_json::json!("other")),
+            ("paths", serde_json::json!(["/home/user/.ssh"])),
+        ] {
+            let mut other = wire.clone();
+            other[field] = value;
+            let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+            assert_ne!(event.identity_key(), other.identity_key(), "{field}");
+        }
+        if kind == "scoped_bind_restore_failed" {
+            assert!(event.summary().contains("permission denied"));
+            wire["error"] = "helper timed out".into();
+            let other = serde_json::from_value::<DiagEvent>(wire).unwrap();
+            assert_eq!(event.identity_key(), other.identity_key());
         }
     }
 }
