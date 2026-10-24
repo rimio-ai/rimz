@@ -227,7 +227,18 @@ pub(super) fn record_conversation(
         return Ok(());
     };
     let kind = agent.spec().kind_id();
-    let snapshot = store.snapshot_cached().ok();
+    let resolves_address = sections.iter().any(|section| {
+        matches!(
+            section.record.map(|record| &record.sender),
+            Some(rimz::store::message::MessageSender::Agent {
+                agent_id: Some(_),
+                ..
+            })
+        ) || (run_id.is_some()
+            && section.origin == rimz::transcript::SectionOrigin::Human
+            && section.record.is_none())
+    });
+    let snapshot = store.snapshot_with_context(|_, _| resolves_address).ok();
     let state = snapshot
         .as_ref()
         .and_then(|snapshot| find_agent(&snapshot.agents, &kind, &agent_id));
@@ -642,7 +653,9 @@ pub(super) fn agent_state(
     agent: &AgentDefinition,
     agent_id: &rimz::ids::AgentSessionId,
 ) -> Option<rimz::agents::AgentState> {
-    let snapshot = store.snapshot_cached().ok()?;
+    let snapshot = store
+        .snapshot_with_context(|kind, id| kind.as_str() == agent.spec().kind && id == agent_id)
+        .ok()?;
     find_agent(&snapshot.agents, agent.spec().kind, agent_id).cloned()
 }
 

@@ -437,7 +437,7 @@ The compact copy trims only ended rows. On a row whose `ended_at` is present, it
 
 The publish gate in [`writer/publish.rs`](../../crates/rimz/src/store/writer/publish.rs) decides when the write tail refreshes the checkpoints. A checkpoint is due when the stamp is `PUBLISH_INTERVAL` (1 second) old, when the unpublished tail reaches `PUBLISH_BYTE_BUDGET` (64 KiB), or when the log is shorter than the stamp's offset. Concurrent publishers serialize on `locks/publish.lock`, so they group-commit.
 
-`Store::snapshot_cached` serves `latest.json` when it is current and re-projects otherwise, then attaches the agent context sidecars for the projected agents. That gives every address resolver the same provider rest evidence (a provider error, or a completed or interrupted settle) that pane ownership uses. The pure snapshot reducer reads the store alone, and a missing sidecar leaves the raw lifecycle status authoritative.
+`Store::snapshot_cached` serves `latest.json` when it is current and re-projects otherwise, then attaches the agent context sidecars for the projected agents. That gives every address resolver the same provider rest evidence (a provider error, or a completed or interrupted settle) that pane ownership uses. It delegates to `Store::snapshot_with_context`, which keeps the same rows and membership but attaches only the selected `(kind, agent_id)` keys; an empty selection does not read sidecars or evict cached parses. Hook reads of lifecycle-only fields select none, and own-session context reads select that session. Address resolution, pane ownership and reaping retain full attachment. The pure snapshot reducer reads the store alone, and a missing sidecar leaves the raw lifecycle status authoritative.
 
 ### Runtime and audit
 

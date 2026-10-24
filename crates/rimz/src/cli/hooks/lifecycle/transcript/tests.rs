@@ -1368,6 +1368,7 @@ fn replay_finishes_a_partially_recorded_prompt_batch() {
 
 #[test]
 fn effort_counts_only_appended_human_prompts_and_agent_messages() {
+    use rimz::agents::{AgentContext, AgentStatus, AgentTurnError, TurnErrorClass};
     use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender, PromptSection};
     use rimz::transcript::{SectionOrigin, TranscriptKind};
 
@@ -1382,6 +1383,37 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
         "sender",
         Default::default(),
     );
+    let now = jiff::Timestamp::now();
+    let mut snapshot = store.snapshot().unwrap();
+    let rows = std::sync::Arc::make_mut(&mut snapshot.agents);
+    let sender = &mut rows[0];
+    sender.status = AgentStatus::Running;
+    sender.registered_at = None;
+    sender.last_activity = now - std::time::Duration::from_secs(2);
+    sender.turn_started_at = Some(now - std::time::Duration::from_secs(2));
+    let mut shadowed = sender.clone();
+    shadowed.agent_id = "a-shadowed-peer".into();
+    shadowed.name = Some("shadowed".into());
+    shadowed.last_activity = now - std::time::Duration::from_secs(1);
+    shadowed.turn_started_at = Some(now - std::time::Duration::from_secs(1));
+    rows.push(shadowed);
+    rimz::disk::atomic::write_temp_then_rename_cache(&store.paths().latest_snapshot, &snapshot)
+        .unwrap();
+    rimz::store::agent_context::write(
+        store.runtime_paths(),
+        "codex",
+        "a-shadowed-peer",
+        &AgentContext {
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::PausedOverloaded,
+                at: now,
+                label: None,
+            }),
+            ..AgentContext::new("codex", now)
+        },
+        None,
+    )
+    .unwrap();
     let receiver = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let message = MessageRecord::new(
         workspace.workspace_id.clone(),
@@ -1447,6 +1479,11 @@ fn effort_counts_only_appended_human_prompts_and_agent_messages() {
     assert_eq!(effort[0]["event"], "from_agent");
     assert_eq!(effort[0]["sender_kind"], "codex");
     assert_eq!(effort[0]["sender_session"], "native-sender");
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert!(entries.iter().any(
+        |entry| entry.message_id.as_ref() == Some(&message.message_id)
+            && entry.from.as_deref() == Some("@sender")
+    ));
     assert_eq!(effort[1]["event"], "from_user");
     assert_eq!(effort[2]["event"], "from_agent");
     assert!(effort[2].get("sender_session").is_none());

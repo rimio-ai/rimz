@@ -2374,7 +2374,8 @@ allowed-dependencies = [
 # The CLI reads a scoped handle's hook ingress id to key assistant transcripts (+1).
 # The durable hibernation record module (+1).
 # The durable `workflow` record and journal module (+1).
-surface-budget = 38
+# Store::snapshot_with_context selects enrichment without narrowing membership (+1).
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
