@@ -141,15 +141,20 @@ proptest! {
             match action {
                 0 => {
                     ui.scroll_ease.arm();
-                    ui.scroll_offset = usize::from(value) % (pane_ui.drawn_scroll_max.unwrap_or(0) + 1);
+                    ui.scroll_offset =
+                        usize::from(value) % (pane_ui.drawn_scroll_max.unwrap_or(0) + 1);
                     ui.offset_authoritative = true;
                 }
-                1 => ui.selected_index = Some(usize::from(value) % ui.visible_roster(&snapshot).len().max(1)),
+                1 => ui.selected_index =
+                    Some(usize::from(value) % ui.visible_roster(&snapshot).len().max(1)),
                 2 => snapshot.now += Duration::from_secs(2),
                 3 => snapshot.rows_mut().next().unwrap().name = format!("edited-{step}"),
                 // Same copy-on-write mutation as the app's private set_rows_unread.
                 4 => { let row = snapshot.rows_mut().next().unwrap(); row.unread = !row.unread; }
-                5 => ui.freeze = Some(LayoutFreeze { frozen: FrozenOrder::default(), armed_ms: snapshot.now.as_millisecond() }),
+                5 => ui.freeze = Some(LayoutFreeze {
+                    frozen: FrozenOrder::default(),
+                    armed_ms: snapshot.now.as_millisecond(),
+                }),
                 6 => ui.freeze = None,
                 7 => {
                     let key = snapshot.worktree_groups[0].key.clone();
@@ -157,7 +162,8 @@ proptest! {
                 }
                 8 => width = 20 + value % 61,
                 9 => ui.landed_open = !ui.landed_open,
-                10 => ui.search_draft = Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
+                10 => ui.search_draft =
+                    Some(if value % 2 == 0 { "card-1".into() } else { String::new() }),
                 _ => {
                     let row = snapshot.worktree_groups[0].rows[0].id.clone();
                     ui.delegation_overrides.insert(row.clone(), value % 2 == 0);
@@ -167,7 +173,8 @@ proptest! {
             let before = ui.clone();
             let pane_before = pane_ui.clone();
             let theme = pane_ui.theme(&snapshot.theme);
-            let expected = compose_lines(&snapshot, None, &before, &pane_before, &theme, width, height);
+            let expected =
+                compose_lines(&snapshot, None, &before, &pane_before, &theme, width, height);
             let actual = compose_cached(&snapshot, &mut ui, &mut pane_ui, width, height);
             prop_assert_eq!(&actual, &expected, "step {} action {}", step, action);
             write_back(&mut ui, &mut pane_ui, actual);
