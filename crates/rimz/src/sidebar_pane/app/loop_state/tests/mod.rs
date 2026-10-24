@@ -482,7 +482,7 @@ fn terminal_with_width(cols: u16) -> Terminal<PaneBackend> {
 }
 
 fn settle_width(rig: &mut Rig) {
-    // A test that starts after width admission, not at the initial probe every own pane arms.
+    // An idle controller starts this test after width admission, without an initial probe.
     rig.state.pane.width_control = WidthController::new(
         rig.runtime.clone(),
         rig.state.pane.config.room.session_name.clone(),

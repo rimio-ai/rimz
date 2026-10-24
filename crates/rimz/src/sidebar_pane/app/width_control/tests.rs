@@ -789,7 +789,7 @@ fn burst_commit_caps_against_a_view_resized_during_the_hold() {
 }
 
 #[test]
-fn observation_without_an_owned_pane_stays_idle() {
+fn observation_without_a_controlled_pane_stays_idle() {
     let (_dir, runtime, _) = controller(MuxName::Tmux);
     let mut controller = WidthController::new(
         runtime,
