@@ -392,7 +392,8 @@ mod tests {
             pass: 0,
         };
         live.advance(Duration::from_secs(1), 34).unwrap();
-        live.column.state.views.scratch_for_test().0.help_visible = true;
+        live.column.input(Wakeup::Key(KeyAction::Help)).unwrap();
+        assert!(live.column.state.inspect_view(|ui, _| ui.help_visible));
         live.advance(Duration::from_secs(5), 34).unwrap();
         assert!(
             !live.column.state.inspect_view(|ui, _| ui.help_visible),

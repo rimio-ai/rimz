@@ -17,7 +17,7 @@ use crate::sidebar::unread::reconcile_snapshot;
 use crate::sidebar_pane::pixel::PixelRenderCaps;
 use crate::sidebar_pane::pixel::PixelSlot;
 use crate::sidebar_pane::render::SectionLabel;
-use crate::{RuntimePaths, SidebarInstanceId};
+use crate::{PaneId, RuntimePaths, SidebarInstanceId};
 
 use super::clock::LoopClock;
 use super::fetch::{FetchHandle, FetchPhase, FetchRequest, FetchUpdate, SnapshotSource};
@@ -234,7 +234,7 @@ impl Column {
             instance_id: SidebarInstanceId::new(),
             tick_seconds: 1,
             refresh_ms_override: None,
-            own_pane: None,
+            own_pane: Some(PaneId::from_parts(crate::MuxName::Zellij, "sidebar_play")),
         };
         let (caps, slot) = match surface {
             Surface::Text => (PixelRenderCaps::default(), None),
