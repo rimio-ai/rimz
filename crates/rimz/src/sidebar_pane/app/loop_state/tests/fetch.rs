@@ -274,7 +274,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
     );
 }
 
-fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
+pub(super) fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
     std::fs::read_to_string(crate::diag::focus_trace::log_path(rig._dir.path()))
         .unwrap_or_default()
         .lines()
@@ -283,7 +283,7 @@ fn focus_records(rig: &Rig) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn enable_focus_trace(rig: &mut Rig) {
+pub(super) fn enable_focus_trace(rig: &mut Rig) {
     rig.state.pane.diag = crate::diag::DiagSink::under(
         rig._dir.path().to_owned(),
         rig.ws.clone(),

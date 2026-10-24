@@ -86,6 +86,7 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// The hold-last baseline from this view's agreed working-pane focus.
     /// It advances on a `Some` derivation and holds across a `None` (sidebar
     /// focus, disagreement between co-viewers, or a focused pane without a row).
+    /// Arrival from another pane to an unlisted destination clears it with the selection.
     pub(in crate::sidebar_pane) baseline_pane: Option<PaneId>,
     /// Whether arrival or the last own-view fold found this view's tab on screen.
     /// Projection arms arrivals, preserving that latch through older hidden

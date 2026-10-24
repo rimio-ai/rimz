@@ -1,5 +1,6 @@
 //! `ViewAccess` lends explicit client views to `PaneState` with a pre-lock overlay cut.
 
+use super::super::selection::unseat_selection;
 use super::super::views::{ViewId, Views};
 use super::*;
 
@@ -175,12 +176,10 @@ impl ViewAccess {
                 return advance(pane, &mut self.scratch(events, resolved, observed));
             }
             let own_pane = own_pane.clone();
-            let own_view = views.fold.as_ref().and_then(|fold| {
-                fold.frame
-                    .as_deref()
-                    .and_then(|frame| SidebarOwnView::from_frame(&own_pane, frame))
-            });
-            // Unresolved copies keep their baseline, never an unrelated client's session focus.
+            let frame = views.fold.as_ref().and_then(|fold| fold.frame.as_deref());
+            let own_view = frame.and_then(|frame| SidebarOwnView::from_frame(&own_pane, frame));
+            let own_pane_unlisted = frame.is_some() && own_view.is_none();
+            // Unresolved copies never follow an unrelated client's session focus.
             let focused = views.has_sample().then(|| views.focused(&own_pane));
             let parked = views.has_sample().then(|| views.parked(&own_pane));
             let focus_event = views.attributed_focus_event(&own_pane);
@@ -216,6 +215,11 @@ impl ViewAccess {
             }
             let mut arrival_until = None;
             if route.advancing && (entry.unpainted || entry.last_pane.as_ref() != Some(&own_pane)) {
+                // A pick arriving from another pane belongs there until topology lists this pane.
+                if own_pane_unlisted && entry.last_pane.as_ref() != Some(&own_pane) {
+                    context.current.own_view = None;
+                    unseat_selection(&mut entry.state);
+                }
                 if entry.last_pane.is_some() || self.view_advanced {
                     entry.state.arrival_pending = true;
                     context.tab_read_dwell_until =
