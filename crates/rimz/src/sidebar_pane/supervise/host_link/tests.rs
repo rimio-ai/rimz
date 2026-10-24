@@ -32,7 +32,7 @@ impl Room {
     fn listen(&self) -> UnixListener {
         let socket = self
             .runtime
-            .sidebar_host_socket_path(self.config.mux, &self.config.session_name);
+            .sidebar_host_socket_path(self.config.room.mux, &self.config.room.session_name);
         UnixListener::bind(socket).unwrap()
     }
 
@@ -59,7 +59,7 @@ impl Room {
                 workspace_id: id,
                 project_root: alias,
                 worktree_root: None,
-                session_name: room.config.session_name.clone(),
+                session_name: room.config.room.session_name.clone(),
                 root_class: crate::workspace::RootClass::Directory,
                 rimz_bin: None,
                 rimz_build: None,
@@ -104,7 +104,7 @@ fn a_pane_no_host_answers_finishes_once_the_wait_is_over() {
     let started = AtomicUsize::new(0);
     let began = Instant::now();
 
-    let stream = connect(&room.config, &room.runtime, BRIEF, || {
+    let stream = connect(&room.config.room, &room.runtime, BRIEF, || {
         started.fetch_add(1, Ordering::SeqCst);
         Ok(())
     });
@@ -124,7 +124,7 @@ fn a_host_that_cannot_start_returns_its_error_at_once() {
     let room = Room::new();
     let began = Instant::now();
 
-    let stream = connect(&room.config, &room.runtime, SETTLE, || {
+    let stream = connect(&room.config.room, &room.runtime, SETTLE, || {
         Err(io::ErrorKind::NotFound.into())
     });
 
@@ -142,7 +142,7 @@ fn a_rejected_hello_preserves_the_hosts_reason() {
         },
         Vec::new(),
     );
-    let stream = connect(&room.config, &room.runtime, BRIEF, || {
+    let stream = connect(&room.config.room, &room.runtime, BRIEF, || {
         panic!("a host is already listening")
     })
     .unwrap()
@@ -157,7 +157,7 @@ fn a_rejected_hello_preserves_the_hosts_reason() {
 fn an_accepted_pane_hears_the_hosts_controls_then_its_end() {
     let room = Room::new();
     answer(room.listen(), accept(), vec![Control::SelfClose]);
-    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+    let stream = connect(&room.config.room, &room.runtime, BRIEF, || Ok(()))
         .unwrap()
         .unwrap();
 
@@ -183,7 +183,7 @@ fn baseline_controls_round_trip_and_unknown_controls_stay_quiet() {
             attach::write_line(&stream, &value).unwrap();
         }
     });
-    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+    let stream = connect(&room.config.room, &room.runtime, BRIEF, || Ok(()))
         .unwrap()
         .unwrap();
     let mut link = HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).unwrap();
@@ -208,7 +208,7 @@ fn a_quiet_host_is_neither_a_control_nor_lost() {
         attach::write_line(&stream, &accept()).unwrap();
         let _ = release.recv();
     });
-    let stream = connect(&room.config, &room.runtime, BRIEF, || Ok(()))
+    let stream = connect(&room.config.room, &room.runtime, BRIEF, || Ok(()))
         .unwrap()
         .unwrap();
     let mut link = HostLink::open(stream, &room.hello(), output().as_fd(), SETTLE).unwrap();
@@ -227,7 +227,7 @@ fn panes_that_lose_their_host_together_start_one_replacement() {
             let room = room.clone();
             let started = started.clone();
             std::thread::spawn(move || {
-                connect(&room.config, &room.runtime, SETTLE, || {
+                connect(&room.config.room, &room.runtime, SETTLE, || {
                     started.fetch_add(1, Ordering::SeqCst);
                     // The replacement host: it binds a little after its
                     // spawn returns, as a real one does.
@@ -257,7 +257,7 @@ fn panes_that_lose_their_host_together_start_one_replacement() {
 fn the_host_argv_names_the_session_and_reads_as_no_other_sidebar_process() {
     let room = Room::new();
 
-    let argv: Vec<String> = host_args(&room.config)
+    let argv: Vec<String> = host_args(&room.config.room)
         .into_iter()
         .map(|arg| arg.into_string().unwrap())
         .collect();
@@ -287,7 +287,7 @@ fn a_host_that_fails_to_start_says_why_in_its_log() {
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
     let log = room._dir.path().join("state/log/sidebar-host.log");
 
-    spawn_host(&exe, &room.config, &room.runtime, &state, &log).unwrap();
+    spawn_host(&exe, &room.config.room, &room.runtime, &state, &log).unwrap();
 
     let deadline = Instant::now() + SETTLE;
     loop {
@@ -308,9 +308,9 @@ fn a_host_that_fails_to_start_says_why_in_its_log() {
 fn the_host_environment_pins_its_room_and_keeps_the_session_not_the_pane() {
     let (room, state, root) = Room::recorded();
     let mut command = Command::new("/bin/true");
-    configure_host_command(&mut command, &room.config, &room.runtime, &state).unwrap();
+    configure_host_command(&mut command, &room.config.room, &room.runtime, &state).unwrap();
     let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
-    for (name, value) in crate::workspace::pin_env(&room.config.workspace_id, &root) {
+    for (name, value) in crate::workspace::pin_env(&room.config.room.workspace_id, &root) {
         assert_eq!(
             env.get(std::ffi::OsStr::new(&name)),
             Some(&Some(std::ffi::OsStr::new(&value))),
@@ -348,18 +348,21 @@ fn assert_refusal_logged(log: &Path, error: &str) {
 fn a_host_without_a_workspace_record_is_not_spawned() {
     let room = Room::new();
     let state =
-        crate::StatePaths::under(room.config.workspace_id.clone(), room._dir.path()).unwrap();
+        crate::StatePaths::under(room.config.room.workspace_id.clone(), room._dir.path()).unwrap();
     let log = room._dir.path().join("host.log");
     let error = spawn_host(
         Path::new("/bin/true"),
-        &room.config,
+        &room.config.room,
         &room.runtime,
         &state,
         &log,
     )
     .unwrap_err()
     .to_string();
-    assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
+    assert!(
+        error.contains(room.config.room.workspace_id.as_str()),
+        "{error}"
+    );
     assert!(error.contains("cannot access"), "{error}");
     assert_refusal_logged(&log, &error);
 }
@@ -373,14 +376,17 @@ fn a_host_with_a_workspace_record_for_another_root_is_not_spawned() {
     let log = room._dir.path().join("host.log");
     let error = spawn_host(
         Path::new("/bin/true"),
-        &room.config,
+        &room.config.room,
         &room.runtime,
         &state,
         &log,
     )
     .unwrap_err()
     .to_string();
-    assert!(error.contains(room.config.workspace_id.as_str()), "{error}");
+    assert!(
+        error.contains(room.config.room.workspace_id.as_str()),
+        "{error}"
+    );
     assert!(error.contains("does not verify"), "{error}");
     assert_refusal_logged(&log, &error);
 }

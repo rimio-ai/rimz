@@ -228,11 +228,12 @@ impl Rig {
         crate::sidebar::body_filter::write(&runtime, &filter).expect("write initial filter");
         let instance_id = SidebarInstanceId::new();
         let mut config = serve_config(&ws);
-        config.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
+        config.room.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
         config.own_pane = own_pane.or_else(|| Some(PaneId::from_parts(MuxName::Tmux, "%99")));
         config.instance_id = instance_id;
         config.tick_seconds = 60;
-        let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
+        let socket_path =
+            runtime.sidebar_host_wake_socket_path(config.room.mux, &config.room.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
         let completion: Arc<AtomicBool> = Arc::default();
@@ -484,9 +485,9 @@ fn settle_width(rig: &mut Rig) {
     // A test that starts after width admission, not at the initial probe every own pane arms.
     rig.state.pane.width_control = WidthController::new(
         rig.runtime.clone(),
-        rig.state.pane.config.session_name.clone(),
+        rig.state.pane.config.room.session_name.clone(),
         None,
-        rig.state.pane.config.mux,
+        rig.state.pane.config.room.mux,
         crate::mux::SidebarWidth::from_config(&rig.state.views.mirror().theme),
     );
 }

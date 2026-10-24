@@ -25,6 +25,8 @@ use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
+use super::RoomConfig;
+#[cfg(feature = "testkit")]
 use super::ServeConfig;
 use super::input::Wakeup;
 use super::timing::tick_for;
@@ -449,7 +451,7 @@ impl TabNameMemo {
 /// Owns all state that persists between fetch cycles.
 struct FetchWorker {
     observer: Option<crate::sidebar::observe::RoomObserver>,
-    config: ServeConfig,
+    config: RoomConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     cursor: RollupCursor,
@@ -491,16 +493,13 @@ impl IdleCycleFixture {
         mut frame: PaneFrame,
         subscribers: usize,
     ) -> Self {
-        let config = ServeConfig {
+        let config = RoomConfig {
             workspace_id: state.workspace_id.clone(),
             mux: crate::MuxName::Zellij,
             session_name: frame.session_name.clone(),
-            instance_id: SidebarInstanceId::new(),
             tick_seconds: 1,
-            refresh_ms_override: None,
             timezone: jiff::tz::TimeZone::UTC,
             notification_prefs: NotificationsPrefs::default(),
-            own_pane: None,
         };
         let producer = PaneProducer::seeded(&runtime, &config.session_name);
         let worker = FetchWorker::new(
@@ -553,9 +552,13 @@ impl IdleCycleFixture {
             .cycle
             .iter()
             .map(|subscriber| {
-                let mut config = self.worker.config.clone();
-                config.instance_id = subscriber.instance_id.clone();
-                config.own_pane = subscriber.own_pane.clone();
+                let config = ServeConfig {
+                    room: self.worker.config.clone(),
+                    instance_id: subscriber.instance_id.clone(),
+                    own_pane: subscriber.own_pane.clone(),
+                    tick_seconds: self.worker.config.tick_seconds,
+                    refresh_ms_override: None,
+                };
                 let mut renderer = super::loop_state::LoopState::new(
                     crate::sidebar_pane::app::clock::LoopClock::wall(),
                     config,
@@ -680,7 +683,7 @@ impl IdleCycleFixture {
                         super::loop_state::LoopState::project_fold(
                             fold,
                             subscriber.own_pane.as_ref(),
-                            self.worker.config.refresh_ms_override,
+                            None,
                         )
                     },
                     true,
@@ -706,7 +709,7 @@ impl IdleCycleFixture {
 
 impl FetchWorker {
     fn new(
-        config: ServeConfig,
+        config: RoomConfig,
         runtime: RuntimePaths,
         diag: crate::diag::DiagSink,
         producer: PaneProducer,
@@ -742,9 +745,9 @@ impl FetchWorker {
     /// bypass cadence without blocking any renderer.
     fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
         sink.begin_cycle();
-        if sink.cycle.is_empty() {
+        let Some(eldest) = sink.cycle.first() else {
             return;
-        }
+        };
         self.window.cycles += 1;
         let now_ms = crate::utils::time::unix_now_ms();
         let inputs = sink
@@ -774,7 +777,7 @@ impl FetchWorker {
             },
         );
         self.window.fold_time += fold_started.elapsed();
-        let tick = data_tick(sink.cycle.first(), &self.config);
+        let tick = data_tick(eldest);
         let produce = self.start_produce_if_due(request, frame_stamps, &fast, now_ms, tick);
         self.publish_fast_fold(
             state,
@@ -846,7 +849,7 @@ impl FetchWorker {
         let opts = crate::sidebar::produce::ProduceOptions {
             mux: self.config.mux,
             session_name: self.config.session_name.clone(),
-            exclude: sink.witness(&self.config),
+            exclude: sink.witness(),
             min_pane_cache_ms: request.min_pane_cache_ms,
             diag: self.diag.clone(),
         };
@@ -1268,8 +1271,8 @@ pub(super) struct Subscriber {
     pub(super) wake: SyncSender<Wakeup>,
 }
 
-pub(super) fn data_tick(eldest: Option<&Subscriber>, config: &ServeConfig) -> Duration {
-    tick_for(eldest.map_or(config.tick_seconds, |eldest| eldest.tick_seconds))
+pub(super) fn data_tick(eldest: &Subscriber) -> Duration {
+    tick_for(eldest.tick_seconds)
 }
 
 /// The renderers one fetch worker feeds, keyed by instance id so they iterate
@@ -1312,11 +1315,10 @@ impl ResultSink {
         self.context = None;
     }
 
-    fn witness(&self, config: &ServeConfig) -> Option<PaneId> {
+    fn witness(&self) -> Option<PaneId> {
         self.cycle
             .first()
             .and_then(|eldest| eldest.own_pane.clone())
-            .or_else(|| config.own_pane.clone())
     }
 
     /// Publish content and completion atomically, then wake the frozen cycle members.
@@ -1445,7 +1447,7 @@ impl FetchWorker {
 /// durable and external side effects still land.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_fetch_worker(
-    config: ServeConfig,
+    config: RoomConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     producer: PaneProducer,

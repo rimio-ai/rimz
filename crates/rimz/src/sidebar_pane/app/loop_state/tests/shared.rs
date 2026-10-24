@@ -8,7 +8,7 @@ fn shared_rig(views: Arc<Mutex<Views>>, index: usize, rows: usize) -> Rig {
     let own = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
     let mut rig = Rig::with_own_pane(own.clone());
     let mut snapshot = agent_snapshot(&rig.ws);
-    snapshot.pane_session_name = Some(rig.state.pane.config.session_name.clone());
+    snapshot.pane_session_name = Some(rig.state.pane.config.room.session_name.clone());
     let first = snapshot.worktree_groups[0].rows[0].clone();
     Arc::make_mut(&mut snapshot.worktree_groups)[0].rows = (0..rows)
         .map(|slot| {
@@ -419,7 +419,7 @@ fn a_jump_contending_with_a_heavy_view_reaches_target_output_within_one_click_bu
         let clicked = Instant::now();
         let anchor = crate::mux::focus_anchor::FocusAnchor {
             nonce: FocusNonce::new(),
-            session_name: target.state.pane.config.session_name.clone(),
+            session_name: target.state.pane.config.room.session_name.clone(),
             pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1_0"),
             origin: FocusOrigin::User,
             repair_generation: None,
@@ -495,7 +495,7 @@ fn a_jump_does_not_change_an_unrelated_clients_view() {
     );
     let anchor = crate::mux::focus_anchor::FocusAnchor {
         nonce: FocusNonce::new(),
-        session_name: target.state.pane.config.session_name.clone(),
+        session_name: target.state.pane.config.room.session_name.clone(),
         pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1_0"),
         origin: FocusOrigin::User,
         repair_generation: None,

@@ -663,7 +663,8 @@ fn unread_snapshot(rig: &Rig, unread: bool) -> SidebarSnapshot {
 }
 
 fn capture_bells(rig: &mut Rig) -> FrameOutput {
-    rig.state.pane.config.notification_prefs.desktop = crate::config::DesktopNotificationMode::Off;
+    rig.state.pane.config.room.notification_prefs.desktop =
+        crate::config::DesktopNotificationMode::Off;
     let output = FrameOutput::default();
     rig.terminal = Terminal::with_options(
         PaneBackend::headless(output.clone()),
@@ -713,9 +714,9 @@ fn zellij_room_reminder_banner_comes_from_the_watched_pane_only() {
     let mut outputs = Vec::new();
     for watched in [true, false] {
         let mut rig = hidden_rig();
-        rig.state.pane.config.mux = MuxName::Zellij;
+        rig.state.pane.config.room.mux = MuxName::Zellij;
         let output = capture_bells(&mut rig);
-        rig.state.pane.config.notification_prefs.desktop =
+        rig.state.pane.config.room.notification_prefs.desktop =
             crate::config::DesktopNotificationMode::Osc;
         if watched {
             let mut snapshot = rig.state.views.mirror().clone();

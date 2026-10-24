@@ -979,9 +979,9 @@ fn disabled_terminal_notifications_write_nothing_and_trace_suppression() {
     let diag =
         crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
     let mut config = fixtures::serve_config(&ws);
-    config.notification_prefs.enabled = false;
-    config.notification_prefs.desktop = crate::config::DesktopNotificationMode::Osc;
-    config.notification_prefs.sound = crate::config::NotificationSoundMode::Bell;
+    config.room.notification_prefs.enabled = false;
+    config.room.notification_prefs.desktop = crate::config::DesktopNotificationMode::Osc;
+    config.room.notification_prefs.sound = crate::config::NotificationSoundMode::Bell;
     let mut snap = snapshot(&ws);
     let work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
     snap.own_view = Some(crate::store::snapshot::SidebarOwnView {

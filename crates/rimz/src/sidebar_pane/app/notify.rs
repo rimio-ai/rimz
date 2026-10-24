@@ -30,19 +30,20 @@ pub(super) fn emit_terminal_notification<B: Backend + Write>(
     notice: BellNotice<'_>,
     diag: &crate::diag::DiagSink,
 ) -> io::Result<bool> {
-    let prefs = &config.notification_prefs;
+    let prefs = &config.room.notification_prefs;
     let mut bytes = Vec::new();
-    let desktop =
-        if config.mux == MuxName::Zellij && notice.kind == NotificationKind::Reminder.as_str() {
-            // One room reminder carries every scope pane: only the pane on the
-            // watched tab writes its banner, as tmux passthrough does.
-            own_tab_watched(snapshot, config.own_pane.as_ref())
-        } else {
-            desktop_notification_targets_renderer(config.mux, snapshot, notice.panes)
-        };
+    let desktop = if config.room.mux == MuxName::Zellij
+        && notice.kind == NotificationKind::Reminder.as_str()
+    {
+        // One room reminder carries every scope pane: only the pane on the
+        // watched tab writes its banner, as tmux passthrough does.
+        own_tab_watched(snapshot, config.own_pane.as_ref())
+    } else {
+        desktop_notification_targets_renderer(config.room.mux, snapshot, notice.panes)
+    };
     if prefs.enabled && desktop {
         bytes.extend(osc::desktop_notification_bytes(
-            config.mux,
+            config.room.mux,
             prefs.desktop,
             notice.title,
             notice.body,

@@ -339,7 +339,7 @@ fn fetch_window_records_reductions_once_per_window() {
     cycles.run_cycle();
     let subscriber = &cycles.sink.cycle[0];
     let reader = Replay::new(&cycles.sink.host_data, subscriber);
-    let mut config = cycles.worker.config.clone();
+    let mut config = pane_config(cycles.worker.config.clone());
     config.own_pane = subscriber.own_pane.clone();
     let mut co_viewer = consumer(config, fixture.runtime.clone(), reader);
     co_viewer.on_snapshot();
@@ -502,7 +502,7 @@ fn consumers(cycles: &mut IdleCycleFixture) -> Vec<LoopState> {
         .cycle
         .iter()
         .map(|subscriber| {
-            let mut config = cycles.worker.config.clone();
+            let mut config = pane_config(cycles.worker.config.clone());
             config.instance_id = subscriber.instance_id.clone();
             config.own_pane = subscriber.own_pane.clone();
             let reader = Replay::new(&cycles.sink.host_data, subscriber);
@@ -550,7 +550,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
 
     let (new_subscriber, mut rx) = subscriber(&fixture, "99", "sidebar_new", 1, wake_channel().0);
     rx.views = cycles.sink.host_data.lock().unwrap().views.clone();
-    let mut config = cycles.worker.config.clone();
+    let mut config = pane_config(cycles.worker.config.clone());
     config.instance_id = new_subscriber.instance_id.clone();
     config.own_pane = new_subscriber.own_pane.clone();
     subscribe(&cycles.sink.subscribers, new_subscriber);
@@ -1089,7 +1089,7 @@ fn refresh_override_stamps_folded_snapshot() {
         source: SnapshotSource::Cached,
     });
     for reader in readers {
-        let mut config = fixture.worker().config;
+        let mut config = pane_config(fixture.worker().config);
         config.own_pane = reader.own_pane.clone();
         config.refresh_ms_override = Some(50);
         let mut renderer = consumer(config, fixture.runtime.clone(), reader);
@@ -1217,7 +1217,7 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     );
     let mut plane = super::super::plane::DataPlane::detached();
     plane.views = fixture.host_data.lock().unwrap().views.clone();
-    let mut config = worker.config.clone();
+    let mut config = pane_config(worker.config.clone());
     config.instance_id = SidebarInstanceId::new();
     let subscription = plane.subscribe(&config, wake_channel().0);
     assert!(
@@ -1390,7 +1390,7 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
     )
     .unwrap();
 
-    let config = test_config(workspace_id, SidebarInstanceId::new());
+    let config = test_config(workspace_id);
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
         ..FetchRequest::default()
@@ -1606,19 +1606,24 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
     }
 }
 
-fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> ServeConfig {
-    ServeConfig {
+fn test_config(workspace_id: WorkspaceId) -> RoomConfig {
+    RoomConfig {
         workspace_id,
         mux: MuxName::Zellij,
         session_name: "rimz-test".to_owned(),
-        instance_id,
         tick_seconds: 2,
-        refresh_ms_override: None,
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: NotificationsPrefs::default(),
-        // No own pane: the fold must admit every published fixture pane even
-        // when the test process itself runs inside a live mux pane.
+    }
+}
+
+fn pane_config(room: RoomConfig) -> ServeConfig {
+    ServeConfig {
+        instance_id: SidebarInstanceId::new(),
         own_pane: None,
+        tick_seconds: room.tick_seconds,
+        refresh_ms_override: None,
+        room,
     }
 }
 
@@ -1639,7 +1644,6 @@ struct FetchFixture {
     workspace_id: WorkspaceId,
     state: StatePaths,
     runtime: RuntimePaths,
-    instance_id: SidebarInstanceId,
     host_data: Arc<Mutex<HostData>>,
 }
 
@@ -1806,13 +1810,12 @@ impl FetchFixture {
             workspace_id,
             state,
             runtime,
-            instance_id: SidebarInstanceId::new(),
             host_data: Arc::default(),
         }
     }
 
     fn worker(&self) -> FetchWorker {
-        let config = test_config(self.workspace_id.clone(), self.instance_id.clone());
+        let config = test_config(self.workspace_id.clone());
         let producer = PaneProducer::seeded(&self.runtime, &config.session_name);
         let mut worker = FetchWorker::new(
             config,
@@ -1889,7 +1892,7 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
         "a previous publication seeds both host folds before the first produce"
     );
     let mut worker = FetchWorker::new(
-        test_config(fixture.workspace_id.clone(), fixture.instance_id.clone()),
+        test_config(fixture.workspace_id.clone()),
         fixture.runtime.clone(),
         crate::diag::DiagSink::disabled(),
         producer,
@@ -2157,7 +2160,7 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
 
     for (own, rx) in updates {
-        let mut config = worker.config.clone();
+        let mut config = pane_config(worker.config.clone());
         config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
         let mut renderer = consumer(config, fixture.runtime.clone(), rx);
         renderer.on_snapshot();
@@ -2483,7 +2486,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         } else {
             common = Some(sig.clone());
         }
-        let mut config = worker.config.clone();
+        let mut config = pane_config(worker.config.clone());
         config.instance_id = sub.instance_id;
         config.own_pane = sub.own_pane;
         let own = config.own_pane.clone().unwrap();
@@ -2559,7 +2562,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
             2,
             wake_channel().0,
         );
-        let mut config = worker.config.clone();
+        let mut config = pane_config(worker.config.clone());
         config.instance_id = sub.instance_id.clone();
         config.own_pane = sub.own_pane.clone();
         subscribe(&subscribers, sub);
@@ -3148,17 +3151,13 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
     let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 1, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
-    let worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
-    assert_eq!(
-        data_tick(sink.cycle.first(), &worker.config),
-        Duration::from_secs(60)
-    );
+    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(60));
     unsubscribe(&subscribers, "01");
     sink.begin_cycle();
     assert_eq!(
-        data_tick(sink.cycle.first(), &worker.config),
+        data_tick(&sink.cycle[0]),
         Duration::from_secs(1),
         "the next eldest's tick takes over"
     );
@@ -3166,57 +3165,41 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
 
 #[test]
 fn the_worker_tick_follows_age_not_magnitude() {
-    fn tick(worker: &FetchWorker, sink: &ResultSink) -> Duration {
-        data_tick(sink.cycle.first(), &worker.config)
-    }
-
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
     let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 1, wake_channel().0);
     let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 60, wake_channel().0);
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
-    let worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
-    assert_eq!(tick(&worker, &sink), Duration::from_secs(1));
+    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(1));
     unsubscribe(&subscribers, "01");
     sink.begin_cycle();
-    assert_eq!(tick(&worker, &sink), Duration::from_secs(60));
-    unsubscribe(&subscribers, "02");
-    sink.begin_cycle();
-    assert_eq!(tick(&worker, &sink), tick_for(worker.config.tick_seconds));
+    assert_eq!(data_tick(&sink.cycle[0]), Duration::from_secs(60));
 }
 
 #[test]
 fn the_worker_witness_is_its_eldest_renderers_pane() {
-    fn witness(worker: &FetchWorker, sink: &ResultSink) -> Option<PaneId> {
-        sink.witness(&worker.config)
-    }
-
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
-    let (mut eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
+    let (eldest, _eldest_rx) = subscriber(&fixture, "01", "terminal_7", 2, wake_channel().0);
     let (younger, _younger_rx) = subscriber(&fixture, "02", "terminal_8", 2, wake_channel().0);
-    subscribe(&subscribers, eldest.clone());
+    subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
-    let mut worker = fixture.worker();
-    let fallback = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
-    worker.config.own_pane = fallback.clone();
     let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
     assert_eq!(
-        witness(&worker, &sink),
+        sink.witness(),
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"))
     );
-    eldest.own_pane = None;
-    subscribe(&subscribers, eldest);
-    sink.begin_cycle();
-    assert_eq!(witness(&worker, &sink), fallback);
     unsubscribe(&subscribers, "01");
-    unsubscribe(&subscribers, "02");
     sink.begin_cycle();
-    assert_eq!(witness(&worker, &sink), fallback);
+    assert_eq!(
+        sink.witness(),
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_8")),
+        "the next eldest's pane takes over"
+    );
 }
 
 #[test]

@@ -1084,14 +1084,17 @@ fn serve(
     };
     let machine_config = rimz::config::MachineConfig::load_lenient();
     let config = rimz::sidebar_pane::app::ServeConfig {
-        workspace_id,
-        mux,
-        session_name,
+        room: rimz::sidebar_pane::app::RoomConfig {
+            workspace_id,
+            mux,
+            session_name,
+            tick_seconds,
+            timezone: machine_config.time_zone(),
+            notification_prefs: machine_config.notifications.clone(),
+        },
         instance_id: rimz::sidebar_pane::supervise::instance_id(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
-        timezone: machine_config.time_zone(),
-        notification_prefs: machine_config.notifications.clone(),
         own_pane: rimz::mux::own_pane_id(mux),
     };
     rimz::sidebar_pane::supervise::run(config)?;
@@ -1100,20 +1103,15 @@ fn serve(
 
 fn host(workspace_id: WorkspaceId, mux: MuxName, session_name: String) -> Result<()> {
     let machine_config = rimz::config::MachineConfig::load_lenient();
-    // What every pane of the session shares. Each pane's hello supplies its
-    // own instance id, pane id, and cadence.
-    let template = rimz::sidebar_pane::app::ServeConfig {
+    let room = rimz::sidebar_pane::app::RoomConfig {
         workspace_id,
         mux,
         session_name,
-        instance_id: rimz::ids::SidebarInstanceId::new(),
         tick_seconds: 1,
-        refresh_ms_override: None,
         timezone: machine_config.time_zone(),
         notification_prefs: machine_config.notifications.clone(),
-        own_pane: None,
     };
-    rimz::sidebar_pane::host::run(template).context("hosting sidebar panes")
+    rimz::sidebar_pane::host::run(room).context("hosting sidebar panes")
 }
 
 fn resolve_serve_identity(

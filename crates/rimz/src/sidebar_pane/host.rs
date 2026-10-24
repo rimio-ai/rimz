@@ -22,8 +22,8 @@ mod reload;
 use crate::RuntimePaths;
 use crate::diag::focus_trace::{FocusTraceEvent, PushDelivery};
 use crate::sidebar_pane::app::{
-    Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, RoomEvents, ServeConfig,
-    SidebarAppErr, Wakeup, decode_wakeup,
+    Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, RoomConfig, RoomEvents,
+    ServeConfig, SidebarAppErr, Wakeup, decode_wakeup,
 };
 use crate::sidebar_pane::attach::{
     self, Control, ControlLine, Hello, PROTOCOL, REJECT_BUILD, REJECT_CAPACITY, REJECT_PROTOCOL,
@@ -97,51 +97,49 @@ fn open_file_soft_target(
     target.min(hard).max(soft)
 }
 
-/// Paint a session's sidebar panes until none is left. `template` is the
-/// configuration every pane shares; each hello supplies the pane's own
-/// identity and cadence.
-pub fn run(template: ServeConfig) -> Result<(), SidebarAppErr> {
+/// Paint a session's sidebar panes until none is left. Each hello supplies
+/// its pane's identity and cadence.
+pub fn run(room: RoomConfig) -> Result<(), SidebarAppErr> {
     crate::build_id::warm();
     // Leave the spawning pane's session, so no terminal is this process's
     // controlling one and closing that pane signals nothing here. Already
     // leading a session is the same outcome.
     let _ = nix::unistd::setsid();
     raise_open_file_limit();
-    let runtime = RuntimePaths::for_workspace(template.workspace_id.clone())?;
-    let state = crate::StatePaths::for_workspace(template.workspace_id.clone())?;
+    let runtime = RuntimePaths::for_workspace(room.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(room.workspace_id.clone())?;
     if crate::Store::open_existing(state, runtime.clone()).is_none() {
-        warn!(workspace = %template.workspace_id, "sidebar host: no room; run `rimz start` first");
+        warn!(workspace = %room.workspace_id, "sidebar host: no room; run `rimz start` first");
         return Ok(());
     }
     runtime.ensure_dirs()?;
-    let lock_path = runtime.sidebar_host_lock(template.mux, &template.session_name);
+    let lock_path = runtime.sidebar_host_lock(room.mux, &room.session_name);
     let Ok(_lifetime) =
         crate::disk::lock::WorkspaceLock::acquire_with_timeout(&lock_path, SUCCESSION_WAIT)
     else {
-        debug!(session = %template.session_name, "another sidebar host holds this session");
+        debug!(session = %room.session_name, "another sidebar host holds this session");
         return Ok(());
     };
-    let socket_path = runtime.sidebar_host_socket_path(template.mux, &template.session_name);
+    let socket_path = runtime.sidebar_host_socket_path(room.mux, &room.session_name);
     let listener = bind_listener(&socket_path)?;
-    let wake = bind_wake_socket(
-        &runtime.sidebar_host_wake_socket_path(template.mux, &template.session_name),
-    )?;
+    let wake =
+        bind_wake_socket(&runtime.sidebar_host_wake_socket_path(room.mux, &room.session_name))?;
     let diag = crate::diag::DiagSink::for_workspace(
-        template.workspace_id.clone(),
-        template.session_name.clone(),
+        room.workspace_id.clone(),
+        room.session_name.clone(),
         None,
     );
     crate::sidebar_pane::app::install_panic_diagnostic_hook(diag.clone());
-    let plane = DataPlane::start(&template, &runtime, &diag);
+    let plane = DataPlane::start(&room, &runtime, &diag);
 
-    let mut watch = RecordWatch::new(&template.workspace_id);
-    let mut recorded = match crate::reload::recorded_reexec_target(&template.workspace_id) {
+    let mut watch = RecordWatch::new(&room.workspace_id);
+    let mut recorded = match crate::reload::recorded_reexec_target(&room.workspace_id) {
         crate::reload::WorkspaceReexecTarget::Verified(target) => Some(target.build),
         crate::reload::WorkspaceReexecTarget::Absent
         | crate::reload::WorkspaceReexecTarget::Invalid => None,
     };
     let host = Host::new(
-        template,
+        room,
         runtime,
         diag,
         plane,
@@ -220,7 +218,7 @@ struct Live {
 }
 
 struct Host {
-    template: ServeConfig,
+    room: RoomConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     plane: DataPlane,
@@ -242,7 +240,7 @@ struct Host {
 
 impl Host {
     fn new(
-        template: ServeConfig,
+        room: RoomConfig,
         runtime: RuntimePaths,
         diag: crate::diag::DiagSink,
         plane: DataPlane,
@@ -253,7 +251,7 @@ impl Host {
         let (events, inbox) = std::sync::mpsc::channel();
         let room_events = plane.room_events(&runtime);
         Arc::new(Self {
-            template,
+            room,
             runtime,
             diag,
             plane,
@@ -345,19 +343,19 @@ impl Host {
                 }
             }
             if requested_reload {
-                match (self.reload_action)(&self.template.workspace_id) {
+                match (self.reload_action)(&self.room.workspace_id) {
                     reload::ReloadAction::Reexec(target) => {
-                        debug!(session = %self.template.session_name, target = %target.display(),
+                        debug!(session = %self.room.session_name, target = %target.display(),
                             "reload: on-disk binary differs; asking supervisor to re-exec");
                         self.begin_drain();
                     }
                     reload::ReloadAction::AlreadyCurrent => {
-                        debug!(session = %self.template.session_name,
+                        debug!(session = %self.room.session_name,
                             "reload: binary unchanged; refetching in place without re-exec");
                         self.plane.hard_refresh();
                     }
                     reload::ReloadAction::Missing => {
-                        warn!(session = %self.template.session_name,
+                        warn!(session = %self.room.session_name,
                             "reload requested but no renderer binary is on disk; refetching in place");
                         self.plane.hard_refresh();
                     }
@@ -394,7 +392,7 @@ impl Host {
         if let Err(err) = remove_socket(
             &self
                 .runtime
-                .sidebar_host_wake_socket_path(self.template.mux, &self.template.session_name),
+                .sidebar_host_wake_socket_path(self.room.mux, &self.room.session_name),
         ) {
             warn!(error = %err, "sidebar host room socket removal failed");
         }
@@ -579,11 +577,11 @@ impl Host {
             let Wakeup::Event(envelope) = decode_wakeup(bytes) else {
                 return;
             };
-            if envelope.workspace_id != self.template.workspace_id
+            if envelope.workspace_id != self.room.workspace_id
                 || envelope
                     .session_name
                     .as_deref()
-                    .is_some_and(|session| session != self.template.session_name)
+                    .is_some_and(|session| session != self.room.session_name)
             {
                 return;
             }
@@ -644,11 +642,11 @@ impl Host {
 
     fn config_for(&self, hello: &Hello) -> ServeConfig {
         ServeConfig {
+            room: self.room.clone(),
             instance_id: hello.instance_id.clone(),
             own_pane: hello.pane_id.clone(),
-            tick_seconds: hello.tick_seconds.unwrap_or(self.template.tick_seconds),
+            tick_seconds: hello.tick_seconds.unwrap_or(self.room.tick_seconds),
             refresh_ms_override: hello.refresh_ms,
-            ..self.template.clone()
         }
     }
 }
