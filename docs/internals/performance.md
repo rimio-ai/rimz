@@ -404,6 +404,82 @@ The 2026-10-14 capture ran at a load average near 45, where two back-to-back run
 
 At fixed room size and across both room sizes, local publication allocates about 3.68 KB per subscriber: groups, rows, and history do not multiply with subscribers. Local configuration, worktree roots, and pane metadata stay owned per pane, and a real exclusion still pays for a detached group vector and the changed collections, as `exclude_agent` shows.
 
+#### Per-frame drainer latency under build load
+
+On 2026-10-24, `crates/rimz/benches/hotpath.rs::drainer_latency` measured the four layer-1 changes together: the publication-bound generation mirror, selective context attachment, boot-aware cursor write classes, and weighted drainer scope. Before (B) is the tree of the measurement-only probe commit, `test(hooks): measure drainer claim-to-applied latency`; after (A) and the single shared coordinator are the tree of `test(perf): measure drainer latency at receipts and prompt replies`, the change's last code commit. Both CLIs were built with `cargo build -p rimz --release --features testkit --bins --locked` into independent temporary target directories. Their build ids are `c1aba0f57552` and `4991060d5e9e`; SHA-256 digests and compiler logs are retained with the results.
+
+Every run generated 300 live Claude root sessions with distinct held owner processes and pane identities, 300 context sidecars, and 1,500 retained history rows. This is not live-room replay. Actual fixture sizes, in bytes:
+
+| Run | Rollup | Durable carryover | Derived carryover | Context sidecars |
+| --- | ---: | ---: | ---: | ---: |
+| Quiet A | 9,338,539 | 9,428,117 | 9,075,688 | 44,256 |
+| Quiet B | 9,342,677 | 9,428,141 | 9,075,713 | 44,259 |
+| Loaded B1 | 9,345,427 | 9,428,171 | 9,075,743 | 44,261 |
+| Loaded A1 | 9,346,743 | 9,428,144 | 9,075,716 | 44,249 |
+| Loaded A2 | 9,342,643 | 9,428,120 | 9,075,692 | 44,251 |
+| Loaded B2 | 9,344,747 | 9,428,156 | 9,075,728 | 44,256 |
+
+Each run measured 300 serial Stops and the first prompt of each of the 300 sessions. Claim-start to applied uses the testkit probe in `crates/rimz/src/harness/hook_drain.rs::Drainer::drain`: immediately before the claim workspace-lock acquisition through applied cursor publication, including generation lookup, both cursor writes and the apply child. Append-start to receipt includes the append and a covering receipt matched by ingress id, including any truncation before that reply. Prompt wall includes spawning `hooks feed --source claude`, collecting stdout and waiting for exit. A reply requires successful JSON with `hookSpecificOutput.hookEventName == "UserPromptSubmit"` and nonempty `additionalContext`; neutral stdout counts as a miss. The production 1.2 s reply wait was not overridden. Cold startup is separate. The following triples are nearest-rank p50 / p99 / max, in milliseconds; misses are out of 300 prompts per row.
+
+| Run | Claim-start → applied | Append-start → receipt | Prompt wall | Misses |
+| --- | ---: | ---: | ---: | ---: |
+| Quiet A | 69.158 / 91.049 / 141.715 | 72.135 / 113.757 / 152.646 | 80.508 / 178.022 / 236.812 | 0 |
+| Quiet B | 138.128 / 299.037 / 440.107 | 147.557 / 306.611 / 451.588 | 140.211 / 382.711 / 490.933 | 0 |
+| Loaded B1 | 105.592 / 218.705 / 249.348 | 112.652 / 225.137 / 264.026 | 127.709 / 339.982 / 380.167 | 0 |
+| Loaded A1 | 163.449 / 441.461 / 603.694 | 171.140 / 458.683 / 609.867 | 193.789 / 366.779 / 375.457 | 0 |
+| Loaded A2 | 134.287 / 230.763 / 251.142 | 144.834 / 282.910 / 328.419 | 214.082 / 335.349 / 377.768 | 0 |
+| Loaded B2 | 105.446 / 279.281 / 431.395 | 112.807 / 291.136 / 513.693 | 175.565 / 518.046 / 743.629 | 0 |
+
+The host was Linux on a Ryzen 9 9950X with 28 online logical CPUs and ZFS temporary storage. Quiet means no induced load, not an idle shared host; its pair ran A then B to check weighted placement first. Loaded order was B, A, A, B. Each case ran inside `systemd-run --user --scope --quiet --collect --unit rimz-proof-<case>-eg1vxx6y.scope -- bash <case-script>`, sharing that non-agent scope with a sustained loop of `CARGO_TARGET_DIR=<fresh-target> cargo build -p rimz --release -j "$(nproc)" --locked` from the probe tree. Every cold target was on ZFS and removed after its build or termination. All four builds remained in their first iteration, with active rustc at measurement start and end. One-second process snapshots give the following load CPU-time lower bounds (the sum of each observed PID's maximum CPU seconds); complete shell/waited-child times are also retained.
+
+| Loaded run | Active rustc, start / end | Sampled load CPU, at least seconds | Host one-minute load, start / end |
+| --- | ---: | ---: | ---: |
+| B1 | 14 / 1 | 372 | 28.09 / 22.00 |
+| A1 | 7 / 1 | 393 | 17.03 / 53.68 |
+| A2 | 13 / 1 | 233 | 51.53 / 57.41 |
+| B2 | 6 / 1 | 453 | 62.11 / 35.72 |
+
+The drainer was reached only through production `hooks feed` spawning, never a direct `hooks drain` launch. The isolated fixture runtime linked its `systemd` directory to the caller's user-manager socket directory; passing a D-Bus address alone did not provide that connection. All cgroups below are under `/user.slice/user-1000.slice/user@1000.service/app.slice/`. Before drainers shared the runner/load scope; after drainers used distinct weighted helper scopes. Every row sampled 601 apply children, all matching its drainer's cgroup and weight. `null` records an absent `cpu.weight` file, not an observed weight of 100.
+
+| Run | Drainer PID | Cgroup suffix | cpu.weight | Cold hook / ready, ms |
+| --- | ---: | --- | ---: | ---: |
+| Quiet A | 1129109 | `rimz-helper-01a16df0447b74949231c7a26602fe1e.scope` | 1000 | 55.726 / 114.201 |
+| Quiet B | 1406715 | `rimz-proof-quiet-before-eg1vxx6y.scope` | null | 11.177 / 126.155 |
+| Loaded B1 | 1489239 | `rimz-proof-loaded-before-1-eg1vxx6y.scope` | null | 10.394 / 156.826 |
+| Loaded A1 | 1544688 | `rimz-helper-01a16dfb308f7757b4fea54bd2c08e2a.scope` | 1000 | 157.175 / 598.138 |
+| Loaded A2 | 1617472 | `rimz-helper-01a16dfe1a0571b99af6c47977997ce8.scope` | 1000 | 59.162 / 211.827 |
+| Loaded B2 | 1684747 | `rimz-proof-loaded-before-2-eg1vxx6y.scope` | null | 8.412 / 164.511 |
+
+Both loaded after-runs meet the acceptance target: claim-start to applied p99 below 1 s and zero prompt misses. Their largest prompt walls, 375.457 and 377.768 ms, also stay below 1.2 s. The baselines meet these targets too, so this fixture did not reproduce the incident's seconds-to-minutes lag. Paired A/B claim median ratios are 1.548 and 1.274 (slower after); claim p99 ratios are 2.019 and 0.826, and prompt p99 ratios 1.079 and 0.647. Ambient load varied substantially. These runs establish target compliance and successful placement, not a stable wall-time speedup, individual fixes' contributions, or queue stability under concurrent arrivals.
+
+During loaded B1, the supplied fsync probe measured 300 alternating durable/cache-class replacements on the same ZFS temporary filesystem:
+
+| Replacement, ms | p50 | p99 | max |
+| --- | ---: | ---: | ---: |
+| Write + file fsync + rename + directory fsync | 6.99 | 69.27 | 121.17 |
+| Write + rename, no fsync | 0.22 | 4.05 | 6.48 |
+
+Raw samples, ingress ids and receipts, every sampled apply placement, fixture sizes, binary digests, build/command logs, case scripts, the summary table and `analysis.json` were retained outside the repository, on the measuring host. JSON rows are selected from each Divan log with `jq -Rc 'fromjson? | select(.drainer_latency)'`. The detached probe worktree and temporary build targets are removed after the experiment; earlier measurements above remain historical.
+
+**Git discovery was deliberately retained.** Verified pins avoid git resolution in the foreground hook, not the apply child's cwd-specific worktree and branch discovery. The earlier 200-run ambient-load probe of `git rev-parse --show-toplevel --git-common-dir --abbrev-ref HEAD` measured median 3.061 ms and p99 8.053 ms at one-minute load 36.41 on 28 CPUs (`fix2-reference.md` in the artifacts). That is gross subprocess cost, not a measured net saving or a controlled build-load comparison. Pins do not carry worktree/branch facts; an equivalent in-process reader needs environment, ownership, config-include and ref-ambiguity rules. Fix 2 was dropped, leaving that resolver work for PR 2 rather than expanding this change.
+
+##### Weighted-scope isolation
+
+A second round on 2026-10-24 used the same fixture, coordinator and cold-build recipe, in order S, P, B, B, P, S. S and P used the identical head binary (built from round 1's after tree): S used a helper scope at weight 1000; P forced the existing plain fallback by giving the coordinator an empty parent `XDG_RUNTIME_DIR`, preventing its manager-socket link. P and probe-commit B shared their runner/load scopes, with `cpu.weight` absent. All six runs passed placement validation, each with 601 matching apply-child samples, 300 Stops and 300 first prompts. No Rust code changed; quiet and fsync cases were not repeated. Times below are milliseconds except main-thread runqueue wait, which is microseconds per frame.
+
+| Run | Claim p50 / p99 / max | Prompt p50 / p99 / max | Misses | Host load, start / end | rustc, start / end | Runqueue wait, µs/frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| S1 | 81.447 / 124.041 / 725.867 | 94.755 / 253.985 / 290.333 | 0 | 28.25 / 22.14 | 10 / 1 | 24.256 |
+| P1 | 81.997 / 173.601 / 235.205 | 87.248 / 496.090 / 556.471 | 0 | 21.16 / 23.47 | 14 / 1 | 376.887 |
+| B1 | 86.369 / 154.928 / 176.650 | 127.843 / 260.033 / 639.134 | 0 | 28.30 / 19.42 | 5 / 1 | 118.307 |
+| B2 | 93.124 / 182.661 / 388.964 | 132.029 / 329.930 / 397.326 | 0 | 18.37 / 14.87 | 5 / 1 | 94.582 |
+| P2 | 65.438 / 145.183 / 176.046 | 85.844 / 189.827 / 234.936 | 0 | 13.68 / 12.98 | 12 / 1 | 49.899 |
+| S2 | 67.906 / 91.462 / 93.571 | 89.433 / 143.950 / 158.388 | 0 | 11.45 / 13.10 | 15 / 1 | 3.267 |
+
+Scope attribution remains unresolved: paired S/P claim-median ratios are 0.993 and 1.038, straddling 1, while claim-p99 ratios 0.715 and 0.630 favor S. S/P prompt medians are higher at 1.086 and 1.042, but prompt-p99 ratios favor S at 0.512 and 0.758. P/B claim-median ratios are 0.949 and 0.703; S/B ratios are 0.943 and 0.729. Neither head arm reproduces round 1's claim-median slowdown relative to B. The recorded load endpoints, 11.45 to 28.30, were lighter than round 1's 17.03 to 62.11, so this round does not settle the higher-load cause. The main-thread runqueue wait is lower in S than in P in both pairs (24.256 against 376.887, and 3.267 against 49.899 µs per frame), so the weight does reach the scheduler. The scope policy is unchanged.
+
+External snapshots of `/proc/<drainer>/schedstat` at the cold row and final prompt supplied the second-field runqueue-wait delta, divided by 600 frames above. This measures the main drainer thread, not apply-child wait. End-of-run cgroup `cpu.pressure`, raw samples, per-50-Stop upper medians, paired ratios, build/digest/command logs and scheduler timestamps were retained outside the repository, on the measuring host. P/B pressure includes the competing build, unlike S's helper-scope pressure. The benchmark itself was unchanged.
+
 ## Making a performance change
 
 1. **Name the thread the cost lands on.** If it is the render/input loop, the change is wrong until the work moves off it.
@@ -411,7 +487,7 @@ At fixed room size and across both room sizes, local publication allocates about
 3. **Decide durability explicitly.** Durable state goes through `write_temp_then_rename`, which fsyncs. A cache rebuilt on the next tick goes through `write_temp_then_rename_cache`.
 4. **Keep single-flight.** A new fetch trigger is a room event through `RoomEvents::dispatch` ([`app/plane.rs`](../../crates/rimz/src/sidebar_pane/app/plane.rs)) or a pane observation through its `FetchHandle` ([`app/fetch.rs`](../../crates/rimz/src/sidebar_pane/app/fetch.rs)), never a bare send or spawn, so the worker merges it with the rest.
 5. **Measure the idle case.** A change that speeds the busy path by adding idle work is usually a net loss.
-6. **Prove it.** `cargo xtask ci` stays green, the tick budgets and the cost map move with the change, and `cargo xtask perf` refreshes the figures when the change touches a measured path. A before/after comparison rests on the bench's allocation counts. Quote a wall-time delta only from runs on an idle host, since medians move with load ([Benchmarks](#benchmarks)). When comparing two builds' wall times, warm both, then run them interleaved (base, branch, base, branch) and compare paired ratios, because a sequential pair measures host load. A change to a bench fixture compares against base rerun with the same fixture, since a comparison across fixtures is not evidence.
+6. **Prove it.** `cargo xtask ci` stays green, the tick budgets and the cost map move with the change, and `cargo xtask perf` refreshes the figures when the change touches a measured path. A before/after comparison rests on the bench's allocation counts. Ordinarily quote a wall-time delta only from runs on an idle host, since medians move with load ([Benchmarks](#benchmarks)). A controlled loaded experiment may instead report paired, interleaved runs with the same fixture and load command, observed placement, sustained-load evidence, raw distributions and misses, as in [the drainer experiment](#per-frame-drainer-latency-under-build-load); conflicting pairs do not establish a speedup. When comparing two builds' wall times, warm both, then run them interleaved (base, branch, base, branch) and compare paired ratios, because a sequential pair measures host load. A change to a bench fixture compares against base rerun with the same fixture, since a comparison across fixtures is not evidence.
 7. **Measure the file you fixed.** For an I/O fix, `strace -f -e trace=openat` filtered on the target path across several ticks shows whether that file is still re-read. `/proc/<pid>/io` `rchar` is the process total, mixing every other read, so report it beside the per-path count, never alone.
 
 ### Perceived response time
