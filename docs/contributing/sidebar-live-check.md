@@ -282,7 +282,7 @@ done
 
 Capture the whole interval, not just the settled frame: the 32-iteration Zellij loop spans about three seconds. A tmux capture is a few milliseconds apart, so the first file is close to the first paint. A Zellij capture goes through the session and takes about 0.2 s, so it proves the first screen seen and bounds the correction only coarsely.
 
-Attribute the captures with the [focus trace](../internals/diagnostics.md#where-diagnostics-land), not just the final screen. Set `FOCUS_LOG` to the room's persistent `audit/focus.log.jsonl` (the state directory is printed by `rimz paths`), and `INSTANCE_ID` to the new sidebar's instance from the testkit command `rimz sidebar renderers`. Record `START_MS=$(date +%s%3N)` immediately before running the capture script and `END_MS=$(date +%s%3N)` immediately after it. Run this where the log is readable, and keep earlier publications in the input so a seed can correlate to its pre-tab frame:
+Attribute the captures with the [focus trace](../internals/diagnostics.md#the-focus-trace), not just the final screen. Set `FOCUS_LOG` to the room's persistent `audit/focus.log.jsonl` (the state directory is printed by `rimz paths`), and `INSTANCE_ID` to the new sidebar's instance from the testkit command `rimz sidebar renderers`. Record `START_MS=$(date +%s%3N)` immediately before running the capture script and `END_MS=$(date +%s%3N)` immediately after it. Run this where the log is readable, and keep earlier publications in the input so a seed can correlate to its pre-tab frame:
 
 ```sh
 jq -s --arg instance "$INSTANCE_ID" --argjson start "$START_MS" --argjson end "$END_MS" '
