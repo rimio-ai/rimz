@@ -63,7 +63,7 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         workspace: WorkspaceSnapshot(remembered.clone()),
         frame: None,
     });
-    let subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
+    let mut subscription = plane.subscribe(&config, std::sync::mpsc::sync_channel(64).0);
     assert_eq!(
         subscription
             .seed
@@ -80,7 +80,7 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
             .since(subscription.revision)
             .is_empty()
     );
-    assert!(!subscription.completion.load(Ordering::Relaxed));
+    assert!(!subscription.fetch.completed());
     assert!(Arc::ptr_eq(
         &subscription
             .seed
@@ -105,7 +105,7 @@ fn a_warm_plane_returns_its_fold_before_later_delivery() {
         |fold| super::super::loop_state::LoopState::project_fold(fold, None, None),
         false,
     );
-    assert!(subscription.completion.load(Ordering::Relaxed));
+    assert!(subscription.fetch.completed());
     let FetchUpdate::Snapshot { snapshot, .. } = update else {
         panic!("expected a later snapshot")
     };

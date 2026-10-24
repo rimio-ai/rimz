@@ -18,7 +18,8 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick, spawn_fetch_worker,
+    FetchHandle, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
+    spawn_fetch_worker,
 };
 use super::input::Wakeup;
 use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
@@ -248,8 +249,7 @@ impl DataPlane {
             start();
         }
         Subscription {
-            requests: self.request_tx.clone(),
-            completion,
+            fetch: FetchHandle::new(self.request_tx.clone(), completion),
             observe: self.observe_tx.clone(),
             seed,
             revision,
@@ -337,8 +337,7 @@ impl DataPlane {
 
 /// One pane's ends of the plane.
 pub(in crate::sidebar_pane) struct Subscription {
-    pub(super) requests: Sender<FetchRequest>,
-    pub(super) completion: Arc<AtomicBool>,
+    pub(super) fetch: FetchHandle,
     pub(super) revision: u64,
     pub(super) observe: SyncSender<ObserveMsg>,
     pub(super) seed: Option<Arc<WorkspaceFold>>,

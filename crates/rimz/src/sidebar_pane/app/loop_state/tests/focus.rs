@@ -391,7 +391,6 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
         }
         rig.state
             .on_wakeup(
-                &mut rig.fetch,
                 &mut rig.terminal,
                 Wakeup::FocusFailed {
                     pane: picked,
@@ -446,7 +445,6 @@ fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adop
         .unwrap();
     rig.state
         .on_wakeup(
-            &mut rig.fetch,
             &mut rig.terminal,
             Wakeup::FocusFailed {
                 pane: picked,
@@ -623,7 +621,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         "failed dispatch removed its request"
     );
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, rx.try_recv().unwrap())
+        .on_wakeup(&mut rig.terminal, rx.try_recv().unwrap())
         .unwrap();
     rig.state
         .paint_now(&mut rig.terminal, Instant::now())
@@ -876,8 +874,7 @@ fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expec
             event,
         );
         rig.record_event(&envelope);
-        rig.state
-            .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
+        rig.state.on_event(&mut rig.terminal, envelope);
     }
     assert_eq!(rig.view().ctx().current.client_views, clients);
     assert_eq!(
@@ -1647,9 +1644,7 @@ fn focus_push_and_intent_to_a_non_destination_leave_projection_and_nonce() {
     pending.display_name = "waiting fold".to_owned();
     rig.send(rig.lazy_update(pending, SnapshotSource::Produced));
     let (push, ack) = focus_push(&mut rig, anchor.clone());
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(
         rig.state.pane.projections, projections,
         "non-owner must leave the publication unread"
@@ -1692,9 +1687,7 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
     anchor.placement = None;
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     let (push, ack) = focus_push(&mut rig, anchor);
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(
         ack.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty),
@@ -1720,9 +1713,7 @@ fn focus_push_with_unknown_own_view_takes_the_drain_and_fold_path() {
     let anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
     let nonce = anchor.nonce;
     let (push, ack) = focus_push(&mut rig, anchor);
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(rig.view().ctx().last_folded_focus_intent, Some(nonce));
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
@@ -1749,9 +1740,7 @@ fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
     );
     let nonce = anchor.nonce;
     let (push, ack) = focus_push(&mut rig, anchor);
-    rig.state
-        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
     assert_eq!(rig.state.pane.projections, 1);
     assert_eq!(rig.view().ctx().current.display_name, "new target");
     assert_eq!(rig.view().ctx().last_folded_focus_intent, Some(nonce));
@@ -1779,9 +1768,7 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
         if !push_first {
             rig.event(event.clone());
         }
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         // The target shares this sidebar's tab, so the first delivery folds and the push paints.
         assert_push_report(&ack, &rig, PushVerdict::Painted, push_first);
         assert_eq!(rig.view().ui().selected_pane, Some(target));
@@ -1840,9 +1827,7 @@ fn focus_push_paints_on_arrival_or_records_the_inline_hold() {
         let mut anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
         anchor.placement = None;
         let (push, ack) = focus_push(&mut rig, anchor);
-        rig.state
-            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
-            .unwrap();
+        rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
         if held {
             assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
             assert_eq!(
@@ -2383,9 +2368,7 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
     rig.state.pane.request_reload = Box::new(move || {
         requests.send(()).unwrap();
     });
-    rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, wakeup)
-        .unwrap();
+    rig.state.on_wakeup(&mut rig.terminal, wakeup).unwrap();
     assert_eq!(received.try_recv(), Ok(()));
     assert!(received.try_recv().is_err());
     assert!(

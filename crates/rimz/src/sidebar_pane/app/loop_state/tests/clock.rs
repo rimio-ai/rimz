@@ -148,10 +148,7 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut inbox = WakeupInbox::new(rx);
     tx.send(Wakeup::MouseClick { column: 2, row }).unwrap();
-    let (painted, deadline) = rig
-        .state
-        .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
-        .unwrap();
+    let (painted, deadline) = rig.state.advance(&mut inbox, &mut rig.terminal).unwrap();
     assert!(painted);
     assert!(deadline > clock.now());
     assert!(
@@ -168,9 +165,7 @@ fn play_clock_drives_the_loop_without_focus_or_notification_effects() {
         clock.now_ms() as i64
     );
     assert_eq!(clock.focus_calls.load(Ordering::Relaxed), 0);
-    rig.state
-        .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
-        .unwrap();
+    rig.state.on_resize(&mut rig.terminal, Some(80)).unwrap();
     assert!(
         rig.state.pane.caps_refresh_deadline.is_none(),
         "play never arms an external caps probe"

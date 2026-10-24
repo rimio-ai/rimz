@@ -174,6 +174,7 @@ pub(super) struct LoopState {
 }
 
 pub(super) struct PaneState {
+    pub(super) fetch: FetchHandle,
     #[cfg(test)]
     pub(super) content_applications: u64,
     #[cfg(test)]
@@ -486,6 +487,7 @@ impl LoopState {
         runtime: RuntimePaths,
         host_wake_path: PathBuf,
         diag: crate::diag::DiagSink,
+        fetch: FetchHandle,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
@@ -525,6 +527,7 @@ impl LoopState {
             ),
             room_events: None,
             pane: PaneState {
+                fetch,
                 #[cfg(test)]
                 content_applications: 0,
                 #[cfg(test)]
@@ -586,20 +589,18 @@ impl LoopState {
     pub(super) fn step(
         &mut self,
         inbox: &mut WakeupInbox,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.report_baseline();
         let (_, timeout) = self.frame_timing();
         inbox.wait(timeout);
-        self.advance(inbox, fetch, terminal).map(|_| ())
+        self.advance(inbox, terminal).map(|_| ())
     }
 
     /// Run the nonblocking iteration and return whether it painted and the next driver deadline.
     pub(super) fn advance(
         &mut self,
         inbox: &mut WakeupInbox,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<(bool, Instant)> {
         let paints = self.pane.paints;
@@ -610,14 +611,14 @@ impl LoopState {
             .as_ref()
             .and_then(FocusPeers::take_push)
         {
-            self.on_focus_push(push, fetch, terminal)?;
+            self.on_focus_push(push, terminal)?;
             true
         } else {
             false
         };
         self.report_baseline();
         if !pushed {
-            inbox.dispatch_next(self, fetch, terminal, Duration::ZERO)?;
+            inbox.dispatch_next(self, terminal, Duration::ZERO)?;
         }
         // A pane the mux had not laid out at attach gets its title
         // with its first size.
@@ -625,7 +626,7 @@ impl LoopState {
             self.pane.titled = terminal.backend_mut().set_pane_title()?;
         }
 
-        self.run_maintenance(fetch, terminal);
+        self.run_maintenance(terminal);
         self.run_width_control_backstop(terminal);
         let (active, _) = self.frame_timing();
         self.paint_frame_if_due(terminal, active)?;
@@ -720,11 +721,11 @@ impl LoopState {
         self.observed_watched()
     }
 
-    pub(super) fn on_snapshot(&mut self, fetch: &mut FetchHandle) {
-        self.drain_snapshot(fetch, true);
+    pub(super) fn on_snapshot(&mut self) {
+        self.drain_snapshot(true);
     }
 
-    fn drain_snapshot(&mut self, fetch: &mut FetchHandle, allow_defer: bool) {
+    fn drain_snapshot(&mut self, allow_defer: bool) {
         let (pending, revision, completed) = {
             let views = self
                 .views
@@ -734,7 +735,7 @@ impl LoopState {
             (
                 views.latest.since(self.pane.own.revision),
                 views.revision,
-                fetch.completed(),
+                self.pane.fetch.completed(),
             )
         };
         let deferred = allow_defer
@@ -797,7 +798,6 @@ impl LoopState {
 
     pub(super) fn on_wakeup(
         &mut self,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         wakeup: Wakeup,
     ) -> Result<()> {
@@ -807,11 +807,11 @@ impl LoopState {
                 Ok(())
             }
             Wakeup::Snapshot => {
-                self.on_snapshot(fetch);
+                self.on_snapshot();
                 Ok(())
             }
             Wakeup::Event(envelope) => {
-                self.on_event(fetch, terminal, envelope);
+                self.on_event(terminal, envelope);
                 Ok(())
             }
             // A recv timeout: the active grid reached a frame boundary, or the
@@ -821,10 +821,10 @@ impl LoopState {
             Wakeup::Tick => Ok(()),
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
-                self.on_resize(fetch, terminal, settled_width)?;
+                self.on_resize(terminal, settled_width)?;
                 Ok(())
             }
-            wakeup => self.on_input(wakeup, terminal, fetch),
+            wakeup => self.on_input(wakeup, terminal),
         }
     }
 
@@ -927,7 +927,6 @@ impl LoopState {
     fn on_focus_push(
         &mut self,
         mut push: FocusPush,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         let arrived = self.pane.clock.now();
@@ -958,7 +957,7 @@ impl LoopState {
             v.context.last_folded_focus_intent
         }) != Some(push.anchor.nonce)
         {
-            self.prepare_action(fetch);
+            self.prepare_action();
             push.peer.snapshot_ms = Some(push.elapsed_ms());
             if !push.is_current() {
                 push.finish(PushVerdict::Superseded);
@@ -1028,7 +1027,6 @@ impl LoopState {
 
     pub(super) fn on_event(
         &mut self,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         envelope: SidebarEventEnvelope,
     ) {
@@ -1049,7 +1047,7 @@ impl LoopState {
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {
                 if fold {
-                    self.prepare_action(fetch);
+                    self.prepare_action();
                 }
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.pane.width_control.reload_target(
@@ -1060,7 +1058,7 @@ impl LoopState {
             }
             SidebarEvent::BodyFilterChanged => {
                 if fold {
-                    self.prepare_action(fetch);
+                    self.prepare_action();
                 }
                 let filter = crate::sidebar::body_filter::load(&self.pane.runtime);
                 self.views.with(&mut self.pane, Route::READ, |state, v| {
@@ -1072,7 +1070,7 @@ impl LoopState {
             }
             event @ SidebarEvent::Notify { .. } => {
                 if fold {
-                    self.prepare_action(fetch);
+                    self.prepare_action();
                 }
                 self.handle_notification(terminal, event);
             }
@@ -1090,7 +1088,7 @@ impl LoopState {
                     );
                     return;
                 }
-                self.prepare_action(fetch);
+                self.prepare_action();
                 let repair = PendingFocusRepair {
                     pane_id,
                     generation,
@@ -1104,7 +1102,7 @@ impl LoopState {
                             "superseded by a newer strand",
                         );
                     }
-                    fetch.request(FetchRequest::fresh_panes());
+                    self.pane.fetch.request(FetchRequest::fresh_panes());
                 }
             }
             SidebarEvent::FocusIntent { nonce, .. } => {
@@ -1127,7 +1125,7 @@ impl LoopState {
                     self.pane.optimistic_watch_until =
                         Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
                 }
-                self.prepare_action(fetch);
+                self.prepare_action();
                 if let Some(anchor) = self
                     .focus_anchor(self.pane.clock.now())
                     .filter(|anchor| anchor.nonce == nonce)
@@ -1144,13 +1142,13 @@ impl LoopState {
                         Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
                 }
                 if fold {
-                    self.prepare_action(fetch);
+                    self.prepare_action();
                 }
-                self.handle_overlay_event(fetch, event, fold);
+                self.handle_overlay_event(event, fold);
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
             _ => {
-                fetch.request(if requests_verification {
+                self.pane.fetch.request(if requests_verification {
                     FetchRequest::fresh_panes()
                 } else {
                     FetchRequest::default()
@@ -1203,11 +1201,11 @@ impl LoopState {
         }
     }
 
-    fn prepare_action(&mut self, fetch: &mut FetchHandle) {
+    fn prepare_action(&mut self) {
         // Require content before flushing, then invalidate reuse again:
         // the action can change renderer state after the drain.
         self.pane.own.accepted = None;
-        self.drain_snapshot(fetch, false);
+        self.drain_snapshot(false);
         self.pane.own.accepted = None;
     }
 
@@ -1380,7 +1378,7 @@ impl LoopState {
         targets.contains(own) || own_view.is_some_and(|view| own_tab_viewed(targets, view, own))
     }
 
-    fn handle_overlay_event(&mut self, fetch: &mut FetchHandle, event: SidebarEvent, fold: bool) {
+    fn handle_overlay_event(&mut self, event: SidebarEvent, fold: bool) {
         // A relevant overlay fuses into the in-memory state and paints this
         // frame. Every topology overlay asks the producer to verify with a
         // real pull, which supersedes the overlay once its fresh frame
@@ -1398,7 +1396,7 @@ impl LoopState {
             self.fold_fused_now();
         }
         if !self.pane.should_exit && (requests_verification || own_revealed) {
-            fetch.request(FetchRequest::fresh_panes());
+            self.pane.fetch.request(FetchRequest::fresh_panes());
         }
         if own_focused {
             self.pane.optimistic_watch_until =
@@ -1419,7 +1417,6 @@ impl LoopState {
     /// probed once at the dispatch site so tests can drive the feedback path.
     pub(super) fn on_resize(
         &mut self,
-        fetch: &mut FetchHandle,
         terminal: &mut Terminal<PaneBackend>,
         settled_width: Option<u16>,
     ) -> Result<()> {
@@ -1433,7 +1430,7 @@ impl LoopState {
                 Some(self.pane.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         }
         // Watched resize uses the newest fold; hidden content stays deferred.
-        self.drain_snapshot(fetch, true);
+        self.drain_snapshot(true);
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width
@@ -1474,7 +1471,7 @@ impl LoopState {
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the host and require a cache produced after
         // this signal.
-        fetch.request(FetchRequest::fresh_panes());
+        self.pane.fetch.request(FetchRequest::fresh_panes());
         Ok(())
     }
 
@@ -1552,18 +1549,16 @@ impl LoopState {
         &mut self,
         wakeup: Wakeup,
         terminal: &mut Terminal<PaneBackend>,
-        fetch: &mut FetchHandle,
     ) -> Result<()> {
-        self.on_inputs([wakeup], terminal, fetch)
+        self.on_inputs([wakeup], terminal)
     }
 
     pub(super) fn on_inputs(
         &mut self,
         wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
-        fetch: &mut FetchHandle,
     ) -> Result<()> {
-        self.prepare_action(fetch);
+        self.prepare_action();
         let applied = match self.apply_input(wakeups, terminal) {
             Ok(applied) => applied,
             Err(error) => {
@@ -1611,9 +1606,9 @@ impl LoopState {
                     };
                     self.pane.width_control.adjust(size.width, dir);
                 }
-                InputEffect::MarkRead(row_id) => self.mark_row_read(fetch, &row_id),
-                InputEffect::MarkUnread(row_id) => self.mark_row_unread(fetch, &row_id),
-                InputEffect::MarkAllRead => self.mark_all_read(fetch),
+                InputEffect::MarkRead(row_id) => self.mark_row_read(&row_id),
+                InputEffect::MarkUnread(row_id) => self.mark_row_unread(&row_id),
+                InputEffect::MarkAllRead => self.mark_all_read(),
                 InputEffect::SyncFilter(filter) => self.persist_body_filter(filter),
                 InputEffect::Reload => (self.pane.request_reload)(),
                 InputEffect::DismissAlert => {}
@@ -1731,7 +1726,7 @@ impl LoopState {
     /// room so the host prunes the episode and peer tabs converge, and refetch
     /// so the receipt lands in the pulled snapshot. A no-op when the row is
     /// already read.
-    fn mark_row_read(&mut self, fetch: &mut FetchHandle, row_id: &str) {
+    fn mark_row_read(&mut self, row_id: &str) {
         let now = self.pane.clock.timestamp();
         let marks = ReadMarks::load(&self.pane.runtime);
         let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
@@ -1746,15 +1741,10 @@ impl LoopState {
                 now,
             )
         });
-        self.apply_read_clear(clear, now, fetch);
+        self.apply_read_clear(clear, now);
     }
 
-    fn apply_read_clear(
-        &mut self,
-        clear: ReadClear,
-        now: jiff::Timestamp,
-        fetch: &mut FetchHandle,
-    ) {
+    fn apply_read_clear(&mut self, clear: ReadClear, now: jiff::Timestamp) {
         if clear.ids.is_empty() {
             return;
         }
@@ -1768,27 +1758,27 @@ impl LoopState {
             set_rows_unread(&mut v.context.current, &clear.ids, false);
         });
         emit_unread_cleared_trace(&self.pane.diag, &clear.trace);
-        self.commit_local_mark(fetch);
+        self.commit_local_mark();
     }
 
     /// Mark every readable row read without jumping (`M`): write room receipts
     /// for every unread or needs-a-look row, clear local unread bits, and refetch
     /// so peers converge through the producer.
-    fn mark_all_read(&mut self, fetch: &mut FetchHandle) {
+    fn mark_all_read(&mut self) {
         let now = self.pane.clock.timestamp();
         let marks = ReadMarks::load(&self.pane.runtime);
         let clear = self.views.with(&mut self.pane, Route::READ, |_, v| {
             v.state.unread_guard = None;
             read_receipts_for_all(&v.context.current, UnreadClearCause::MarkRead, &marks, now)
         });
-        self.apply_read_clear(clear, now, fetch);
+        self.apply_read_clear(clear, now);
     }
 
     /// Re-flag a row unread without jumping (`m` on a read row): open a durable
     /// episode through the shared mark-unread path, set the row locally for an
     /// instant repaint, trace the open, wake the room, and refetch so the episode
     /// lands in the pulled snapshot. A no-op when the row has left the room.
-    fn mark_row_unread(&mut self, fetch: &mut FetchHandle, row_id: &str) {
+    fn mark_row_unread(&mut self, row_id: &str) {
         let Some(row) = self
             .views
             .mirror()
@@ -1817,19 +1807,19 @@ impl LoopState {
         for item in &opened {
             self.pane.diag.trace_notify(item.trace_event());
         }
-        self.commit_local_mark(fetch);
+        self.commit_local_mark();
     }
 
-    fn commit_local_mark(&mut self, fetch: &mut FetchHandle) {
+    fn commit_local_mark(&mut self) {
         if self.pane.clock.effects_enabled() {
             wake_room(&self.pane.runtime);
         }
         self.pane.dirty = true;
         self.pane.next_frame = self.pane.clock.now();
-        fetch.request(FetchRequest::default());
+        self.pane.fetch.request(FetchRequest::default());
     }
 
-    fn run_maintenance(&mut self, fetch: &mut FetchHandle, terminal: &mut Terminal<PaneBackend>) {
+    fn run_maintenance(&mut self, terminal: &mut Terminal<PaneBackend>) {
         let own_pane = self.pane.config.own_pane.clone();
         let room_caps = self.pane.room_caps.clone();
         if self.pane.clock.effects_enabled() {
@@ -1853,7 +1843,7 @@ impl LoopState {
         // datagram can be lost around socket teardown/rebind; the frame/tick
         // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
-        self.on_snapshot(fetch);
+        self.on_snapshot();
 
         let (gate_due, dwell_due) = self.inspect_view(|_, view| {
             (
@@ -1865,14 +1855,14 @@ impl LoopState {
             )
         });
         if gate_due {
-            fetch.request_if_idle(FetchRequest::default());
+            self.pane.fetch.request_if_idle(FetchRequest::default());
         }
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
         // a fold so the normal clear path sweeps the unread siblings. The fold
         // disarms the deadline, so this fires at most a fetch or two.
         if dwell_due && self.watched() {
-            fetch.request_if_idle(FetchRequest::default());
+            self.pane.fetch.request_if_idle(FetchRequest::default());
         }
 
         // Data backstop: catch pane/git drift no store delta announced. It is
@@ -1885,7 +1875,7 @@ impl LoopState {
             .saturating_duration_since(self.pane.fetched_at)
             >= tick_for(self.pane.config.tick_seconds)
         {
-            fetch.request_if_idle(FetchRequest::default());
+            self.pane.fetch.request_if_idle(FetchRequest::default());
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
@@ -1924,7 +1914,7 @@ impl LoopState {
             } else {
                 FetchRequest::default()
             };
-            fetch.request_if_idle(request);
+            self.pane.fetch.request_if_idle(request);
         }
         if !self.inspect_view(|ui, _| ui.freeze.is_some()) {
             return;
@@ -1937,7 +1927,7 @@ impl LoopState {
                 })
             })
         {
-            fetch.request_if_idle(FetchRequest::default());
+            self.pane.fetch.request_if_idle(FetchRequest::default());
         }
     }
 
@@ -2336,6 +2326,7 @@ impl PaneState {
             runtime: _,
             host_wake_path: _,
             diag: _,
+            fetch: _,
             own: _,
             observe_tx: _,
             wake: _,

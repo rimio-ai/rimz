@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
-use crate::sidebar_pane::app::fetch::{FetchPhase, FetchUpdate, SnapshotSource};
+use crate::sidebar_pane::app::fetch::{FetchHandle, FetchPhase, FetchUpdate, SnapshotSource};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -393,6 +393,7 @@ impl ApplyHarness {
         config.own_pane = Some(own.clone());
         let socket_path = runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
+        let completion: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
         let mut state = LoopState::new(
             crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
@@ -400,6 +401,7 @@ impl ApplyHarness {
             runtime,
             socket_path,
             diag,
+            FetchHandle::new(std::sync::mpsc::channel().0, completion.clone()),
             None,
             observe_tx,
             PixelRenderCaps::default(),
@@ -410,7 +412,7 @@ impl ApplyHarness {
         state.share_views(std::sync::Arc::clone(&views), 0);
         Self {
             state,
-            completion: Default::default(),
+            completion,
             views,
             own,
         }

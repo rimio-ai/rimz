@@ -8,9 +8,9 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);
     rig.fold(snapshot.clone(), SnapshotSource::Produced);
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     for phase in [FetchPhase::Interim, FetchPhase::Final] {
         snapshot.now += jiff::SignedDuration::from_secs(1);
@@ -20,13 +20,13 @@ fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
             source: SnapshotSource::Produced,
         });
     }
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(rig.view().ctx().current.now, snapshot.now);
     assert_eq!(
         rig.state.pane.content_applications, 1,
         "coalescing must retain clock-only delivery"
     );
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
         "unchanged final clears the latch"
@@ -160,8 +160,7 @@ fn a_late_consumer_does_not_reinsert_an_overlay_expired_since_ingress() {
     rig.record_event(&envelope);
     clock.advance(Duration::from_millis(12_001));
     rig.state.events().prune(clock.now_ms());
-    rig.state
-        .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
+    rig.state.on_event(&mut rig.terminal, envelope);
     assert_eq!(
         rig.view()
             .ctx()
@@ -238,7 +237,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
         pane_id: pane_id.clone(),
         command: "vim".to_owned(),
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     // The event's own fold catches the view up to the queued equal content and fuses it, so the
     // take that follows has nothing left to apply.
     assert_eq!(
@@ -755,9 +754,9 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         frame: Some(Arc::new(frame)),
     };
 
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     rig.state.pane.dirty = false;
     rig.state.seed(&fold);
@@ -858,7 +857,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
         0,
         "the changed pane set commits"
     );
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
         "only the final correction clears the latch"
@@ -910,16 +909,14 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
         mods: KeyModifiers::NONE,
     };
     rig.state
-        .on_input(press.clone(), &mut rig.terminal, &mut rig.fetch)
+        .on_input(press.clone(), &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.view().ui().selected_index, None);
 
     let mut rebound = snapshot;
     rebound.sidebar.keys.down = "v".to_owned();
     rig.fold(rebound, SnapshotSource::Produced);
-    rig.state
-        .on_input(press, &mut rig.terminal, &mut rig.fetch)
-        .unwrap();
+    rig.state.on_input(press, &mut rig.terminal).unwrap();
     assert_eq!(rig.view().ui().selected_index, Some(0));
     assert_eq!(
         rig.view().ui().selected_pane,
@@ -933,7 +930,6 @@ fn snapshot_key_rebind_reaches_the_host_resolver() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(
@@ -951,9 +947,9 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[0]
     .name = "unread-snapshot".into();
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     let filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Idle));
     rig.send(FetchUpdate::Shared {
@@ -973,7 +969,7 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view()
             .ctx()
@@ -990,7 +986,7 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
         "snapshot context is applied with its snapshot"
     );
     assert_eq!(rig.view().ctx().health.failure_streak, 1);
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
             .expect("final outcome clears the latch")
@@ -1002,9 +998,9 @@ fn failure_after_an_unread_snapshot_keeps_state_context_and_completion() {
 #[test]
 fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
     let mut rig = Rig::new();
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     for (name, phase) in [
         ("final-snapshot", FetchPhase::Final),
@@ -1021,13 +1017,13 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
             source: SnapshotSource::Cached,
         });
     }
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view().ctx().current.rows().next().unwrap().name,
         "final-snapshot",
         "an interim must not displace the pending final snapshot"
     );
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
             .expect("completion survives an interim publication")
@@ -1038,9 +1034,9 @@ fn a_final_snapshot_never_yields_to_an_interim_or_loses_completion() {
 #[test]
 fn a_failed_completion_survives_a_later_interim_snapshot() {
     let mut rig = Rig::new();
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     rig.send(FetchUpdate::Failed {
         error: "fold failed".into(),
@@ -1050,14 +1046,14 @@ fn a_failed_completion_survives_a_later_interim_snapshot() {
         phase: FetchPhase::Interim,
         source: SnapshotSource::Cached,
     });
-    rig.state.on_snapshot(&mut rig.fetch);
+    rig.state.on_snapshot();
     assert_eq!(
         rig.view().ctx().health.failure_streak,
         1,
         "an interim must not erase a pending failure"
     );
     assert_eq!(rig.view().ctx().current.rows().count(), 1);
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request()
             .expect("failed final clears the latch")
@@ -1300,7 +1296,6 @@ fn search_commit_writes_and_dispatches_the_lens() {
                     mods: KeyModifiers::NONE,
                 },
                 &mut rig.terminal,
-                &mut rig.fetch,
             )
             .unwrap();
     }
@@ -1327,7 +1322,6 @@ fn search_draft_survives_peer_adoption_and_focus_loss_keeps_commit() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
@@ -1372,7 +1366,6 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
                     mods: KeyModifiers::NONE,
                 },
                 &mut rig.terminal,
-                &mut rig.fetch,
             )
             .unwrap();
     }
@@ -1400,7 +1393,6 @@ fn active_alert_discards_search_draft_and_preserves_committed_lens() {
                 mods: KeyModifiers::NONE,
             },
             &mut rig.terminal,
-            &mut rig.fetch,
         )
         .unwrap();
     assert_eq!(rig.view().ui().search_draft, None);

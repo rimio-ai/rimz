@@ -67,9 +67,9 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
         rig.state.pane.projections, 1,
         "the initial fold projects on take"
     );
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     for name in ["first", "latest"] {
         defer_name(&mut rig, name);
@@ -78,7 +78,7 @@ fn hidden_projection_waits_for_reveal_and_completes_skipped_final() {
         rig.state.pane.projections, 1,
         "deferred folds never project"
     );
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
         "deferred final clears the latch"
@@ -173,11 +173,7 @@ fn first_input_reveal_arms_dwell_only_once() {
     let clock = LoopClock::play(rig.state.views.mirror().now);
     rig.state.pane.clock = clock.clone();
     rig.state
-        .on_input(
-            Wakeup::Key(KeyAction::Dismiss),
-            &mut rig.terminal,
-            &mut rig.fetch,
-        )
+        .on_input(Wakeup::Key(KeyAction::Dismiss), &mut rig.terminal)
         .unwrap();
     let until = rig.state.inspect_view(|_, view| view.tab_read_dwell_until);
     assert_eq!(until, Some(clock.now() + TAB_READ_DWELL));
@@ -253,15 +249,15 @@ fn one_watched_of_fifty_seven_folds_across_data_ticks() {
 #[test]
 fn skipped_final_completes_requests_and_refreshes_backstops() {
     let mut rig = hidden_rig();
-    rig.fetch.request_if_idle(FetchRequest::default());
+    rig.request_if_idle(FetchRequest::default());
     assert!(rig.next_request().is_some());
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(rig.next_request().is_none());
     let before = Instant::now();
     defer_name(&mut rig, "deferred");
     assert!(rig.state.pane.fetched_at >= before);
     assert!(rig.state.pane.last_self_close_check >= before);
-    rig.fetch.request_if_idle(FetchRequest::fresh_panes());
+    rig.request_if_idle(FetchRequest::fresh_panes());
     assert!(
         rig.next_request().unwrap().is_fresh_panes(),
         "deferred final clears the latch"
@@ -380,9 +376,7 @@ fn input_flushes_hidden_content() {
     ] {
         let mut rig = hidden_rig();
         defer_name(&mut rig, "before input");
-        rig.state
-            .on_input(input, &mut rig.terminal, &mut rig.fetch)
-            .unwrap();
+        rig.state.on_input(input, &mut rig.terminal).unwrap();
         assert_eq!(rig.view().ctx().current.display_name, "before input");
     }
 }
@@ -393,9 +387,7 @@ fn hidden_resize_keeps_deferred_content_unprojected() {
     defer_name(&mut rig, "before resize");
     let projections = rig.state.pane.projections;
     let reductions = rig.state.pane.content_applications;
-    rig.state
-        .on_resize(&mut rig.fetch, &mut rig.terminal, None)
-        .unwrap();
+    rig.state.on_resize(&mut rig.terminal, None).unwrap();
     assert_ne!(rig.view().ctx().current.display_name, "before resize");
     assert_eq!(rig.state.pane.projections, projections);
     assert_eq!(rig.state.pane.content_applications, reductions);
@@ -696,7 +688,7 @@ fn notification_rings_against_the_deferred_unread_fold() {
         let panes = snapshot.own_view.as_ref().unwrap().working_pane_ids.clone();
         rig.send(rig.lazy_update(snapshot, SnapshotSource::Produced));
         if drain {
-            rig.state.on_snapshot(&mut rig.fetch);
+            rig.state.on_snapshot();
         }
         assert!(
             !rig.view().ctx().current.rows().next().unwrap().unread,

@@ -127,7 +127,7 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     rig.state.pane.last_heartbeat = Some(Instant::now());
 
     rig.state
-        .on_resize(&mut rig.fetch, &mut rig.terminal, Some(57))
+        .on_resize(&mut rig.terminal, Some(57))
         .expect("handle attach resize");
 
     assert_eq!(
@@ -269,9 +269,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
     };
     for _ in 0..3 {
         let before = Instant::now();
-        rig.state
-            .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
-            .unwrap();
+        rig.state.on_resize(&mut rig.terminal, Some(40)).unwrap();
         let deadline = armed(&rig);
         assert!(
             deadline >= before + RESIZE_CAPS_SETTLE,
@@ -317,9 +315,7 @@ fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
         None => crate::config::CellAspect::from_ratio(2.0),
     };
     rig.state.pane.paint.set_probed_aspect(stale);
-    rig.state
-        .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
-        .unwrap();
+    rig.state.on_resize(&mut rig.terminal, Some(40)).unwrap();
     rig.state.pane.dirty = false;
     let caps = rig.state.pane.paint.caps();
 
