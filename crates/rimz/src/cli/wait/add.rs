@@ -117,7 +117,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     else {
         unreachable!("timer, process, and command waits are not subscriptions")
     };
-    let pending = list::pending_rows(&ctx, Some(agent), &snapshot.agents)?;
+    let pending = list::pending_rows(&ctx, Some(agent), &snapshot)?;
     if args.json {
         return super::super::render::json(&WakeReceipt {
             name: &name,
