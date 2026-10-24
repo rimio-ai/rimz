@@ -1290,7 +1290,8 @@ impl Fixture {
     }
 
     /// One hook's stdout; `runtime_env` feeds it as a launch stamped with the runtime switch
-    /// does, from the provider's current directory.
+    /// does, from the provider's current directory, and waits for the drainer's reply, so load
+    /// cannot turn the reply neutral.
     fn feed(
         &self,
         role: &str,
@@ -1316,6 +1317,7 @@ impl Fixture {
         if let Some(cwd) = runtime_env {
             command
                 .env(rimz::harness::launch::ENV_RUNTIME_ENV, "1")
+                .env("RIMZ_TEST_HOOK_REPLY_WAIT_MS", "30000")
                 .current_dir(cwd);
         }
         command
