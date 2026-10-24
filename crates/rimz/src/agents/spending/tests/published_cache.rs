@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn publication_carries_session_start_and_accepts_an_older_writer() {
+    let result = SpendingWalkResult {
+        session_start_secs: Some(NOW_SECS - 100),
+        ..Default::default()
+    };
+    let published = ProviderSpendingCache::from_walk(&result, NOW_SECS * 1_000);
+    assert_eq!(published.session_start_secs, result.session_start_secs);
+    let mut value = serde_json::to_value(&published).unwrap();
+    assert_eq!(value["session_start_secs"], NOW_SECS - 100);
+    value.as_object_mut().unwrap().remove("session_start_secs");
+    let older: ProviderSpendingCache = serde_json::from_value(value).unwrap();
+    assert_eq!(older.session_start_secs, None);
+    assert!(older.is_current_version());
+    assert!(
+        serde_json::to_value(older)
+            .unwrap()
+            .get("session_start_secs")
+            .is_none()
+    );
+}
+
+#[test]
 fn workspace_cache_is_current_only_at_the_published_version() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("workspace-spending.scope.json");
