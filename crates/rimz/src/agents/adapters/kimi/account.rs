@@ -107,6 +107,7 @@ fn probe_at(path: &Path) -> AccountProbe {
         return AccountProbe::LoggedOut;
     }
     AccountProbe::Found(AgentAccount {
+        profile_fingerprint: None,
         scope: Default::default(),
         plan: Some("Code".to_owned()),
         account_id: None,

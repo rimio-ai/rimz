@@ -471,6 +471,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
             version: None,
             sub_provider: None,
             credentials_updated_at_ms: None,
+            profile_fingerprint: None,
         },
     );
     let snapshot = snapshot.with_provider_aggregates(

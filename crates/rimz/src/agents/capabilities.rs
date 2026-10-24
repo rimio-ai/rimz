@@ -989,7 +989,25 @@ pub trait ContextCapability: CoreCapability {
 }
 
 #[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccountProfileProbe {
+    NotAttempted,
+    Answered(Option<String>),
+    Failed,
+}
+
+#[doc(hidden)]
 pub trait AccountCapability: CoreCapability {
+    /// Read a live plan bound to the freshly probed account. The caller owns
+    /// cadence, offline policy and publication; failure changes no account facts.
+    fn probe_account_profile(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _account: &AgentAccount,
+    ) -> AccountProfileProbe {
+        AccountProfileProbe::NotAttempted
+    }
+
     fn prepare_reset_credit(
         &self,
         _login_env: &BTreeMap<String, String>,

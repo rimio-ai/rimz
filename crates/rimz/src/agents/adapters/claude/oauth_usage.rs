@@ -1,8 +1,8 @@
-//! Direct Claude OAuth account usage and manual reset-credit claims.
+//! Direct Claude OAuth account usage, profile plans and manual reset-credit claims.
 //!
 //! Reads `.credentials.json` under the login's Claude config home and
 //! normalizes the provider usage endpoint's response into RimZ's
-//! account-window and paid-usage types. Probes are read-only; manual
+//! account-window, paid-usage and identity-bound plan types. Probes are read-only; manual
 //! redemption prepares from usage and profile reads, then sends one claim
 //! without retries. It never refreshes or writes credentials; retry/backoff
 //! of reads and cache writes live in the CLI helper that calls this module.
@@ -25,11 +25,11 @@ use crate::agents::account::{
     ProviderCapacity, RedeemHold, RedemptionCode, ResetCreditAction, ResetCreditOffer,
     ResetCreditResult,
 };
-use crate::agents::capabilities::LaunchCapability;
+use crate::agents::capabilities::{AccountProfileProbe, LaunchCapability};
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{
-    AccountUsageFault, OAuthHttpErr, oauth_http_get, oauth_http_post_json_once, trusted_usage_url,
-    url_host,
+    AccountUsageFault, OAuthHttpErr, oauth_http_get, oauth_http_get_once,
+    oauth_http_post_json_once, trusted_usage_url, url_host,
 };
 use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
@@ -101,6 +101,57 @@ impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
 }
 
 type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
+
+pub(super) fn probe_profile(
+    login_env: &BTreeMap<String, String>,
+    account: &crate::agents::AgentAccount,
+) -> AccountProfileProbe {
+    let Some(owner) = account.profile_fingerprint.as_deref() else {
+        return AccountProfileProbe::NotAttempted;
+    };
+    let read = || -> Result<String> {
+        let url = endpoint_url(&usage_url()?, &["api", "oauth", "profile"])?;
+        let credentials = load_credentials(login_env)?;
+        oauth_http_get_once(
+            &url,
+            &oauth_headers(&credentials.access_token),
+            "claude: fetching OAuth account profile",
+        )
+        .map_err(|error| ClaudeOauthUsageErr::ProfileHttp {
+            kind: error.kind,
+            host: error.host,
+        })
+    };
+    match read() {
+        Ok(body) => parse_profile_plan(&body, owner),
+        Err(_) => AccountProfileProbe::Failed,
+    }
+}
+
+fn parse_profile_plan(body: &str, owner: &str) -> AccountProfileProbe {
+    let Ok(profile) = serde_json::from_str::<ProfileWire>(body) else {
+        return AccountProfileProbe::Failed;
+    };
+    let fingerprint = profile.account.as_ref().and_then(|account| {
+        super::account::profile_fingerprint(account.email.as_deref()?, &profile.organization.uuid)
+    });
+    let Some(fingerprint) = fingerprint else {
+        return AccountProfileProbe::Failed;
+    };
+    if fingerprint != owner {
+        return AccountProfileProbe::Answered(None);
+    }
+    let plan = match (
+        profile.organization.organization_type.as_deref(),
+        profile.organization.rate_limit_tier.as_deref(),
+    ) {
+        (Some("claude_pro"), _) => Some("pro"),
+        (Some("claude_max"), Some("default_claude_max_5x")) => Some("max_5x"),
+        (Some("claude_max"), Some("default_claude_max_20x")) => Some("max_20x"),
+        _ => None,
+    };
+    AccountProfileProbe::Answered(plan.map(str::to_owned))
+}
 
 fn redemption_hold(usage: &UsageWire, now: Timestamp) -> Option<RedeemHold> {
     let held = |code, reason| Some(RedeemHold { code, reason });
@@ -243,11 +294,23 @@ struct ApiErrorDetailsWire {
 #[derive(Deserialize)]
 struct ProfileWire {
     organization: OrganizationWire,
+    #[serde(default)]
+    account: Option<ProfileAccountWire>,
+}
+
+#[derive(Deserialize)]
+struct ProfileAccountWire {
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OrganizationWire {
     uuid: String,
+    #[serde(default)]
+    organization_type: Option<String>,
+    #[serde(default)]
+    rate_limit_tier: Option<String>,
 }
 
 #[derive(Deserialize)]

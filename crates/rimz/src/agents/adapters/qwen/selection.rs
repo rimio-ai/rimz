@@ -149,6 +149,7 @@ impl Selection {
 
     pub(super) fn account(&self) -> AgentAccount {
         AgentAccount {
+            profile_fingerprint: None,
             scope: self.scope(),
             plan: (!matches!(self.provider, SelectedProvider::Alibaba(_)))
                 .then(|| "API key".to_owned()),

@@ -1370,6 +1370,14 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
+    fn probe_account_profile(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        account: &crate::agents::AgentAccount,
+    ) -> crate::agents::capabilities::AccountProfileProbe {
+        oauth_usage::probe_profile(login_env, account)
+    }
+
     fn prepare_reset_credit(
         &self,
         login_env: &BTreeMap<String, String>,

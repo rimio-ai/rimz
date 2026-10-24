@@ -473,6 +473,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         let usage = collect_usage(parsed);
         let account =
             (usage.plan.is_some() || usage.rate_limits.is_some()).then_some(AgentAccount {
+                profile_fingerprint: None,
                 metered: Some(true),
                 plan: usage.plan,
                 ..Default::default()

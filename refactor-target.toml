@@ -256,7 +256,23 @@ upward-dependencies = ["address"]
 # expects_usage_reading and its re-export share per-login quota expectations with the CLI (+2).
 # BirthLoginErr::repair shares structured account repair text with the overview (+1).
 # AccountCapability::has_quota_surface lets adapters own sub-provider quota expectations (+1).
-surface-budget = 1128
+# AccountProfileProbe, probe_account_profile and oauth_http_get_once share bounded plan reads (+3).
+surface-budget = 1131
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::AccountProfileProbe"
+reason = "The public account capability distinguishes no attempt, an answered plan and failure without changing login facts."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::AccountCapability::probe_account_profile"
+reason = "The account worker owns cadence and writes while the adapter owns its identity-bound live plan read."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::oauth_http_get_once"
+reason = "Profile reads share the bounded, redirect-refusing OAuth transport without its transient retry loop."
 
 [[verdict]]
 kind = "item"

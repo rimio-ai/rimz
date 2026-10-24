@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::context::{AgentAccount, RateLimitWindow, RateLimitWindowScope, WindowSource};
@@ -103,6 +104,18 @@ fn refine_max_plan(account: &mut AgentAccount, rate_limit_tier: Option<&str>) {
     account.plan = Some(plan.to_owned());
 }
 
+pub(super) fn profile_fingerprint(email: &str, organization: &str) -> Option<String> {
+    let email = non_empty_trimmed(email)?.to_lowercase();
+    let organization = non_empty_trimmed(organization)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"rimz/claude-profile-owner/v1");
+    hasher.update([0]);
+    hasher.update(email.as_bytes());
+    hasher.update([0]);
+    hasher.update(organization.as_bytes());
+    Some(hex::encode(hasher.finalize()))
+}
+
 /// What one finished `claude auth status` run says. The CLI exits non-zero
 /// when logged out while still printing `"loggedIn": false`, so a failed exit
 /// is a logout only when its stdout says exactly that; any other failed exit,
@@ -126,6 +139,10 @@ struct ClaudeAuthStatus {
     auth_method: Option<String>,
     #[serde(default)]
     subscription_type: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    org_id: Option<String>,
 }
 
 /// Map a `claude auth status` JSON payload onto a probe outcome. The auth method
@@ -149,9 +166,13 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     }
     // API-key logins report `apiKey`; a Console sign-in with a stored key reports `api_key` (2.1.286+).
     let metered = auth_method.map(|method| !matches!(method.as_str(), "apiKey" | "api_key"));
+    let profile_fingerprint = (status.auth_method.as_deref() == Some("claude.ai"))
+        .then(|| profile_fingerprint(status.email.as_deref()?, status.org_id.as_deref()?))
+        .flatten();
     AccountProbe::Found(AgentAccount {
         plan,
         metered,
+        profile_fingerprint,
         ..Default::default()
     })
 }
@@ -159,6 +180,64 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_binding_requires_subscription_identity_and_redacts_debug() {
+        let accounts: Vec<_> = [
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"claude.ai","email":"Work@example.test",
+                "orgId":"00000000-0000-0000-0000-000000000001"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"claude.ai","email":"work@example.test",
+                "orgId":"00000000-0000-0000-0000-000000000001"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"claude.ai","email":"work@example.test",
+                "orgId":"00000000-0000-0000-0000-000000000002"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"claude.ai","email":"work@example.test"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"claude.ai","email":" ",
+                "orgId":"00000000-0000-0000-0000-000000000001"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"api_key","email":"work@example.test",
+                "orgId":"00000000-0000-0000-0000-000000000001"
+            }),
+            serde_json::json!({
+                "loggedIn":true,"authMethod":"gateway","email":"work@example.test",
+                "orgId":"00000000-0000-0000-0000-000000000001"
+            }),
+        ]
+        .iter()
+        .map(|body| found(parse_claude_auth(body.to_string().as_bytes()), "identity"))
+        .collect();
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.profile_fingerprint.is_some())
+                .collect::<Vec<_>>(),
+            vec![true, true, true, false, false, false, false]
+        );
+        assert_eq!(
+            accounts[0].profile_fingerprint,
+            accounts[1].profile_fingerprint
+        );
+        assert_ne!(
+            accounts[0].profile_fingerprint,
+            accounts[2].profile_fingerprint
+        );
+        let fingerprint = accounts[0].profile_fingerprint.as_ref().unwrap();
+        assert!(!format!("{:?}", accounts[0]).contains(fingerprint));
+        let value = serde_json::to_string(&accounts[0]).unwrap();
+        assert!(
+            !value.contains("example.test")
+                && !value.contains("00000000-0000-0000-0000-000000000001")
+        );
+    }
 
     #[test]
     fn refines_only_max_plans_with_known_credential_tiers() {

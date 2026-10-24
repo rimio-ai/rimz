@@ -2,6 +2,71 @@ use super::*;
 use crate::agents::credits::AccountUsageReportable;
 
 #[test]
+fn profile_plan_is_strict_bound_and_requires_a_well_formed_identity() {
+    use crate::agents::capabilities::AccountProfileProbe::{Answered, Failed};
+    let owner = super::super::account::profile_fingerprint(
+        "work@example.test",
+        "00000000-0000-0000-0000-000000000001",
+    )
+    .unwrap_or_default();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (family, tier, plan) in [
+        ("claude_pro", None, Some("pro")),
+        ("claude_pro", Some("default_claude_ai"), Some("pro")),
+        ("claude_max", Some("default_claude_max_5x"), Some("max_5x")),
+        (
+            "claude_max",
+            Some("default_claude_max_20x"),
+            Some("max_20x"),
+        ),
+        ("claude_max", None, None),
+        ("claude_max", Some("default_claude_ai"), None),
+        ("claude_team", Some("default_claude_max_20x"), None),
+        ("claude_enterprise", None, None),
+        ("future", None, None),
+    ] {
+        let body = serde_json::json!({
+            "account":{"email":"WORK@example.test"},
+            "organization":{
+                "uuid":"00000000-0000-0000-0000-000000000001",
+                "organization_type":family,"rate_limit_tier":tier
+            },
+            "subscription_status":"inactive","has_claude_pro":false,
+        });
+        actual.push(parse_profile_plan(&body.to_string(), &owner));
+        expected.push(Answered(plan.map(str::to_owned)));
+    }
+    for (body, result) in [
+        (
+            r#"{"account":{"email":"other@example.test"},
+                "organization":{"uuid":"00000000-0000-0000-0000-000000000001",
+                "organization_type":"claude_pro"}}"#,
+            Answered(None),
+        ),
+        (
+            r#"{"organization":{"uuid":"00000000-0000-0000-0000-000000000001",
+                "organization_type":"claude_pro"}}"#,
+            Failed,
+        ),
+        (
+            r#"{"account":{"email":" "},
+                "organization":{"uuid":"00000000-0000-0000-0000-000000000001"}}"#,
+            Failed,
+        ),
+        (
+            r#"{"account":{"email":"work@example.test"},"organization":{"uuid":""}}"#,
+            Failed,
+        ),
+        ("not json", Failed),
+    ] {
+        actual.push(parse_profile_plan(body, &owner));
+        expected.push(result);
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn max_tier_metadata_needs_no_valid_token_but_rejects_contradictions() {
     for tier in ["default_claude_max_5x", "default_claude_max_20x"] {
         for subscription in [None, Some("max")] {

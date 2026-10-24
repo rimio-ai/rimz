@@ -168,6 +168,7 @@ fn accounts() -> AccountsCache {
                 version: Some("2.1.158".to_owned()),
                 sub_provider: None,
                 credentials_updated_at_ms: None,
+                profile_fingerprint: None,
             }),
         },
     );
