@@ -1,75 +1,183 @@
 # Droid adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [droid-reference.md](../../externals/agent-adapter/droid-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Binding and session death are in [instances.md](./instances.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md), and the raw upstream protocol is in [droid-reference.md](../../externals/agent-adapter/droid-reference.md).
 
-Factory Droid reports basic lifecycle through native `settings.json` hooks. RimZ installs a slim additive hook set into `~/.factory/settings.json`; it leaves Droid's user-owned `statusLine` and persistent autonomy settings untouched. The adapter is intentionally interactive-only: supervised `rimz agents droid -p` launches the stock TUI with a positional prompt and completes from the native `Stop` hook rather than replacing the TUI with a separate exec transport.
+Factory Droid reports its lifecycle through native command hooks in `~/.factory/settings.json`, and RimZ enriches the card from Droid's private session files. The adapter drives only the stock interactive TUI. A supervised `rimz agents droid -p` launches that TUI with a positional prompt and completes from the native `Stop` hook. RimZ does not speak the `droid exec` JSON-RPC transport, and it never writes Droid's `statusLine` or persistent autonomy settings. The code lives in [`agents/adapters/droid/`](../../../crates/rimz/src/agents/adapters/droid/mod.rs):
 
-Only the registry reaches the concrete adapter. Custom-model config, payloads, hook-process attribution, transcript telemetry, installation, and spend stay private to the Droid adapter; other modules consume the provider-neutral capabilities.
+| Module | Owns |
+| --- | --- |
+| `mod.rs` | `DROID_DESCRIPTOR` (the `static AgentSpec`), the coverage declarations, the hook catalog `DROID_HOOKS`, the hook command, `DroidAdapter::decode_hook`, `DroidAdapter::hook_ingress`, and `DroidAdapter::local_context_refresh` |
+| `payloads.rs` | the typed `SessionStart`, `UserPromptSubmit`, and `Notification` payloads, with `DroidSessionStart::compacted_session_id` and `DroidNotification::ask_kind` |
+| `process.rs` | `hook_process_disposition`, which tells the stock TUI from its internal worker |
+| `install.rs` | `MANAGED_SOURCE`, the `settings.json` hook merge, and `droid_settings_path` |
+| `transcript.rs` | the version-2 session-file reader: history, the assistant suffix, the final answer, the settings snapshot, and the `AskUser` projection |
+| `config.rs` | the read-only `custom:` model catalogue (`resolve_custom_model_from_cwd`) |
+| `spend.rs` | exact-model pricing of the settings snapshot (`parse`, `live_cost`) |
+| `tests.rs` | install and uninstall, lifecycle mapping, compaction routing, notification types, the transcript and settings readers, streaming, pricing, and launch argv, over the Droid 0.170.0 fixture pair in `tests/fixtures/` |
 
 ## Hooks and lifecycle
 
-| Native event | `LifecycleSignal` | Notes |
+`decode_hook` maps each native event to one [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs). The payloads are in [droid-reference.md](../../externals/agent-adapter/droid-reference.md#hook-input).
+
+| Native event | Signal | Notes |
 | --- | --- | --- |
-| `SessionStart` | `Registered` | `startup` and `clear` mark a fresh session; `resume` registers the replacement session id Droid assigns. |
-| `SessionStart` (`source: compact`) | `CompactionEnded { auto: None }` | Closes the bracket only after `/handoff`. Since 0.228.0 ordinary compaction runs in place, keeps the session id, and fires no `SessionStart`; `agents/lifecycle.rs::step` lifts that compacting head on the next lifecycle signal, or `AgentState::is_compacting` expires it after `COMPACTING_WINDOW_SECS`. A handoff successor's `previous_session_id` names the session it replaced, so the close routes to that previous id (without repointing its transcript) and the successor registers on its next prompt or tool signal. A payload without `previous_session_id` closes on the reported id. |
-| `UserPromptSubmit` | `TurnStarted` | Carries the sanitized prompt as task and prompt metadata. |
-| `PostToolUse` | `ToolUsed { mutates, edits }` | `Create`, `Edit`, and `ApplyPatch` edit; `Execute` mutates without ending the reasoning phase. |
-| `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | Droid exposes no structured failure or background-work field. The displayed-status ladder and stall window surface failures without guessing from silence. |
-| `PreCompact` | `Compacting` | Opens the compaction bracket; `trigger` is retained by the typed wire but the close cannot report it. |
-| `SessionEnd` | `Ended` | Eagerly stamps `ended_at`; runtime hides the retained resumable row. |
-| `Notification` (`notification_type: permission_prompt`) | `AwaitingInput { Permission }` | Durable ask with the prompt text as detail; the spec-mode exit approval shares this tool confirmation, so it reads as a permission. |
+| `SessionStart` (`startup`, `clear`) | `Registered`, origin `Fresh` | |
+| `SessionStart` (`resume`) | `Registered` | Registers the hook's `session_id`, which need not echo the resume argument ([session identity](../../externals/agent-adapter/droid-reference.md#session-identity-and-resume)). |
+| `SessionStart` (`compact`) | `CompactionEnded { auto: None }` | Fires only for a `/handoff` successor. See [Compaction](#compaction). |
+| `UserPromptSubmit` | `TurnStarted` | The sanitized prompt becomes the task and the prompt. |
+| `PostToolUse` | `ToolUsed { mutates, edits }` | `Create`, `Edit`, and `ApplyPatch` edit. `Execute` mutates without editing. |
+| `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | Droid sends no failure or background-work field. The stall window and the displayed-status ladder surface a failed turn. |
+| `PreCompact` | `Compacting` | Opens the bracket. The decoder ignores the payload's `trigger`. |
+| `SessionEnd` | `Ended` | Stamps `ended_at` at once. The retained resumable row is hidden. |
+| `Notification` (`permission_prompt`) | `AwaitingInput { Permission }` | The prompt text is the ask's detail. |
 | `Notification` (`elicitation_dialog`) | `AwaitingInput { Question }` | The `AskUser` question UI. |
-| `Notification` (`idle_prompt`) | `TurnInterrupted` | Fired only after the user stops the agent; settles the turn that `Stop` never closes. |
-| `Notification` (untyped or other) | none | Silent; releases before `notification_type` keep the transcript fallback below. |
+| `Notification` (`idle_prompt`) | `TurnInterrupted` | Sent only after the user stops the agent. It settles the turn that `Stop` never closes. |
+| `Notification` (no type, or another type) | none | The event records nothing. |
 
-Droid 0.218.2 fires `Notification` with a `notification_type` only when a prompt actually needs the user, so permission and question prompts reach `rimz asks` and the next `PostToolUse` returns the card to running. The hook carries no request id, options, or answer channel, so `rimz answer` stays unsupported and Droid's pane remains the answer surface. For releases that send `Notification` without a type, the validated local transcript still projects an active `AskUser` tool call as a display-only native wait while the turn runs. `SubagentStop` carries a task name and result but no child identity, so the adapter does not install it or render child rows.
+An observation carries the payload's `transcript_path` (a handoff close excepted, see [Compaction](#compaction)), and `transcript::identity` reads model and effort from the settings snapshot, else from the newest visible assistant record. `SubagentStop` carries a task name and result but no child identity, so RimZ does not install it and draws no child rows.
 
-Neutral hook output is byte-empty stdout with exit status zero, handing control back to Droid's own UI. The installed command is `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid`, with a 2-second timeout and no matcher so every completed tool reaches the classifier.
+### Asks
 
-Droid's stock TUI (verified through 0.218.2) starts an internal `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` worker, and both processes apply the global hook configuration. RimZ suppresses structurally recognized outer-TUI hooks before workspace or store work and accepts the worker's complete stream; accepted worker observations retain the outer TUI PID as their runtime owner so liveness follows the pane process. A directly launched `droid exec` stays accepted and self-owned, while unreadable or unrecognized process metadata fails open.
+A `Notification` with a `notification_type` arrives only when a prompt needs the user, so permission and question prompts reach `rimz asks` and the next `PostToolUse` returns the card to running. The payload carries no request id, options, or answer channel. The asks are keyless ([edges](./model.md#edges)), `rimz answer` is unsupported, and the user answers in Droid's pane.
+
+The spec-mode exit approval uses the same tool confirmation and the same `permission_prompt`, so a plan approval reads as a permission ask. A Droid release whose `Notification` carries no type raises no hook ask. On every release, the local refresh also projects an active `AskUser` call from the transcript as a display-only native wait (see [The transcript](#the-transcript)), which covers the question case for such a release.
+
+### Compaction
+
+`PreCompact` opens the [compaction bracket](./model.md#the-compaction-bracket) for every compaction, and how it closes depends on the command:
+
+- `/compress` compacts in place. The session id stays, and Droid fires no closing hook. [`agents/lifecycle.rs::step`](../../../crates/rimz/src/agents/lifecycle.rs) lifts the compacting head on the next lifecycle signal, and `AgentState::is_compacting` expires it after `COMPACTING_WINDOW_SECS` (90 s). Until then the card reads compacting and `message/deliver.rs` holds the agent's queued messages.
+- `/handoff` starts a successor session, which fires `SessionStart` with `source: compact` and a `previous_session_id`. `DroidSessionStart::compacted_session_id` returns that id, and the close routes to it. The observation carries no `transcript_path`, so the compacted row keeps its own transcript. The successor registers on its next prompt or tool signal. A `compact` payload without `previous_session_id` closes the bracket on the reported `session_id`.
+
+### Hook replies
+
+The neutral reply is empty stdout with exit status zero, so Droid's own UI keeps control. The one non-empty reply is a supervised deadline rung on `PostToolUse` (`hook_context` is `HookContextReply::HookSpecificOutput { event_name: false }`), which writes `{"hookSpecificOutput":{"additionalContext":"..."}}`. Every other event takes no deadline context.
+
+### Install
+
+`MANAGED_SOURCE` merges one block per event in `DROID_HOOKS` into the `hooks` key of `~/.factory/settings.json`. The events are `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification`, `Stop`, `PreCompact`, and `SessionEnd`. `RIMZ_DROID_SETTINGS`, when non-empty, replaces the whole path, and without it an unset `HOME` fails the install.
+
+Each block runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid` with a 2-second timeout and no matcher, so every completed tool reaches the classifier. The command resolves `rimz` through `PATH`, the shared shape of every built-in installer. Droid also loads hooks from `~/.factory/hooks.json` ([hook configuration](../../externals/agent-adapter/droid-reference.md#hook-configuration)), which RimZ neither reads nor writes (see [Known gaps](#known-gaps)).
+
+### Runtime owner
+
+The stock TUI spawns an internal `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` worker, and both processes run the same hooks ([processes](../../externals/agent-adapter/droid-reference.md#processes)). `DroidAdapter::hook_ingress` takes the emitter pid from `cli/hooks/owner.rs::hook_agent_pid` (the `RIMZ_AGENT_PID` the hook command exports, else an ancestor walk) and classifies that process through `process::hook_process_disposition`:
+
+| Emitter | Disposition | Result |
+| --- | --- | --- |
+| A `droid` process whose argv has no `exec` subcommand | `StockTui` | `Ignore(DroidStockTui)`: `rimz hooks feed` exits 0 before it reads stdin or opens the store |
+| A stream-JSON-RPC `droid exec` worker with a non-`exec` `droid` ancestor within 32 levels | `InternalWorker` | accepted, and the ancestor TUI's pid becomes the session's [`RuntimeOwner`](./instances.md#session-death) |
+| A directly launched `droid exec`, any other process, or unreadable or cyclic ancestry | `Standalone` | accepted, owned by the emitter itself |
+| No pid resolved | none | accepted with no owner pid |
+
+The worker's stream is therefore the one canonical source, and liveness follows the pane's TUI. Classification fails open: process metadata RimZ cannot read never suppresses a hook.
 
 ## Launch and resume
 
-Bare RimZ `--resume` uses the native `droid --resume` picker ([upstream](../../externals/agent-adapter/droid-reference.md#sessions)).
+Launch argv comes from `DROID_DESCRIPTOR.launch`. Interactive Droid accepts unknown options and can fold their values into the positional prompt ([argument parsing](../../externals/agent-adapter/droid-reference.md#argument-parsing)), so RimZ emits only flags the interactive TUI takes and refuses the rest.
 
-Fresh launch uses `droid -- <prompt>`, resume uses `droid --resume <id>`, fork uses `droid --fork <id>`, and `/compress <instructions>` is the smart-compaction command: it compacts in place with trailing instructions. Droid 0.239.1 dropped the former `/compact` alias from its command registry, while `/compress` was already the primary name on 0.218.2. Typed `system-prompt-file` requires provider-neutral replacement semantics, which Droid's append-only CLI cannot express, so it fails at profile validation. A user deliberately choosing Droid's native behavior can put `--append-system-prompt-file <path>` in raw profile `args`. Interactive Droid through 0.218.2 carries no `--model` or `--reasoning-effort` flag: both are `droid exec`-only, and its parser accepts unknown options, so an emitted `--model <id>` would be silently ignored and leak the id into the positional prompt. Model and effort are chosen in-session (`/model`, Tab) or through `droid exec`.
+| Launch input | Droid argv or behaviour |
+| --- | --- |
+| fresh launch | `droid -- <prompt>` |
+| resume | `droid --resume <id>` |
+| bare `--resume` | `droid --resume`, Droid's own picker |
+| fork | `droid --fork <id>` |
+| manual compaction | `/compress <instructions>`, folded to one line |
+| `droid`, `droid-ask` | no argument: Droid's configured autonomy and native permission UI |
+| `droid-auto` | `--auto medium` |
+| `droid-plan` | `--use-spec` |
+| Yolo | no argument: `--skip-permissions-unsafe` exists only on `droid exec`, and RimZ does not rewrite persistent autonomy settings |
+| launch reminder | `--append-system-prompt <text>` (`SystemTextChannel::TextFlag`) |
+| `system-prompt-file` and `append-system-prompt-files` | refused when the launch is finalized (`LaunchFinalizeError::UnsupportedSystemPrompt` in `harness/plan.rs`): Droid's CLI only appends, so it cannot replace the system prompt |
+| `model`, `effort`, `auto-compact` profile fields | refused (`UnsupportedField`): interactive Droid has no `--model` or `--reasoning-effort` flag |
+| fast mode | refused, with the fix `toggle /fast inside the session` |
 
-Current interactive Droid accepts launch-scoped `--auto <level>` and `--use-spec`. `droid-auto` selects `--auto medium`, the closest fit for normal local development; `droid-plan` starts with `--use-spec`; and `droid`/`droid-ask` retain the user's configured autonomy and native permission UI. `droid-yolo` remains unavailable because `--skip-permissions-unsafe` belongs to `droid exec`; RimZ does not rewrite persistent autonomy settings.
-
-The 0.218.2 binary's help verifies these flags without authentication: interactive `droid --help` lists `--auto`, `--use-spec`, `--resume`/`--fork`, `--append-system-prompt[-file]`, `--settings`, `--cwd`, and `--worktree[-dir]`, but no `--model` or `--reasoning-effort` (interactive `-r` is `--resume`); `--worktree-dir` is deprecated and unused by RimZ.
-
-The stock CLI, hook wire fixtures, and goldens are researched through Droid CLI 0.218.2, with the compaction commands, the `SessionStart:compact` source, and the `Notification` types re-checked against 0.239.1; the private transcript reader additionally requires version 2 at runtime and abstains on drift. The structured exec research remains pinned separately to the public SDK version named in the upstream reference. Refresh the upstream reference and fixtures when Droid's behavior changes.
+A user who wants Droid's append-only behaviour puts `--append-system-prompt-file <path>` in raw profile `args`. Model and effort are chosen in the session (`/model`, Tab) or through `droid exec`. Interactive `--settings <path>` can carry `model`, `reasoningEffort`, and `autonomyLevel`, but RimZ has no typed contract for such a side file (see [Known gaps](#known-gaps)).
 
 ## Context and transcript
 
-Every hook's `transcript_path` is authoritative carry-forward metadata. For Droid 0.170.0 through 0.218.2, RimZ parses only a `session_start.version = 2` JSONL source: complete history follows the physically latest visible message through its `parentId` chain, while incremental streaming emits newly appended visible assistant records in physical order because a suffix lacks its ancestors. Visible user and assistant text blocks reach history; thinking, tool/document content, `llm_only` context, `user_only` hook audit rows, malformed records, and unknown versions stay out. `Stop` tail-reads the latest visible assistant answer for durable transcript, supervised result, streaming, and message-reply capture. The native question UI is an assistant `tool_use` named `AskUser`; it raises the card while that assistant record is the active leaf, and a later user/tool-result or assistant record clears the marker.
+Droid writes two private files per session, `<session-id>.jsonl` and its sibling `<session-id>.settings.json` ([session files](../../externals/agent-adapter/droid-reference.md#session-files)). Factory publishes no schema for either, so the reader pins the transcript format and abstains on drift.
 
-The sibling `<session-id>.settings.json` snapshot supplies raw `model`, `reasoningEffort`, cumulative root-session `tokenUsage`, and `lastCallTokenUsage`, with the newest visible assistant's `modelId` and effort as identity fallback. One validated header read carries the session cwd into custom-model resolution, and one typed transcript-tail projection derives both assistant identity and the native `AskUser` leaf. RimZ preserves root input, output, cache creation, cache read, and thinking as session-lifetime counters; the cumulative fallback line folds cache creation into displayed input and thinking into displayed output, leaves cache reads separate, and ignores `inclusiveTokenUsage` and Factory credits. The last-call input and cache read counts (0.218.2 writes no last-call cache creation; an older snapshot's count still folds in) establish current-context occupancy against the resolved capacity, so the ordinary `▣` gauge and `▤ · ◌ ◍ ↘ ↗` composition render together and feed smart-compaction thresholds.
+### The transcript
 
-For a raw `custom:` selector, the sidecar rebuilds the catalogue Droid 0.218.2 loads, reading only `id`, `displayName`, `model`, `index`, and positive `maxContextLimit`, plus the presence of `provider`, `baseUrl`, or `bedrock` and whether `apiKey` is a template placeholder. Entries without a model, provider, and endpoint, or with a placeholder key, are dropped. A provider outside Droid's four wire protocols (`anthropic`, `openai`, `generic-chat-completion-api`, `bedrock-converse`, case and underscores folded) makes Droid reject that settings file, so RimZ abstains, while a rejected legacy `config.json` is only skipped. Each file names its surviving entries `custom:<name>-<n>`, where the name is the trimmed `displayName` (or `model`) with whitespace runs folded to hyphens and `n` counts earlier entries of that name in the file; a stored `id` wins. Within a folder `settings.local.json` replaces its sibling's list and the legacy `config.json` (`model_display_name`) appends entries whose model and id are new; the project folder precedes the user folder, dropping repeated ids. Resolution follows Droid: exact id, then the pre-ordinal `custom:<name>-<index>` form, then a unique name, then the raw model. A malformed present settings file abstains. Unresolved selectors still receive a structural friendly display label, but no canonical pricing identity, capacity, or dollars.
+`transcript.rs` reads a transcript only when its first record is `session_start` with `version: 2`. Any other version, a missing header, or a malformed parent graph reads as no history. Every hook's `transcript_path` is authoritative and carried forward.
 
-The conversation JSONL becomes the sidecar's watched local-source path after its first hook/tick refresh, while one paired stat covers both that file and the sibling settings snapshot. JSONL writes surface native-question open/close edges below the producer cadence; settings-only writes are caught by the producer tick, and later hooks remain the durability backstop when Factory writes just after `Stop` or a wakeup is missed.
+- Complete history (`parse_messages`) starts at the physically latest visible message and follows its `parentId` chain, because rewinds and branches make the file a tree.
+- Streaming (`parse_assistant_suffix`) emits newly appended visible assistant records in physical order, because a suffix lacks its ancestors.
+- Only visible user and assistant `text` blocks reach history. A record with `visibility` (`llm_only` context, `user_only` UI rows) or a `hookEventName` (hook audit rows) is skipped, and so are thinking, tool, and document blocks.
+- On `Stop`, `last_assistant_message` tail-reads the latest visible assistant answer. It feeds the durable transcript, the supervised result, streaming, and message-reply capture.
+- The `AskUser` projection: when the latest visible record is an assistant `tool_use` named `AskUser`, the refresh sets a `NativeWait` settle at that record's timestamp. A later user, tool-result, or assistant record clears it.
+
+### The settings snapshot
+
+The settings snapshot supplies `model`, `reasoningEffort`, the root session's cumulative `tokenUsage`, and `lastCallTokenUsage`. When it lacks model or effort, the newest visible assistant record's `modelId` and `reasoningEffort` fill them. One header read gives the session cwd for custom-model resolution, and one tail projection gives both the assistant identity and the `AskUser` leaf.
+
+RimZ keeps the root counters (input, output, cache creation, cache read, thinking) as session-lifetime usage. The displayed cumulative line folds cache creation into input and thinking into output, and keeps cache reads separate. `inclusiveTokenUsage` (child sessions) and `factoryCredits` are ignored. The last-call input and cache-read counts give current-context occupancy against the resolved capacity, so the `▣` gauge and the `▤ · ◌ ◍ ↘ ↗` composition render together and feed the smart-compaction thresholds. Droid 0.218.2 writes no last-call cache-creation count, and an older snapshot's count still folds in.
+
+### Custom models
+
+A `custom:` selector names a user-configured model, and `config.rs` rebuilds the catalogue Droid loads to resolve it. The module follows its own reading of the Droid 0.218.2 bundle. The reference records the selector grammar and the load filter ([custom models](../../externals/agent-adapter/droid-reference.md#custom-models)), but not the merge order or the provider rejection. The projection reads `id`, `displayName`, `model`, `index`, and `maxContextLimit`, the presence of `provider`, `baseUrl`, and `bedrock`, and whether `apiKey` is a template placeholder. Credentials and endpoints never cross the boundary.
+
+An entry is loaded only when:
+
+- it has a `model` and a `provider`
+- it has a `baseUrl` or a `bedrock` object
+- its `apiKey` is not a placeholder (`YOUR_API_KEY`, `YOUR_OPENAI_API_KEY`)
+
+A provider outside Droid's four wire protocols (`anthropic`, `openai`, `generic-chat-completion-api`, `bedrock-converse`, with case and underscores folded) makes Droid reject the whole settings file, so RimZ abstains. A malformed settings file that is present also abstains. A rejected or unreadable legacy `config.json` is skipped.
+
+Each file names its loaded entries `custom:<name>-<n>`. The name is `displayName` (else `model`) with each whitespace run folded to one hyphen, and `n` counts earlier entries of that name in the same file. A stored `id` wins over the generated one. The catalogue is assembled in this order:
+
+1. In each folder, `settings.local.json` replaces its sibling `settings.json` list.
+2. The folder's legacy `config.json` (`model_display_name`, snake_case keys) appends each entry whose model and id are both new.
+3. The project folder (`<cwd>/.factory/`) comes before the user folder, and a repeated id is dropped.
+
+The user folder is `droid_settings_path`, so `RIMZ_DROID_SETTINGS` moves it too. A selector resolves by the first match:
+
+| Order | Match |
+| --- | --- |
+| 1 | an exact catalogue id |
+| 2 | the pre-ordinal form `custom:<name>-<index>`, where `index` is the stored `index` or the entry's position |
+| 3 | a unique entry of that name |
+| 4 | an entry whose raw `model` equals the selector body |
+
+A resolved entry supplies the canonical model id, the display name, and a positive `maxContextLimit`. An unresolved selector still gets a display label from `model_display::display_factory_custom_selector`, but no pricing identity, capacity, or dollars.
+
+### Refresh source
+
+`local_context_refresh` reads both files behind one stat gate. It publishes the JSONL as the context record's `transcript_path`, with the settings file's stat and the JSONL as its companion (`TranscriptCompanionStat`), so a write to either file changes the stat. JSONL writes surface the `AskUser` open and close edges faster than the producer tick. A write to the settings file alone is caught by the tick, and later hooks are the backstop when Factory writes just after `Stop` or a wakeup is missed.
+
+The turn-end cost fallback (see [Cost](#cost)) publishes the settings path with a settings-only stat instead. The next refresh accepts either path, sees a different stat, and publishes the JSONL again.
 
 ## Account and balance
 
-Droid exposes no machine-readable local auth, plan, quota, or account-usage surface. The adapter reports no account panel or rate-limit windows.
+The adapter keeps the default `AccountCapability`, so the card shows no account panel and no rate-limit windows. Droid's one auth surface is `droid doctor --json --auth`, which RimZ does not call, and Droid publishes no plan, quota, or account usage ([authentication and usage](../../externals/agent-adapter/droid-reference.md#authentication-usage-and-diagnostics)).
 
 ## Cost
 
-Droid exposes no authoritative transcript USD billing field. When a non-custom model or proven custom mapping has an exact price-book row, RimZ prices the already parsed cumulative root counters through one pure exact-model helper and renders the session-card value as ordinary dollars; fuzzy family matches never establish a rate. The live path performs no second settings, header, or custom-config resolution for cost. A positive configured `maxContextLimit` supplies capacity first, then exact price metadata supplies `max_input_tokens` when available.
+Droid writes no USD figure, so RimZ prices the root session's cumulative counters itself. `spend::price_exact_model` uses only an exact price-book row for a built-in model id or a resolved custom model, and a fuzzy family match never sets a rate. Thinking tokens price as output, cache creation as cache write, and cache reads as cache read. The card renders the result as ordinary dollars. Capacity comes from a positive `maxContextLimit` first, then from the exact row's `max_input_tokens`.
 
-The settings parser replaces its prior snapshot but the counters themselves are cumulative for the root session, so the value has session coverage and enters cockpit spend and live agent/room budget enforcement. Droid exposes no historical store discovery, so the value remains outside historical workspace/provider aggregates, `rimz stats`, provider/account totals, and account-day caps. Account spend stays unsupported. A missing or changed exact price clears the earlier card cost.
+Two paths write the card cost:
+
+| Path | When | What it reads |
+| --- | --- | --- |
+| `local_context_refresh` | every hook, tick, or watch refresh whose stat changed | the counters and model it already parsed, through `spend::live_cost` |
+| the turn-end fallback, `cli/hooks/lifecycle/context.rs::supplement_realtime_cost` | `Stop`, when that refresh set no cost (an unchanged stat, or no exact price) | the settings snapshot again, through `DroidAdapter::session_transcript` and `spend::parse`, which repeat the header read and the custom-model resolution |
+
+A refresh that runs without an exact price clears the card cost. A price-book change alone does not pass the stat gate, so the card keeps its old figure until the next file change or the next `Stop`, where the fallback reprices it with the current book.
+
+The value has `Session` coverage, because the counters are cumulative for the root session. It enters cockpit spend and live agent and room budget enforcement. The adapter declares no `spending_sources`, so the value stays out of historical workspace and provider aggregates, `rimz stats`, provider and account totals, and account-day caps ([spending.md](./spending.md)). Account spend is unsupported.
 
 ## Known gaps
 
-Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
+`rimz coverage --wiring` prints the declared wired, partial, and unsupported grid ([declared coverage](./adapter.md#declared-coverage)). These gaps have a reason worth recording.
 
-- **The adapter stays on the stock interactive pane.** Droid's internal exec worker is only the canonical hook emitter; RimZ does not speak its JSON-RPC transport. A future direct supervised `droid exec` integration can add durable permission/question requests and answers, structured model/effort updates, failed outcomes, and identified mission workers, but it needs a process-lifecycle and ask-answer path larger than this adapter.
-- **Launch-time model and effort selection is deferred with it.** Interactive `--settings <path>` merges a process-only settings file that *can* carry `model`, `reasoningEffort`, and `autonomyLevel`. `AgentDefinition` has no typed settings-file renderer or ownership contract for a provider config that mixes several launch fields. That broader typed side-file contract is the missing abstraction.
-- **In-place compaction has no close.** Droid 0.239.1 fires `PreCompact` for every compaction but no hook when an in-place one finishes, so the card can read compacting, and `message/deliver.rs` holds its queued messages, until the next lifecycle signal or the 90 s window. The private `compaction_state` session record marks completion but has no published durability contract.
-- **A handoff replaces the session** while one native event both closes the old bracket and introduces the successor. `AgentDefinition::decode_hook` carries one observation per event today, so the adapter closes the bracket on `previous_session_id` and lets later activity establish the replacement row. Registering the successor from the same event requires a kind-agnostic multi-observation or explicit session-replacement abstraction.
-- **Hook commands stay PATH-resolved.** Factory recommends an absolute hook command because hook cwd can change, while RimZ's built-in installers use the shared `rimz hooks feed` shape. Resolving and migrating the running RimZ executable belongs in the common hook-install abstraction so every built-in gets identical trust hashing, drift detection, and upgrades.
-- **User `hooks.json` can shadow the installed hooks.** Droid 0.218.2 also reads `~/.factory/hooks.json`, which replaces the `settings.json` hook list per event, and any user-level hook save in Droid (the `/hooks` manager, the hooks toggle, Git AI setup) copies the merged set there while leaving `settings.json` unchanged. From then on a RimZ reinstall or uninstall that edits only `settings.json` is shadowed for those events. Owning both files needs a multi-file install source and a compatibility story for releases that ignore `hooks.json`.
-- **Plan approval reads as a permission.** The spec-mode exit uses the same tool confirmation batch and `permission_prompt` notification, so no distinct plan ask exists.
-- **`/compress` may confirm first.** Droid 0.218.2 could show a compaction confirmation dialog before compressing an idle session; the operator verb still needs a live check on 0.239.1 that the typed command proceeds unattended.
-- **Live verification.** A logged-in live-pane pass still needs to confirm handoff session replacement, typed notifications from the internal worker, and the exact first-turn posture for each suffix; the earlier live pass verified hook delivery, `AskUser` projection, and last-call usage on 0.171.0.
+- The adapter stays on the stock interactive pane. RimZ does not speak the worker's JSON-RPC transport. A direct supervised `droid exec` integration could add keyed permission and question requests with answers, structured model and effort updates, failed outcomes, and identified mission workers. It needs a process-lifecycle and ask-answer path larger than this adapter.
+- Launch-time model and effort selection waits on the same work. `AgentDefinition` has no typed renderer or ownership contract for a provider settings file that mixes several launch fields, which interactive `--settings <path>` would need.
+- In-place compaction has no close. The bracket ends only on the next lifecycle signal or after 90 s. Droid's private `compaction_state` session record marks completion, but Factory publishes no durability contract for it.
+- A handoff close cannot register the successor. `AgentDefinition::decode_hook` returns one observation per event, so the event closes the old bracket and later activity registers the new row. Registering both needs a kind-agnostic multi-observation or session-replacement abstraction.
+- Hook commands resolve `rimz` through `PATH`. Factory recommends an absolute hook command because the hook cwd can change. Resolving and migrating the running RimZ executable belongs in the shared hook-install abstraction, so that every built-in keeps the same trust hashing, drift detection, and upgrades.
+- `~/.factory/hooks.json` is outside the install. The reference records that Droid loads it, but not how its lists combine with the `settings.json` hooks, or whether Droid's own hook saves move entries there. If they do, a RimZ reinstall or uninstall that edits only `settings.json` misses them. Owning both files needs a multi-file install source.
+- A plan approval reads as a permission ask, because the spec-mode exit shares the tool confirmation and the `permission_prompt` notification.
+- Whether `/compress` on an idle session shows a confirmation dialog first is unverified. If it does, the RimZ compaction verb waits on the user.
+- No logged-in live-pane check covers handoff session replacement, typed notifications from the internal worker, or the first-turn posture of each permission suffix.
