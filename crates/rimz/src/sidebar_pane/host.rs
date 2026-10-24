@@ -645,7 +645,7 @@ impl Host {
             room: self.room.clone(),
             instance_id: hello.instance_id.clone(),
             own_pane: hello.pane_id.clone(),
-            tick_seconds: hello.tick_seconds.unwrap_or(self.room.tick_seconds),
+            tick_seconds: hello.tick_seconds,
             refresh_ms_override: hello.refresh_ms,
         }
     }

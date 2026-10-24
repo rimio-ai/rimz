@@ -128,7 +128,7 @@ The supervisor carries a selection baseline across host replacement. At its firs
 
 The host listens on a stream socket in the runtime `sock/` directory, named by a digest of the mux and session name. One connection is one pane, and end of stream from either side detaches it.
 
-1. Hello. The supervisor sends one JSON line and, riding the same message as `SCM_RIGHTS`, its stdout. The fields are `protocol` (`rimz.sidebar-attach.v1`), `instance_id`, the required `pane_id` (the supervisor's own pane; a hello without it is malformed), `supervisor_build`, the optional `baseline_pane` (a pane id such as `"tmux:%6"`), and the pane's `tick_seconds` and `refresh_ms` launch overrides when set.
+1. Hello. The supervisor sends one JSON line and, riding the same message as `SCM_RIGHTS`, its stdout. The fields are `protocol` (`rimz.sidebar-attach.v1`), `instance_id`, the required `pane_id` (the supervisor's own pane; a hello without it is malformed), `supervisor_build`, the optional `baseline_pane` (a pane id such as `"tmux:%6"`), the pane's `tick_seconds` cadence (also required), and its `refresh_ms` launch override when set.
 2. Reply. The host answers `{"accept":{"build":"…"}}` or `{"reject":{"reason":"…"}}`. The named reasons are `protocol` (another wire version), `build` (the host is leaving for a newer build), and `capacity` (the host already holds `MAX_ATTACHMENTS`, 512). Any other text is a host-side failure.
 3. Stream. After an accept, the host writes JSON control lines and the supervisor writes bare newline-terminated input words, starting with `resize`.
 
