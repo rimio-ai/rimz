@@ -1383,7 +1383,13 @@ upward-dependencies = [
 # `memory::Pressure` and `memory::pressure` give the lsp kill and eviction records the memory stall averages (+2).
 # TreeMemory adds swap to the existing status walk (+1).
 # process_group_has_env proves a reaped workflow leader's surviving group ownership (+1).
-surface-budget = 141
+# sole_agent_child and its proc re-export share candidate descent across both walks (+2).
+surface-budget = 143
+
+[[verdict]]
+kind = "item"
+key = "proc::command::sole_agent_child"
+reason = "Resume identity and hibernation share the unambiguous child step past RimZ helpers."
 
 [[verdict]]
 kind = "item"

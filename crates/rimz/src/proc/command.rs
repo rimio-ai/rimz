@@ -16,6 +16,22 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program_info(command).program).to_owned()
 }
 
+/// The sole child that could host an agent, skipping RimZ helpers and children
+/// without a command line. Exec wrappers label as their provider kind, not RimZ.
+/// Two candidates abstain rather than choosing a sibling agent.
+pub(crate) fn sole_agent_child(
+    children: Vec<u32>,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+) -> Option<(u32, String)> {
+    let mut candidates = children.into_iter().filter_map(|child| {
+        cmdline(child)
+            .filter(|command| !command.trim().is_empty() && program_label(command) != "rimz")
+            .map(|command| (child, command))
+    });
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate)
+}
+
 /// Whether pane birth argv still names the live foreground root. A missing or
 /// empty foreground is a reporting race; missing birth argv carries no identity.
 pub(crate) fn spawn_command_names_live_root(

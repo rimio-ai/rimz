@@ -317,6 +317,7 @@ fn scoped_provider(
     provider: &dyn Fn(u32) -> Option<u32>,
     scope: &dyn Fn(u32) -> Option<ScopePath>,
     children: &dyn Fn(u32) -> Vec<u32>,
+    cmdline: &dyn Fn(u32) -> Option<String>,
 ) -> Option<(u32, ScopePath)> {
     let prefix = scope_prefix(workspace);
     loop {
@@ -332,11 +333,9 @@ fn scoped_provider(
         }
         // Liveness also recognizes the exec wrapper, which stays outside this agent's
         // scope and may sit in another room's agent scope its mux server inherited.
-        let children = children(pid);
-        let [child] = children.as_slice() else {
-            return None;
-        };
-        root_pid = *child;
+        // Descend past it through proc::sole_agent_child, shared with the resume walk.
+        let (child, _) = crate::proc::sole_agent_child(children(pid), cmdline)?;
+        root_pid = child;
     }
 }
 
@@ -351,6 +350,7 @@ impl ScopeView {
             },
             &crate::proc::cgroup::scope_of,
             &crate::proc::children,
+            &crate::proc::cmdline,
         )
         .map_or((0, None), |(pid, scope)| (pid, Some(scope)));
         let members = scope
