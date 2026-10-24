@@ -13,7 +13,7 @@ The code lives in `crates/rimz/src/sandbox/`:
 | `skills.rs` | The scoped skill view: the merged provider root and library, alias checks, omissions. |
 | `rewrite.rs` | User-only skill copies and system SSH-config mirrors: capture, digest, rewrite, atomic apply. |
 
-`harness/launch_plan.rs` is the one caller that plans and applies a view. Two other places read a view back to host paths: `cli::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
+`harness/launch_plan.rs` is the one caller that plans and applies a view. Two other places read a view back to host paths: `cli::caller_host_path` for paths a scoped caller passes to a launch ([paths a caller names](#paths-a-caller-names)), and `crates/rimz/src/cli/hooks.rs::map_sandbox_paths` for hook frames ([hook frames](#hook-frames)).
 
 ## Choosing the isolation
 
@@ -100,7 +100,7 @@ The command has no `--unshare-*` flag, no replacement `/proc`, and no cleared en
 
 ### Protected paths
 
-`sandbox/mod.rs::protected_paths` builds the list of configuration paths a scoped agent cannot write: shell startup files, `.gitconfig`, `.ssh`, and the systemd user directory under HOME, the checkout's Git `hooks` and `config`, and the agent configuration entries (`.claude`, `.codex`, `.agents`, `.mcp.json`) at the checkout and the project root. The [security guide](../guide/security.md#scoped-isolation) owns the list and its operational costs. Five rules decide which entries become binds.
+`crates/rimz/src/sandbox/mod.rs::protected_paths` builds the list of configuration paths a scoped agent cannot write: shell startup files, `.gitconfig`, `.ssh`, and the systemd user directory under HOME, the checkout's Git `hooks` and `config`, and the agent configuration entries (`.claude`, `.codex`, `.agents`, `.mcp.json`) at the checkout and the project root. The [security guide](../guide/security.md#scoped-isolation) owns the list and its operational costs. Five rules decide which entries become binds.
 
 `launch_plan::compile` decides the checkout once, for both protection and the judge's read-only paths. `worktree::discover_checkout` finds the first ancestor whose `.git` resolves to an admin directory with a `HEAD` file, skipping empty or stray metadata. An unreadable `.git` file refuses a scoped launch with `SandboxErr::Io`. A cwd under `StatePaths::empty_dir_root` has no checkout, also when the root and the cwd use different symlink spellings. Without a checkout, configuration protection uses the cwd and the room project root and protects no Git directory.
 
@@ -111,6 +111,8 @@ A path that does not exist is skipped, and no placeholder is created for it.
 An entry whose canonical path equals, lies inside, or contains the provider-home source, target, or default home is skipped silently, with an absent home normalized lexically. The exemption covers HOME startup files too, but never the requested read-only paths.
 
 A bind follows a symlinked protected entry and makes its target read-only. The link itself stays replaceable by a rename over it in its writable parent directory.
+
+A protected file is a single-file bind, and the kernel detaches such a bind in every running view when the host renames a new file over its path. `git config --global` writes `~/.gitconfig` that way, as do most editors and package managers. From then on the view sees the host's new file, writable, until the agent restarts. Protected directories (`.ssh`, the Git `hooks`) are unaffected. A new bind should target a directory, or a file that is rarely replaced, and its doc should say which.
 
 ## Reachable host paths
 
@@ -162,7 +164,7 @@ Separately, every launch at every level sets these keys ([env application](./har
 
 ### Hook frames
 
-A hook fired inside a scoped view carries the view's paths, and the host drainer applies it. `cli/hooks.rs::map_sandbox_paths` maps the frame back to host paths when its environment shows ambient scoped isolation, and refuses a scoped frame without `RIMZ_SANDBOX_HOST_PATHS`. It maps the frame cwd, each absolute environment value (`PATH` and the comma lists `CLAUDE_CONFIG_DIR` and `PI_AGENT_DIR` entry by entry, `TMUX` never), and the payload's path fields (`cwd`, `worktree_path`, the transcript paths, and the workspace paths, in each spelling). A path under one of the pinned host-bound paths stays as it is. Any other `/tmp` or `/var/tmp` path maps into `tmp/<RIMZ_AGENT_NAME>/`, the unit named after the frame's own handle. A subagent's view shows its parent's unit, so its `/tmp` paths map to a directory that does not exist (a known defect).
+A hook fired inside a scoped view carries the view's paths, and the host drainer applies it. `crates/rimz/src/cli/hooks.rs::map_sandbox_paths` maps the frame back to host paths when its environment shows ambient scoped isolation, and refuses a scoped frame without `RIMZ_SANDBOX_HOST_PATHS`. It maps the frame cwd, each absolute environment value (`PATH` and the comma lists `CLAUDE_CONFIG_DIR` and `PI_AGENT_DIR` entry by entry, `TMUX` never), and the payload's path fields (`cwd`, `worktree_path`, the transcript paths, and the workspace paths, in each spelling). A path under one of the pinned host-bound paths stays as it is. Any other `/tmp` or `/var/tmp` path maps into `tmp/<RIMZ_AGENT_NAME>/`, the unit named after the frame's own handle. A subagent's view shows its parent's unit, so its `/tmp` paths map to a directory that does not exist (a known defect).
 
 ## Temp units
 
@@ -215,15 +217,15 @@ Bubblewrap's unprivileged user namespace maps only the caller's uid. Root-owned 
 
 `SandboxInputs.ssh_config_file` supplies the system config file to walk. `launch_plan::compile` passes `/etc/ssh/ssh_config` and `StatePaths.ssh_config_copies_dir`, constructed as `cache/ssh-config` by the disk path module. Planning captures a snapshot without writing; application uses the same `PlannedCopy` publisher as rewritten skills. The source path remains as supplied in `copies[].source`. The root and each reached regular file get a copy, and each canonical file is visited once so cycles terminate. Only the rewritten root is bound, read-only at its canonical path, as the last mount. Its Include lines name cache copies rather than host includes: binding each included file would detach that file's mount whenever a package upgrade renamed a replacement over it.
 
-The Include reader matches the first token in any case, separated from arguments by whitespace or `=`. The `shlex` crate splits the arguments on whitespace and honours single and double quotes, and each argument is globbed. Relative arguments resolve against the input root's directory (`/etc/ssh` in production), not the including file's directory. Every Include line is followed without evaluating `Host` or `Match`. This reader does not reproduce OpenSSH's tokenizer byte for byte; escaped input paths are not supported.
+The Include reader matches the first token in any case, separated from arguments by whitespace or `=`. The `shlex` crate splits the arguments on whitespace and honours single and double quotes, and each argument is globbed. Relative arguments resolve against the input root's directory (`/etc/ssh` in production), not the including file's directory. Every Include line is followed without evaluating `Host` or `Match`. A line whose arguments `shlex` cannot split, such as one with an unbalanced quote, keeps its bytes and is not followed. This reader does not reproduce OpenSSH's tokenizer byte for byte; escaped input paths are not supported.
 
-Each Include line in every copy becomes one `Include` line, with matches in glob order per argument. Mirrored matches name their absolute cache paths; unmirrored matches keep their absolute host paths. Paths are double-quoted, with glob metacharacters escaped, `"` written as `\"`, and a backslash as four backslashes for SSH's tokenizer and glob expansion. An argument matching nothing is dropped; a `~` argument stays verbatim. A line left with no paths becomes a comment holding the original line. Non-Include lines keep their bytes, and cycles remain cycles among the copies.
+Each Include line in every copy becomes one `Include` line, with matches in glob order per argument. Mirrored matches name their absolute cache paths; unmirrored matches keep their absolute host paths. Paths are double-quoted, with glob metacharacters escaped, `"` written as `\"`, and a backslash as four backslashes for SSH's tokenizer and glob expansion. An argument matching nothing is dropped. An argument starting with `~` is not globbed or mirrored and keeps its spelling, but it is quoted and escaped like every other path, so a glob in it (`~/.ssh/config.d/*`) matches only a literal `*` (a known defect). A line left with no paths becomes a comment holding the original line. Non-Include lines keep their bytes, and cycles remain cycles among the copies.
 
 | Input or Include match | Mirror behaviour |
 | --- | --- |
 | Input absent, non-regular, unreadable, or reaching no mirrorable file | No copy or mount. |
 | Argument matching nothing | No copy; drop from the rewritten line. |
-| Argument starting with `~` | No copy; keep verbatim. |
+| Argument starting with `~` | No copy; keep its spelling, quoted and glob-escaped. |
 | Regular file | Copy its bytes with Include lines rewritten and mode `& !0o022`. |
 | Symlink to a regular file | Copy its target's bytes and masked mode as a regular file, with Include lines rewritten. |
 | Dangling symlink | No copy; keep its host path. |
@@ -362,3 +364,9 @@ Whether a problem refuses the launch or drops one skill depends on whether a lis
 | List configured, and an unlisted skill has an unreadable file or directory, a directory symlink cycle inside it, a non-file entry, or unsupported metadata | Skill omitted from this launch, and the others proceed. |
 
 An omitted skill is hidden at its discovery path by the tmpfs. `SandboxPlan.skipped` carries a `SkippedSkill` for it, and the exec wrapper prints each one to the pane's stderr before the provider starts, as `rimz: starting without skill "<name>": RimZ cannot …`, naming the source path and the reason. The installed skill is untouched, and the remaining skills keep their invocation restrictions.
+
+## Tests
+
+Unit tests in `sandbox/mod.rs` and `sandbox/rewrite.rs` cover parsing, rewriting, and argv lowering. Filesystem and real-bubblewrap tests live in `crates/rimz/tests/integration/sandbox.rs`, and room messaging and supervised handoff through a view live in the journey tier (`crates/rimz/tests/integration/journey/sandbox.rs`).
+
+Every real-bubblewrap test self-skips when `sandbox::preflight` fails, with a reason starting `bubblewrap unusable:`. `.config/allowed-test-skips.txt` admits that reason because the CI container denies the user namespace. A property of the view itself is therefore proven only on a local non-root run, so a change that relies on one also gets a bubblewrap-free test of `plan` and `apply` (the `sandbox_ssh_config_captures_regular_targets_without_writes` shape). The SSH-mirror tests that run real `ssh` also skip when it is not on `PATH`, and the unreadable-source tests skip as root.
