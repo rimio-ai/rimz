@@ -436,6 +436,7 @@ mod tests {
                 entry,
                 lifecycle: Lifecycle::default(),
                 readiness: Readiness::default(),
+                not_ready_since_ms: 0,
                 transport: None,
                 request_phase: RequestPhase::Serving,
                 start_requested: false,

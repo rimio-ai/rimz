@@ -392,9 +392,9 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Ok(
-                json!({"indexing": {"elapsed_ms": crate::utils::time::unix_now_ms().saturating_sub(model.entry.started_at_ms)}}),
-            );
+            let elapsed_ms =
+                crate::utils::time::unix_now_ms().saturating_sub(model.not_ready_since_ms);
+            return Ok(json!({"indexing": {"elapsed_ms": elapsed_ms}}));
         }
         model = shared
             .changed
@@ -505,6 +505,7 @@ mod tests {
                 entry,
                 lifecycle: Lifecycle::default(),
                 readiness: Readiness::default(),
+                not_ready_since_ms: 0,
                 transport: None,
                 request_phase: RequestPhase::Serving,
                 start_requested: false,
@@ -525,6 +526,49 @@ mod tests {
             #[cfg(feature = "testkit")]
             ticks: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn indexing_elapsed_tracks_the_current_not_ready_stretch() {
+        let shared = shared(State::Indexing);
+        let before = crate::utils::time::unix_now_ms();
+        let cold = query(&shared, "workspace/symbol", json!({"query":"symbol"}), 0).unwrap();
+        let first_ready_ms = before - 700_000;
+        let dropped_ms = before - 20_000;
+        let ready;
+        {
+            let mut model = shared.model.lock().unwrap();
+            model.readiness.initialized(0);
+            model.update_readiness(10_000, first_ready_ms);
+            ready = model.entry.state.clone();
+            model
+                .readiness
+                .progress(&json!({"token":"reload", "value":{"kind":"begin"}}), 20_000);
+            model.update_readiness(20_000, dropped_ms);
+        }
+        let reindex = query(&shared, "workspace/symbol", json!({"query":"symbol"}), 0).unwrap();
+        shared
+            .model
+            .lock()
+            .unwrap()
+            .update_readiness(20_001, before - 10_000);
+        let again = query(&shared, "workspace/symbol", json!({"query":"symbol"}), 0).unwrap();
+        let after = crate::utils::time::unix_now_ms();
+        let model = shared.model.lock().unwrap();
+        assert_eq!(
+            [
+                (before..=after).contains(&cold["indexing"]["elapsed_ms"].as_u64().unwrap()),
+                ready == State::Ready,
+                model.entry.state == State::Indexing,
+                (20_000..=after - dropped_ms)
+                    .contains(&reindex["indexing"]["elapsed_ms"].as_u64().unwrap()),
+                (20_000..=after - dropped_ms)
+                    .contains(&again["indexing"]["elapsed_ms"].as_u64().unwrap()),
+                model.entry.ready_at_ms == Some(first_ready_ms),
+            ],
+            [true; 6],
+            "cold={cold}, ready={ready:?}, reindex={reindex}, again={again}"
+        );
     }
 
     #[test]
