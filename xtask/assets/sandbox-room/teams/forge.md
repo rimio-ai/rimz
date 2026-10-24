@@ -1,10 +1,10 @@
 ---
 leader: coder
-stages: [Build, Review]
+stages: [Build, Review, Ship]
 roles:
   - role: coder
     agent: worker
-    owns: [Build]
+    owns: [Build, Ship]
   - role: reviewer
     agent: worker
     owns: [Review]
