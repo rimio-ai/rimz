@@ -200,7 +200,13 @@ fn chart_cells_conserve_local_days_and_seven_day_blocks_with_bounded_history() {
         },
         None,
     );
-    assert_eq!(scoped.chart, ChartSpend::default());
+    assert_eq!(
+        scoped.chart,
+        ChartSpend {
+            today,
+            ..Default::default()
+        }
+    );
 }
 
 #[test]
@@ -935,6 +941,10 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
         None,
     );
 
+    assert_eq!(
+        rollups.chart.today,
+        local_day_index(now.as_second() as u64, spec.timezone.as_deref()).unwrap()
+    );
     assert_eq!(
         rollups.day_cutoff_secs,
         "2025-06-01T04:00:00Z"

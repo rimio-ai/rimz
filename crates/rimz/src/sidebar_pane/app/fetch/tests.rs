@@ -1367,6 +1367,11 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
             refreshed_at_ms: now_ms,
             day_cutoff_secs: crate::agents::spending::local_day_start_secs(now_ms / 1000, None)
                 .unwrap(),
+            timezone: "UTC".into(),
+            chart: crate::agents::spending::ChartSpend {
+                today: (now_ms / 86_400_000) as i64,
+                ..Default::default()
+            },
             spending: crate::agents::spending::Spending::default(),
             ..Default::default()
         },

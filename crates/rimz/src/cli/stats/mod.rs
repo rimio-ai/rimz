@@ -7,7 +7,8 @@
 //! Account-global: it reads the producer's published provider aggregate when
 //! available. A standalone first launch takes the same shared spending election
 //! as the sidebar producer, publishes the same provider-spending rollups, and
-//! then subsequent runs return from a cache aggregated for the same local day.
+//! then subsequent runs return from a cache aggregated for the same day in its
+//! published history zone.
 //!
 //! Windows: the heatmap always reads the full available history (the cache spans
 //! the trailing year). `--window` scopes model, provider, and profile breakdowns
@@ -326,7 +327,6 @@ use {assists::*, fmt::*, hold::*, panel::*};
 struct Stats {
     timezone: String,
     refreshed_at_ms: u64,
-    day_cutoff_secs: u64,
     agents: BTreeMap<String, RoleTally>,
     teams: BTreeMap<String, BTreeMap<String, RoleTally>>,
     subagents: BTreeMap<String, RoleTally>,
@@ -347,7 +347,6 @@ impl Stats {
             spending,
             timezone,
             refreshed_at_ms,
-            day_cutoff_secs,
             roles,
             chart,
             ..
@@ -358,7 +357,6 @@ impl Stats {
         Stats {
             timezone,
             refreshed_at_ms,
-            day_cutoff_secs,
             agents: roles.agents,
             teams: roles.teams,
             subagents: roles.subagents,
@@ -380,10 +378,6 @@ impl Stats {
         Timestamp::from_millisecond(self.refreshed_at_ms as i64)
             .unwrap_or(Timestamp::UNIX_EPOCH)
             .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
-    }
-
-    fn published_today(&self) -> bool {
-        self.today_day(self.day_cutoff_secs) == self.today_day(unix_secs_now())
     }
 
     fn recorded_since(&self) -> Option<jiff::Zoned> {
@@ -428,7 +422,14 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<Stats> {
 }
 
 fn load_today_stats(paths: &RuntimePaths) -> Option<Stats> {
-    load_published_stats(paths).filter(Stats::published_today)
+    today_stats(read_provider_spending_cache(
+        &paths.shared_provider_spending_path(),
+    ))
+}
+
+fn today_stats(cache: ProviderSpendingCache) -> Option<Stats> {
+    (cache.is_current_version() && cache.is_from_today(unix_secs_now()))
+        .then(|| Stats::from_provider(cache))
 }
 
 fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
@@ -451,11 +452,7 @@ fn load_or_refresh_stats(
     } else {
         refresh_global_spending_direct(paths, &spec, &mut |_| {})
     };
-    provider
-        .is_current_version()
-        .then(|| Stats::from_provider(provider))
-        .filter(Stats::published_today)
-        .ok_or_else(|| {
+    today_stats(provider).ok_or_else(|| {
             anyhow::anyhow!(
                 "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
             )

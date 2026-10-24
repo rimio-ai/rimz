@@ -716,8 +716,7 @@ fn dashboard_model_shades_follow_year_rank_on_every_tab() {
 
 #[test]
 fn dashboard_weekly_chart_uses_the_published_history_anchor() {
-    let (mut stats, assists) = fixture();
-    stats.day_cutoff_secs = ((TODAY - 1) * DAY_SECS + 14 * 3_600) as u64;
+    let (stats, assists) = fixture();
     let output = strip_ansi(&frame(&stats, &assists, Window::Year, 119, None).text);
     let chart = output
         .split("Spend per week")

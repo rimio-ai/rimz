@@ -141,7 +141,8 @@ pub struct SpendingWalkResult {
 /// Stored model dollars for the dashboard's daily and weekly spend charts.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSpend {
-    /// Local epoch day anchoring the newest block in the published history zone.
+    /// Walk's local epoch day in the published history zone, anchoring chart
+    /// blocks and publication freshness.
     pub today: i64,
     /// Local epoch days for the last 30 days, including today.
     pub days: BTreeMap<i64, BTreeMap<String, f64>>,

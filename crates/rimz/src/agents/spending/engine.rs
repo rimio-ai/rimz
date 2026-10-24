@@ -24,8 +24,8 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// Walk every provider's transcript history into a fleet-wide and per-provider
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
 /// result to the persistent shared `provider-spending.json` — the cache consumer
-/// tabs read instead of walking, and the producer's own global gate: a stamp
-/// from the current local day and younger than
+/// tabs read instead of walking, and the producer's own global gate: a walk
+/// from today in its published history zone and younger than
 /// [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves
 /// the published provider totals without a global transcript walk or price-book
 /// load.
