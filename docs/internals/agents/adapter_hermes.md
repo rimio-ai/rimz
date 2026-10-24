@@ -39,7 +39,7 @@ Hermes launches carry no RimZ text outside the user's prompt:
 - No system-prompt replacement. The spec has no `SystemPromptFile` matcher, so a profile's system-prompt fields fail with `PromptComposeErr::Unsupported` (`crates/rimz/src/harness/prompt_compose.rs::plan_system_prompt`).
 - No headless command. `LaunchSpec.headless` is unset, so a workflow judge or a loop agent check on Hermes fails with `AgentProcessCompileErr::NoHeadless`.
 
-Every interactive launch checks the binary against `install::MIN_VERSION` (0.22.2) after the shell rc resolves the program (`crates/rimz/src/agents/version.rs::check_launch_version_floor`, called from `cli/agents_cmd/launch.rs` and `cli/agents_cmd/exec.rs`). An unreadable version passes.
+Every interactive launch checks the binary against `install::MIN_VERSION` (0.22.2) after the shell rc resolves the program (`crates/rimz/src/agents/version.rs::check_launch_version_floor`, called from `crates/rimz/src/launcher/mod.rs::check_cell` and `crates/rimz/src/cli/agents_cmd/exec.rs::launch_and_supervise`). An unreadable version passes.
 
 `process_names` is `["hermes"]`. The shell launcher execs Python, and Hermes renames its process to `hermes` with `prctl(PR_SET_NAME)`, so the ancestor walk from a hook child finds Hermes by that name. The reference has not verified that the rename happens before the first hook spawns ([reference](../../externals/agent-adapter/hermes-reference.md#processes-and-transports)). Claiming `python3` instead would claim every Python process on the machine.
 

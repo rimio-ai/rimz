@@ -63,7 +63,7 @@ Two callers soften the refusal. Room judgment (`room/judgment.rs`) records a fai
 | `rimz start` and detached room ensure (`cli/room/mod.rs`) | When machine policy is scoped. |
 | Room recovery | When a candidate resolves to scoped from its override, current profile default, or machine policy. An unavailable scoped view skips that candidate. |
 | `rimz agents launch`, `restart`, `fork`, supervised runs | For the launch's effective isolation. |
-| Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's effective isolation. |
+| Cohort resume (`crates/rimz/src/launcher/mod.rs::launch_resume_layout`) | For each resumed agent's effective isolation. |
 | Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |
 | The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation. A failure marks the launch failed and fails its run with the refusal as its reason. |
 | `rimz agents explain` | For the explained launch's isolation. |

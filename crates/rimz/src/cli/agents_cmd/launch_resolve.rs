@@ -1,34 +1,36 @@
-//! Shared CLI launch resolution, override parsing, and validation.
-
-use std::borrow::Cow;
-use std::path::{Path, PathBuf};
-
-use anyhow::{Context, Result, bail};
-use rimz::agents::{LaunchPreset, PermissionMode};
-use rimz::config::{MachineConfig, effective::LaunchAgents};
-use rimz::harness::budget::BudgetSpec;
-use rimz::harness::plan::{
-    LaunchFinalizeOptions, LaunchFinalizeWarning, PermissionModeChoice, ResolvedLaunch,
-};
-use rimz::harness::spec::LayoutSpec;
-use rimz::store::snapshot::SidebarSnapshot;
+//! CLI posture parsing for the library's read-only layout resolver.
 
 use super::LaunchOverrideArgs;
+use anyhow::{Result, bail};
+use rimz::agents::PermissionMode;
+use rimz::config::{MachineConfig, effective::LaunchAgents};
+use rimz::harness::budget::BudgetSpec;
+pub(super) use rimz::launcher::resolve::{
+    FinalizedLaunch, resolve_launch_prompt_file, resolve_launch_prompt_files,
+};
+use rimz::store::snapshot::SidebarSnapshot;
 
-#[derive(Debug)]
-pub(super) struct FinalizedLaunch {
-    pub(super) profiles: rimz::config::ProfilesConfig,
-    pub(super) resolved: ResolvedLaunch,
-    pub(super) preset: LaunchPreset,
-    pub(super) warnings: Vec<LaunchFinalizeWarning>,
-    pub(super) inferred_lane: Option<String>,
-    pub(super) qualified_spec: Option<String>,
+pub(super) fn typed_overrides(
+    overrides: &LaunchOverrideArgs,
+) -> Result<rimz::launcher::LaunchOverrides> {
+    Ok(rimz::launcher::LaunchOverrides {
+        mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
+        tier: overrides.tier,
+        agent: overrides.agent.clone(),
+        preset: rimz::agents::LaunchPreset {
+            model: rimz::harness::plan::normalized_preset_value(overrides.model.as_deref()),
+            effort: rimz::harness::plan::normalized_preset_value(overrides.effort.as_deref()),
+            fast: overrides.fast_override(),
+            auto_compact: None,
+            system_prompt_file: overrides.system_prompt_file.clone(),
+            append_system_prompt_files: overrides.append_system_prompt_files.clone(),
+        },
+        isolation: overrides.isolation,
+        passthrough: overrides.passthrough.clone(),
+    })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared launch inputs keep CLI overrides and optional room context explicit"
-)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_finalized_layout(
     snapshot: Option<&SidebarSnapshot>,
     machine_config: &MachineConfig,
@@ -42,93 +44,19 @@ pub(super) fn resolve_finalized_layout(
     enforce_name_cardinality: bool,
     room: Option<(&rimz::RuntimePaths, &rimz::StatePaths)>,
 ) -> Result<FinalizedLaunch> {
-    // A bare role in a team's lane names that team's role, not a global profile.
-    let mut qualified_spec = None;
-    let mut inferred_lane = None;
-    if let (Some(snapshot), Some(spec), Some(channel)) = (snapshot, spec, lane)
-        && let Some(team) = rimz::address::channel_team(&snapshot.agents, channel)
-    {
-        let qualified = rimz::harness::spec::qualify_spec_in_channel(
-            spec,
-            channel,
-            team,
-            &effective.teams,
-            &effective.profiles,
-            &machine_config.agents.commands,
-        )?;
-        if let Cow::Owned(qualified) = qualified {
-            qualified_spec = Some(qualified);
-            inferred_lane = Some(channel.to_owned());
-        }
-    }
-    let spec = qualified_spec.as_deref().or(spec);
-    let mut effective = effective.clone();
-    let availability = room.map(|(runtime, state)| {
-        rimz::harness::plan::LaunchAvailability::read(
-            runtime,
-            state,
-            machine_config,
-            jiff::Timestamp::now(),
-        )
-    });
-    let routed = effective.route(
-        &machine_config.tiers,
-        rimz::config::effective::ProfileScope::Agents,
-        spec,
-        overrides.tier,
-        overrides.model.as_deref(),
-        overrides.agent.as_deref(),
-        |kind, model| {
-            availability
-                .as_ref()
-                .and_then(|usage| usage.unavailable(kind, model))
-        },
-    )?;
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        rimz::config::effective::ProfileScope::Agents,
-        &machine_config.agents.commands,
-        spec,
-        if routed {
-            None
-        } else {
-            overrides.agent.as_deref()
-        },
-    )?;
-    let preset = validate_resolved_launch_inputs(
+    rimz::launcher::resolve::resolve_finalized_layout(
+        snapshot,
+        machine_config,
+        effective,
         spec,
         prompt,
-        overrides,
-        &effective,
-        &machine_config.agents.commands,
-        &resolved.layout,
+        &typed_overrides(overrides)?,
+        budget,
+        max_turns,
+        lane,
         enforce_name_cardinality,
-    )?;
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            agent_base: if routed {
-                None
-            } else {
-                overrides.agent.as_deref()
-            },
-            permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?
-                .map(PermissionModeChoice::Explicit),
-            isolation: overrides.isolation,
-            preset: &preset,
-            passthrough: &overrides.passthrough,
-            budget,
-            max_turns,
-        },
-    )?;
-    Ok(FinalizedLaunch {
-        profiles: effective.profiles,
-        resolved,
-        preset,
-        warnings,
-        inferred_lane,
-        qualified_spec,
-    })
+        room,
+    )
 }
 
 pub(super) fn interactive_permission_mode_from_flags(
@@ -147,28 +75,6 @@ pub(super) fn interactive_permission_mode_from_flags(
     })
 }
 
-/// Build the launch-override preset from shared launch flags. Prompt files are
-/// resolved to absolute paths and required to exist here, at the entry point,
-/// rather than downstream in the agent.
-pub(super) fn launch_override_preset(
-    overrides: &LaunchOverrideArgs,
-) -> Result<rimz::agents::LaunchPreset> {
-    let system_prompt_file = resolve_launch_prompt_file(
-        overrides.system_prompt_file.as_deref(),
-        "--system-prompt-file",
-    )?;
-    let append_system_prompt_files =
-        resolve_launch_prompt_files(&overrides.append_system_prompt_files)?;
-    Ok(rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(overrides.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(overrides.effort.as_deref()),
-        fast: overrides.fast_override(),
-        auto_compact: None,
-        system_prompt_file,
-        append_system_prompt_files,
-    })
-}
-
 pub(super) fn resume_overrides<'a>(
     overrides: &'a LaunchOverrideArgs,
     machine: &'a MachineConfig,
@@ -184,54 +90,8 @@ pub(super) fn resume_overrides<'a>(
     })
 }
 
-pub(super) fn resolve_launch_prompt_file(
-    path: Option<&Path>,
-    flag: &str,
-) -> Result<Option<PathBuf>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let absolute = std::env::current_dir()
-        .context("reading the caller cwd")?
-        .join(path);
-    let resolved = crate::cli::caller_host_path(&absolute, None)?
-        .canonicalize()
-        .with_context(|| format!("reading {flag} `{}`", path.display()))?;
-    if !resolved.is_file() {
-        bail!("{flag} `{}` is not a regular file", path.display());
-    }
-    Ok(Some(resolved))
-}
-
-pub(super) fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    paths
-        .iter()
-        .map(|path| {
-            resolve_launch_prompt_file(Some(path), "--append-system-prompt-file")
-                .map(|path| path.expect("a supplied path resolves to one path"))
-        })
-        .collect()
-}
-
-/// Apply CLI-owned launch validation in its user-visible precedence order.
-fn validate_resolved_launch_inputs(
-    spec: Option<&str>,
-    prompt: Option<&str>,
+pub(super) fn launch_override_preset(
     overrides: &LaunchOverrideArgs,
-    effective: &rimz::config::effective::LaunchAgents,
-    commands: &rimz::config::CommandsConfig,
-    layout: &LayoutSpec,
-    enforce_name_cardinality: bool,
 ) -> Result<rimz::agents::LaunchPreset> {
-    rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        spec,
-        prompt,
-        &effective.profiles,
-        commands,
-        &effective.teams,
-    )?;
-    if enforce_name_cardinality && layout.agent_kinds().count() != 1 {
-        bail!("--name requires a layout with exactly one agent cell");
-    }
-    launch_override_preset(overrides)
+    rimz::launcher::resolve::launch_override_preset(&typed_overrides(overrides)?)
 }

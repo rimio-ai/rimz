@@ -15,15 +15,14 @@ mod hibernate;
 mod history;
 mod idle_compact;
 mod idle_stop;
-pub(in crate::cli) mod launch;
+mod launch;
 mod launch_resolve;
 mod list;
 mod logs;
 mod molt;
 mod orphan_subagent;
 mod park_notice;
-mod placement;
-mod reconcile;
+use rimz::launcher::placement;
 mod refresh;
 mod refresh_context;
 mod refresh_usage;
@@ -57,7 +56,7 @@ use super::GlobalFlags;
 use super::usage::{UsageError, shell_command};
 pub(super) use crate::cli::Ctx;
 use crate::cli::supervised;
-use placement::{Placement, apply_in_place_downgrade, resolve_fork_placement, resolve_placement};
+use placement::{Placement, resolve_fork_placement};
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, LifecycleRefreshRequest};
 use rimz::harness::AutoContinueRequest;
@@ -65,10 +64,9 @@ use rimz::harness::auto_redeem::AutoRedeemRequest;
 use rimz::harness::budget::BudgetParkRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::orphan_sweep::OrphanSubagentRequest;
-use rimz::harness::plan::{
-    LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes, launch_identity_requests,
-    mint_launch_id, validate_agent_name,
-};
+#[cfg(test)]
+use rimz::harness::plan::ResolvedLaunch;
+use rimz::harness::plan::{mint_launch_id, validate_agent_name};
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::SupervisedRunOutcome;
 use rimz::harness::run_timeout::RunTimeoutRequest;

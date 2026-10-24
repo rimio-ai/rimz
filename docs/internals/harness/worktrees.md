@@ -54,7 +54,7 @@ Path matches are lexical, after `normalize_path_lexical`, so under a symlinked t
 | [`cli/mod.rs`](../../../crates/rimz/src/cli/mod.rs) | The CLI's `resolve_launch_checkout` and `settle_launch_checkout` (unmarked-checkout confirmation, PR retry, the `worktree.created` signal), `resolve_pr_branch_choice`, and `confirm_cross_repo_worktree`. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The worktree area of the aggregate `rimz gc` report. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The exec wrapper that enters a tree and triggers cleanup when the agent exits. |
-| [`cli/agents_cmd/reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs) | Cohort relaunch into a tree that already exists. |
+| [`launcher/reconcile.rs`](../../../crates/rimz/src/launcher/reconcile.rs) | Cohort relaunch into a tree that already exists. |
 
 The domain module runs Git through `crate::proc::git_command` with `LC_ALL=C` and returns typed `WorktreeErr` values. Prompts, confirmations, and reports live in the CLI layer. A `WorktreeErr` message reaches the user as written, so each refusal carries its fix in its own text (`use --force to remove it`, `pass --branch <name> for a review-only checkout`).
 
@@ -96,7 +96,7 @@ Only a `Team` tree with a `fresh` base, set or defaulted, fetches before cutting
 
 Discovery and fetch each run through `git_network_output`: `proc::run_bounded_output` with `TRUNK_FETCH_TIMEOUT` (60 seconds) and `GIT_TERMINAL_PROMPT=0`. A failure returns a `crates/rimz/src/worktree.rs::TrunkFetchFailure` that the CLI prints as a warning, and the tree cuts from the last-fetched `origin/<default>` when it resolves, otherwise from local `HEAD`. A repository with no `origin` skips the fetch: a defaulted `fresh` falls back to `head`, while an explicit `fresh` keeps its missing-ref error.
 
-Before adding a fresh non-PR tree, `create` computes an optional `crates/rimz/src/worktree.rs::StaleBase`: how far `base_branch` trails its upstream, from local refs and without fetching. A tree cut from the remote trunk skips the check, and a fallback to `HEAD` keeps it. The observation travels through `CreatedWorktree` and `LaunchCheckout`, never the marker, and `crates/rimz/src/cli/worktree.rs::new_worktree` and `crates/rimz/src/cli/mod.rs::settle_launch_checkout` print it on stderr after creation. The check is enrichment: any Git or parse failure leaves it silent.
+Before adding a fresh non-PR tree, `create` computes an optional `crates/rimz/src/worktree.rs::StaleBase`: how far `base_branch` trails its upstream, from local refs and without fetching. A tree cut from the remote trunk skips the check, and a fallback to `HEAD` keeps it. The observation travels through `CreatedWorktree` and `LaunchCheckout`, never the marker, and `crates/rimz/src/cli/worktree.rs::new_worktree` and `crates/rimz/src/launcher/checkout.rs::settle_launch_checkout` report it through the CLI on stderr after creation. The check is enrichment: any Git or parse failure leaves it silent.
 
 ### Reusing a tree
 
@@ -104,7 +104,7 @@ A launch that names an existing marked tree reuses it, subject to the CLI's [nam
 
 `rimz worktree new` refuses a name that live agents hold as an explicit lane (`channel::admit_worktree_name`). A launch applies the same admission when the tree does not exist yet (`admit_launch_worktree_name` in `cli/mod.rs`). After a fresh creation, `new` archives any messages left in that channel with the reason `channel recreated`.
 
-`crates/rimz/src/cli/worktree_entry.rs::check` is the entry check. It reads the marker and returns for a missing, unmarked, or occupied tree. It then prints the `--fresh` notice, and only after that inspects Git, so an occupied tree or a `--fresh` launch pays no Git status. It runs after cross-repository consent and before checkout resolution, from interactive `launch_resolved` and supervised `prepare_supervised`. Single agents enter it directly, and cohorts enter only from `Absent`. Harness-owned runs, PR checkouts, explicit resumes, and generated names skip it. The same CLI module owns the closed-cohort offers and the protected removal described [below](#removing-a-worktree).
+`crates/rimz/src/launcher/worktree_entry.rs::check` is the entry check. It reads the marker and returns for a missing, unmarked, or occupied tree. It then prints the `--fresh` notice, and only after that inspects Git, so an occupied tree or a `--fresh` launch pays no Git status. It runs after cross-repository consent and before checkout resolution, from layout `launcher::execute` and supervised `prepare_supervised`. Single agents enter it directly, and cohorts enter only from `Absent`. Harness-owned runs, PR checkouts, explicit resumes, and generated names skip it. The launcher owns entry checks and protected removal, and the CLI presents the closed-cohort offers described [below](#removing-a-worktree).
 
 The facts behind the check come from the harness. `crates/rimz/src/harness/worktree_entry.rs::occupied` applies `schedule::takeover::read` to `cli::alive_snapshot` rows. `crates/rimz/src/harness/worktree_entry.rs::read` takes a marked tree and owns the landed memo load and save, Git inspection with `WorktreeState::removable`, and the newest Audit activity at or under the tree, ended agents included. Both lexical and physical checkout paths match.
 
@@ -160,7 +160,7 @@ Reuse fills only a missing `from_pr` and keeps the holder's existing `base_branc
 
 #### PR checkout in a team launch
 
-A named team, or a layout with at least two agent cells, settles a PR checkout in four stages, ordered by `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout`: lookup, cohort reconciliation, tip choice, then checkout settlement. The lookup is a `create_from_pr` call with no tip choice. Its invariant is that it never moves an existing local branch tip, though a fresh path may create a branch. It may fetch remote refs, set upstream for an equal tip, or fill a missing marker PR number. Reconciliation keys on the `worktree_path` in the holder's marker, which may lie outside the configured worktree directory. A live cohort, a cancellation, or an unattended closed cohort returns before tip choice and before any launch row. A resume settles the chosen tip first, and removing the tree discards the pending checkout and resolves it anew. For PR selection, single-agent specs outside a named team, and supervised launches, take the ordinary checkout path.
+A named team, or a layout with at least two agent cells, settles a PR checkout in four stages, ordered by `crates/rimz/src/launcher/mod.rs::execute`: lookup, cohort reconciliation, tip choice, then checkout settlement. The lookup is a `create_from_pr` call with no tip choice. Its invariant is that it never moves an existing local branch tip, though a fresh path may create a branch. It may fetch remote refs, set upstream for an equal tip, or fill a missing marker PR number. Reconciliation keys on the `worktree_path` in the holder's marker, which may lie outside the configured worktree directory. A live cohort, a cancellation, or an unattended closed cohort returns before tip choice and before any launch row. A resume settles the chosen tip first, and removing the tree discards the pending checkout and resolves it anew. For PR selection, single-agent specs outside a named team, and supervised launches, take the ordinary checkout path.
 
 #### The PR tree's base
 
@@ -208,7 +208,7 @@ A failed `removed` hook only emits `tracing::warn!` and does not change the remo
 
 The hook events share their names with two [loop signals](../../reference/cli/events.md#reserved-families), which fire from other places:
 
-- `worktree.created` comes from `crates/rimz/src/cli/mod.rs::emit_worktree_created`, called by `new_worktree` and `settle_launch_checkout` after a fresh creation, so after a successful hook. A launch skips the signal, with a debug log, when the store does not open.
+- `worktree.created` comes from `crates/rimz/src/launcher/checkout.rs::emit_worktree_created`, called by `new_worktree` and `settle_launch_checkout` after a fresh creation, so after a successful hook. A launch skips the signal, with a debug log, when the store does not open.
 - `worktree.removed` comes from `crates/rimz/src/worktree.rs::retire_removal`, so every caller that retires a removed tree emits it ([branch deletion and retirement](#branch-deletion-and-retirement)). A hook rollback calls no retirement and emits no signal.
 
 ### Who triggers creation
@@ -216,7 +216,7 @@ The hook events share their names with two [loop signals](../../reference/cli/ev
 | Caller | Entry | Notes |
 | --- | --- | --- |
 | `rimz worktree new` | `crates/rimz/src/cli/worktree.rs::new_worktree` calls `create` or `create_from_pr` | No launch. The PR path can reuse a branch holder and retry after a tip choice. |
-| Agent layouts and teams | `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout`, through the CLI's `resolve_launch_checkout` to the domain resolver | Cohort reconciliation can remove a landed tree before this path recreates it. |
+| Agent layouts and teams | `crates/rimz/src/launcher/mod.rs::execute`, through the launcher's `checkout::resolve_launch_checkout` to the domain resolver | Cohort reconciliation can remove a landed tree before this path recreates it. |
 | Supervised `-p` runs, scheduled loop launches included | `cli/supervised/run.rs`, through the same resolver | See below. |
 
 A `created` hook failure on a supervised run comes before the launch batch and the run record, so no pane or launch row exists. The loop caller routes that error through `crates/rimz/src/cli/loop_cmd/run.rs::record_task_error` to `TaskFire::finish_error`, which records `LoopRunResult::Errored` with the error text.
@@ -379,7 +379,7 @@ Five callers reach the removal sequence, besides the `created` hook rollback in 
 | `rimz worktree remove <name>` | `crates/rimz/src/cli/worktree.rs::remove_worktree` | Builds the path from the configured directory, assesses it with explicit-removal facts, and removes it through `worktree::remove`. |
 | `rimz worktree sweep`, `rimz gc` | `crates/rimz/src/worktree.rs::sweep_owned` | The one sweep implementation (below). |
 | The exec wrapper | `cli/agents_cmd/exec.rs` | Reclaims a tree an agent was launched into with `--worktree-path` (below). |
-| Cohort relaunch | `crates/rimz/src/cli/agents_cmd/reconcile.rs::recreate_or_done` | A team or multi-agent layout launched with `-w <name>` into an existing tree ([the assessment](#the-assessment)). |
+| Cohort relaunch | `crates/rimz/src/launcher/worktree_entry.rs::remove` | A team or multi-agent layout launched with `-w <name>` into an existing tree ([the assessment](#the-assessment)). |
 | Supervised retry cleanup | `cli/supervised/run.rs` | Defers wrapper cleanup while retries remain, then calls `crates/rimz/src/cli/worktree.rs::cleanup_worktree` after the run settles. That helper loads machine config and reaches `remove_marked_worktree` through `remove_for_cleanup`, so retry teardown runs the same hooks as wrapper cleanup. |
 
 `sweep_owned` discovers every marked tree in the repository from `git worktree list --porcelain`, assesses each, removes the removable ones, retires their sessions and messages, and runs `git worktree prune` when it removed anything. A per-tree failure is recorded and the sweep continues. `--dry-run` reports the same accounting, bytes included, without acting. `sweep` flows removed names in one block, and `gc` prints each tree with every reason and its holders or branch fate. `gc` skips its worktree area with a reason when the directory is not a repository, no store exists, the agent roster cannot be read, a loop-task source cannot be read (`loop_tasks_unavailable`, naming the source in text), or listing fails.

@@ -344,15 +344,15 @@ fn resume_selected(
             adapter.manual_skill(),
         )?;
     }
-    crate::cli::lsp_admission::admit(&tab.cwd, &machine)?;
+    crate::cli::launch_interaction::admit_lsp(&tab.cwd, &machine)?;
     rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &tab.cwd)?;
     let login = logins.login(kind, &machine.accounts)?;
-    crate::cli::folder_trust::preflight_hooks(
+    crate::cli::launch_interaction::preflight_hooks(
         login.health(&rimz::agents::ambient_env()),
         || {
             caller
                 .as_ref()
-                .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                .map(|_| rimz::launcher::trust::Unattended::Agent)
         },
         || match source {
             ResumeSource::Recorded(agent) => rimz::config::definitions::hook_trust_fix(
@@ -371,7 +371,7 @@ fn resume_selected(
         ResumeSource::Recorded(agent) if agent.checkout.is_some() => None,
         _ => workspace.at_launch_dir(&tab.cwd)?.cwd_project_root,
     };
-    crate::cli::folder_trust::preflight(
+    crate::cli::launch_interaction::preflight(
         kind.as_str(),
         &tab.cwd,
         adapter.folder_trust(
@@ -562,19 +562,19 @@ pub(super) fn resume_lane(
         }
         for (cwd, repo_root, login, agent) in targets {
             if admitted.insert(cwd) {
-                crate::cli::lsp_admission::admit(cwd, &machine_config)?;
+                crate::cli::launch_interaction::admit_lsp(cwd, &machine_config)?;
             }
             rimz::harness::launch::preflight_agent_kind(
                 &workspace.project_root,
                 kind.as_str(),
                 cwd,
             )?;
-            crate::cli::folder_trust::preflight_hooks(
+            crate::cli::launch_interaction::preflight_hooks(
                 login.health(&rimz::agents::ambient_env()),
                 || {
                     caller
                         .as_ref()
-                        .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                        .map(|_| rimz::launcher::trust::Unattended::Agent)
                 },
                 || {
                     let agent = agent.or_else(|| {
@@ -598,7 +598,7 @@ pub(super) fn resume_lane(
             )?;
             let adapter = rimz::agents::find_definition(kind.as_str())
                 .with_context(|| format!("unknown agent kind `{kind}`"))?;
-            crate::cli::folder_trust::preflight(
+            crate::cli::launch_interaction::preflight(
                 kind.as_str(),
                 cwd,
                 adapter.folder_trust(cwd, repo_root, &login.env(&rimz::agents::ambient_env())),

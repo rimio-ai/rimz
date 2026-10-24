@@ -248,29 +248,58 @@ pub(super) fn run_one(
                 let mut launch_globals = globals.clone();
                 launch_globals.root = Some(root.clone());
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
-                let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
-                    spec: Some(spec),
-                    prompt: Some(prompt),
-                    ..Default::default()
+                let request = rimz::launcher::LayoutRequest {
+                    context: rimz::launcher::LaunchContext {
+                        workspace: ctx.workspace.clone(),
+                        store: ctx.store.clone(),
+                        machine: config.clone(),
+                        mux: launch_globals.mux,
+                        root: launch_globals.root.clone(),
+                        channel: ctx.channel().map(str::to_owned),
+                    },
+                    launch: rimz::launcher::LayoutLaunch {
+                        spec: Some(spec),
+                        prompt: Some(prompt),
+                        cohort: rimz::launcher::CohortRequest {
+                            new_tab: true,
+                            bg: true,
+                            worktree: worktree.clone(),
+                            fresh: worktree.is_some() && entry.takeover,
+                            ..Default::default()
+                        },
+                        overrides: rimz::launcher::LaunchOverrides {
+                            mode: match entry.mode.as_deref() {
+                                Some("ask") => Some(rimz::agents::PermissionMode::Ask),
+                                Some("yolo") => Some(rimz::agents::PermissionMode::Yolo),
+                                _ => None,
+                            },
+                            preset: rimz::agents::LaunchPreset {
+                                effort: rimz::harness::plan::normalized_preset_value(
+                                    entry.effort.as_deref(),
+                                ),
+                                fast: entry.fast,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    cwd: worktree.is_none().then(|| cwd.clone()),
+                    allow_in_place: false,
+                    entry: rimz::launcher::RoomEntry::Live,
+                    starter: rimz::launcher::Starter::Loop,
+                    resident_loop: Some(rimz::launcher::ResidentLoop {
+                        task: name.to_owned(),
+                        reminder: loop_reminder,
+                    }),
                 };
-                launch.cohort.new_tab = true;
-                launch.cohort.bg = true;
-                launch.cohort.worktree = worktree.clone();
-                launch.cohort.fresh = worktree.is_some() && entry.takeover;
-                launch.overrides.ask = entry.mode.as_deref() == Some("ask");
-                launch.overrides.yolo = entry.mode.as_deref() == Some("yolo");
-                launch.overrides.effort = entry.effort.clone();
-                launch.overrides.fast = entry.fast == Some(true);
-                launch.overrides.no_fast = entry.fast == Some(false);
-                let execute = crate::cli::agents_cmd::launch::launch_resolved(
-                    launch,
-                    &launch_globals,
-                    false,
-                    &ctx,
-                    config.clone(),
-                    worktree.is_none().then(|| cwd.clone()),
-                    Some((name, &loop_reminder)),
-                )?;
+                let mut interaction = crate::cli::launch_interaction::CliInteraction;
+                let prepared = match rimz::launcher::prepare_layout(request, &mut interaction)? {
+                    rimz::launcher::Preparation::Prepared(prepared) => prepared,
+                    rimz::launcher::Preparation::Handled(_) => {
+                        anyhow::bail!("resident launch aborted")
+                    }
+                };
                 let stopped = if entry.takeover {
                     let destination = worktree
                         .as_deref()
@@ -295,7 +324,11 @@ pub(super) fn run_one(
                 } else {
                     Vec::new()
                 };
-                let launched = execute()?.context("resident launch aborted")?;
+                let rimz::launcher::LaunchOutcome::Opened(launched) =
+                    rimz::launcher::execute(*prepared, &mut interaction)?
+                else {
+                    anyhow::bail!("resident launch aborted");
+                };
                 let leader = launched
                     .leader_index
                     .and_then(|index| launched.identities.get(index))

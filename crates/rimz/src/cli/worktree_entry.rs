@@ -1,46 +1,16 @@
-use std::io::{IsTerminal, Write};
-use std::path::Path;
-
-use anyhow::{Context, Result, bail};
+use super::GlobalFlags;
+use anyhow::{Result, bail};
 use rimz::harness::worktree_entry::WorktreeEntry;
-use rimz::worktree::{LandedVerdict, WorktreeMarker};
-
-use super::usage::shell_command;
-use super::{GlobalFlags, render};
+use rimz::launcher::ClosedCohort as Offer;
+use rimz::launcher::worktree_entry::facts_block;
+pub(super) use rimz::launcher::worktree_entry::{PrintInput, relaunch_commands};
+use std::io::Write;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Choice {
     Fresh,
     Remove,
     Resume,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum PrintInput {
-    Text,
-    Stdin,
-    StreamJson,
-}
-
-pub(super) struct Offer<'a> {
-    pub(super) name: &'a str,
-    pub(super) subject: &'a str,
-    pub(super) facts: &'a WorktreeEntry,
-    pub(super) resume_command: Option<&'a str>,
-    pub(super) fresh_command: &'a str,
-}
-
-pub(super) fn inspect(
-    store: &rimz::Store,
-    path: &Path,
-    marker: &WorktreeMarker,
-) -> Result<WorktreeEntry> {
-    let audit = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    Ok(rimz::harness::worktree_entry::read(
-        path,
-        marker,
-        &audit.agents,
-    )?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -56,36 +26,20 @@ pub(super) fn check(
     fresh: bool,
     fresh_command: Option<&str>,
 ) -> Result<()> {
-    let path =
-        rimz::worktree::worktree_path(workspace.launch_repo_root(), &config.agents.worktree, name)?;
-    let Some(marker) = rimz::worktree::read_marker_for_worktree(&path)? else {
-        return Ok(());
-    };
-    let alive = super::alive_snapshot(store, &workspace.session_name)?;
-    let repo_root = workspace.launch_repo_root();
-    if rimz::harness::worktree_entry::occupied(&path, repo_root, &alive.agents)? {
-        return Ok(());
-    }
-    let subject = cohort_subject(spec, team);
-    if fresh {
-        return launch_fresh(name, &subject);
-    }
-    let facts = inspect(store, &path, &marker)?;
-    let (_, command) = relaunch_commands(name, spec, team, None, prompt, None);
-    let choice = offer(
-        &Offer {
-            name,
-            subject: &subject,
-            facts: &facts,
-            resume_command: None,
-            fresh_command: fresh_command.unwrap_or(&command),
-        },
-        std::io::stdin().is_terminal(),
-    )?;
-    match choice {
-        Choice::Remove => remove(workspace, config, globals, store, name, &path, &subject),
-        Choice::Fresh | Choice::Resume => launch_fresh(name, &subject),
-    }
+    rimz::launcher::worktree_entry::check(
+        workspace,
+        config,
+        globals.root.as_deref(),
+        globals.mux,
+        store,
+        name,
+        spec,
+        team,
+        prompt,
+        fresh,
+        fresh_command,
+        &mut super::launch_interaction::CliInteraction,
+    )
 }
 
 pub(super) fn offer(offer: &Offer<'_>, terminal: bool) -> Result<Choice> {
@@ -117,20 +71,9 @@ fn offer_with(
         "has work in progress"
     };
     if !terminal {
-        let resume = resume_command
-            .map(|command| format!("resume with `{command}`, or "))
-            .unwrap_or_default();
-        let remove = if facts.removable {
-            let command = shell_command(["rimz", "worktree", "remove", name]);
-            format!("recreate {subject} with `{command}` then relaunch, ")
-        } else {
-            String::new()
-        };
-        bail!(
-            "worktree `{name}` {state}; {remove}{resume}launch fresh with `{fresh_command}`\n{}",
-            facts_block(name, facts)
-        );
+        return offer.refuse();
     }
+
     let (choices, default, action): (&[&str], _, _) = if facts.removable {
         (
             &["remove", "fresh", "cancel"],
@@ -166,162 +109,11 @@ fn offer_with(
     }
 }
 
-fn facts_block(name: &str, facts: &WorktreeEntry) -> String {
-    let now = jiff::Timestamp::now();
-    let activity = facts
-        .last_activity
-        .map(|at| render::rel_age(at, now))
-        .unwrap_or_else(|| "none recorded".to_owned());
-    let landed = match (
-        facts.status.landed,
-        facts.status.target.as_deref(),
-        facts.status.ahead,
-    ) {
-        (LandedVerdict::Landed, Some(target), _) => format!("landed on {target}"),
-        (LandedVerdict::Landed, None, _) => "landed".to_owned(),
-        (LandedVerdict::Unlanded, Some(target), Some(ahead)) => {
-            format!("not landed ({ahead} commits ahead of {target})")
-        }
-        (LandedVerdict::Unlanded, _, _) => "not landed".to_owned(),
-        (LandedVerdict::Unknown, _, _) => "landed: unknown".to_owned(),
-    };
-    format!(
-        "worktree `{name}`: created {}\n  last agent activity: {activity}\n  {} uncommitted file(s); {landed}",
-        render::rel_age(facts.created_at, now),
-        facts.status.changed_files
-    )
-}
-
-pub(super) fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
-    match team {
-        Some(team) => format!("team `{team}`"),
-        None => format!("`{spec_display}`"),
-    }
-}
-
-pub(super) fn launch_fresh(name: &str, subject: &str) -> Result<()> {
-    writeln!(
-        std::io::stderr().lock(),
-        "launching {subject} fresh in worktree `{name}`"
-    )?;
-    Ok(())
-}
-
 fn canceled<T>(resume_command: Option<&str>, fresh_command: &str) -> Result<T> {
     let resume = resume_command
         .map(|command| format!("resume with `{command}` or "))
         .unwrap_or_default();
     bail!("canceled; nothing launched; {resume}launch fresh with `{fresh_command}`")
-}
-
-pub(super) fn remove(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::MachineConfig,
-    globals: &GlobalFlags,
-    store: &rimz::Store,
-    name: &str,
-    path: &Path,
-    subject: &str,
-) -> Result<()> {
-    // Read holders from both this room and the room of the repository that owns the tree.
-    let protections = super::worktree_protection::for_explicit_removal(
-        &[&workspace.project_root, workspace.launch_repo_root()],
-        globals,
-    );
-    let memo = rimz::worktree::LandedMemo::load(path);
-    let result = rimz::worktree::remove(
-        workspace.launch_repo_root(),
-        &config.agents.worktree,
-        name,
-        path,
-        false,
-        &protections.protections,
-        &memo,
-    );
-    memo.save();
-    let removed = match result {
-        Err(rimz::worktree::WorktreeErr::Missing { .. }) => {
-            writeln!(
-                std::io::stderr().lock(),
-                "worktree `{name}` was already removed; recreating {subject}"
-            )?;
-            return Ok(());
-        }
-        Err(rimz::worktree::WorktreeErr::InUse { .. }) => bail!(
-            "worktree `{name}` is in use by {}; nothing removed; nothing launched",
-            protections.protections.holders(path)
-        ),
-        result => result?,
-    };
-    let retirement = rimz::worktree::retire_removal(
-        store,
-        &removed,
-        "worktree recreated",
-        &workspace.session_name,
-    );
-    let session_retirement = retirement
-        .session_retirement
-        .context("retiring sessions for recreated worktree");
-    let message_archival = retirement
-        .message_archival
-        .context("archiving messages for recreated worktree channel");
-    session_retirement?;
-    message_archival?;
-    writeln!(
-        std::io::stderr().lock(),
-        "removed worktree `{name}`; recreating {subject}"
-    )?;
-    Ok(())
-}
-
-pub(super) fn relaunch_commands(
-    name: &str,
-    spec_display: &str,
-    team: Option<&str>,
-    channel: Option<&str>,
-    prompt: Option<&str>,
-    print_input: Option<PrintInput>,
-) -> (String, String) {
-    let target = team.map(|team| format!("{team}#{name}"));
-    let resume_target = team
-        .zip(channel)
-        .map(|(team, channel)| format!("{team}#{channel}"));
-    let (mut resume, mut fresh) = match target.as_deref() {
-        Some(target) => (
-            vec![
-                "rimz",
-                "teams",
-                "resume",
-                resume_target.as_deref().unwrap_or(target),
-            ],
-            vec!["rimz", "teams", target, "--fresh"],
-        ),
-        None => {
-            let mut fresh = vec!["rimz", "agents", spec_display];
-            if print_input.is_some() {
-                fresh.push("-p");
-            }
-            fresh.extend(["-w", name, "--fresh"]);
-            match print_input {
-                Some(PrintInput::Stdin) => fresh.push("--stdin"),
-                Some(PrintInput::StreamJson) => fresh.extend(["--input-format", "stream-json"]),
-                _ => {}
-            }
-            (
-                vec!["rimz", "agents", spec_display, "-w", name, "--continue"],
-                fresh,
-            )
-        }
-    };
-    if let Some(prompt) = prompt {
-        if team.is_some() && prompt.starts_with('-') {
-            resume.push("--");
-            fresh.push("--");
-        }
-        resume.push(prompt);
-        fresh.push(prompt);
-    }
-    (shell_command(resume), shell_command(fresh))
 }
 
 #[cfg(test)]

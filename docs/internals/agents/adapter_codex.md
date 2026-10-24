@@ -216,9 +216,9 @@ An Undecided message names both fixes: `rimz trust grant --agents codex`, or ans
 
 | Launcher | Undecided | Restricted | Check |
 | --- | --- | --- | --- |
-| human `rimz agents` command | warns | warns | `crates/rimz/src/cli/folder_trust.rs::preflight` |
-| team command, resident loop | warns | refuses | `crates/rimz/src/cli/folder_trust.rs::preflight` |
-| fresh agent-started launch | refuses, asking the user to grant or name a trusted directory to relaunch in | refuses, asking the user to trust the folder in Codex or relaunch from a trusted directory, since no pane opens | `crates/rimz/src/cli/folder_trust.rs::preflight` |
+| human `rimz agents` command | warns | warns | `crates/rimz/src/launcher/trust.rs::preflight` |
+| team command, resident loop | warns | refuses | `crates/rimz/src/launcher/trust.rs::preflight` |
+| fresh agent-started launch | refuses, asking the user to grant or name a trusted directory to relaunch in | refuses, asking the user to trust the folder in Codex or relaunch from a trusted directory, since no pane opens | `crates/rimz/src/launcher/trust.rs::preflight` |
 | supervised `rimz agents -p` launch, subagent resume | refuses | refuses | `agents::preflight_launch_dir`, `LaunchDirMode::Supervised` |
 | headless loop or workflow judge | refuses | passes, because `codex exec` has no folder screen | `agents::preflight_launch_dir`, `LaunchDirMode::Headless` |
 

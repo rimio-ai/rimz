@@ -131,15 +131,15 @@ fn resume_resolved(
     }
     let provider_login =
         rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
-    crate::cli::folder_trust::preflight_hooks(
+    crate::cli::launch_interaction::preflight_hooks(
         provider_login.health(&rimz::agents::ambient_env()),
-        || Some(crate::cli::folder_trust::Unattended::Subagent),
+        || Some(rimz::launcher::trust::Unattended::Subagent),
         || rimz::config::definitions::hook_trust_fix(&child.kind, child.profile.as_deref(), None),
         &mut Default::default(),
         &mut crate::cli::render::err(),
     )?;
     if child.checkout.is_some() {
-        crate::cli::folder_trust::preflight(
+        crate::cli::launch_interaction::preflight(
             child.kind.as_str(),
             &cwd,
             adapter.folder_trust(
@@ -147,7 +147,7 @@ fn resume_resolved(
                 None,
                 &provider_login.env(&rimz::agents::ambient_env()),
             ),
-            Some(crate::cli::folder_trust::Unattended::Subagent),
+            Some(rimz::launcher::trust::Unattended::Subagent),
         )?;
     }
     let repo_root = if child.checkout.is_none() {
@@ -207,9 +207,9 @@ fn resume_resolved(
         child.channel.as_deref(),
         false,
     );
-    let _guard = supervised::pane::lock_subagent_zone(store)?;
+    let _guard = rimz::launcher::placement::lock_subagent_zone(store)?;
     let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
+    if rimz::launcher::placement::launch_has_bound_pane(&current.agents, &child.kind, launch_id)
         || current
             .agents
             .iter()
@@ -256,7 +256,7 @@ fn resume_resolved(
         };
         let sidebar = room.sidebar_options(&cwd);
         let open_started = std::time::Instant::now();
-        match supervised::pane::split_into_subagent_zone(
+        match rimz::launcher::placement::split_into_subagent_zone(
             room.backend(),
             store,
             &parent_workspace,
@@ -269,14 +269,14 @@ fn resume_resolved(
             Some(parent_pane.pane_id.clone()),
             &run.run_id,
         ) {
-            supervised::pane::SubagentZoneOpen::Opened => {}
-            supervised::pane::SubagentZoneOpen::Failed(error) => return Err(error.into()),
+            rimz::launcher::placement::SubagentZoneOpen::Opened => {}
+            rimz::launcher::placement::SubagentZoneOpen::Failed(error) => return Err(error.into()),
         }
         let open = open_started.elapsed();
-        supervised::pane::wait_for_subagent_pane_bind(
+        rimz::launcher::placement::wait_for_subagent_pane_bind(
             store,
             &parent_workspace,
-            supervised::pane::PaneBindWait {
+            rimz::launcher::placement::PaneBindWait {
                 run_id: &run.run_id,
                 launch_id,
                 kind: &child.kind,

@@ -594,7 +594,7 @@ fn attach(server: Option<String>, version: bool, globals: &GlobalFlags) -> Resul
             anyhow::bail!("{target}: no matching root-markers");
         }
         for wait in admitted.wait_for_required {
-            super::lsp_admission::write_wait(&wait)?;
+            super::launch_interaction::write_wait(&wait)?;
         }
         std::thread::sleep(Duration::from_secs(5));
     };

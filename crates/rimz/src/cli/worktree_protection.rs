@@ -3,7 +3,6 @@
 //! Domain removal policy stays in `rimz::worktree::ProtectionSet`; this module
 //! preserves each CLI caller's fact-gathering and failure semantics.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -12,7 +11,7 @@ use super::{GlobalFlags, open_existing_store};
 use rimz::agents::AgentState;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::PaneRef;
-use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
+use rimz::workspace::ResolvedWorkspace;
 
 pub(super) struct RuntimeProtection {
     pub(super) protections: rimz::worktree::ProtectionSet,
@@ -78,26 +77,13 @@ pub(super) fn for_explicit_removal(
     repo_roots: &[&Path],
     globals: &GlobalFlags,
 ) -> RuntimeProtection {
-    let mut workspace_ids = HashSet::new();
-    let workspaces = repo_roots
-        .iter()
-        .filter_map(
-            |repo_root| match WorkspaceResolver::resolve(repo_root, globals.root.clone()) {
-                Ok(workspace) => workspace_ids
-                    .insert(workspace.workspace_id.clone())
-                    .then_some(workspace),
-                Err(err) => {
-                    tracing::debug!(
-                        path = %repo_root.display(),
-                        error = %err,
-                        "could not resolve workspace while gathering worktree protection facts",
-                    );
-                    None
-                }
-            },
-        )
-        .collect::<Vec<_>>();
-    best_effort_workspaces(&workspaces, globals, rimz::worktree::Occupancy::ProvenLive)
+    RuntimeProtection {
+        protections: rimz::launcher::worktree_entry::explicit_removal_protections(
+            repo_roots,
+            globals.root.as_deref(),
+            globals.mux,
+        ),
+    }
 }
 
 /// Best-effort occupancy, required loop-task facts, and the cleanup path's team board.
@@ -143,22 +129,13 @@ fn best_effort_workspaces(
     globals: &GlobalFlags,
     occupancy: rimz::worktree::Occupancy,
 ) -> RuntimeProtection {
-    let mut panes = Vec::new();
-    let mut agents = Vec::new();
-    let mut own_pane = None;
-    for workspace in workspaces {
-        let (mux, room_panes) = list_panes(Some(workspace), globals);
-        own_pane = own_pane.or_else(|| mux.and_then(rimz::mux::own_pane_id));
-        panes.extend(room_panes);
-        agents.extend(
-            open_existing_store(workspace)
-                .ok()
-                .flatten()
-                .and_then(|store| alive_agents(workspace, &store).ok())
-                .unwrap_or_default(),
-        );
+    RuntimeProtection {
+        protections: rimz::launcher::worktree_entry::runtime_protections(
+            workspaces,
+            globals.mux,
+            occupancy,
+        ),
     }
-    assemble(&panes, agents, own_pane.as_ref(), occupancy)
 }
 
 fn list_panes(

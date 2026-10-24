@@ -142,12 +142,12 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     )?;
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;
-    crate::cli::folder_trust::preflight_hooks(
+    crate::cli::launch_interaction::preflight_hooks(
         login.health(&rimz::agents::ambient_env()),
         || {
             caller
                 .as_ref()
-                .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                .map(|_| rimz::launcher::trust::Unattended::Agent)
         },
         || {
             rimz::config::definitions::hook_trust_fix(
@@ -164,7 +164,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         None
     };
-    crate::cli::folder_trust::preflight(
+    crate::cli::launch_interaction::preflight(
         seed.kind.as_str(),
         &seed.cwd,
         adapter.folder_trust(

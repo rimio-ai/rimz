@@ -8,7 +8,9 @@ use clap::Args;
 
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
 use rimz::message::{DeliveryKind, InterruptConfirmation};
-use rimz::store::message::{AutoCompact, MessageSender};
+use rimz::store::message::AutoCompact;
+#[cfg(test)]
+use rimz::store::message::MessageSender;
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
@@ -198,63 +200,9 @@ pub(crate) fn warn_ignored_stdin() {
     }
 }
 
-/// The caller identity for `message`. `--no-from` is deliberately unattributed
-/// system text so delivery stays verbatim. RimZ-launched agents carry their
-/// identity in the environment; a bare-resumed provider is recognised through
-/// its live durable owner in the process ancestry. Ordinary shells stay human.
-pub(crate) fn sender_for(
-    caller: Option<&rimz::harness::ancestry::CallerIdentity>,
-    channel: Option<&str>,
-    no_from: bool,
-) -> MessageSender {
-    if no_from {
-        return MessageSender::System;
-    }
-    let Some(caller) = caller else {
-        return MessageSender::Human;
-    };
-    MessageSender::Agent {
-        agent_id: caller.launch_id.clone(),
-        kind: caller.kind.clone(),
-        name: caller.name.clone(),
-        profile: caller.profile.clone(),
-        role: caller.role.clone(),
-        channel: channel.map(ToOwned::to_owned),
-    }
-}
-
-pub(crate) fn resolve_caller(
-    store: &rimz::Store,
-) -> Result<Option<rimz::harness::ancestry::CallerIdentity>> {
-    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
-    if caller
-        .as_ref()
-        .is_some_and(|caller| caller.launch_id.is_some())
-    {
-        return Ok(caller);
-    }
-    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    Ok(resolve_caller_from(&projection.agents, caller))
-}
-
-fn resolve_caller_from(
-    agents: &[rimz::agents::AgentState],
-    caller: Option<rimz::harness::ancestry::CallerIdentity>,
-) -> Option<rimz::harness::ancestry::CallerIdentity> {
-    let mut caller = caller
-        .or_else(|| rimz::harness::ancestry::CallerIdentity::from_process_ancestry(agents))?;
-    if caller.launch_id.is_none()
-        && let Ok(agent) = rimz::harness::ancestry::resolve_launch_caller(agents, &caller)
-    {
-        caller.launch_id = Some(
-            agent
-                .launch_id
-                .clone()
-                .unwrap_or_else(|| agent.agent_id.clone()),
-        );
-    }
-    Some(caller)
-}
+#[cfg(test)]
+use rimz::launcher::context::resolve_caller_from;
+pub(crate) use rimz::launcher::context::{resolve_caller, sender_for};
 
 pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
     match wait {

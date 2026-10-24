@@ -1,12 +1,9 @@
+use super::worktree_entry::{self, cohort_subject, relaunch_commands};
 use super::*;
-use crate::cli::send;
-use crate::cli::worktree_entry::{
-    self, Choice, Offer, cohort_subject, launch_fresh, relaunch_commands,
-};
-use rimz::harness::ancestry::LaunchFocus;
-use rimz::message::dispatch::{DispatchMode, DispatchRequest};
-use rimz::store::message::DeliveryGate;
-use std::io::IsTerminal;
+use super::{ClosedCohort, CohortChoice, Interaction, Notice, Unattended, context};
+use crate::harness::ancestry::LaunchFocus;
+use crate::message::dispatch::{DispatchMode, DispatchRequest};
+use crate::store::message::DeliveryGate;
 
 pub(super) enum Reconciled {
     Absent,
@@ -19,36 +16,38 @@ pub(super) enum Reconciled {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reconcile_cohort_launch(
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-    globals: &GlobalFlags,
-    backend: &dyn rimz::mux::MuxBackend,
-    store: &rimz::Store,
+    workspace: &crate::ResolvedWorkspace,
+    machine_config: &crate::config::MachineConfig,
+    root: Option<&Path>,
+    mux: Option<crate::ids::MuxName>,
+    backend: &dyn crate::mux::MuxBackend,
+    store: &crate::Store,
     name: &str,
     path: &Path,
     spec_display: &str,
     team: Option<&str>,
-    cells: &[rimz::harness::plan::CohortCell],
+    cells: &[crate::harness::plan::CohortCell],
     leader_index: Option<usize>,
     prompt: Option<&str>,
     fresh: bool,
     focus: LaunchFocus,
     loop_fire: bool,
+    interaction: &mut dyn Interaction,
 ) -> Result<Reconciled> {
     if !path.exists() {
         return Ok(Reconciled::Absent);
     }
-    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let projection = store.runtime_projection(crate::RuntimeScope::Audit)?;
     let subject = cohort_subject(spec_display, team);
-    match rimz::harness::resume::inspect_cohort_relaunch(
+    match crate::harness::resume::inspect_cohort_relaunch(
         &projection.agents,
         path,
         cells,
         team,
         leader_index,
     ) {
-        rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Absent),
-        rimz::harness::resume::CohortRelaunchState::Present {
+        crate::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Absent),
+        crate::harness::resume::CohortRelaunchState::Present {
             mut focus_pane,
             leader,
             members,
@@ -63,7 +62,7 @@ pub(super) fn reconcile_cohort_launch(
                     .map(|agent| {
                         format!(
                             ", leader {}",
-                            rimz::address::agent_handle(agent, &peers, true)
+                            crate::address::agent_handle(agent, &peers, true)
                         )
                     })
                     .unwrap_or_default();
@@ -82,7 +81,7 @@ pub(super) fn reconcile_cohort_launch(
                             shell_command([
                                 "rimz",
                                 "message",
-                                &rimz::address::agent_handle(member, &peers, true),
+                                &crate::address::agent_handle(member, &peers, true),
                                 prompt,
                             ])
                         })
@@ -90,10 +89,10 @@ pub(super) fn reconcile_cohort_launch(
                         .join("; ");
                     bail!("{running}, but its leader is not live; message a live member: {hints}");
                 };
-                let caller = send::resolve_caller(store)?;
-                let channel = crate::cli::current_channel(workspace, Some(store));
+                let caller = context::resolve_caller(store)?;
+                let channel = context::current_channel(workspace, Some(store));
                 let target = format!("@{}", leader.agent_id);
-                let result = rimz::message::dispatch::dispatch(
+                let result = crate::message::dispatch::dispatch(
                     workspace,
                     store,
                     DispatchRequest {
@@ -102,7 +101,7 @@ pub(super) fn reconcile_cohort_launch(
                         text: prompt.to_owned(),
                         target_scope: leader.channel(),
                         current_channel: channel.address_context(),
-                        sender: send::sender_for(caller.as_ref(), channel.as_deref(), false),
+                        sender: context::sender_for(caller.as_ref(), channel.as_deref(), false),
                         caller,
                         automated: false,
                         allow_fanout: false,
@@ -119,16 +118,13 @@ pub(super) fn reconcile_cohort_launch(
                         },
                     },
                 )?;
-                writeln!(
-                    std::io::stderr().lock(),
+                interaction.notice(Notice::Reconcile(&format!(
                     "{running}; prompt sent to its leader"
-                )?;
-                send::report_dispatch(
-                    rimz::message::DeliveryKind::Boundary,
-                    &target,
-                    &result.outcomes,
-                    &result.compacted,
-                )?;
+                )))?;
+                interaction.notice(Notice::Dispatch {
+                    target: &target,
+                    result: &result,
+                })?;
                 focus_pane = leader.pane.as_ref().map(|pane| pane.pane_id.clone());
             }
             if focus.takes_focus()
@@ -139,77 +135,76 @@ pub(super) fn reconcile_cohort_launch(
                     // The prompt is already sent or queued, so a failed focus must
                     // not exit 1 and invite a retry that sends it twice.
                     if let Err(error) = focused {
-                        writeln!(
-                            std::io::stderr().lock(),
+                        interaction.notice(Notice::Warning(&format!(
                             "warning: could not focus the leader's pane: {error:#}"
-                        )?;
+                        )))?;
                     }
                     return Ok(Reconciled::PromptDispatched);
                 }
                 focused?;
-                writeln!(std::io::stderr().lock(), "{running}; focused it")?;
+                interaction.notice(Notice::Reconcile(&format!("{running}; focused it")))?;
                 return Ok(Reconciled::Done);
             }
             if prompt.is_some() {
                 return Ok(Reconciled::PromptDispatched);
             }
-            writeln!(std::io::stderr().lock(), "{running}")?;
+            interaction.notice(Notice::Reconcile(&running))?;
             Ok(Reconciled::Done)
         }
-        rimz::harness::resume::CohortRelaunchState::Closed { channel } => {
-            let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
+        crate::harness::resume::CohortRelaunchState::Closed { channel } => {
+            let Some(marker) = crate::worktree::read_marker_for_worktree(path)? else {
                 return Ok(Reconciled::Continue);
             };
             if fresh {
-                launch_fresh(name, &subject)?;
-                return Ok(Reconciled::Continue);
+                return launch_fresh(name, &subject, interaction);
             }
             let facts = worktree_entry::inspect(store, path, &marker)?;
             let (resume_command, fresh_command) =
                 relaunch_commands(name, spec_display, team, channel.as_deref(), prompt, None);
-            // Cohort liveness was already decided above, so Git state alone
-            // separates "recreate it" from "resume into it". A concurrent
-            // cleanup may still remove the checkout after this decision.
-            // A loop fire is unattended even when `loop fire` runs from a
-            // terminal: it refuses with the guidance instead of prompting.
-            match worktree_entry::offer(
-                &Offer {
-                    name,
-                    subject: &subject,
-                    facts: &facts,
-                    resume_command: Some(&resume_command),
-                    fresh_command: &fresh_command,
-                },
-                !loop_fire && std::io::stdin().is_terminal(),
-            )? {
-                Choice::Fresh => {
-                    launch_fresh(name, &subject)?;
-                    Ok(Reconciled::Continue)
-                }
-                Choice::Resume => Ok(Reconciled::Resume(path.to_owned())),
-                Choice::Remove => {
+            // A loop fire refuses with guidance even when fired from a terminal.
+            let mut unattended = Unattended;
+            let interaction: &mut dyn Interaction = if loop_fire {
+                &mut unattended
+            } else {
+                interaction
+            };
+            match interaction.closed_cohort(ClosedCohort {
+                name,
+                subject: &subject,
+                facts: &facts,
+                resume_command: Some(&resume_command),
+                fresh_command: &fresh_command,
+            })? {
+                CohortChoice::Fresh => launch_fresh(name, &subject, interaction),
+                CohortChoice::Resume => Ok(Reconciled::Resume(path.to_owned())),
+                CohortChoice::Recreate => {
                     worktree_entry::remove(
                         workspace,
                         machine_config,
-                        globals,
+                        root,
+                        mux,
                         store,
                         name,
                         path,
                         &subject,
+                        interaction,
                     )?;
                     Ok(Reconciled::Removed)
                 }
+                CohortChoice::Cancel => bail!(
+                    "canceled; nothing launched; resume with `{resume_command}` or launch fresh with `{fresh_command}`"
+                ),
             }
         }
     }
 }
 
 pub(super) fn cohort_worktree_path(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::WorktreeConfig,
+    workspace: &crate::ResolvedWorkspace,
+    config: &crate::config::WorktreeConfig,
     name: &str,
-) -> rimz::worktree::Result<PathBuf> {
-    rimz::worktree::worktree_path(workspace.launch_repo_root(), config, name)
+) -> crate::worktree::Result<PathBuf> {
+    crate::worktree::worktree_path(workspace.launch_repo_root(), config, name)
 }
 
 fn already_running(name: &str, subject: &str, team: Option<&str>) -> String {
@@ -220,15 +215,24 @@ fn already_running(name: &str, subject: &str, team: Option<&str>) -> String {
 }
 
 fn focus_existing(
-    workspace: &rimz::ResolvedWorkspace,
-    backend: &dyn rimz::mux::MuxBackend,
-    store: &rimz::Store,
-    pane_id: rimz::ids::PaneId,
+    workspace: &crate::ResolvedWorkspace,
+    backend: &dyn crate::mux::MuxBackend,
+    store: &crate::Store,
+    pane_id: crate::ids::PaneId,
 ) -> Result<()> {
-    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-    rimz::harness::hibernate::wake_pane(store, &pane_id)?;
-    rimz::mux::focus_anchor::execute_action(backend, &runtime, &workspace.session_name, pane_id)?;
+    let runtime = crate::RuntimePaths::for_project_root(&workspace.project_root)?;
+    crate::harness::hibernate::wake_pane(store, &pane_id)?;
+    crate::mux::focus_anchor::execute_action(backend, &runtime, &workspace.session_name, pane_id)?;
     Ok(())
+}
+
+fn launch_fresh(
+    name: &str,
+    subject: &str,
+    interaction: &mut dyn Interaction,
+) -> Result<Reconciled> {
+    worktree_entry::launch_fresh(name, subject, interaction)?;
+    Ok(Reconciled::Continue)
 }
 
 #[cfg(test)]
@@ -250,11 +254,11 @@ mod tests {
     #[test]
     fn cohort_reconciliation_resolves_worktree_from_current_repo() {
         let project_root = PathBuf::from("/repos/room");
-        let workspace = rimz::ResolvedWorkspace {
-            workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
+        let workspace = crate::ResolvedWorkspace {
+            workspace_id: crate::WorkspaceId::from_project_root(&project_root),
             project_root: project_root.clone(),
             cwd_project_root: Some(PathBuf::from("/repos/current")),
-            root_class: rimz::workspace::RootClass::Repo,
+            root_class: crate::workspace::RootClass::Repo,
             worktree_root: project_root,
             worktree_branch: Some("main".to_owned()),
             session_name: "rimz-room".to_owned(),
@@ -263,7 +267,7 @@ mod tests {
 
         let path = cohort_worktree_path(
             &workspace,
-            &rimz::config::WorktreeConfig::default(),
+            &crate::config::WorktreeConfig::default(),
             "cross-root",
         )
         .expect("worktree path");

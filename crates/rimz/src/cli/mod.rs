@@ -21,13 +21,13 @@ mod folder_trust;
 mod gc;
 mod help;
 mod hooks;
+mod launch_interaction;
 mod list;
 mod list_pets;
 mod list_themes;
 mod loop_cmd;
 mod loop_timer;
 mod lsp;
-mod lsp_admission;
 mod message;
 mod pane;
 mod paths;
@@ -70,6 +70,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
 use rimz::ids::{AskId, MuxName, WorkspaceId};
+use rimz::launcher::checkout::{admit_launch_worktree_name, caller_host_path, pinned_room_root};
 use rimz::store::snapshot::{PaneAgent, SidebarSnapshot};
 use rimz::{RuntimePaths, StatePaths, Store};
 
@@ -325,90 +326,9 @@ fn scope_facts<'a>(
     }
 }
 
-enum CurrentChannel {
-    Named(String),
-    Derived(String),
-    Root(String),
-    Unscoped,
-}
-
-impl CurrentChannel {
-    fn as_deref(&self) -> Option<&str> {
-        match self {
-            Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
-            Self::Unscoped => None,
-        }
-    }
-
-    fn into_name(self) -> Option<String> {
-        match self {
-            Self::Named(name) | Self::Derived(name) | Self::Root(name) => Some(name),
-            Self::Unscoped => None,
-        }
-    }
-
-    fn address_context(&self) -> rimz::address::AddressContext {
-        rimz::address::AddressContext {
-            channel: self.as_deref().map(ToOwned::to_owned),
-            origin: match self {
-                Self::Derived(_) => rimz::address::ChannelOrigin::Directory,
-                Self::Root(_) => rimz::address::ChannelOrigin::Root,
-                Self::Named(_) | Self::Unscoped => rimz::address::ChannelOrigin::Stamped,
-            },
-        }
-    }
-}
-
-/// The current channel a command runs in: an explicit named lane from
-/// `RIMZ_CHANNEL`, else the caller's stored card channel, else the worktree
-/// rule. A human shell at the project root has no current channel. The value
-/// keeps its provenance, so create-on-miss launches in place on a derived one.
-fn current_channel(
-    workspace: &rimz::ResolvedWorkspace,
-    store: Option<&rimz::Store>,
-) -> CurrentChannel {
-    current_channel_with(
-        workspace,
-        std::env::var(rimz::workspace::ENV_CHANNEL).ok(),
-        || {
-            let store = store?;
-            let caller = send::resolve_caller(store).ok()??;
-            let rows = store
-                .runtime_projection(rimz::RuntimeScope::Audit)
-                .ok()?
-                .agents;
-            Some((caller, rows))
-        },
-    )
-}
-
-fn current_channel_with(
-    workspace: &rimz::ResolvedWorkspace,
-    explicit: Option<String>,
-    caller: impl FnOnce() -> Option<(rimz::harness::ancestry::CallerIdentity, Vec<AgentState>)>,
-) -> CurrentChannel {
-    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return CurrentChannel::Named(channel);
-    }
-    if let Some((caller, rows)) = caller()
-        && let Ok(agent) = rimz::harness::ancestry::resolve_launch_caller(&rows, &caller)
-        && let Some(channel) = agent.channel()
-    {
-        return if agent.root_lane {
-            CurrentChannel::Root(channel)
-        } else if agent.channel.is_some() {
-            CurrentChannel::Named(channel)
-        } else {
-            CurrentChannel::Derived(channel)
-        };
-    }
-    directory_channel(workspace, &workspace.worktree_root)
-        .map_or(CurrentChannel::Unscoped, CurrentChannel::Derived)
-}
-
-fn directory_channel(workspace: &rimz::ResolvedWorkspace, cwd: &Path) -> Option<String> {
-    rimz::harness::spec::resolve_room_channel(&workspace.project_root, cwd, None, None)
-}
+#[cfg(test)]
+use rimz::launcher::context::current_channel_with;
+use rimz::launcher::context::{CurrentChannel, current_channel, directory_channel};
 
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
@@ -984,11 +904,13 @@ fn resolve_pr_branch_choice_with(
     }
     write_stderr("  the previous tip stays in the reflog")?;
     if !is_terminal {
-        if matches!(divergence, PrBranchDivergence::Behind { .. }) {
+        use rimz::launcher::Interaction;
+        let choice = rimz::launcher::Unattended.pr_branch(facts)?;
+        if choice == Some(PrBranchChoice::Remote) {
             write_stderr(&format!("  fast-forwarding `{branch}` to the PR head"))?;
-            return Ok(Some(PrBranchChoice::Remote));
+            return Ok(choice);
         }
-        anyhow::bail!("{facts}");
+        return Ok(choice);
     }
     let default = usize::from(matches!(divergence, PrBranchDivergence::Diverged { .. }));
     Ok(choose(
@@ -1003,129 +925,6 @@ fn resolve_pr_branch_choice_with(
             PrBranchChoice::Local
         }
     }))
-}
-
-fn admit_launch_worktree_name(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::WorktreeConfig,
-    agents: &[rimz::agents::AgentState],
-    worktree: Option<&str>,
-) -> Result<()> {
-    let Some(name) = worktree.map(str::trim).filter(|name| !name.is_empty()) else {
-        return Ok(());
-    };
-    let requested = rimz::worktree::parse_requested_name(name)?;
-    if rimz::worktree::worktree_path(workspace.launch_repo_root(), config, &requested.name)?
-        .exists()
-    {
-        return Ok(());
-    }
-    rimz::channel::admit_worktree_name(agents, &requested.name)?;
-    Ok(())
-}
-
-fn resolve_launch_checkout(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::MachineConfig,
-    worktree: Option<&str>,
-    from_pr: Option<&rimz::forge::PrTarget>,
-    cwd: Option<&std::path::Path>,
-    base: rimz::worktree::LaunchBase,
-) -> Result<Option<rimz::worktree::LaunchCheckout>> {
-    if worktree.is_some() || from_pr.is_some() {
-        require_worktree_config(config)?;
-    }
-    let config = &config.agents.worktree;
-    let checkout = rimz::worktree::resolve_launch_checkout(
-        workspace, config, worktree, from_pr, None, cwd, base,
-    );
-    settle_launch_checkout(workspace, config, worktree, from_pr, cwd, base, checkout)
-}
-
-fn settle_launch_checkout(
-    workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::WorktreeConfig,
-    worktree: Option<&str>,
-    from_pr: Option<&rimz::forge::PrTarget>,
-    cwd: Option<&std::path::Path>,
-    base: rimz::worktree::LaunchBase,
-    checkout: rimz::worktree::Result<rimz::worktree::LaunchCheckout>,
-) -> Result<Option<rimz::worktree::LaunchCheckout>> {
-    let launch = match checkout {
-        Ok(launch) => launch,
-        Err(err @ rimz::worktree::WorktreeErr::PrBranchDiverged { .. }) => {
-            let Some(choice) = resolve_pr_branch_choice(&err)? else {
-                writeln!(render::err(), "Launch aborted; nothing changed.")?;
-                return Ok(None);
-            };
-            rimz::worktree::resolve_launch_checkout(
-                workspace,
-                config,
-                worktree,
-                from_pr,
-                Some(choice),
-                cwd,
-                base,
-            )?
-        }
-        Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => {
-            let launch =
-                rimz::worktree::resolve_unmanaged_launch_checkout(workspace, config, &name)?;
-            if !std::io::stdin().is_terminal() {
-                anyhow::bail!(
-                    "worktree `{name}` is not RimZ-managed; rerun in a terminal to confirm entering it"
-                );
-            }
-            if !confirm(&format!(
-                "Worktree `{name}` at {} is not RimZ-managed. Enter it without adopting it or enabling automatic cleanup?",
-                launch.cwd.display(),
-            ))? {
-                writeln!(render::err(), "Launch aborted; nothing changed.")?;
-                return Ok(None);
-            }
-            launch
-        }
-        Err(err) => return Err(err.into()),
-    };
-    if let Some(pr) = from_pr.filter(|_| launch.reused) {
-        writeln!(
-            render::err(),
-            "reusing worktree `{}` at {} (PR #{} head branch `{}`)",
-            launch.worktree_name.as_deref().unwrap_or_default(),
-            launch.cwd.display(),
-            pr.number,
-            launch.branch.as_deref().unwrap_or_default()
-        )?;
-    }
-    if let Some(marker) = &launch.created {
-        rimz::launcher::checkout::record_creation(workspace, marker);
-    }
-    if let Some(reason) = launch.review_only_reason.as_deref() {
-        writeln!(
-            std::io::stderr(),
-            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
-        )?;
-    }
-    if let Some(stale) = &launch.stale_base {
-        writeln!(
-            render::err(),
-            "warning: {stale}; fast-forward {} first, or set agents.worktree.base to fresh",
-            stale.branch
-        )?;
-    }
-    if let Some(failure) = &launch.trunk_fetch {
-        writeln!(render::err(), "warning: {failure}")?;
-    }
-    Ok(Some(launch))
-}
-
-/// The project root of the room this process runs inside, from its verified
-/// pane pin; `None` outside any room.
-pub(crate) fn pinned_room_root() -> Option<PathBuf> {
-    std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
-        .ok()
-        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
-        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)))
 }
 
 /// The standing at the caller's position, and whether the caller runs inside
@@ -1213,50 +1012,10 @@ fn resolve_launch_cwd(
         .with_context(|| format!("resolving --cwd `{}`", path.display()))
 }
 
-/// The host path behind an absolute path a calling agent names. A scoped
-/// caller names its temp unit as `/tmp`, while the launch reads the path
-/// outside that view; `paths` defaults to the room the caller is pinned to.
-pub(crate) fn caller_host_path(
-    absolute: &std::path::Path,
-    paths: Option<&rimz::StatePaths>,
-) -> Result<std::path::PathBuf> {
-    use rimz::config::Isolation;
-    if !Isolation::ambient(&rimz::agents::ambient_env()).is_some_and(Isolation::is_scoped) {
-        return Ok(absolute.to_path_buf());
-    }
-    let pinned;
-    let paths = match paths {
-        Some(paths) => paths,
-        None => {
-            let Some(root) = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
-                .ok()
-                .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
-                .and_then(|(id, root)| {
-                    rimz::workspace::verify_pin(&id, std::path::Path::new(&root))
-                })
-            else {
-                return Ok(absolute.to_path_buf());
-            };
-            pinned =
-                rimz::StatePaths::for_workspace(rimz::ids::WorkspaceId::from_project_root(&root))?;
-            &pinned
-        }
-    };
-    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
-    let view = rimz::sandbox::TmpView::current(
-        Isolation::Scoped,
-        caller.as_ref().and_then(|caller| caller.name.as_deref()),
-        paths,
-    );
-    Ok(view.host_path(absolute))
-}
-
 pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
-    confirm_cross_repo_worktree_with(
+    rimz::launcher::checkout::confirm_cross_repo_worktree(
         workspace,
-        std::io::stdin().is_terminal(),
-        confirm,
-        |message| writeln!(render::err(), "{message}"),
+        &mut launch_interaction::CliInteraction,
     )
 }
 
@@ -1286,13 +1045,8 @@ fn confirm_cross_repo_worktree_with(
     ))?;
 
     if !is_terminal {
-        anyhow::bail!(
-            "room root {} differs from current Git root {}; \
-             pass --root {} (or run from the room's checkout) for a non-interactive launch",
-            workspace.project_root.display(),
-            cwd_root.display(),
-            cwd_root.display(),
-        );
+        use rimz::launcher::Interaction;
+        return rimz::launcher::Unattended.cross_repo(workspace);
     }
     if !confirm("Create the worktree at the current Git root and manage its cleanup from there?")? {
         write_stderr("Launch aborted; nothing changed.")?;
@@ -1415,3 +1169,22 @@ mod surface_tests;
 
 #[cfg(test)]
 mod tests;
+
+fn resolve_launch_checkout(
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::MachineConfig,
+    worktree: Option<&str>,
+    from_pr: Option<&rimz::forge::PrTarget>,
+    cwd: Option<&Path>,
+    base: rimz::worktree::LaunchBase,
+) -> Result<Option<rimz::worktree::LaunchCheckout>> {
+    rimz::launcher::checkout::resolve_launch_checkout(
+        workspace,
+        config,
+        worktree,
+        from_pr,
+        cwd,
+        base,
+        &mut launch_interaction::CliInteraction,
+    )
+}

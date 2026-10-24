@@ -13,9 +13,9 @@
 
 ## The log
 
-The transcript is a RimZ-owned conversation log, separate from each provider's native session files. Ended agents, past channels, and their asks and answers stay readable after the native files rotate away. `transcript::append` writes one JSONL line under the workspace lock to a seven-day bucket at `audit/transcript/<bucket-start>.jsonl` in the workspace state directory. `disk/buckets.rs::bucket_file_name` names each bucket by the UTC date that starts its epoch-aligned window, and the width is `disk::retention::TRANSCRIPT_FILE_DAYS`, which message history shares. The files are append-only. Readers sort by the recorded `at`, so a bucket boundary carries no ordering meaning.
+The transcript is a RimZ-owned conversation log, separate from each provider's native session files. Ended agents, past channels, and their asks and answers stay readable after the native files rotate away. `transcript::append` writes one JSONL line under the workspace lock to a seven-day bucket at `audit/transcript/<bucket-start>.jsonl` in the workspace state directory. `crates/rimz/src/disk/buckets.rs::bucket_file_name` names each bucket by the UTC date that starts its epoch-aligned window, and the width is `disk::retention::TRANSCRIPT_FILE_DAYS`, which message history shares. The files are append-only. Readers sort by the recorded `at`, so a bucket boundary carries no ordering meaning.
 
-[`gc.transcript_retention`](../../reference/cli/config.md#set-a-value) governs the transcript and message history together (`store/gc/classes.rs::collect_transcript`). The default is `forever`. A positive duration expires whole files by mtime, so a bucket goes only after its last append ages out, and its entries can outlive the setting by up to seven days. The audit sweep's age rule and size cap skip both directories (`collect_audit`). A hard reset removes the buckets, and so does `rimz uninstall --state` or `--all`. A plain uninstall keeps them.
+[`gc.transcript_retention`](../../reference/cli/config.md#set-a-value) governs the transcript and message history together (`crates/rimz/src/store/gc/classes.rs::collect_transcript`). The default is `forever`. A positive duration expires whole files by mtime, so a bucket goes only after its last append ages out, and its entries can outlive the setting by up to seven days. The audit sweep's age rule and size cap skip both directories (`collect_audit`). A hard reset removes the buckets, and so does `rimz uninstall --state` or `--all`. A plain uninstall keeps them.
 
 Routine reads use a 30-day floor, `transcript::recent_floor`. `read_since` selects buckets by file name before it opens any, newest first, so the bucket that overlaps the floor can hold entries up to seven days older than the floor. An ask or answer older than the window takes no part in lookup or duplicate suppression.
 
@@ -28,7 +28,7 @@ Routine reads use a 30-day floor, `transcript::recent_floor`. `read_since` selec
 | Hook redo and replay deduplication | Buckets from the ingress frame's timestamp |
 | `rimz agents attribution` | Every bucket |
 
-A windowed view that skipped older buckets says so. It sets `older_omitted` in non-follow JSON, or prints a faint stderr hint that names the `--all` command (`cli/transcript/mod.rs::write_older_history_hint`), even when the selected scope is empty. The flag reports that the workspace has older files, not that the scope has older entries, since the skipped files are never opened.
+A windowed view that skipped older buckets says so. It sets `older_omitted` in non-follow JSON, or prints a faint stderr hint that names the `--all` command (`crates/rimz/src/cli/transcript/mod.rs::write_older_history_hint`), even when the selected scope is empty. The flag reports that the workspace has older files, not that the scope has older entries, since the skipped files are never opened.
 
 Hook redo and replay deduplication read from the ingress frame's timestamp (`hook_drain::frame_timestamp`) instead of the floor. An earlier apply attempt stamped its entries at apply time, at or after ingress, so the buckets from the frame's timestamp hold them. A redo matches its earlier copy by entry kind and `ingress` key. This assumes the host clock does not step backward across a bucket boundary between ingress and apply.
 
@@ -117,7 +117,7 @@ A retry carries the same `subagent` and `loop_task` fields, so it keeps its orig
 
 Persistent peers and team seats carry no run id in their environment, so step 2 finds their open run from the row (`harness::run::open_peer_run`, `open_team_run`). An open run suppresses the human-input spend window, as a supervised run does. Once the run settles, later turns carry no run: even identical launch text is then human-authored and opens a spend window.
 
-An agent-launched interactive peer gets its run before its prompted pane opens (`cli/agents_cmd/launch.rs::prepare_peer_prompt`), so its launch prompt has launcher origin from the first hook. `rimz message --create` from an agent takes the same path. User launches and promptless or resumed launches create no launch-prompt run, and their launch text is the user's.
+An agent-launched interactive peer gets its run before its prompted pane opens (`crates/rimz/src/launcher/mod.rs::prepare_peer_prompt`), so its launch prompt has launcher origin from the first hook. `rimz message --create` from an agent takes the same path. User launches and promptless or resumed launches create no launch-prompt run, and their launch text is the user's.
 
 ### Wrappers and sanitizing
 
@@ -161,29 +161,29 @@ A requeued message keeps `in_reply_to`, so retried text keeps its causal positio
 
 ### Scope and the current life
 
-The reader computes a current-life boundary: the earliest `registered_at` among the live agents in scope (`scope.rs::live_boundary`). For a channel view those are the channel's live root agents, and for an agent view they are the focused sessions, a child included. Entries that arrived before the boundary are the prior-session archive, so a message created earlier and delivered after the boundary stays in the live view. The archive is hidden by default, with a stderr hint that counts the hidden entries and names the `--all` command, and `--all` renders it under a dated marker. When every selected entry predates the boundary, or no live agent is in scope, the whole view renders as archive. The buckets are never rewritten.
+The reader computes a current-life boundary: the earliest `registered_at` among the live agents in scope (`crates/rimz/src/cli/transcript/scope.rs::live_boundary`). For a channel view those are the channel's live root agents, and for an agent view they are the focused sessions, a child included. Entries that arrived before the boundary are the prior-session archive, so a message created earlier and delivered after the boundary stays in the live view. The archive is hidden by default, with a stderr hint that counts the hidden entries and names the `--all` command, and `--all` renders it under a dated marker. When every selected entry predates the boundary, or no live agent is in scope, the whole view renders as archive. The buckets are never rewritten.
 
 ### Superseded asks
 
-`scope.rs::dedup_asks` keeps, for each agent, only its newest `Ask` and every `Ask` that an `Answer` closes by id. An unanswered ask that a newer one replaced leaves the view.
+`crates/rimz/src/cli/transcript/scope.rs::dedup_asks` keeps, for each agent, only its newest `Ask` and every `Ask` that an `Answer` closes by id. An unanswered ask that a newer one replaced leaves the view.
 
 ### Harness-turn hiding
 
-The human view drops harness turns as units before assembly (`thread.rs::hide_harness_turns`). A turn's openers are the resolved `reply_to` parents of its output, or, when none were recorded, the session's latest preceding opener, which in an arrival-ordered view is the last one delivered before the output ran. An `Assistant` or `Error` entry whose openers are all harness entries hides with them. The exception is a turn that asked: when an `Ask` anywhere in the log, superseded ones included, shares one of those openers, the output stays, since that turn ends in a reply to the user's answer. `Ask` entries and agent-sent `Message` entries always stay. A kept output whose fallback opener was hidden is marked so that assembly roots it, instead of attaching it to an older visible opener.
+The human view drops harness turns as units before assembly (`crates/rimz/src/cli/transcript/thread.rs::hide_harness_turns`). A turn's openers are the resolved `reply_to` parents of its output, or, when none were recorded, the session's latest preceding opener, which in an arrival-ordered view is the last one delivered before the output ran. An `Assistant` or `Error` entry whose openers are all harness entries hides with them. The exception is a turn that asked: when an `Ask` anywhere in the log, superseded ones included, shares one of those openers, the output stays, since that turn ends in a reply to the user's answer. `Ask` entries and agent-sent `Message` entries always stay. A kept output whose fallback opener was hidden is marked so that assembly roots it, instead of attaching it to an older visible opener.
 
 ### Thread assembly
 
-The reader makes one pass in view order (`thread.rs::assemble_threads`). Prompts, messages, subagent reports, waits, and flips are ordered entries. Each joins its link target's thread only while that thread is current, otherwise it starts a thread at the margin, and each ordered entry makes its thread current. A message targets its latest preceding eligible `reply_to` parent: the parent is not human-authored, and its sender is the message's receiver, so a hand-off to a third agent starts a new exchange. Turn output (`Assistant`, `Ask`, `Error`) joins its latest preceding opener's thread. An `Answer` takes its ask's lane, block, and archive membership, without changing the current thread or the sender a flip attaches to. Missing or forward anchors leave entries at the margin. Two openers answered by one turn therefore stay separate, with the output under the later opener.
+The reader makes one pass in view order (`crates/rimz/src/cli/transcript/thread.rs::assemble_threads`). Prompts, messages, subagent reports, waits, and flips are ordered entries. Each joins its link target's thread only while that thread is current, otherwise it starts a thread at the margin, and each ordered entry makes its thread current. A message targets its latest preceding eligible `reply_to` parent: the parent is not human-authored, and its sender is the message's receiver, so a hand-off to a third agent starts a new exchange. Turn output (`Assistant`, `Ask`, `Error`) joins its latest preceding opener's thread. An `Answer` takes its ask's lane, block, and archive membership, without changing the current thread or the sender a flip attaches to. Missing or forward anchors leave entries at the margin. Two openers answered by one turn therefore stay separate, with the output under the later opener.
 
 Threads emit in the order of their first entry, with members in view order. This keeps arrival order among ordered entries while late output sits under its opener. `--flat` skips assembly. `--last` then cuts this display order, not arrival order (`keep_last_blocks`): it keeps the last N cards, counting an ask and its folded answer once, and widens the cut back to the head of the block it lands in, so a shown thread keeps the entry that opened it.
 
 ### Answer resolution
 
-One resolver links each answer to an earlier ask (`mod.rs::answer_asks`). An id-stamped answer links to the ask with that `AskId`, with no fallback when the id is unmatched. Only an id-less answer falls back to its agent's latest earlier unanswered ask. Resolution uses source order even after threading moves asks in display order. Placement, folding, archive selection, follow ticks, and tail counts share the resolver. A folded pair counts as one card, and an archive or tail cut keeps or drops both. A follow tick carrying an answer reprints its ask card.
+One resolver links each answer to an earlier ask (`crates/rimz/src/cli/transcript/mod.rs::answer_asks`). An id-stamped answer links to the ask with that `AskId`, with no fallback when the id is unmatched. Only an id-less answer falls back to its agent's latest earlier unanswered ask. Resolution uses source order even after threading moves asks in display order. Placement, folding, archive selection, follow ticks, and tail counts share the resolver. A folded pair counts as one card, and an archive or tail cut keeps or drops both. A follow tick carrying an answer reprints its ask card.
 
 ### Stage lines
 
-The reader joins the lane's `team.stage` flips (`harness::team_stage::stage_flips`) by time as flip lines. A flip targets the flipping agent's latest preceding non-answer line within the five-minute grouping window (`chat.rs::GROUP_WINDOW_SECS`). It inherits that line's lane only when the line belongs to the current thread, and otherwise opens at the margin ([loops.md § Team signals](./loops.md#team-signals)).
+The reader joins the lane's `team.stage` flips (`harness::team_stage::stage_flips`) by time as flip lines. A flip targets the flipping agent's latest preceding non-answer line within the five-minute grouping window (`crates/rimz/src/cli/transcript/chat.rs::GROUP_WINDOW_SECS`). It inherits that line's lane only when the line belongs to the current thread, and otherwise opens at the margin ([loops.md § Team signals](./loops.md#team-signals)).
 
 ## Asks and answers
 
@@ -191,7 +191,7 @@ An agent holding a permission prompt, plan approval, or blocking question reserv
 
 ### Recording an ask
 
-A blocking hook gets an `ask_` id at ingestion (`cli/hooks/lifecycle/observe.rs::record_lifecycle_observation`), written onto the `AwaitingInput` signal. The reducer projects it to `AgentState.open_ask` and clears it on the same edges that clear `waiting_since`. An event recorded without an id replays as a waiting row with no structured ask. What else is recorded depends on the ask kind:
+A blocking hook gets an `ask_` id at ingestion (`crates/rimz/src/cli/hooks/lifecycle/observe.rs::record_lifecycle_observation`), written onto the `AwaitingInput` signal. The reducer projects it to `AgentState.open_ask` and clears it on the same edges that clear `waiting_since`. An event recorded without an id replays as a waiting row with no structured ask. What else is recorded depends on the ask kind:
 
 - A question or plan hook with parsed questions appends a transcript `Ask` entry with the same id ([turn output](#turn-output)).
 - A question with no parsed questions, such as a Pi extension dialog, opens `open_ask` and writes no `Ask` entry.
@@ -211,7 +211,7 @@ The materializer also computes one route (`AskRoute`). An async question routes 
 
 `rimz answer` drives the native prompt UI through the adapter's `answer_plan`, which maps validated replies to keys, typed text, and pastes. Claude, Codex, and Pi implement it, and the trait default refuses. The key mapping for each lives on its adapter page: [Claude](../agents/adapter_claude.md#asks-and-answers), [Codex](../agents/adapter_codex.md#asks-and-answers), [Pi](../agents/adapter_pi.md#hooks-and-lifecycle). The command runs in this order:
 
-1. Resolve the agent and its ask: an ask id selects that ask, and an address selects the agent's first actionable ask. A provider-native subagent's ask is answered through its parent's pane (`cli/mod.rs::ask_pane_owner`). Refuse a pane-routed ask, then validate every reply against the questions and build the plan. Nothing touches the pane on a failure.
+1. Resolve the agent and its ask: an ask id selects that ask, and an address selects the agent's first actionable ask. A provider-native subagent's ask is answered through its parent's pane (`crates/rimz/src/cli/mod.rs::ask_pane_owner`). Refuse a pane-routed ask, then validate every reply against the questions and build the plan. Nothing touches the pane on a failure.
 2. Find the live bound pane, wake it if it is hibernated (`harness::hibernate::wake_pane`), and take its [pane write lock](./messaging.md#writing-to-the-pane).
 3. Re-read the rollup and require the ask id to be among the agent's actionable asks. This compare-and-swap stops a stale answer from reaching a newer prompt (exit 2, "was answered or replaced before any key was sent").
 4. Send the plan's steps, paced like message segments (`message::send::Pacer`).
