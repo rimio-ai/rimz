@@ -496,7 +496,10 @@ fn consumer(
         None,
     );
     state.share_views(reader.views, reader.cursor.lock().unwrap().revision);
-    (state, FetchDispatcher::new(std::sync::mpsc::channel().0))
+    (
+        state,
+        FetchDispatcher::for_plane(std::sync::mpsc::channel().0),
+    )
 }
 
 fn consumers(cycles: &mut IdleCycleFixture) -> Vec<(LoopState, FetchDispatcher)> {
@@ -802,8 +805,7 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
             subscribe(&subscribers, sub);
             receivers.push(rx);
         }
-        let mut sink =
-            ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+        let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
 
         let projected = WorkspaceFold {
             workspace: WorkspaceSnapshot(shared),
@@ -863,7 +865,7 @@ fn unread_write_back_copies_only_the_changed_group() {
     let (younger, younger_rx) = subscriber(&fixture, "02", "sidebar_2", 2, wake_channel().0);
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
     let mut second = shared.worktree_groups[0].rows[0].clone();
     second.id = "second".into();
@@ -989,10 +991,7 @@ fn single_sink(host_data: Arc<Mutex<HostData>>, wake: SyncSender<Wakeup>) -> (Re
         subscriber.instance_id.as_str().to_owned(),
         subscriber,
     )])));
-    (
-        ResultSink::shared(subscribers, Covered::default(), host_data),
-        reader,
-    )
+    (ResultSink::shared(subscribers, host_data), reader)
 }
 
 fn frameless(snapshot: SidebarSnapshot) -> WorkspaceFold {
@@ -1091,7 +1090,7 @@ fn refresh_override_stamps_folded_snapshot() {
         subscribe(&subscribers, subscriber);
         readers.push(reader);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     sink.publish(FetchUpdate::Fold {
         fold: Arc::new(frameless(folded)),
         phase: FetchPhase::Final,
@@ -1166,7 +1165,7 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     let (younger, younger_rx) = subscriber(&fixture, "02", "terminal_8", 2, wake);
     subscribe(&subscribers, elder);
     subscribe(&subscribers, younger);
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
         [0]
@@ -1275,7 +1274,7 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
         receivers.push((inbox, rx));
         subscribe(&subscribers, sub);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut shared.worktree_groups)[0].rows)
         [0]
@@ -2117,7 +2116,7 @@ fn fast_fold_miss_posts_the_rollup_error_as_the_final_outcome() {
 #[test]
 fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     let request = FetchRequest::fresh_panes();
 
     dispatcher.request(request, true);
@@ -2127,7 +2126,7 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert!(dispatcher.pending_refetch.is_none());
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     dispatcher.request(FetchRequest::default(), false);
     dispatcher.request(FetchRequest::default(), true);
     let request = FetchRequest::fresh_panes();
@@ -2142,7 +2141,7 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     dispatcher.request(FetchRequest::default(), false);
     dispatcher.request(FetchRequest::fresh_panes(), true);
     let request = FetchRequest::hard_refresh();
@@ -2155,17 +2154,12 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     let pending = rx.try_recv().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
-
-    let request = FetchRequest::force_fold();
-    assert_eq!(request.mode, FetchMode::Normal);
-    assert!(request.force_fold);
-    assert!(request.min_pane_cache_ms.is_none());
 }
 
 #[test]
 fn fetch_dispatcher_merges_deferred_deadlines_and_absorbs_work() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     let later = Instant::now() + Duration::from_secs(10);
     let earlier = later - Duration::from_secs(3);
 
@@ -2184,7 +2178,7 @@ fn fetch_dispatcher_merges_deferred_deadlines_and_absorbs_work() {
 #[test]
 fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     dispatcher.request(FetchRequest::default(), false);
     rx.try_recv().expect("initial request");
     let due = Instant::now() + Duration::from_secs(3);
@@ -2206,7 +2200,7 @@ fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
 #[test]
 fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut dispatcher = FetchDispatcher::new(tx);
+    let mut dispatcher = FetchDispatcher::for_plane(tx);
     dispatcher.request(FetchRequest::default(), false);
     rx.try_recv().expect("initial request");
     dispatcher.request(FetchRequest::default(), true);
@@ -2244,8 +2238,8 @@ fn one_cycle_projects_each_pane_excluding_only_itself() {
         updates.push((own, rx));
     }
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
+    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
 
     for (own, rx) in updates {
         let mut config = worker.config.clone();
@@ -2443,8 +2437,8 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     subscribe(&subscribers, first);
     subscribe(&subscribers, second);
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
+    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     let first = first_rx.try_recv().unwrap();
     let second = second_rx.try_recv().unwrap();
     let host = fixture.host_data.lock().unwrap();
@@ -2480,7 +2474,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
     subscribe(&subscribers, stalled);
     subscribe(&subscribers, advancing);
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let now = crate::utils::time::unix_now_ms();
     for fold in 0..64 {
         tick_clock();
@@ -2494,7 +2488,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
             "rimz-test",
         );
         fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
-        worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+        worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
         let updates = advancing_rx.take();
         assert_eq!(updates.len(), 1, "unrelated subscriber keeps advancing");
         assert_eq!(shown_panes(&updates[0]), ["terminal_7", &newest]);
@@ -2556,9 +2550,9 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     let (tx, _rx) = std::sync::mpsc::sync_channel(64);
     let mut worker = fixture.worker();
     worker.observer = Some(observe::RoomObserver::new(tx.clone(), Arc::default()));
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     observe::take_extractions();
-    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert_eq!(
         observe::take_extractions(),
         (1, 0),
@@ -2686,8 +2680,8 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
     }
     focus_anchor::take_reads();
     body_filter::take_reads();
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
-    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
+    worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     let mut reads = (focus_anchor::take_reads(), body_filter::take_reads());
     for pane in panes {
         let own = pane.join().unwrap();
@@ -2740,8 +2734,7 @@ fn shown_panes(update: &FetchUpdate) -> Vec<String> {
         .collect()
 }
 
-/// Let the monotonic clock move past the last reading, so "observed before
-/// the cycle started" is never a tie.
+/// Let successive fixture publications observe distinct clock ticks.
 fn tick_clock() {
     std::thread::sleep(Duration::from_millis(2));
 }
@@ -2749,7 +2742,6 @@ fn tick_clock() {
 #[test]
 fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
     let floor = Duration::from_millis(150);
-    let covered = Covered::default();
     let (tx, rx) = std::sync::mpsc::channel();
     let (finished_tx, finished_rx) = std::sync::mpsc::channel();
     tx.send(FetchRequest::default()).unwrap();
@@ -2757,45 +2749,36 @@ fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
         min_pane_cache_ms: Some(20),
         ..FetchRequest::fresh_panes()
     };
-    let worker_covered = covered.clone();
     std::thread::scope(|scope| {
         let mut gap_tx = Some(tx.clone());
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, &worker_covered, floor, |cycle| {
-                cycles.push(cycle);
-                worker_covered.record(cycle);
+            drive(&rx, floor, |request| {
+                cycles.push((Instant::now(), request));
                 if let Some(gap_tx) = gap_tx.take() {
                     // A start-to-start floor would already have expired.
                     std::thread::sleep(floor + Duration::from_millis(10));
                     // Queued before the return, so they merge however late
                     // either thread is scheduled.
-                    tick_clock();
                     gap_tx.send(FetchRequest::default()).unwrap();
-                    gap_tx.send(queued.observed_now()).unwrap();
+                    gap_tx.send(queued).unwrap();
                     finished_tx.send(Instant::now()).unwrap();
                 }
             });
             cycles
         });
         let returned_at = finished_rx.recv().unwrap();
-        // Lands during the rest or, on a stalled runner, after it: either way
-        // the cycle that answers it started after it was observed.
-        let during_wait = FetchRequest::default().observed_now();
-        tx.send(during_wait).unwrap();
+        tx.send(FetchRequest::default()).unwrap();
         drop(tx);
 
         let cycles = worker.join().unwrap();
-        assert!(cycles[1].started.duration_since(returned_at) >= floor);
+        assert!(cycles[1].0.duration_since(returned_at) >= floor);
         assert!(
             (2..=3).contains(&cycles.len()),
             "queued gap requests merge into one fold"
         );
-        assert_eq!(cycles[1].request.mode, FetchMode::FreshPanes);
-        assert_eq!(cycles[1].request.min_pane_cache_ms, Some(20));
-        assert!(cycles[1].answers(&queued));
-        assert!(!cycles[0].answers(&during_wait));
-        assert!(covered.answers(&during_wait));
+        assert_eq!(cycles[1].1.mode, FetchMode::FreshPanes);
+        assert_eq!(cycles[1].1.min_pane_cache_ms, Some(20));
     });
 }
 
@@ -2808,8 +2791,8 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, &Covered::default(), floor, |cycle| {
-                cycles.push(cycle);
+            drive(&rx, floor, |request| {
+                cycles.push((Instant::now(), request));
                 if cycles.len() == 1 {
                     finished_tx.send(()).unwrap();
                 }
@@ -2820,43 +2803,41 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
         // Past the rest; a wait counted from receipt would still cost a whole
         // floor, far more than scheduling jitter.
         std::thread::sleep(floor + Duration::from_millis(50));
-        let request = FetchRequest::default();
-        tx.send(request).unwrap();
+        let sent_at = Instant::now();
+        tx.send(FetchRequest::default()).unwrap();
         drop(tx);
         let cycles = worker.join().unwrap();
         assert_eq!(cycles.len(), 2);
-        assert!(cycles[1].started.duration_since(request.observed_at) < floor);
+        assert!(cycles[1].0.duration_since(sent_at) < floor);
     });
 }
 
 #[test]
-fn fetch_floor_has_no_refresh_or_forced_fold_bypass() {
+fn fetch_floor_has_no_mode_bypass() {
     let floor = Duration::from_millis(40);
     for request in [
         FetchRequest::default(),
         FetchRequest::fresh_panes(),
         FetchRequest::hard_refresh(),
-        FetchRequest::force_fold(),
     ] {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(FetchRequest::default()).unwrap();
         let mut sender = Some(tx);
         let mut returned_at = None;
         let mut cycles = Vec::new();
-        drive(&rx, &Covered::default(), floor, |cycle| {
-            cycles.push(cycle);
+        drive(&rx, floor, |cycle| {
+            cycles.push((Instant::now(), cycle));
             if let Some(tx) = sender.take() {
-                tx.send(request.observed_now()).unwrap();
+                tx.send(request).unwrap();
                 returned_at = Some(Instant::now());
             }
         });
         assert_eq!(cycles.len(), 2);
         assert!(
-            cycles[1].started.duration_since(returned_at.unwrap()) >= floor,
+            cycles[1].0.duration_since(returned_at.unwrap()) >= floor,
             "no bypass for {request:?}"
         );
-        assert_eq!(cycles[1].request.mode, request.mode);
-        assert_eq!(cycles[1].request.force_fold, request.force_fold);
+        assert_eq!(cycles[1].1.mode, request.mode);
     }
 }
 
@@ -2868,8 +2849,8 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
-            drive(&rx, &Covered::default(), floor, |cycle| {
-                cycles.push(cycle);
+            drive(&rx, floor, |request| {
+                cycles.push((Instant::now(), request));
                 if cycles.len() == 1 {
                     finished_tx.send(Instant::now()).unwrap();
                 }
@@ -2879,7 +2860,7 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
         tx.send(FetchRequest::default()).unwrap();
         let returned_at = finished_rx.recv().unwrap();
         // The rendezvous proves the worker holds this batch before disconnect.
-        tx.send(FetchRequest::force_fold()).unwrap();
+        tx.send(FetchRequest::hard_refresh()).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         drop(tx);
         let cycles = worker.join().unwrap();
@@ -2888,8 +2869,8 @@ fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
             2,
             "disconnect must not discard the held batch"
         );
-        assert!(cycles[1].started.duration_since(returned_at) >= floor);
-        assert!(cycles[1].request.force_fold);
+        assert!(cycles[1].0.duration_since(returned_at) >= floor);
+        assert_eq!(cycles[1].1.mode, FetchMode::HardRefresh);
     });
 }
 
@@ -2946,23 +2927,20 @@ fn staggered_requests(idle: bool) {
         receivers.push(rx);
     }
     let (tx, rx) = std::sync::mpsc::channel();
-    tx.send(FetchRequest::force_fold()).unwrap();
+    tx.send(FetchRequest::default()).unwrap();
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = reads.clone();
     let receivers = Arc::new(receivers);
     let draining = receivers.clone();
     let first_publications = Arc::new(Mutex::new(Vec::new()));
     let captured = first_publications.clone();
-    let sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let mut worker = fixture.worker();
     let mut sender = Some(tx);
-    let mut mid_first = None;
     worker.on_read = Some(Box::new(move || {
         let read = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        tick_clock();
         match read {
             1 => {
-                mid_first = Some(Instant::now());
                 for _ in 0..PANES {
                     sender
                         .as_ref()
@@ -2974,19 +2952,9 @@ fn staggered_requests(idle: bool) {
             2 => {
                 *captured.lock().unwrap() =
                     draining.iter().map(|rx| rx.try_recv().unwrap()).collect();
-                for _ in 0..PANES {
-                    sender
-                        .as_ref()
-                        .unwrap()
-                        .send(FetchRequest {
-                            observed_at: mid_first.unwrap(),
-                            ..FetchRequest::default()
-                        })
-                        .unwrap();
-                }
                 sender = None;
             }
-            _ => panic!("a publication failed to cover the staggered burst"),
+            _ => panic!("the staggered burst cost more than two folds"),
         }
     }));
     worker.run_resolving(rx, sink, |_| Ok(fixture.state.clone()));
@@ -3008,7 +2976,7 @@ fn staggered_requests(idle: bool) {
             if idle && index == 1 {
                 assert!(
                     update.is_unchanged(),
-                    "covered idle requests deliver only clocks"
+                    "an unchanged idle fold delivers only clocks"
                 );
                 assert!(update.is_final());
                 continue;
@@ -3023,142 +2991,6 @@ fn staggered_requests(idle: bool) {
             );
         }
     }
-}
-
-#[test]
-fn requests_a_finished_fold_cannot_answer_still_run() {
-    requests_beyond_finished_fold(false);
-}
-
-#[test]
-fn requests_a_finished_idle_fold_cannot_answer_still_run() {
-    requests_beyond_finished_fold(true);
-}
-
-fn requests_beyond_finished_fold(idle: bool) {
-    let fixture = FetchFixture::new();
-    let frame = crate::sidebar::frame::assemble_frame(
-        Vec::new(),
-        crate::utils::time::unix_now_ms(),
-        "rimz-test",
-    );
-    let mut delivery =
-        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 1);
-    let (tx, rx) = std::sync::mpsc::channel();
-    let covered = Covered::default();
-    delivery.sink.covered = covered.clone();
-    tx.send(FetchRequest::default()).unwrap();
-    let mut sender = Some(tx);
-    let reader = Replay::new(&delivery.sink.host_data, &delivery.sink.cycle[0]);
-    let mut cycles = Vec::new();
-    let mut mid_first = None;
-    drive(&rx, &covered, Duration::ZERO, |cycle| {
-        cycles.push(cycle.request);
-        if idle {
-            delivery.sink.begin_cycle();
-            delivery.sink.answering = Some(cycle);
-            delivery.sink.publish(FetchUpdate::Fold {
-                fold: Arc::new(frameless(SidebarSnapshot::build_with_agents(
-                    fixture.workspace_id.clone(),
-                    Vec::new(),
-                    jiff::Timestamp::now(),
-                ))),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Cached,
-            });
-            let update = reader.take().pop().unwrap();
-            assert_eq!(update.is_unchanged(), cycles.len() > 1);
-        } else {
-            covered.record(cycle);
-        }
-        let Some(tx) = sender.as_ref() else {
-            return;
-        };
-        tick_clock();
-        match cycles.len() {
-            1 => {
-                mid_first = Some(Instant::now());
-                tx.send(FetchRequest::default()).unwrap();
-            }
-            // Observed before the second fold started, but asking more than
-            // its ordinary request did.
-            2 => {
-                let observed_at = mid_first.unwrap();
-                for request in [
-                    FetchRequest::hard_refresh(),
-                    FetchRequest::force_fold(),
-                    FetchRequest::fresh_panes(),
-                ] {
-                    tx.send(FetchRequest {
-                        observed_at,
-                        ..request
-                    })
-                    .unwrap();
-                }
-                sender = None;
-            }
-            _ => {}
-        }
-    });
-    assert_eq!(cycles.len(), 3, "every stronger request runs");
-    let last = cycles[2];
-    assert_eq!(last.mode, FetchMode::HardRefresh);
-    assert!(last.force_fold);
-}
-
-#[test]
-fn a_fold_that_failed_answers_nothing() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let covered = Covered::default();
-    tx.send(FetchRequest::default()).unwrap();
-    let mut sender = Some(tx);
-    let mut cycles = 0;
-    let observed_at = Instant::now();
-    tick_clock();
-    // Nothing went out, so nothing is recorded.
-    drive(&rx, &covered, Duration::ZERO, |_cycle| {
-        cycles += 1;
-        if let Some(tx) = sender.take() {
-            tx.send(FetchRequest {
-                observed_at,
-                ..FetchRequest::default()
-            })
-            .unwrap();
-        }
-    });
-    assert_eq!(cycles, 2);
-}
-
-#[test]
-fn a_follow_up_a_finished_fold_answered_is_not_sent() {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let covered = Covered::default();
-    let mut dispatcher = FetchDispatcher::for_plane(tx, covered.clone());
-    dispatcher.request(FetchRequest::default(), false);
-    rx.try_recv().expect("first request");
-    dispatcher.request(FetchRequest::default(), true);
-    tick_clock();
-    covered.record(Coverage {
-        started: Instant::now(),
-        request: FetchRequest::default(),
-    });
-
-    dispatcher.complete(true);
-    assert!(
-        rx.try_recv().is_err(),
-        "the plane's fold that started after it answers the follow-up"
-    );
-    assert!(
-        !dispatcher.in_flight,
-        "nothing is left waiting for an answer"
-    );
-
-    dispatcher.request(FetchRequest::default(), false);
-    rx.try_recv().expect("next request");
-    dispatcher.request(FetchRequest::default(), true);
-    dispatcher.complete(true);
-    rx.try_recv()
-        .expect("a follow-up observed after the last fold started goes out");
 }
 
 #[test]
@@ -3181,11 +3013,7 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let mut worker = fixture.worker();
-    let mut sink = ResultSink::shared(
-        subscribers.clone(),
-        Covered::default(),
-        fixture.host_data.clone(),
-    );
+    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
     sink.begin_cycle();
     let inputs = fixture.host_data.lock().unwrap().inputs.clone().unwrap();
     let workspace = HostInputs::fold(
@@ -3239,11 +3067,7 @@ fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
-    let mut sink = ResultSink::shared(
-        subscribers.clone(),
-        Covered::default(),
-        fixture.host_data.clone(),
-    );
+    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
     assert_eq!(
         data_tick(sink.cycle.first(), &worker.config),
@@ -3271,11 +3095,7 @@ fn the_worker_tick_follows_age_not_magnitude() {
     subscribe(&subscribers, eldest);
     subscribe(&subscribers, younger);
     let worker = fixture.worker();
-    let mut sink = ResultSink::shared(
-        subscribers.clone(),
-        Covered::default(),
-        fixture.host_data.clone(),
-    );
+    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
     assert_eq!(tick(&worker, &sink), Duration::from_secs(1));
     unsubscribe(&subscribers, "01");
@@ -3301,11 +3121,7 @@ fn the_worker_witness_is_its_eldest_renderers_pane() {
     let mut worker = fixture.worker();
     let fallback = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
     worker.config.own_pane = fallback.clone();
-    let mut sink = ResultSink::shared(
-        subscribers.clone(),
-        Covered::default(),
-        fixture.host_data.clone(),
-    );
+    let mut sink = ResultSink::shared(subscribers.clone(), fixture.host_data.clone());
 
     assert_eq!(
         witness(&worker, &sink),
@@ -3333,7 +3149,7 @@ fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
     for subscriber in [eldest, stalled, other] {
         subscribe(&subscribers, subscriber);
     }
-    let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
+    let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         sink.publish(FetchUpdate::Failed {

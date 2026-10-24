@@ -537,11 +537,7 @@ impl IdleCycleFixture {
         }
         Self {
             worker,
-            sink: ResultSink::shared(
-                Arc::new(Mutex::new(subscriptions)),
-                Covered::default(),
-                host_data,
-            ),
+            sink: ResultSink::shared(Arc::new(Mutex::new(subscriptions)), host_data),
             state,
             cursors: vec![super::views::Cursor::default(); subscribers],
             renderers: Vec::new(),
@@ -576,7 +572,7 @@ impl IdleCycleFixture {
                 renderer.share_views(views.clone(), 0);
                 (
                     renderer,
-                    FetchDispatcher::for_plane(std::sync::mpsc::channel().0, Covered::default()),
+                    FetchDispatcher::for_plane(std::sync::mpsc::channel().0),
                 )
             })
             .collect();
@@ -1160,25 +1156,10 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
 /// from manual recovery. When a
 /// request carries `min_pane_cache_ms`, any producing lane ignores a pane cache
 /// older than the signal that asked for fresh topology.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FetchRequest {
     mode: FetchMode,
     min_pane_cache_ms: Option<u64>,
-    force_fold: bool,
-    /// When the renderer learned of what this request asks to fold. A cycle
-    /// that started later already read it.
-    observed_at: Instant,
-}
-
-impl Default for FetchRequest {
-    fn default() -> Self {
-        Self {
-            mode: FetchMode::Normal,
-            min_pane_cache_ms: None,
-            force_fold: false,
-            observed_at: Instant::now(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1212,7 +1193,6 @@ impl FetchRequest {
         Self {
             mode: FetchMode::FreshPanes,
             min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
-            ..Self::default()
         }
     }
 
@@ -1220,15 +1200,6 @@ impl FetchRequest {
         Self {
             mode: FetchMode::HardRefresh,
             min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
-            ..Self::default()
-        }
-    }
-
-    /// Request a new fold for renderer-local state that a prior cycle could not observe.
-    pub(super) fn force_fold() -> Self {
-        Self {
-            force_fold: true,
-            ..Self::default()
         }
     }
 
@@ -1237,30 +1208,9 @@ impl FetchRequest {
         matches!(self.mode, FetchMode::FreshPanes)
     }
 
-    #[cfg(test)]
-    pub(super) fn forces_fold(self) -> bool {
-        self.force_fold
-    }
-
     pub(super) fn merge(&mut self, other: Self) {
         self.mode = self.mode.strongest(other.mode);
-        self.force_fold |= other.force_fold;
-        self.observed_at = self.observed_at.max(other.observed_at);
-        self.min_pane_cache_ms = match (self.min_pane_cache_ms, other.min_pane_cache_ms) {
-            (Some(current), Some(next)) => Some(current.max(next)),
-            (Some(current), None) => Some(current),
-            (None, Some(next)) => Some(next),
-            (None, None) => None,
-        };
-    }
-
-    /// A deferred request asks for a fold after its deadline, so a cycle that
-    /// started before the deadline does not answer it.
-    fn observed_now(self) -> Self {
-        Self {
-            observed_at: Instant::now(),
-            ..self
-        }
+        self.min_pane_cache_ms = self.min_pane_cache_ms.max(other.min_pane_cache_ms);
     }
 }
 
@@ -1330,21 +1280,16 @@ struct ResultSink {
     host_data: Arc<Mutex<HostData>>,
     /// The renderers this cycle serves, taken once as it starts.
     cycle: Vec<Subscriber>,
-    covered: Covered,
-    /// The cycle in hand, recorded as covered once its answer goes out.
-    answering: Option<Coverage>,
     context: Option<Arc<FoldShared>>,
     inputs: Arc<FoldInputs>,
 }
 
 impl ResultSink {
-    fn shared(subscribers: Subscribers, covered: Covered, host_data: Arc<Mutex<HostData>>) -> Self {
+    fn shared(subscribers: Subscribers, host_data: Arc<Mutex<HostData>>) -> Self {
         let mut sink = Self {
             subscribers,
             host_data,
             cycle: Vec::new(),
-            covered,
-            answering: None,
             context: None,
             inputs: Arc::default(),
         };
@@ -1402,11 +1347,6 @@ impl ResultSink {
                     reuse_shared(shared, prior);
                 }
             }
-            if update.is_final()
-                && let Some(cycle) = self.answering.take()
-            {
-                self.covered.record(cycle);
-            }
         } else {
             // The worker publishes only room folds or failed final outcomes.
             assert!(matches!(update, FetchUpdate::Failed { .. }));
@@ -1460,17 +1400,13 @@ impl FetchWorker {
         )
             -> std::result::Result<StatePaths, crate::disk::paths::PathErr>,
     ) {
-        // Several renderers share this worker: one cycle answers every
-        // request already waiting, and none a published cycle answered.
-        let covered = sink.covered.clone();
-        drive(&request_rx, &covered, FOLD_FLOOR, |cycle| {
-            sink.answering = Some(cycle);
+        drive(&request_rx, FOLD_FLOOR, |request| {
             // Re-resolved every cycle so `workspace migrate` repoints reads
             // without restarting the renderer.
             match resolve_state(self.config.workspace_id.clone()) {
                 Ok(state) => {
                     let tick = self.meter.begin();
-                    self.run_cycle(&state, cycle.request, &mut sink);
+                    self.run_cycle(&state, request, &mut sink);
                     if let Some(event) = self.meter.finish(
                         tick,
                         crate::utils::time::unix_now_ms(),
@@ -1486,7 +1422,6 @@ impl FetchWorker {
                     });
                 }
             }
-            sink.answering = None;
         });
     }
 }
@@ -1503,7 +1438,6 @@ pub(super) fn spawn_fetch_worker(
     last_projection: Option<crate::sidebar::agent_projection::AgentProjectionPublication>,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     subscribers: Subscribers,
-    covered: Covered,
     host_data: Arc<Mutex<HostData>>,
     observer: Option<crate::sidebar::observe::RoomObserver>,
 ) -> std::thread::JoinHandle<()> {
@@ -1511,69 +1445,8 @@ pub(super) fn spawn_fetch_worker(
         crate::lane::set(crate::lane::WorkLane::Fetch);
         let mut worker = FetchWorker::new(config, runtime, diag, producer, last_projection);
         worker.observer = observer;
-        worker.run(
-            request_rx,
-            ResultSink::shared(subscribers, covered, host_data),
-        );
+        worker.run(request_rx, ResultSink::shared(subscribers, host_data));
     })
-}
-
-/// A cycle: when it started and the merged request it runs.
-#[derive(Clone, Copy, Debug)]
-struct Coverage {
-    started: Instant,
-    request: FetchRequest,
-}
-
-impl Coverage {
-    /// Whether this cycle already did all `request` asks: it started after the
-    /// request's cause was observed, and folded at least as strongly. Hard
-    /// refreshes and forced folds are never answered for another request.
-    fn answers(&self, request: &FetchRequest) -> bool {
-        let cycle = self.request;
-        let cache_floor_met = match (request.min_pane_cache_ms, cycle.min_pane_cache_ms) {
-            (None, _) => true,
-            (Some(asked), Some(ran)) => asked <= ran,
-            (Some(_), None) => false,
-        };
-        request.observed_at < self.started
-            && request.mode != FetchMode::HardRefresh
-            && !request.force_fold
-            && request.mode.strength() <= cycle.mode.strength()
-            && cache_floor_met
-    }
-}
-
-/// The plane's last answered cycle, shared by its fetch worker and every
-/// pane's dispatcher. The worker records a cycle as it publishes the cycle's
-/// final outcome, before sending it, so every renderer the cycle serves either
-/// finds its next request answered here or receives that outcome after asking.
-/// A request observed while a cycle runs costs one more cycle, never a lost
-/// change; one observed during the post-cycle rest merges into the next cycle,
-/// whose start stamp follows that rest.
-#[derive(Clone, Default)]
-pub(super) struct Covered(Arc<Mutex<Option<Coverage>>>);
-
-impl Covered {
-    fn answers(&self, request: &FetchRequest) -> bool {
-        self.last().is_some_and(|cycle| cycle.answers(request))
-    }
-
-    fn record(&self, cycle: Coverage) {
-        *self.lock() = Some(cycle);
-    }
-
-    fn last(&self) -> Option<Coverage> {
-        *self.lock()
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Coverage>> {
-        // A plain value replaced whole, so a panic while held tears nothing.
-        match self.0.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
 }
 
 /// The worker's idle gap after each cycle returns: an end-to-start gap bounds
@@ -1581,40 +1454,26 @@ impl Covered {
 const FOLD_FLOOR: Duration = Duration::from_millis(250);
 
 /// Run one cycle per batch, starting none sooner than `fold_floor` after the
-/// previous one returned, whatever the request's mode or flags. Requests that
-/// arrive during the rest join the same merge and coverage filter, and a batch
-/// in hand still runs after every sender disconnects. Coverage is stamped after
-/// the rest, outside the cycle's tick meter. `cycle` records itself in
-/// `covered` before publishing its final outcome.
+/// previous one returned, whatever the request's mode. Every request waiting
+/// at the drain joins the batch; later arrivals run the next cycle. A batch
+/// in hand still runs after every sender disconnects.
 fn drive(
     requests: &std::sync::mpsc::Receiver<FetchRequest>,
-    covered: &Covered,
     fold_floor: Duration,
-    mut cycle: impl FnMut(Coverage),
+    mut cycle: impl FnMut(FetchRequest),
 ) {
     let mut next_cycle_at: Option<Instant> = None;
-    while let Ok(first) = requests.recv() {
+    while let Ok(mut request) = requests.recv() {
         if let Some(rest) =
             next_cycle_at.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
         {
             std::thread::sleep(rest);
         }
-        let last = covered.last();
-        let mut batch: Option<FetchRequest> = None;
-        let waiting = std::iter::once(first).chain(std::iter::from_fn(|| requests.try_recv().ok()));
-        for request in waiting.filter(|request| !last.is_some_and(|cycle| cycle.answers(request))) {
-            match &mut batch {
-                Some(batch) => batch.merge(request),
-                None => batch = Some(request),
-            }
+        for waiting in requests.try_iter() {
+            request.merge(waiting);
         }
-        if let Some(request) = batch {
-            cycle(Coverage {
-                started: Instant::now(),
-                request,
-            });
-            next_cycle_at = Some(Instant::now() + fold_floor);
-        }
+        cycle(request);
+        next_cycle_at = Some(Instant::now() + fold_floor);
     }
 }
 
@@ -1629,25 +1488,15 @@ struct DeferredFetch {
 /// in one place.
 pub(super) struct FetchDispatcher {
     tx: Sender<FetchRequest>,
-    covered: Covered,
     in_flight: bool,
     pending_refetch: Option<FetchRequest>,
     deferred: Option<DeferredFetch>,
 }
 
 impl FetchDispatcher {
-    /// A dispatcher whose worker serves it alone.
-    #[cfg(any(test, feature = "testkit"))]
-    pub(super) fn new(tx: Sender<FetchRequest>) -> Self {
-        Self::for_plane(tx, Covered::default())
-    }
-
-    /// A pane's dispatcher on a shared plane, which skips a request one of the
-    /// plane's finished cycles already answered.
-    pub(super) fn for_plane(tx: Sender<FetchRequest>, covered: Covered) -> Self {
+    pub(super) fn for_plane(tx: Sender<FetchRequest>) -> Self {
         Self {
             tx,
-            covered,
             in_flight: false,
             pending_refetch: None,
             deferred: None,
@@ -1663,16 +1512,13 @@ impl FetchDispatcher {
     pub(super) fn request(&mut self, mut request: FetchRequest, force_after: bool) {
         let absorbed = self.deferred.take();
         if let Some(deferred) = absorbed {
-            request.merge(deferred.request.observed_now());
+            request.merge(deferred.request);
         }
         self.dispatch(request, force_after || absorbed.is_some());
     }
 
     fn dispatch(&mut self, request: FetchRequest, force_after: bool) {
         if !self.in_flight {
-            if self.covered.answers(&request) {
-                return;
-            }
             if self.tx.send(request).is_ok() {
                 self.in_flight = true;
             }
@@ -1702,7 +1548,7 @@ impl FetchDispatcher {
             return;
         };
         self.deferred = None;
-        self.dispatch(deferred.request.observed_now(), true);
+        self.dispatch(deferred.request, true);
     }
 
     pub(super) fn complete(&mut self, dispatch_follow_up: bool) {

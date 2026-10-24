@@ -18,8 +18,7 @@ use crate::{MuxName, RuntimePaths, SidebarInstanceId};
 #[cfg(test)]
 use super::fetch::FetchUpdate;
 use super::fetch::{
-    Covered, FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick,
-    spawn_fetch_worker,
+    FetchRequest, HostData, Subscriber, Subscribers, WorkspaceFold, data_tick, spawn_fetch_worker,
 };
 use super::input::Wakeup;
 use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
@@ -33,7 +32,6 @@ pub(in crate::sidebar_pane) struct DataPlane {
     request_tx: Sender<FetchRequest>,
     pub(super) subscribers: Subscribers,
     host_data: Arc<Mutex<HostData>>,
-    covered: Covered,
     observe_tx: SyncSender<ObserveMsg>,
     fit: Option<super::focus_push::FitView>,
     /// The plane's threads, until the first pane starts them.
@@ -119,7 +117,6 @@ impl DataPlane {
             .then(|| observe::RoomObserver::new(plane.observe_tx.clone(), plane.events.clone()));
         let (config, runtime, diag) = (config.clone(), runtime.clone(), diag.clone());
         let subscribers = plane.subscribers.clone();
-        let covered = plane.covered.clone();
         let host_data = plane.host_data.clone();
         let room_events = plane.room_events(&runtime);
         let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
@@ -149,7 +146,6 @@ impl DataPlane {
                 last_projection,
                 request_rx,
                 subscribers.clone(),
-                covered,
                 host_data.clone(),
                 observer,
             );
@@ -200,7 +196,6 @@ impl DataPlane {
             request_tx,
             subscribers: Subscribers::default(),
             host_data,
-            covered: Covered::default(),
             observe_tx,
             fit: None,
             lanes: Mutex::new(None),
@@ -254,7 +249,6 @@ impl DataPlane {
         }
         Subscription {
             requests: self.request_tx.clone(),
-            covered: self.covered.clone(),
             completion,
             observe: self.observe_tx.clone(),
             seed,
@@ -344,7 +338,6 @@ impl DataPlane {
 /// One pane's ends of the plane.
 pub(in crate::sidebar_pane) struct Subscription {
     pub(super) requests: Sender<FetchRequest>,
-    pub(super) covered: Covered,
     pub(super) completion: Arc<AtomicBool>,
     pub(super) revision: u64,
     pub(super) observe: SyncSender<ObserveMsg>,

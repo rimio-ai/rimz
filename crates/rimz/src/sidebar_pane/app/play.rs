@@ -262,7 +262,7 @@ impl Column {
             state,
             terminal,
             requests,
-            fetch: FetchDispatcher::new(tx),
+            fetch: FetchDispatcher::for_plane(tx),
             inbox: WakeupInbox::new(mpsc::channel().1),
             at: Duration::ZERO,
             next: Duration::ZERO,
