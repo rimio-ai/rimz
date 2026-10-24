@@ -70,20 +70,26 @@ fn drainer_latency(bencher: Bencher) {
 }
 
 #[cfg(target_os = "linux")]
+#[divan::bench(sample_count = 1, sample_size = 1, ignore)]
+fn drainer_backlog(bencher: Bencher) {
+    latency::run_backlog(bencher);
+}
+
+#[cfg(target_os = "linux")]
 mod latency {
     use super::*;
-    use std::io::{BufRead as _, Write as _};
+    use std::io::{BufRead as _, Read as _, Write as _};
     use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::process::{Child, Command, Output, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
     use rimz::agents::{AgentContext, AgentLifecycleObservation, LifecycleSignal};
     use rimz::disk::lock::SharedAppendLock;
-    use rimz::harness::hook_drain::{Connection, DrainReceipt};
+    use rimz::harness::hook_drain::{Connection, DrainReceipt, HookDrainErr};
     use rimz::ids::{AgentKind, EventId};
     use rimz::store::event::{EventEnvelope, EventKind};
     use rimz::store::{agent_context, event_log, ingress};
@@ -113,7 +119,7 @@ mod latency {
     }
 
     impl Fixture {
-        fn new() -> Self {
+        fn new(row_key: &str) -> Self {
             assert!(
                 std::env::var_os("RIMZ_HOOK_BUDGET_HOME").is_none(),
                 "generated fixture only"
@@ -281,14 +287,17 @@ mod latency {
             assert_eq!(sidecars.len(), SAMPLES);
             let version = output(fixture.command(0).arg("--version"), &[]);
             assert!(version.status.success(), "{version:?}");
-            emit(json!({"kind": "fixture", "binary": fixture.binary,
+            emit(
+                row_key,
+                json!({"kind": "fixture", "binary": fixture.binary,
                 "build_id": rimz::build_id::of_file(&fixture.binary).unwrap(),
                 "version": String::from_utf8(version.stdout).unwrap().trim(),
                 "live_roots": live.len(), "owner_processes": fixture.owners.0.len(),
                 "history_rows": HISTORY_CARRYOVER, "rollup_bytes": rollup,
                 "carryover_bytes": bytes(&fixture.store.paths().agents_carryover),
                 "derived_carryover_bytes": bytes(&fixture.store.paths().carryover_cache),
-                "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()}));
+                "sidecar_count": sidecars.len(), "sidecar_bytes": sidecars.iter().sum::<u64>()}),
+            );
             assert!(
                 !fixture
                     .store
@@ -380,9 +389,9 @@ mod latency {
         duration.as_micros().try_into().unwrap()
     }
 
-    fn emit(row: Value) {
+    fn emit(row_key: &str, row: Value) {
         // Divan can leave its tree label unterminated before fixture setup.
-        writeln!(io::stdout().lock(), "\n{}", json!({"drainer_latency": row})).unwrap();
+        writeln!(io::stdout().lock(), "\n{}", json!({row_key: row})).unwrap();
     }
 
     fn distribution(samples: &[u64]) -> Value {
@@ -484,71 +493,86 @@ mod latency {
         }
     }
 
-    pub(super) fn run(bencher: Bencher) {
-        let fixture = Fixture::new();
-        bencher.bench_local(|| {
-            emit(json!({
+    fn start(fixture: &Fixture, row_key: &str) -> (UnixStream, Placement, ChildSampler, PathBuf) {
+        emit(
+            row_key,
+            json!({
                 "kind": "runner_placement", "placement": placement(std::process::id()).unwrap(),
-            }));
-            let cold_start = Instant::now();
+            }),
+        );
+        let cold_start = Instant::now();
+        let cold = json!({
+            "hook_event_name": "SessionStart", "session_id": "latency-0",
+            "source": "startup", "cwd": fixture.project,
+        });
+        let result = output(
+            fixture
+                .command(0)
+                .args(["hooks", "feed", "--source", "claude"]),
+            &serde_json::to_vec(&cold).unwrap(),
+        );
+        let foreground = micros(cold_start.elapsed());
+        assert!(result.status.success(), "{result:?}");
+        let deadline = Instant::now() + WAIT;
+        let mut lease = loop {
+            match UnixStream::connect(fixture.store.runtime_paths().hook_drainer_socket_path()) {
+                Ok(stream) => break stream,
+                Err(error) => {
+                    assert!(Instant::now() < deadline, "drainer readiness: {error}");
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        };
+        lease.set_read_timeout(Some(WAIT)).unwrap();
+        lease.set_write_timeout(Some(WAIT)).unwrap();
+        writeln!(
+            lease,
+            "{}",
+            json!({
+                "through": 0, "reply_for": null, "epoch": null, "stop": false, "lease": true,
+            })
+        )
+        .unwrap();
+        let mut line = String::new();
+        io::BufReader::new(&lease).read_line(&mut line).unwrap();
+        let _: DrainReceipt = serde_json::from_str(&line).unwrap();
+        let pid = nix::sys::socket::getsockopt(&lease, nix::sys::socket::sockopt::PeerCredentials)
+            .unwrap()
+            .pid()
+            .try_into()
+            .unwrap();
+        let drainer = placement(pid).unwrap();
+        let sampler = ChildSampler::start(pid);
+        let log = fixture.store.paths().hook_drainer_log();
+        loop {
+            if timings(&log)
+                .iter()
+                .any(|record| record["hook_event"] == "SessionStart" && record["applied"] == true)
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "testkit C7 cold timing absent");
+            thread::sleep(Duration::from_millis(5));
+        }
+        emit(
+            row_key,
+            json!({
+                "kind": "cold", "foreground_wall_us": foreground,
+                "ready_wall_us": micros(cold_start.elapsed()), "drainer": drainer,
+            }),
+        );
+        (lease, drainer, sampler, log)
+    }
+
+    pub(super) fn run(bencher: Bencher) {
+        let row_key = "drainer_latency";
+        let fixture = Fixture::new(row_key);
+        bencher.bench_local(|| {
+            let (lease, drainer, sampler, log) = start(&fixture, row_key);
             let cold = json!({
                 "hook_event_name": "SessionStart", "session_id": "latency-0",
                 "source": "startup", "cwd": fixture.project,
             });
-            let result = output(
-                fixture
-                    .command(0)
-                    .args(["hooks", "feed", "--source", "claude"]),
-                &serde_json::to_vec(&cold).unwrap(),
-            );
-            let foreground = micros(cold_start.elapsed());
-            assert!(result.status.success(), "{result:?}");
-            let deadline = Instant::now() + WAIT;
-            let mut lease = loop {
-                match UnixStream::connect(fixture.store.runtime_paths().hook_drainer_socket_path())
-                {
-                    Ok(stream) => break stream,
-                    Err(error) => {
-                        assert!(Instant::now() < deadline, "drainer readiness: {error}");
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                }
-            };
-            lease.set_read_timeout(Some(WAIT)).unwrap();
-            lease.set_write_timeout(Some(WAIT)).unwrap();
-            writeln!(
-                lease,
-                "{}",
-                json!({
-                    "through": 0, "reply_for": null, "epoch": null, "stop": false, "lease": true,
-                })
-            )
-            .unwrap();
-            let mut line = String::new();
-            io::BufReader::new(&lease).read_line(&mut line).unwrap();
-            let _: DrainReceipt = serde_json::from_str(&line).unwrap();
-            let pid =
-                nix::sys::socket::getsockopt(&lease, nix::sys::socket::sockopt::PeerCredentials)
-                    .unwrap()
-                    .pid()
-                    .try_into()
-                    .unwrap();
-            let drainer = placement(pid).unwrap();
-            let sampler = ChildSampler::start(pid);
-            let log = fixture.store.paths().hook_drainer_log();
-            loop {
-                if timings(&log).iter().any(|record| {
-                    record["hook_event"] == "SessionStart" && record["applied"] == true
-                }) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "testkit C7 cold timing absent");
-                thread::sleep(Duration::from_millis(5));
-            }
-            emit(json!({
-                "kind": "cold", "foreground_wall_us": foreground,
-                "ready_wall_us": micros(cold_start.elapsed()), "drainer": drainer,
-            }));
             let mut stops = Vec::new();
             for index in 0..SAMPLES {
                 let frame = fixture.frame(
@@ -587,10 +611,13 @@ mod latency {
                     });
                 misses += usize::from(!replied);
                 prompt_walls.push(wall);
-                emit(json!({
-                    "kind": "prompt", "session": session, "wall_us": wall, "replied": replied,
-                    "status": result.status.code(), "stdout_bytes": result.stdout.len(),
-                }));
+                emit(
+                    row_key,
+                    json!({
+                        "kind": "prompt", "session": session, "wall_us": wall, "replied": replied,
+                        "status": result.status.code(), "stdout_bytes": result.stdout.len(),
+                    }),
+                );
                 assert!(result.status.success(), "prompt {index}: {result:?}");
             }
             let fence = fixture.frame(0, cold);
@@ -622,31 +649,470 @@ mod latency {
                 let claim = record["claim_to_applied_us"].as_u64().unwrap();
                 claims.push(claim);
                 receipts.push(sample.wall);
-                emit(json!({
-                    "kind": "stop", "ingress": sample.ingress, "through": sample.through,
-                    "receipt": sample.receipt, "claim_to_applied_us": claim,
-                    "append_to_receipt_us": sample.wall,
-                }));
+                emit(
+                    row_key,
+                    json!({
+                        "kind": "stop", "ingress": sample.ingress, "through": sample.through,
+                        "receipt": sample.receipt, "claim_to_applied_us": claim,
+                        "append_to_receipt_us": sample.wall,
+                    }),
+                );
             }
             let children = sampler.finish();
             assert!(!children.is_empty(), "no apply placement sampled");
             for child in children.values() {
-                emit(json!({"kind": "apply_placement", "placement": child}));
+                emit(
+                    row_key,
+                    json!({"kind": "apply_placement", "placement": child}),
+                );
                 assert_eq!(
                     child.cgroup, drainer.cgroup,
                     "apply must inherit the drainer"
                 );
             }
-            emit(json!({
-                "kind": "summary", "stop_samples": claims.len(),
-                "prompt_samples": prompt_walls.len(), "prompt_reply_misses": misses,
-                "claim_to_applied_us": distribution(&claims),
-                "append_to_receipt_us": distribution(&receipts),
-                "prompt_wall_us": distribution(&prompt_walls),
-                "apply_children_sampled": children.len(),
-            }));
+            emit(
+                row_key,
+                json!({
+                    "kind": "summary", "stop_samples": claims.len(),
+                    "prompt_samples": prompt_walls.len(), "prompt_reply_misses": misses,
+                    "claim_to_applied_us": distribution(&claims),
+                    "append_to_receipt_us": distribution(&receipts),
+                    "prompt_wall_us": distribution(&prompt_walls),
+                    "apply_children_sampled": children.len(),
+                }),
+            );
             drop(lease);
         });
+    }
+
+    const BACKLOG_KEY: &str = "drainer_backlog";
+    const RATES: &[u64] = &[1, 2, 4, 8, 16];
+    const STEP: Duration = Duration::from_secs(60);
+    const SENDERS: usize = 46;
+    const WINDOW: Duration = Duration::from_secs(5);
+    const POLL: Duration = Duration::from_millis(10);
+    const PROMPT_WAIT: Duration = Duration::from_millis(1_200);
+    const DRAIN_WAIT: Duration = Duration::from_secs(600);
+
+    type TimedRecord = (Instant, Value);
+
+    struct TimingReader {
+        stop: Arc<AtomicBool>,
+        records: Arc<Mutex<Vec<TimedRecord>>>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    impl TimingReader {
+        fn start(path: &Path) -> Self {
+            let mut reader = io::BufReader::new(std::fs::File::open(path).unwrap());
+            let stop = Arc::new(AtomicBool::new(false));
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let done = Arc::clone(&stop);
+            let pending = Arc::clone(&records);
+            let worker = thread::spawn(move || {
+                let mut line = String::new();
+                loop {
+                    while reader.read_line(&mut line).unwrap() != 0 {
+                        if !line.ends_with('\n') {
+                            continue;
+                        }
+                        // Publish the read stamp under the snapshot lock, so a window cannot
+                        // miss an already-stamped record at its boundary.
+                        let mut records = pending.lock().unwrap();
+                        let read_at = Instant::now();
+                        if let Ok(mut record) = serde_json::from_str::<Value>(&line)
+                            && let Some(timing) = record.get_mut("hook_drain_timing")
+                        {
+                            records.push((read_at, timing.take()));
+                        }
+                        line.clear();
+                    }
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(POLL);
+                }
+            });
+            Self {
+                stop,
+                records,
+                worker: Some(worker),
+            }
+        }
+
+        fn finish(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+
+    impl Drop for TimingReader {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    struct BacklogFrame {
+        hook: &'static str,
+        appended: Instant,
+        sent_at: Instant,
+        send_lag: u64,
+        applied: Option<(Instant, u64)>,
+    }
+
+    #[derive(Default)]
+    struct Sweep {
+        frames: Vec<BacklogFrame>,
+        indices: HashMap<EventId, usize>,
+    }
+
+    impl Sweep {
+        fn send(&mut self, fixture: &Fixture, due: Instant) -> Option<JoinHandle<Option<u64>>> {
+            let sequence = self.frames.len();
+            let sender = sequence % SENDERS;
+            let turn_offset = (sequence / SENDERS + sender) % 20;
+            let (hook, mut payload) = match turn_offset {
+                0 => (
+                    "UserPromptSubmit",
+                    json!({"prompt": "check the repository"}),
+                ),
+                19 => (
+                    "Stop",
+                    json!({
+                        "turn_id": format!("backlog-{sequence}"),
+                        "last_assistant_message": "done",
+                    }),
+                ),
+                _ => (
+                    "PostToolUse",
+                    json!({
+                        "tool_name": "Read", "tool_input": {}, "tool_response": {},
+                    }),
+                ),
+            };
+            payload["hook_event_name"] = json!(hook);
+            payload["session_id"] = json!(format!("latency-{sender}"));
+            let frame = fixture.frame(sender, payload);
+            let appended = Instant::now();
+            let lock = SharedAppendLock::acquire(&fixture.store.paths().hook_ingress_lock).unwrap();
+            let through = ingress::append(fixture.store.paths(), &frame, &lock).unwrap();
+            let sent_at = Instant::now();
+            drop(lock);
+            self.indices.insert(frame.event_id.clone(), sequence);
+            self.frames.push(BacklogFrame {
+                hook,
+                appended,
+                sent_at,
+                send_lag: micros(sent_at.duration_since(due)),
+                applied: None,
+            });
+            let connection = Connection::connect(&fixture.store).unwrap();
+            if hook == "UserPromptSubmit" {
+                return Some(thread::spawn(move || {
+                    prompt_receipt(connection, through, frame.event_id, appended)
+                }));
+            }
+            connection.nudge(through).unwrap();
+            None
+        }
+
+        fn observe(&mut self, reader: &TimingReader, mut lease: &UnixStream) -> Instant {
+            assert!(
+                matches!(lease.read(&mut [0]), Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock),
+                "drainer lease closed during sweep"
+            );
+            let mut records = reader.records.lock().unwrap();
+            let now = Instant::now();
+            for (read_at, record) in records.drain(..) {
+                let id: EventId = serde_json::from_value(record["ingress"].clone()).unwrap();
+                let Some(&index) = self.indices.get(&id) else {
+                    continue;
+                };
+                let frame = &mut self.frames[index];
+                assert_eq!(record["hook_event"], frame.hook, "{id}");
+                assert_eq!(record["applied"], true, "{id}");
+                let claim = record["claim_to_applied_us"].as_u64().unwrap();
+                assert!(
+                    frame.applied.replace((read_at, claim)).is_none(),
+                    "duplicate sweep ingress {id}"
+                );
+            }
+            now
+        }
+
+        fn drain(
+            &mut self,
+            reader: &TimingReader,
+            lease: &UnixStream,
+            first: usize,
+            send_end: Instant,
+            mut window: BacklogWindow,
+        ) -> Instant {
+            loop {
+                let now = self.observe(reader, lease);
+                let depth = self
+                    .frames
+                    .iter()
+                    .filter(|frame| frame.applied.is_none())
+                    .count();
+                assert!(
+                    now < send_end + DRAIN_WAIT,
+                    "step {} drain timeout: depth {depth}",
+                    window.step,
+                );
+                if depth == 0 {
+                    let end = self.frames[first..]
+                        .iter()
+                        .map(|frame| frame.applied.unwrap().0)
+                        .max()
+                        .unwrap()
+                        .max(send_end);
+                    window.report(&self.frames, end, true);
+                    return end;
+                }
+                window.report(&self.frames, now, false);
+                thread::sleep(POLL);
+            }
+        }
+    }
+
+    struct BacklogWindow {
+        sweep_start: Instant,
+        start: Instant,
+        step: usize,
+        rate: u64,
+        phase: &'static str,
+    }
+
+    impl BacklogWindow {
+        fn report(&mut self, frames: &[BacklogFrame], now: Instant, finish: bool) {
+            while self.start + WINDOW <= now || finish {
+                let end = (self.start + WINDOW).min(now);
+                let sent = frames.iter().filter(|frame| frame.sent_at <= end).count();
+                let applied = frames
+                    .iter()
+                    .filter(|frame| frame.applied.is_some_and(|(at, _)| at <= end))
+                    .count();
+                let mut claims = Vec::new();
+                let mut appends = Vec::new();
+                for frame in frames {
+                    if let Some((at, claim)) = frame.applied
+                        && at > self.start
+                        && at <= end
+                    {
+                        claims.push(claim);
+                        appends.push(micros(at.duration_since(frame.appended)));
+                    }
+                }
+                let loadavg: f64 = std::fs::read_to_string("/proc/loadavg")
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                emit(
+                    BACKLOG_KEY,
+                    json!({
+                        "kind": "window", "t_ms": end.duration_since(self.sweep_start).as_millis(),
+                        "step": self.step, "rate_per_s": self.rate, "phase": self.phase,
+                        "sent": sent, "applied": applied, "depth": sent - applied,
+                        "applied_in_window": claims.len(), "loadavg_1m": loadavg,
+                        "claim_to_applied_us": nullable_distribution(&claims),
+                        "append_to_applied_us": nullable_distribution(&appends),
+                    }),
+                );
+                self.start = end;
+                if end == now {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn nullable_distribution(samples: &[u64]) -> Value {
+        if samples.is_empty() {
+            Value::Null
+        } else {
+            distribution(samples)
+        }
+    }
+
+    fn prompt_receipt(
+        connection: Connection,
+        through: u64,
+        id: EventId,
+        appended: Instant,
+    ) -> Option<u64> {
+        let start = Instant::now();
+        match connection.reply(through, id, PROMPT_WAIT) {
+            Ok(receipt) => {
+                assert!(
+                    receipt.applied >= through && receipt.epoch.is_some(),
+                    "{receipt:?}"
+                );
+                (start.elapsed() <= PROMPT_WAIT).then(|| micros(appended.elapsed()))
+            }
+            Err(HookDrainErr::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                None
+            }
+            Err(error) => panic!("prompt reply: {error}"),
+        }
+    }
+
+    fn report_step(
+        step: usize,
+        rate: u64,
+        frames: &[BacklogFrame],
+        send_end: Instant,
+        send_duration: Duration,
+        drain_duration: Duration,
+        prompts: Vec<JoinHandle<Option<u64>>>,
+    ) {
+        let mut claims = Vec::new();
+        let mut appends = Vec::new();
+        let mut by_hook = BTreeMap::<_, Vec<_>>::new();
+        let mut depth_changes = Vec::new();
+        let mut applied_by_end = 0;
+        for frame in frames {
+            let (at, claim) = frame.applied.unwrap();
+            claims.push(claim);
+            appends.push(micros(at.duration_since(frame.appended)));
+            by_hook.entry(frame.hook).or_default().push(claim);
+            applied_by_end += usize::from(at <= send_end);
+            depth_changes.extend([(frame.sent_at, 1_i64), (at, -1)]);
+        }
+        depth_changes.sort_unstable();
+        let mut depth = 0;
+        let mut depth_max = 0;
+        for (_, change) in depth_changes {
+            depth += change;
+            depth_max = depth_max.max(depth);
+        }
+        let prompt_count = prompts.len();
+        let receipts: Vec<_> = prompts
+            .into_iter()
+            .filter_map(|prompt| prompt.join().unwrap())
+            .collect();
+        let by_hook: BTreeMap<_, _> = by_hook
+            .into_iter()
+            .map(|(hook, samples)| (hook, distribution(&samples)))
+            .collect();
+        let send_lags: Vec<_> = frames.iter().map(|frame| frame.send_lag).collect();
+        emit(
+            BACKLOG_KEY,
+            json!({
+                "kind": "step", "step": step, "rate_per_s": rate, "step_s": STEP.as_secs(),
+                "sent": frames.len(), "send_lag_us": distribution(&send_lags),
+                "applied_by_end": applied_by_end, "depth_end": frames.len() - applied_by_end,
+                "applied_rate_per_s": applied_by_end as f64 / send_duration.as_secs_f64(),
+                "depth_max": depth_max, "drain_ms": drain_duration.as_millis(),
+                "append_to_applied_us": distribution(&appends),
+                "claim_to_applied_us": distribution(&claims),
+                "claim_to_applied_us_by_hook": by_hook,
+                "prompts": prompt_count, "prompts_late": prompt_count - receipts.len(),
+                "prompt_receipt_us": nullable_distribution(&receipts),
+            }),
+        );
+    }
+
+    fn run_sweep(fixture: &Fixture) {
+        let (lease, _, sampler, log) = start(fixture, BACKLOG_KEY);
+        drop(sampler);
+        lease.set_nonblocking(true).unwrap();
+        for index in 0..SENDERS {
+            fixture.append_receipt(&fixture.frame(
+                index,
+                json!({
+                    "hook_event_name": "UserPromptSubmit", "session_id": format!("latency-{index}"),
+                    "prompt": "check the repository",
+                }),
+            ));
+        }
+        emit(
+            BACKLOG_KEY,
+            json!({
+                "kind": "config", "rates_per_s": RATES, "step_s": STEP.as_secs(),
+                "senders": SENDERS, "turn": {"UserPromptSubmit": 1, "PostToolUse": 18, "Stop": 1},
+                "window_s": WINDOW.as_secs(), "poll_ms": POLL.as_millis(),
+                "prompt_wait_ms": PROMPT_WAIT.as_millis(), "live_roots": SAMPLES,
+            }),
+        );
+        let mut reader = TimingReader::start(&log);
+        let mut sweep = Sweep::default();
+        let sweep_start = Instant::now();
+        for (index, &rate) in RATES.iter().enumerate() {
+            let step = index + 1;
+            let first = sweep.frames.len();
+            let step_start = Instant::now();
+            let scheduled_end = step_start + STEP;
+            let count = (rate * STEP.as_secs()) as usize;
+            let mut prompts = Vec::new();
+            let mut window = BacklogWindow {
+                sweep_start,
+                start: step_start,
+                step,
+                rate,
+                phase: "send",
+            };
+            let mut sent = 0;
+            while sent < count || Instant::now() < scheduled_end {
+                let now = sweep.observe(&reader, &lease);
+                let window_end = if sent == count {
+                    now.min(scheduled_end.max(sweep.frames.last().unwrap().sent_at))
+                } else {
+                    now
+                };
+                window.report(&sweep.frames, window_end, false);
+                let now = Instant::now();
+                let due = step_start + Duration::from_secs_f64(sent as f64 / rate as f64);
+                if sent < count && now >= due {
+                    prompts.extend(sweep.send(fixture, due));
+                    sent += 1;
+                    continue;
+                }
+                thread::sleep(POLL.min(due.saturating_duration_since(Instant::now())));
+            }
+            sweep.observe(&reader, &lease);
+            let send_end = scheduled_end.max(sweep.frames.last().unwrap().sent_at);
+            window.report(&sweep.frames, send_end, true);
+            let window = BacklogWindow {
+                sweep_start,
+                start: send_end,
+                step,
+                rate,
+                phase: "drain",
+            };
+            let drain_end = sweep.drain(&reader, &lease, first, send_end, window);
+            assert_eq!(sweep.frames.len() - first, count);
+            report_step(
+                step,
+                rate,
+                &sweep.frames[first..],
+                send_end,
+                send_end.duration_since(step_start),
+                drain_end.duration_since(send_end),
+                prompts,
+            );
+        }
+        reader.finish();
+        sweep.observe(&reader, &lease);
+        assert!(sweep.frames.iter().all(|frame| frame.applied.is_some()));
+        drop(lease);
+    }
+
+    pub(super) fn run_backlog(bencher: Bencher) {
+        let fixture = Fixture::new(BACKLOG_KEY);
+        bencher.bench_local(|| run_sweep(&fixture));
     }
 }
 
