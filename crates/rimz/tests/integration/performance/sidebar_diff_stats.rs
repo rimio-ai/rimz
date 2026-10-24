@@ -33,7 +33,9 @@ const SESSION: &str = "rimz-diff-stats";
 /// enrichment-cadence guards (`performance/enrichment_cadence.rs`), which
 /// drive the same produce path against the same shim.
 /// A fresh accounts cache isolates the PATH-wide git witness from host
-/// provider CLIs, which may fork git while answering an account probe.
+/// provider CLIs, which may fork git while answering an account probe. Its
+/// records carry a version: an active kind's unversioned record is re-probed
+/// after 10 s, which a loaded run outlasts.
 pub(crate) struct Fixture {
     pub(crate) env: Env,
     panes_path: PathBuf,
@@ -165,7 +167,10 @@ impl Fixture {
                             login: None,
                             probed_at_ms: now_ms,
                             ok: true,
-                            account: None,
+                            account: Some(rimz::agents::AgentAccount {
+                                version: Some("1.0.0".to_owned()),
+                                ..Default::default()
+                            }),
                         },
                     )
                 })
