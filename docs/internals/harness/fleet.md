@@ -76,7 +76,7 @@ The harness is a product area spanning several source modules, and the twelve pa
 | [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
 | [transcript.md](./transcript.md) | The durable conversation log and asks | [`transcript.rs`](../../../crates/rimz/src/transcript.rs) |
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
-| [teams.md](./teams.md) | Team scratch files, the stage board, and stage flips | [`harness/scratch.rs`](../../../crates/rimz/src/harness/scratch.rs), [`harness/team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) |
+| [teams.md](./teams.md) | Team run archive, memory listing, stage board, flips, resume re-wake, and team reports | [`harness/scratch.rs`](../../../crates/rimz/src/harness/scratch.rs), [`harness/team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) |
 | [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
 
 Every file below is under `harness/` except the top-level `address.rs`, the petname grammar in `agents/`, and the durable run record in `store/`. Each module's `//!` header is the authority on what it holds.
@@ -94,7 +94,7 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`headless.rs`](../../../crates/rimz/src/harness/headless.rs) | Profile resolution, launch preparation, and execution for headless loop checks and workflow judges. See [loops.md § Guard chains](./loops.md#guard-chains). |
 | [`hook_drain.rs`](../../../crates/rimz/src/harness/hook_drain.rs) | The elected hook drainer and the socket leases sandboxed wrappers hold. See [adapter.md § The feed](../agents/adapter.md#the-feed). |
 | [`scratch.rs`](../../../crates/rimz/src/harness/scratch.rs), [`board.rs`](../../../crates/rimz/src/harness/board.rs) | Team memory-file scan, the advisory `.rimz/team/blackboard.md` stage parser, and locked board writes. See [teams.md](./teams.md). |
-| [`team_notes.rs`](../../../crates/rimz/src/harness/team_notes.rs) | Locked archive-run and checkout-link registration before fresh launch, cohort resume, or place-first restore. See [teams.md](./teams.md#scratch-files). |
+| [`team_notes.rs`](../../../crates/rimz/src/harness/team_notes.rs) | Locked archive-run and checkout-link registration before a fresh launch, a cohort resume, or a restored team tab. See [teams.md](./teams.md#the-run-archive). |
 | [`team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) | `rimz teams flip`: locked board edits, the durable `team.stage` signal, owner delivery, and hand-off compaction. See [teams.md](./teams.md). |
 | [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution, launch-chain policy, and the shared focus policy. |
 | [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs), [`parent_watch.rs`](../../../crates/rimz/src/harness/parent_watch.rs), [`orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) | What a subagent caller may launch, the child's parent watchdog, and the host's backstop when that watchdog fails. See [subagents.md](./subagents.md). |
@@ -309,7 +309,7 @@ The worktree bullet comes from records written at creation. A linked worktree ge
 
 The shell bullet names the shell the process compiler resolved for the wrapper: the machine's `[agents] shell` when set, else `proc::user_shell()` at compile time. It renders as its kind, the path's file name (`zsh`, `bash`), and `None` omits the bullet; `explain` names the shell the launch would run under. With `[agents] shell` set, `SHELL` and `CLAUDE_CODE_SHELL` name it too, so a provider that reads either runs its tools there (Claude only for bash or zsh, per [its tool shell rule](../../externals/agent-adapter/claude-reference.md#tool-shell)). Without it, the bullet does not promise which shell the provider's tools use.
 
-Environment ends with the [team memory-file listing](./teams.md#scratch-files), using the fixed archive-memory pattern and the bare names of the files it matches. It carries facts only: no board sentence, snapshot warning, or instructions to read or create files. A launch that gets the listing at prompt submit carries none here, so the listing is never in both places. Git state is absent because launch and the agent's first read can be far apart; it arrives [at prompt submit](#environment-at-prompt-submit) where the adapter can carry it, and the agent runs git itself otherwise.
+Environment ends with the [team memory-file listing](./teams.md#the-memory-listing), using the fixed archive-memory pattern and the bare names of the files it matches. It carries facts only: no board sentence, snapshot warning, or instructions to read or create files. A launch that gets the listing at prompt submit carries none here, so the listing is never in both places. Git state is absent because launch and the agent's first read can be far apart; it arrives [at prompt submit](#environment-at-prompt-submit) where the adapter can carry it, and the agent runs git itself otherwise.
 
 #### Environment at prompt submit
 

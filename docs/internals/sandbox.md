@@ -198,7 +198,7 @@ A unit is separate from host `/tmp`, not hidden from the host. The state path st
 | GC | Removed after the configurable temp-unit grace (default 1 day). A shared unit is kept while its parent or any launched child is live or has not ended ([store.md](./store.md#what-is-on-disk)). |
 | Disk-pressure eviction | May reclaim an ended or rowless unit before the grace, never one with a live or open hold ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). |
 
-Team memory is a different mechanism, linked from the checkout into room state ([teams.md](./harness/teams.md#scratch-files)).
+Team memory is a different mechanism, linked from the checkout into room state ([teams.md](./harness/teams.md#the-run-archive)).
 
 ### Hard reset ends the processes inside a view
 
