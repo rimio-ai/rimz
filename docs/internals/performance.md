@@ -519,7 +519,45 @@ Before the runs, the rule was registered: claim "faster under load" only if A's 
 | A3/B3 | 0.834 | 0.961 | 1.297 |
 | A4/B4 | 0.895 | 0.488 | 1.281 |
 
-The rule holds: A was faster by claim median in four of four pairs, with ratios 0.814 to 0.895 and ambient load of 4.791 to 14.256 CPUs. All eight runs met the target (claim p99 below 1 s, zero prompt misses). A's claim p99 ranged from 100.977 to 218.433 ms; its largest prompt wall was 541.514 ms. Prompt p99 improved in only two pairs, so the claim-median improvement is not a uniform prompt-tail improvement. A's main-thread runqueue wait was lower than B's in three pairs and higher in A3/B3 (299.586 against 234.181 µs per frame). This establishes a loaded A/B speedup for this recipe, not the cause of round 1's slowdown or the contribution of each fix. The bench sends hooks one at a time, so it does not reproduce the incident's backlog. The before binary also met the target.
+The rule holds: A was faster by claim median in four of four pairs, with ratios 0.814 to 0.895 and ambient load of 4.791 to 14.256 CPUs. All eight runs met the target (claim p99 below 1 s, zero prompt misses). A's claim p99 ranged from 100.977 to 218.433 ms; its largest prompt wall was 541.514 ms. Prompt p99 improved in only two pairs, so the claim-median improvement is not a uniform prompt-tail improvement. A's main-thread runqueue wait was lower than B's in three pairs and higher in A3/B3 (299.586 against 234.181 µs per frame). This establishes a loaded A/B speedup for this recipe, not the cause of round 1's slowdown or the contribution of each fix. The bench sends hooks one at a time, so it [does not reproduce the incident's backlog](#drainer-backlog-under-arrival-load). The before binary also met the target.
+
+#### Drainer backlog under arrival load
+
+The Linux-only `crates/rimz/benches/hotpath.rs::drainer_backlog` is an open-loop sibling of the serial latency bench, ignored by default so an unfiltered performance run does not start the sweep. Run it with `cargo xtask perf --bench hotpath -- drainer_backlog --ignored`; `RIMZ_HOOK_BUDGET_BIN` selects the CLI under test. Select its JSON rows with `jq -Rc 'fromjson? | select(.drainer_backlog)'`. It asserts run validity, not a rate or latency gate.
+
+Each run keeps the existing 300 live-root fixture, context sidecars and 1,500 retained history rows. Of those roots, 46 send round-robin, each walking a staggered 20-frame turn: one UserPromptSubmit, 18 non-mutating Read PostToolUse frames and one Stop. One serial warm-up prompt per sender spends the runtime-environment first-prompt claim before measurement. Rates are 1, 2, 4, 8 and 16 frames/s, 60 s each, with a complete drain between steps, bounded at 10 minutes. Each arrival is due at step start plus its index divided by rate. Late sends catch up without dropping frames or moving the schedule. Prompts wait on separate threads for a covering receipt within 1.2 s; other frames nudge and close. The sender never waits for a receipt, and a held lease keeps the drainer alive.
+
+`claim_to_applied_us` is the testkit interval in `crates/rimz/src/harness/hook_drain.rs::Drainer::drain`, from before the claim lock through applied cursor publication, excluding time queued before claim. `append_to_applied_us` starts immediately before append and ends when `crates/rimz/benches/hotpath.rs::latency::TimingReader::start` reads that frame's timing record. This is an upper observation bound on cursor publication, including the drainer's post-publication response work, nominal 10 ms polling and any scheduling delay, not a hard 10 ms error bound. Every sweep frame must have exactly one matching successful timing record; cold and warm-up records do not count. A late prompt lacks a covering receipt within the reply thread's 1.2 s wait; empty context on a repeat prompt is not a miss. Receipted-prompt latency starts before append, unlike its wait deadline.
+
+Five-second `window` rows report cumulative sent/applied counts, observed depth (sent minus applied), applied-in-window latency distributions and host load. Windows restart at each send/drain phase; a phase's last window may be short, an empty drain still emits a window, empty distributions are null, and `t_ms` marks the end. Each `step` row includes its drain tail in the latency distributions. Applied/s counts frames observed applied by send end divided by the actual send-phase duration, which extends past 60 s if sends run late. Depth end is at that boundary, depth max spans the step, and drain time ends at its last applied observation. Triples below are nearest-rank p50 / p99 / max in milliseconds; drain is milliseconds too.
+
+On 2026-10-24 (UTC), loaded runs L1 and L2 used the same CLI built from trunk `1f7ce3556b` (`docs(store): hold replaced files open in forged-identity tests`) in a detached worktree with a fresh target: `cargo build -p rimz --release --features testkit --bins --locked`. Both fixture rows report build id `2b08d9eb3478`. The coordinator was the tree of `test(perf): add an open-loop drainer backlog sweep` on that base. Each case shared a non-agent `systemd-run --user --scope` with a sustained loop of `CARGO_TARGET_DIR=<fresh-target> cargo build -p rimz --release -j "$(nproc)" --locked` from the merge base. Both drainers used distinct helper scopes at CPU weight 1000.
+
+The host was the same Ryzen 9 9950X, with 28 online logical CPUs and ZFS temporary storage. Ambient CPU uses [round 3's cgroup method](#loaded-ab-rerun-with-ambient-cpu), sampled at the config row and final step row so it covers the send and drain phases but excludes fixture setup and warm-up. Readings are sequential, not atomic. Rustc counts are live compilers in the injected build's process session; one-second process snapshots and build-loop logs retain the intervening load phases.
+
+| Run | Ambient CPUs | Host load, start / end | Window load, min / max | rustc, start / end |
+| --- | ---: | ---: | ---: | ---: |
+| L1 | 6.054 | 42.29 / 34.43 | 16.06 / 42.96 | 1 / 1 |
+| L2 | 14.358 | 27.12 / 29.22 | 20.56 / 109.37 | 1 / 1 |
+
+| Run | Arrivals/s | Applied/s | Depth end | Depth max | Drain ms | Append → observed applied, ms | Claim → applied, ms | Prompts late / sent |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| L1 | 1 | 1.000 | 0 | 1 | 0 | 86.295 / 228.639 / 228.639 | 77.029 / 213.605 / 213.605 | 0/3 |
+| L1 | 2 | 2.000 | 0 | 1 | 0 | 138.681 / 363.457 / 433.407 | 131.945 / 312.523 / 344.764 | 0/6 |
+| L1 | 4 | 4.000 | 0 | 3 | 0 | 97.615 / 529.125 / 539.707 | 87.235 / 328.833 / 330.568 | 0/10 |
+| L1 | 8 | 8.000 | 0 | 5 | 0 | 90.258 / 504.260 / 517.346 | 78.966 / 167.291 / 187.562 | 0/26 |
+| L1 | 16 | 8.500 | 450 | 451 | 55897 | 25337.308 / 55882.738 / 55960.259 | 94.332 / 290.836 / 405.949 | 45/48 |
+| L2 | 1 | 1.000 | 0 | 1 | 0 | 113.885 / 293.024 / 293.024 | 99.424 / 279.250 / 279.250 | 0/3 |
+| L2 | 2 | 2.000 | 0 | 2 | 0 | 230.984 / 382.245 / 620.906 | 219.708 / 329.424 / 458.504 | 0/6 |
+| L2 | 4 | 4.000 | 0 | 4 | 0 | 201.566 / 545.541 / 796.305 | 188.439 / 372.452 / 450.558 | 0/10 |
+| L2 | 8 | 5.100 | 174 | 175 | 29656 | 18764.399 / 29930.010 / 29961.909 | 187.222 / 318.731 / 409.743 | 25/26 |
+| L2 | 16 | 10.150 | 351 | 352 | 37114 | 12792.829 / 36873.573 / 37176.587 | 88.916 / 203.533 / 235.928 | 45/48 |
+
+Both runs applied all 1,860 scheduled frames; maximum send lag was 77.952 ms in L1 and 199.408 ms in L2. L1's first growing step was 16/s, after holding at 8/s; L2's was 8/s, after holding at 4/s. Their five-second send-window depths grew from 20 to 450 and from 18 to 174 respectively. These are observed brackets, not one fixed capacity. L2's 8/s step ran at that run's load peak, with window one-minute load between 91.35 and 109.37 against 39.19 to 70.6 at 16/s. It applied 5.1/s there, against 10.15/s at 16/s, so L2's 8/s growth reflects a load phase, the case two runs were taken to expose. Both 16/s steps grew, so the ladder did not need a 32/s extension.
+
+At the incident-rate steps of 1 and 2 frames/s, trunk holds on this fixture in both runs, with no late prompts. Claim medians here were 77.029 to 219.708 ms, against the incident's observed 0.47 to 3.4 s per frame. The cause of that per-frame cost gap remains unmeasured. This is a loaded arrival-capacity baseline, not live-room replay; SessionStart and mutating-tool work are not represented.
+
+Raw Divan rows, row-validation results, one-second build-process snapshots, CPU readings and deltas, scope identities, scripts, binary digest and compiler logs were retained outside the repository on the measuring host. The detached merge-base worktree and all fresh build targets were removed after measurement.
 
 ## Making a performance change
 
