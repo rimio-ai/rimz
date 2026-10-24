@@ -27,12 +27,13 @@ use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::tab_name::{TabNameIntent, TabOwnerRecord, ViewNaming};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
-    CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
-    PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, ResumeTab,
-    ResumeTabShape, ResumeTabUnconfirmed, SessionHealth, SessionLiveness, SessionOptions,
-    SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    SplitPlacement, SplitTarget, TabOptions, WidthStep, confirm_resume_tab_shapes,
-    ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    CommandSpec, CompanionAppendErr, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr,
+    PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
+    ReconcilePaneRole, Result, ResumeTab, ResumeTabShape, ResumeTabUnconfirmed, SessionHealth,
+    SessionLiveness, SessionOptions, SidebarLivenessSource, SidebarPaneOptions, SidebarRecovery,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
+    confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes,
+    memoized_version,
 };
 use crate::mux::{PaneRect, ViewGeometry};
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
@@ -1241,7 +1242,10 @@ impl MuxBackend for ZellijBackend {
         Ok(created)
     }
 
-    fn append_companion_pane(&self, mut opts: SplitPaneOptions) -> Result<CompanionPaneAppend> {
+    fn append_companion_pane(
+        &self,
+        mut opts: SplitPaneOptions,
+    ) -> std::result::Result<CompanionPaneAppend, CompanionAppendErr> {
         let SplitTarget::SessionPane {
             session_name,
             pane_id,
@@ -1253,8 +1257,9 @@ impl MuxBackend for ZellijBackend {
         if !self.supports_no_focus() {
             return Ok(CompanionPaneAppend::Full);
         }
-        let Some(target) =
-            self.companion_append_target(&session, pane_id, super::super::COMMAND_TIMEOUT)?
+        let Some(target) = self
+            .companion_append_target(&session, pane_id, super::super::COMMAND_TIMEOUT)
+            .map_err(CompanionAppendErr::BeforeSpawn)?
         else {
             return Ok(CompanionPaneAppend::Full);
         };
@@ -1264,7 +1269,7 @@ impl MuxBackend for ZellijBackend {
         };
         opts.placement = SplitPlacement::Stacked;
         opts.focus = false;
-        self.split_pane(opts)?;
+        self.split_pane(opts).map_err(CompanionAppendErr::Spawn)?;
         Ok(CompanionPaneAppend::Opened)
     }
 

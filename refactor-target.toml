@@ -1277,7 +1277,13 @@ path = "crates/rimz/src/mux"
 # PaneRect, ViewGeometry and MuxBackend::view_geometry share daemon shape truth (+3).
 # MuxBackend::attach_may_drop_early keeps version-specific attach recovery in the backend (+1).
 # ViewFit shares ordered fitted, skipped, and failed outcomes across sweep and jump (+1).
-surface-budget = 297
+# CompanionAppendErr distinguishes pre-spawn fallback from an uncertain spawn (+1).
+surface-budget = 298
+
+[[verdict]]
+kind = "item"
+key = "mux::CompanionAppendErr"
+reason = "The CLI abandons companion stack placement only when the backend proves no payload ran."
 
 [[verdict]]
 kind = "item"
@@ -4015,7 +4021,7 @@ reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is requi
 [[verdict]]
 kind = "item"
 key = "diag::record::SubagentZoneLookup"
-reason = "The CLI stamps projection, caller, or pane-listing failure in the public SubagentZoneLookupFailed diagnostic payload."
+reason = "The CLI stamps projection, caller, pane-listing, or companion-stack preparation failure in the public SubagentZoneLookupFailed diagnostic payload."
 
 [[verdict]]
 kind = "item"

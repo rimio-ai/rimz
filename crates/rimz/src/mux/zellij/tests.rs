@@ -2057,7 +2057,11 @@ exit 0
             ..Default::default()
         });
     assert!(
-        matches!(&result, Err(MuxErr::Output { reason, .. }) if reason.contains("returned no array on every attempt")),
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::BeforeSpawn(MuxErr::Output { reason, .. }))
+                if reason.contains("returned no array on every attempt")
+        ),
         "{result:?}"
     );
     let log = shim_log(&temp);
@@ -2111,6 +2115,46 @@ esac
         1,
         "{log}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_new_pane_failure_is_spawn_error() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+case " $* " in
+  *" list-panes "*)
+    printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":120,"pane_rows":80}]\n' ;;
+  *" new-pane "*) printf 'spawn refused\n' >&2; exit 1 ;;
+esac
+"#,
+    );
+    let result =
+        ZellijBackend::with_program_for_test(&shim).append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            ..Default::default()
+        });
+    assert!(
+        matches!(
+            &result,
+            Err(crate::mux::CompanionAppendErr::Spawn(MuxErr::Command { stderr, .. }))
+                if stderr.contains("spawn refused")
+        ),
+        "{result:?}"
+    );
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        1,
+        "{log}"
+    );
+    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
 }
 
 #[cfg(unix)]

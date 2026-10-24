@@ -147,7 +147,7 @@ fn subagent_pane_bind_timeouts_round_trip_with_run_identity() {
 fn subagent_zone_lookup_failures_round_trip_and_distinguish_run_and_lookup() {
     let run_id = crate::RunId::new();
     let mut identities = std::collections::BTreeSet::new();
-    for lookup in ["projection", "caller", "pane_listing"] {
+    for lookup in ["projection", "caller", "pane_listing", "companion_stack"] {
         let wire = serde_json::json!({
             "kind": "subagent_zone_lookup_failed", "run_id": run_id,
             "lookup": lookup, "error": "placement unavailable",

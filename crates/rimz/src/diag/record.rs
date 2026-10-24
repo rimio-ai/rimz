@@ -96,6 +96,7 @@ pub enum SubagentZoneLookup {
     Projection,
     Caller,
     PaneListing,
+    CompanionStack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

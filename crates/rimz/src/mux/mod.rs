@@ -734,6 +734,8 @@ impl SplitPaneOptions {
 }
 
 /// A companion append never asks the caller to retry after opening a pane.
+/// Errors distinguish preparation, when no payload ran, from a failed spawn
+/// command or reply, when a payload may be running; see [`CompanionAppendErr`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompanionPaneAppend {
     /// The payload was spawned, even when the backend printed no pane id.
@@ -741,6 +743,17 @@ pub enum CompanionPaneAppend {
     /// No payload ran: no work pane, an unsuitable layout, insufficient stack
     /// room, or background placement unavailable on this backend version.
     Full,
+}
+
+/// The phase of a companion append failure, preserving the underlying mux error.
+#[derive(Debug, thiserror::Error)]
+pub enum CompanionAppendErr {
+    /// A step before the spawn command failed; no payload ran.
+    #[error(transparent)]
+    BeforeSpawn(MuxErr),
+    /// The spawn command or reading its reply failed; a payload may be running.
+    #[error(transparent)]
+    Spawn(MuxErr),
 }
 
 /// Mux context used to resolve a pane split.
@@ -1122,7 +1135,13 @@ pub trait MuxBackend: Send + Sync {
     /// the backend splits its bottom-most work pane only when the open member
     /// will retain at least 10 content rows. No balancing or geometry confirmation
     /// follows the split. Zoomed, fullscreen, suppressed and mixed layouts are full.
-    fn append_companion_pane(&self, opts: SplitPaneOptions) -> Result<CompanionPaneAppend>;
+    /// [`CompanionAppendErr::BeforeSpawn`] guarantees no payload ran;
+    /// [`CompanionAppendErr::Spawn`] means the spawn command or reading its reply
+    /// failed and a payload may be running.
+    fn append_companion_pane(
+        &self,
+        opts: SplitPaneOptions,
+    ) -> std::result::Result<CompanionPaneAppend, CompanionAppendErr>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
     /// room pane pass `Some(session)`; with `None` the Zellij backend names the
     /// caller's own `ZELLIJ_SESSION_NAME` and returns
