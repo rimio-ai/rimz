@@ -34,7 +34,7 @@ The harness spawns the fleet, addresses it, drives it, and reclaims what it leav
 | [hibernate.md](./harness/hibernate.md) | Agent hibernation: admission and doctor checks, provider and helper scopes, the hold order, freeze and deepen transactions with the reclaim steps, record projection, synchronous and focus wakes with the wake-first guard, grace stamps, start reconciliation, and wake diagnostics. |
 | [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, the prompt-cache keepalive, reply waits, sender notices, scheduling, the inbox verbs, channels, and the timing knobs. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds and origins, hook writers, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
-| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, dirty and landed status, landing on main, removal, and every caller that triggers it. |
+| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, lifecycle hooks and signals, dirty and landed status, landing on the comparison branch, removal, and every caller that triggers it. |
 | [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `.rimz/team/blackboard.md` stage board, `rimz teams flip`, and the resume re-wake with its registration backstop. |
 | [trust.md](./harness/trust.md) | Project trust: the hashed executable surface, launch-time enforcement, grant storage, the stale-grant diff, and every way a grant is made. |
 
