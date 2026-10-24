@@ -453,10 +453,10 @@ fn load_or_refresh_stats(
         refresh_global_spending_direct(paths, &spec, &mut |_| {})
     };
     today_stats(provider).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
-            )
-        })
+        anyhow::anyhow!(
+            "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
+        )
+    })
 }
 
 fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {
