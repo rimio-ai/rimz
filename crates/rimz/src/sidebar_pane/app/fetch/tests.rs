@@ -812,7 +812,10 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
             FetchPhase::Final,
             SnapshotSource::Cached,
         )));
-        let delivered: Vec<_> = receivers.iter().map(|rx| rx.try_recv().unwrap()).collect();
+        let delivered: Vec<_> = receivers
+            .iter()
+            .map(|rx| rx.first_unseen().unwrap())
+            .collect();
         for update in &delivered {
             let shown = snapshot(update);
             assert_eq!(shown.rows().count(), 200);
@@ -883,7 +886,7 @@ fn unread_write_back_copies_only_the_changed_group() {
         &mut sink,
     );
     for rx in [elder_rx, younger_rx] {
-        let update = rx.try_recv().unwrap();
+        let update = rx.first_unseen().unwrap();
         let shown = snapshot(&update);
         assert!(shown.rows().all(|row| !row.unread));
         assert!(!Arc::ptr_eq(
@@ -927,7 +930,8 @@ impl Replay {
         }
     }
 
-    fn take(&self) -> Vec<FetchUpdate> {
+    /// Every outcome the cursor has not seen yet, oldest first.
+    fn take_unseen(&self) -> Vec<FetchUpdate> {
         let views = self.views.lock().unwrap();
         let mut cursor = self.cursor.lock().unwrap();
         let updates = views
@@ -946,29 +950,31 @@ impl Replay {
         updates
     }
 
-    fn try_iter(&self) -> std::vec::IntoIter<FetchUpdate> {
-        self.take().into_iter()
-    }
-
-    fn try_recv(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
-        self.try_iter()
+    /// Takes every unseen outcome and returns the first.
+    fn first_unseen(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
+        self.take_unseen()
+            .into_iter()
             .next()
             .ok_or(std::sync::mpsc::TryRecvError::Empty)
     }
 
-    fn recv(&self) -> Result<FetchUpdate, std::sync::mpsc::RecvError> {
+    /// Polls `first_unseen` until an outcome arrives or five seconds pass.
+    fn wait_first_unseen(&self) -> Result<FetchUpdate, NoOutcomeWithin5s> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(update) = self.try_recv() {
+            if let Ok(update) = self.first_unseen() {
                 return Ok(update);
             }
             if Instant::now() >= deadline {
-                return Err(std::sync::mpsc::RecvError);
+                return Err(NoOutcomeWithin5s);
             }
             std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
+
+#[derive(Debug)]
+struct NoOutcomeWithin5s;
 
 /// The single sink's synthetic owner; a producing fixture lists it so the witness is present.
 const SINGLE_SINK_PANE: &str = "sidebar_0";
@@ -1017,7 +1023,8 @@ fn run_cycle(
     reader.cursor.lock().unwrap().revision = reader.views.lock().unwrap().revision;
     worker.run_cycle(state, request, &mut sink);
     reader
-        .try_iter()
+        .take_unseen()
+        .into_iter()
         .map(|update| update.into_parts().0)
         .collect()
 }
@@ -1143,7 +1150,7 @@ fn notification_panes_target_agent_panes() {
 }
 
 #[test]
-fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
+fn reconciled_unread_is_published_before_notice_and_permits_the_younger_bell() {
     use super::super::notify::{BellDecision, bell_decision};
 
     let fixture = FetchFixture::new();
@@ -1193,11 +1200,11 @@ fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
     );
 
     assert!(
-        snapshot(&elder_rx.recv().unwrap())
+        snapshot(&elder_rx.wait_first_unseen().unwrap())
             .rows()
             .any(|row| row.unread)
     );
-    let younger = younger_rx.recv().unwrap();
+    let younger = younger_rx.wait_first_unseen().unwrap();
     assert!(
         snapshot(&younger).rows().any(|row| row.unread),
         "this publication must carry the newly reconciled episode"
@@ -1300,7 +1307,11 @@ fn a_worker_notification_reaches_every_subscribed_pane_after_its_snapshot() {
             inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
             Wakeup::Snapshot
         );
-        assert!(snapshot(&rx.recv().unwrap()).rows().any(|row| row.unread));
+        assert!(
+            snapshot(&rx.wait_first_unseen().unwrap())
+                .rows()
+                .any(|row| row.unread)
+        );
         let Wakeup::Event(envelope) = inbox.recv_timeout(Duration::from_secs(1)).unwrap() else {
             panic!("expected notification");
         };
@@ -1660,7 +1671,7 @@ struct FetchFixture {
 }
 
 #[test]
-fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
+fn publication_and_completion_precede_the_narrowing_probe() {
     thread_local! {
         static UPDATES: std::cell::RefCell<Option<Replay>> =
             const { std::cell::RefCell::new(None) };
@@ -1980,7 +1991,7 @@ fn a_delivered_fold_is_already_the_hosts_latest_fold() {
 }
 
 #[test]
-fn fast_fold_retains_its_fold_for_new_attachments() {
+fn fast_fold_replaces_the_retained_seed_and_failure_preserves_it() {
     let fixture = FetchFixture::new();
     fixture.write_pane_frame();
     let mut rollup = SidebarSnapshot::build(
@@ -2002,7 +2013,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     let (mut sink, rx) = single_sink(fixture.host_data.clone(), wake_channel().0);
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert!(matches!(
-        rx.recv().unwrap().into_parts().0,
+        rx.wait_first_unseen().unwrap().into_parts().0,
         FetchUpdate::Snapshot { .. }
     ));
     assert_eq!(sink.cycle.len(), 1);
@@ -2030,7 +2041,7 @@ fn fast_fold_retains_its_fold_for_new_attachments() {
     .unwrap();
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
     assert!(matches!(
-        rx.recv().unwrap().into_parts().0,
+        rx.wait_first_unseen().unwrap().into_parts().0,
         FetchUpdate::Snapshot { .. }
     ));
     assert_eq!(
@@ -2365,8 +2376,8 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
     let mut worker = fixture.worker();
     let mut sink = ResultSink::shared(subscribers, fixture.host_data.clone());
     worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
-    let first = first_rx.try_recv().unwrap();
-    let second = second_rx.try_recv().unwrap();
+    let first = first_rx.first_unseen().unwrap();
+    let second = second_rx.first_unseen().unwrap();
     let host = fixture.host_data.lock().unwrap();
     let views = host.views.lock().unwrap();
     let remembered = views.fold.as_ref().unwrap().workspace.snapshot();
@@ -2392,7 +2403,7 @@ fn one_cycle_shares_rosters_and_cards_across_renderers() {
 }
 
 #[test]
-fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
+fn a_lagging_cursor_replays_only_the_latest_room_fold() {
     let fixture = FetchFixture::new();
     let subscribers = Subscribers::default();
     let (stalled, stalled_rx) = subscriber(&fixture, "01", "terminal_7", 60, wake_channel().0);
@@ -2415,7 +2426,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
         );
         fixture.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
         worker.run_cycle(&fixture.state, FetchRequest::default(), &mut sink);
-        let updates = advancing_rx.take();
+        let updates = advancing_rx.take_unseen();
         assert_eq!(updates.len(), 1, "unrelated subscriber keeps advancing");
         assert_eq!(shown_panes(&updates[0]), ["terminal_7", &newest]);
     }
@@ -2429,7 +2440,7 @@ fn a_stalled_subscriber_retains_only_the_latest_projected_fold() {
             .len(),
         1
     );
-    let updates: Vec<_> = stalled_rx.try_iter().collect();
+    let updates = stalled_rx.take_unseen();
     assert_eq!(
         updates.len(),
         1,
@@ -2486,7 +2497,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
     );
     let mut common = None;
     for (n, (sub, rx)) in receivers.into_iter().enumerate() {
-        let update = rx.try_recv().unwrap();
+        let update = rx.first_unseen().unwrap();
         let FetchUpdate::Shared { context, .. } = &update else {
             panic!("shared context missing")
         };
@@ -2596,7 +2607,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
             body_filter::take_reads();
             ready.send(()).unwrap();
             drop(ready);
-            state.apply_latest_snapshot(rx.recv().unwrap());
+            state.apply_latest_snapshot(rx.wait_first_unseen().unwrap());
             (focus_anchor::take_reads(), body_filter::take_reads())
         }));
     }
@@ -3045,8 +3056,10 @@ fn staggered_requests(idle: bool) {
                 }
             }
             2 => {
-                *captured.lock().unwrap() =
-                    draining.iter().map(|rx| rx.try_recv().unwrap()).collect();
+                *captured.lock().unwrap() = draining
+                    .iter()
+                    .map(|rx| rx.first_unseen().unwrap())
+                    .collect();
                 sender = None;
             }
             _ => panic!("the staggered burst cost more than two folds"),
@@ -3061,7 +3074,7 @@ fn staggered_requests(idle: bool) {
     );
     let first_publications = std::mem::take(&mut *first_publications.lock().unwrap());
     for ((own, rx), first) in panes.iter().zip(receivers.iter()).zip(first_publications) {
-        let updates: Vec<_> = std::iter::once(first).chain(rx.try_iter()).collect();
+        let updates: Vec<_> = std::iter::once(first).chain(rx.take_unseen()).collect();
         assert_eq!(
             updates.len(),
             2,
@@ -3089,7 +3102,7 @@ fn staggered_requests(idle: bool) {
 }
 
 #[test]
-fn one_publication_serves_the_renderers_its_cycle_began_with() {
+fn completion_and_wakes_use_frozen_membership_but_content_is_room_shared() {
     let fixture = FetchFixture::new();
     let frame = crate::sidebar::frame::assemble_frame(
         ["terminal_7", "terminal_8", "terminal_9"]
@@ -3132,14 +3145,14 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
         SnapshotSource::Cached,
     )));
 
-    let younger: Vec<_> = younger_rx.try_iter().collect();
+    let younger: Vec<_> = younger_rx.take_unseen().into_iter().collect();
     assert_eq!(younger.len(), 1);
     assert_eq!(
         shown_panes(&younger[0]),
         ["terminal_7", "terminal_9"],
         "the younger pane gets its own view, not the departed eldest's"
     );
-    let eldest: Vec<_> = eldest_rx.try_iter().collect();
+    let eldest: Vec<_> = eldest_rx.take_unseen().into_iter().collect();
     assert_eq!(shown_panes(&eldest[0]), ["terminal_8", "terminal_9"]);
     assert!(eldest_rx.completion.load(Ordering::Relaxed));
     assert!(younger_rx.completion.load(Ordering::Relaxed));
@@ -3148,7 +3161,7 @@ fn one_publication_serves_the_renderers_its_cycle_began_with() {
     assert_eq!(younger_wakes.try_recv().unwrap(), Wakeup::Snapshot);
     assert!(new_wakes.try_recv().is_err());
     assert_eq!(
-        shown_panes(&newcomer_rx.recv().unwrap()),
+        shown_panes(&newcomer_rx.wait_first_unseen().unwrap()),
         ["terminal_7", "terminal_8"]
     );
 }
@@ -3213,7 +3226,7 @@ fn the_worker_witness_is_its_eldest_renderers_pane() {
 }
 
 #[test]
-fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
+fn a_full_wake_channel_does_not_block_failure_publication_or_peer_completion() {
     let fixture = FetchFixture::new();
     let (full, _stalled) = std::sync::mpsc::sync_channel(1);
     full.send(Wakeup::Tick).unwrap();
