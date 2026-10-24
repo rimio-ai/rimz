@@ -449,7 +449,7 @@ impl ZellijBackend {
         let timeout_error = || MuxErr::Timeout {
             program: spec.program.clone(),
             args: spec.args.join(" "),
-            seconds: timeout.as_secs(),
+            timeout,
         };
         let mut remaining = timeout;
         for attempt in 0..super::TRANSIENT_EMPTY_ATTEMPTS {
@@ -463,7 +463,7 @@ impl ZellijBackend {
                 MuxErr::Timeout { program, args, .. } => MuxErr::Timeout {
                     program,
                     args,
-                    seconds: timeout.as_secs(),
+                    timeout,
                 },
                 err => classify_session_not_found(err, session_name),
             })?;

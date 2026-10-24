@@ -437,7 +437,7 @@ fn subagent_zone_ambiguous_split_never_opens_a_second_pane() {
         rimz::mux::MuxErr::Timeout {
             program: "fake".to_owned(),
             args: "split".to_owned(),
-            seconds: 1,
+            timeout: Duration::from_secs(1),
         },
         rimz::mux::MuxErr::Output {
             program: "fake".to_owned(),
@@ -514,7 +514,7 @@ fn subagent_zone_ambiguous_append_never_opens_a_second_pane() {
         rimz::mux::MuxErr::Timeout {
             program: "fake".into(),
             args: "append".into(),
-            seconds: 1,
+            timeout: Duration::from_secs(1),
         },
         rimz::mux::MuxErr::Output {
             program: "fake".into(),
@@ -552,7 +552,7 @@ fn subagent_zone_before_spawn_timeout_opens_numbered_companion() {
     assert_zone_before_spawn_fallback(rimz::mux::MuxErr::Timeout {
         program: "fake".into(),
         args: "append lookup".into(),
-        seconds: 1,
+        timeout: Duration::from_secs(1),
     });
 }
 
@@ -791,7 +791,7 @@ mod zone_backend {
             Err(m::MuxErr::Timeout {
                 program: "fake".to_owned(),
                 args: "list-panes".to_owned(),
-                seconds: 1,
+                timeout: Duration::from_secs(1),
             })
         }
         fn split_pane(&self, _opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
