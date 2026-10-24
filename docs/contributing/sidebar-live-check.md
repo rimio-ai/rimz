@@ -549,6 +549,16 @@ ssh reads `~/.ssh` from your passwd home, not `$HOME`, so an SSH command a sandb
 
 A held room's provider has no folder-trust decision for its worktree, so the first `a subagents claude ...` refuses with `claude has no trust decision for ...` and names `rimz trust grant --agents claude` as the fix. Run that grant as `rz trust grant --agents claude`: the plain-shell prefix writes the sandbox's home, while a bare `rimz trust grant` from your shell writes your real provider config. The launch then succeeds.
 
+To check a launched child's entry (its model, effort, and fast-mode bolt), prime the agent with `UserPromptSubmit` and `Stop` as well, so its card can show a subagents line, then launch children that stay alive:
+
+```sh
+rz trust grant --agents claude
+a subagents --fast --keep --model haiku --effort high --description 'fast child' claude 'Stay alive until stopped.'
+a subagents --no-fast --keep --model haiku --effort low --description 'plain child' claude 'Stay alive until stopped.'
+```
+
+The launch alone puts each child's model, effort, and fast mode on its entry. The stub child reports nothing else, so to add its token figure and resolved model name, feed a Claude statusline as the child, running `sandbox in --as` with the child's handle. `PreCompact` then `PostCompact` fed as the child adds `↻ 1`.
+
 `--as-ancestor` starts the command below the stub, with exactly plain `in`'s environment: no `RIMZ_AGENT_*` or pane key. It relays stdin, stdout, and stderr through pipes, not a tty, and reports a failed command's exit status. An absent or dead serving seat refuses with the instruction to hold a fresh room with this build. Both modes default to the card's Worktree; `--cwd` overrides it. A relative program path containing `/` resolves from your checkout, as it does for plain `in`.
 
 Session-death recovery needs the same feed for every agent. The stub agents hold provisional session ids, which the producer leaves out of `records/live-roster.json`, so an unprimed room publishes an empty roster while its agents are alive and the next `rimz start` has nothing to recover. Feed one SessionStart per agent and wait for the roster to name them before ending the session.
