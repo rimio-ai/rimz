@@ -26,12 +26,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-/// Native Linux boot identity for matching provider process records.
-#[cfg(target_os = "linux")]
+/// Native Linux boot identity, cached once per process, including failed reads.
+/// Other platforms have no cheap native identity and return `None`.
 pub(crate) fn boot_id() -> Option<String> {
-    let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-    let id = id.trim().to_owned();
-    (!id.is_empty()).then_some(id)
+    static BOOT_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BOOT_ID
+        .get_or_init(|| {
+            if !cfg!(target_os = "linux") {
+                return None;
+            }
+            let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+            let id = id.trim().to_owned();
+            (!id.is_empty()).then_some(id)
+        })
+        .clone()
 }
 
 /// Stable per-device identity carried to the remote attach so a replacement

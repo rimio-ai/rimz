@@ -35,7 +35,7 @@ fn rotation_commits_reborn_ordinals_before_the_next_registration() {
     )
     .unwrap();
     let (cache, _, _) = catch_up_rollup(&paths).unwrap();
-    write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+    write_rollup_cache(&paths, &cache).unwrap();
     stage_carryover_for_rotation(&paths, 1).unwrap();
     event_log::rotate(&paths.events_log, &paths.events_archive_dir, 1).unwrap();
     reseed_rollup_cache_for_rotation(&paths).unwrap();
@@ -332,7 +332,7 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
     )
     .unwrap();
     let (cache, _, _) = catch_up_rollup(&paths).unwrap();
-    write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+    write_rollup_cache(&paths, &cache).unwrap();
     assert_eq!(cache.extent.generation, 0);
     assert!(cache.extent.offset > 0);
 
@@ -405,7 +405,7 @@ fn thread_fold_serves_across_a_rotation() {
     };
     event_log::append(&paths.events_log, &registered("before")).unwrap();
     let (held, _, _) = thread_catch_up(&paths).unwrap();
-    write_rollup_cache(&paths.rollup_cache, &held).unwrap();
+    write_rollup_cache(&paths, &held).unwrap();
     drop(held);
 
     stage_carryover_for_rotation(&paths, 1).unwrap();
