@@ -621,7 +621,7 @@ The surviving overlays then apply in precedence order:
 
 ## Focus intent
 
-Every RimZ-initiated focus action, a user jump or an automatic repair, is a two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)), a rename-atomic runtime record written without fsync. The one bare jump, after a Zellij focus-taking directional split, is in [multiplexers.md → jumping to a pane](../multiplexers.md#jumping-to-a-pane). The two phases are:
+A RimZ-initiated focus action, a user jump or an automatic repair, is a two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)), a rename-atomic runtime record written without fsync. The one exception, a bare jump after a Zellij focus-taking directional split, is in [multiplexers.md → jumping to a pane](../multiplexers.md#jumping-to-a-pane). The two phases are:
 
 - `Requested` is written and broadcast with `FocusIntent` before the one-way mux focus command.
 - `Applied` records that the mux accepted the command, without reseeding presentation. Native confirmation and fencing read this phase.
