@@ -174,6 +174,88 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn validation_accepts_step_layouts_and_refuses_invalid_stay_fields() {
+    let cases = [
+        (
+            "mixed layout",
+            VALID.replace("agent = \"claude\"", "agent = 'claude,term'"),
+            None,
+        ),
+        (
+            "virtual cell",
+            VALID.replace("agent = \"claude\"", "agent = 'claude-auto,term'"),
+            None,
+        ),
+        ("stay", format!("{VALID}lifecycle='stay'\n"), None),
+        (
+            "no agent",
+            VALID.replace("agent = \"claude\"", "agent = 'term'"),
+            Some("steps.build.agent"),
+        ),
+        (
+            "ambiguous leader",
+            VALID.replace("agent = \"claude\"", "agent = 'claude,claude'"),
+            Some("steps.build.agent"),
+        ),
+        (
+            "team",
+            VALID.replace("agent = \"claude\"", "agent = 'forge'"),
+            Some("steps.build.agent"),
+        ),
+        (
+            "stay timeout",
+            format!("{VALID}lifecycle='stay'\ntimeout='1h'\n"),
+            Some("steps.build.timeout"),
+        ),
+        (
+            "stay asked",
+            format!("{VALID}lifecycle='stay'\non.asked='@user'\n"),
+            Some("steps.build.on.asked"),
+        ),
+        (
+            "judge layout",
+            VALID.replace(
+                "run = \"python3 checks/pick.py\"",
+                "agent='claude,codex'\nprompt-file='prompts/build.md'",
+            ),
+            Some("checks.pick.agent"),
+        ),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(label, text, path)| {
+            let (home, dir) = fixture();
+            fs::write(dir.join("workflow.toml"), text).unwrap();
+            let mut definitions = LoadedDefinitions::default();
+            definitions.teams.0.insert(
+                "forge".into(),
+                crate::config::Team {
+                    layout: Some("claude".into()),
+                    ..Default::default()
+                },
+            );
+            let report = validate(&dir, home.path(), &definitions, None);
+            let valid = match path {
+                Some(path) => report.errors.iter().any(|issue| {
+                    issue.path == path
+                        && match label {
+                            "team" => issue.message.contains("use an agent layout"),
+                            "no agent" => issue.message.contains("add an agent"),
+                            "ambiguous leader" => issue.message.contains("choose an unambiguous"),
+                            "stay timeout" => issue.message.contains("remove timeout"),
+                            "stay asked" => issue.message.contains("remove on.asked"),
+                            _ => true,
+                        }
+                }),
+                None => report.errors.is_empty(),
+            };
+            (label, valid, report.errors)
+        })
+        .collect();
+    assert!(results.iter().all(|(_, valid, _)| *valid), "{results:#?}");
+}
+
+#[test]
 fn validation_rejects_each_invalid_spec() {
     let shell = "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nshell='true'\non={pass='@done',fail='@user'}\n";
     let cases = [

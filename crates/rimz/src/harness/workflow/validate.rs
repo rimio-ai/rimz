@@ -241,7 +241,13 @@ pub(super) fn validate_spec(
                 && spec
                     .steps
                     .get(target)
-                    .is_some_and(|step| step.agent == agent)
+                    .and_then(|step| step_layout(dir, &step.agent, definitions, project_root).ok())
+                    .and_then(|layout| {
+                        let leader = crate::harness::spec::prompt_leader(&layout, None).ok()?;
+                        let cell = layout.agent_cells().nth(leader)?;
+                        Some(cell.launch.profile.as_deref().unwrap_or(&cell.kind) == agent)
+                    })
+                    == Some(true)
             {
                 report.warnings.push(issue(&path, format!("judge and step {target} use the same profile {agent}; independence relies on the prompt")));
             }
@@ -267,17 +273,40 @@ pub(super) fn validate_spec(
     for (node, step) in &spec.steps {
         let path = format!("steps.{node}");
         report.node_name(&path, node);
-        report.agent_fields(
-            dir,
-            &path,
-            Some(&step.agent),
-            Some(&step.prompt_file),
-            step.window.as_deref(),
-            definitions,
-        );
+        report.prompt_window(dir, &path, Some(&step.prompt_file), step.window.as_deref());
+        let layout = match step_layout(dir, &step.agent, definitions, project_root) {
+            Ok(layout) => Some(layout),
+            Err(error) => {
+                report.error(&format!("{path}.agent"), error);
+                None
+            }
+        };
+        if !step.lifecycle.is_turn() {
+            if step.timeout.is_some() {
+                report.error(
+                    &format!("{path}.timeout"),
+                    "a staying step has no step timeout; remove timeout or use lifecycle = 'turn'",
+                );
+            }
+            if step.on.asked.is_some() {
+                report.error(
+                    &format!("{path}.on.asked"),
+                    "a staying step keeps asks live; remove on.asked or use lifecycle = 'turn'",
+                );
+            }
+        }
         report.timeout(&path, step.timeout.as_deref());
-        let do_background = do_background(Some(&step.agent), definitions);
-        if do_background == Some(false) {
+        let do_background = layout.as_ref().and_then(|layout| {
+            let leader = crate::harness::spec::prompt_leader(layout, None).ok()?;
+            let cell = layout.agent_cells().nth(leader)?;
+            let adapter = crate::agents::find_definition(&cell.kind)?;
+            Some(
+                adapter
+                    .concern_coverage(crate::agents::IntegrationConcern::BackgroundParking)
+                    .is_wired(),
+            )
+        });
+        if step.lifecycle.is_turn() && do_background == Some(false) {
             report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
         }
         if !step
@@ -348,6 +377,13 @@ pub(super) fn validate_spec(
         .auto_continue
     {
         for row in &report.rows {
+            if spec
+                .steps
+                .get(&row.node)
+                .is_some_and(|step| !step.lifecycle.is_turn())
+            {
+                continue;
+            }
             if row.agent.is_some() {
                 report.warnings.push(issue(&format!("{}.{}", if row.kind == "step" { "steps" } else { "checks" }, row.node), "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"));
             }
@@ -596,19 +632,65 @@ impl Validation {
                 self.error(&format!("{path}.agent"), err);
             }
         }
+        if window.is_some() && agent.is_none() {
+            self.error(&format!("{path}.window"), "window requires an agent");
+        }
+        self.prompt_window(dir, path, prompt, window);
+    }
+
+    fn prompt_window(
+        &mut self,
+        dir: &Path,
+        path: &str,
+        prompt: Option<&str>,
+        window: Option<&str>,
+    ) {
         if let Some(prompt) = prompt
             && let Err(err) = spec::confined_file(dir, prompt)
         {
             self.error(&format!("{path}.prompt-file"), err);
         }
         let Some(window) = window else { return };
-        if agent.is_none() {
-            self.error(&format!("{path}.window"), "window requires an agent");
-        }
         if let Err(err) = spec::parse_window(window) {
             self.error(&format!("{path}.window"), err);
         }
     }
+}
+
+fn step_layout(
+    dir: &Path,
+    agent: &str,
+    definitions: &LoadedDefinitions,
+    project_root: Option<&Path>,
+) -> anyhow::Result<crate::harness::spec::LayoutSpec> {
+    for cell in crate::harness::spec::parse_layout_structure(agent)?.cells() {
+        if let Some(paths) = definitions.failed.get(cell) {
+            anyhow::bail!("broken definition for {cell}: {paths:?}");
+        }
+    }
+    let mut machine = (*crate::config::MachineConfig::load_lenient()).clone();
+    machine
+        .agents
+        .profiles
+        .clone_from(&definitions.agent_profiles);
+    machine.agents.teams.clone_from(&definitions.teams);
+    let effective = crate::config::effective::load(&machine, project_root.unwrap_or(dir))?;
+    let resolved = crate::harness::plan::resolve_launch(
+        &effective,
+        crate::config::effective::ProfileScope::Agents,
+        &machine.agents.commands,
+        Some(agent),
+        None,
+    )?;
+    if resolved.team_name.is_some() {
+        anyhow::bail!("steps do not support teams; use an agent layout instead");
+    }
+    if resolved.layout.agent_cells().next().is_none() {
+        anyhow::bail!("step layout needs a prompt leader; add an agent cell");
+    }
+    crate::harness::spec::prompt_leader(&resolved.layout, None)
+        .map_err(|error| anyhow::anyhow!("{error}; choose an unambiguous prompt leader"))?;
+    Ok(resolved.layout)
 }
 
 /// `None` when the profile does not resolve; `agent_fields` reports that error.

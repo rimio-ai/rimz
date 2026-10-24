@@ -188,7 +188,7 @@ Every write previews the provider-file diff through the shared CLI file-diff ren
 
 Codex's saved-untrusted decision is `Restricted`, and no grant path writes over it. `rimz start` prints its fix on every start without asking and records no decline for it. `rimz doctor` and `rimz trust` resolve each kind's account as a launch would: room pins and live inherited defaults inside a room, else the trusted project, then the machine, then the provider default. A kind whose account fails to resolve does not hide its siblings' rows.
 
-The verdict each launch class gets for an undecided or restricted folder (warn or refuse) is owned by [fleet.md § Every path that builds a launch layout](./fleet.md#every-path-that-builds-a-launch-layout). Each provider's decision and grant key are on its adapter page: [Claude](../agents/adapter_claude.md#folder-trust), [Codex](../agents/adapter_codex.md#directory-trust-preflight), and [Qoder](../agents/adapter_qoder.md#launch-preconditions-and-folder-trust).
+The verdict each launch class gets for an undecided or restricted folder (warn or refuse) is owned by [fleet.md § Every path that builds a launch layout](./fleet.md#every-path-that-builds-a-launch-layout). Each provider's decision and grant key are on its adapter page: [Claude](../agents/adapter_claude.md#folder-trust), [Codex](../agents/adapter_codex.md#directory-trust-preflight), and [Qoder](../agents/adapter_qoder.md#launch-preconditions-and-folder-trust). The launcher owns both recipes: workflow leaders take the strict run-bearing recipe, and companions take the loop's verdicts (undecided warns; Restricted and untrusted hooks refuse), naming the workflow in refusals.
 
 ## Adding a command-running field
 

@@ -18,6 +18,7 @@ const AGENT_RELAUNCH: &str = "launch from a directory the account already trusts
 pub enum Unattended {
     Team,
     Loop,
+    Workflow,
     Subagent,
     Agent,
 }
@@ -27,6 +28,7 @@ impl std::fmt::Display for Unattended {
         f.write_str(match self {
             Self::Team => "team",
             Self::Loop => "loop",
+            Self::Workflow => "workflow",
             Self::Subagent => "subagent resume",
             Self::Agent => "agent-started",
         })
@@ -49,6 +51,15 @@ pub fn preflight_hooks(
         ..
     } = error
     else {
+        if matches!(
+            error,
+            crate::agents::BirthLoginErr::HooksMissing { .. }
+                | crate::agents::BirthLoginErr::HooksDisabled { .. }
+                | crate::agents::BirthLoginErr::HooksUntrusted { .. }
+        ) && matches!(unattended(), Some(Unattended::Workflow))
+        {
+            anyhow::bail!("workflow launch refused: {error}");
+        }
         return Err(error.into());
     };
     if let Some(context) = unattended() {
@@ -266,6 +277,37 @@ mod tests {
             .to_string(),
             expected
         );
+    }
+
+    #[test]
+    fn every_workflow_hook_refusal_keeps_its_fix_and_names_the_workflow() {
+        use crate::agents::BirthLoginErr;
+        let kind = crate::ids::AgentKind::new_unchecked("codex");
+        let name = crate::ids::LoginName::default_login();
+        for error in [
+            BirthLoginErr::HooksMissing {
+                kind: kind.clone(),
+                name: name.clone(),
+                home: "/codex".into(),
+            },
+            BirthLoginErr::HooksDisabled {
+                kind,
+                name,
+                reason: "hooks disabled".into(),
+                fix: "enable hooks".into(),
+            },
+            untrusted_hooks(None),
+        ] {
+            let expected = format!("workflow launch refused: {error}");
+            let error = super::preflight_hooks(
+                Err(error),
+                || Some(super::Unattended::Workflow),
+                || panic!("the original error carries its fix"),
+                &mut Default::default(),
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), expected);
+        }
     }
 
     #[test]

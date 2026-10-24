@@ -300,6 +300,39 @@ pub fn cancel_and_wake(store: &Store, run_id: &RunId) -> Result<RunRecord> {
     cancel_and_wake_paths(store.paths(), store.runtime_paths(), run_id)
 }
 
+pub(super) fn cancel_unserved_workflow_run(store: &Store, run_id: &RunId) -> Result<()> {
+    let (record, wrote) = update_record(store.paths(), run_id, |record, now| {
+        if record.workflow.is_none() || record.status.is_terminal() {
+            return Ok(RecordMutation::Keep(false));
+        }
+        let projection = match crate::store::runtime::audit_projection(store.paths()) {
+            Ok(projection) => projection,
+            Err(error) => {
+                tracing::warn!(%error, "rebirth: could not inspect workflow run owners");
+                return Ok(RecordMutation::Keep(false));
+            }
+        };
+        if record.provider_pid.is_some_and(|pid| {
+            crate::proc::process_is_live(pid, record.provider_process_start.as_deref())
+        }) || projection.agents.iter().any(|agent| {
+            agent.workflow == record.workflow
+                && record.matches_agent(agent)
+                && matches!(
+                    crate::store::runtime::agent_liveness(agent),
+                    crate::store::runtime::AgentLiveness::Live { .. }
+                )
+        }) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.mark_terminal(RunStatus::Canceled, now);
+        Ok(RecordMutation::Write(true))
+    })?;
+    if wrote {
+        crate::store::run::wake_run(store.runtime_paths(), &record);
+    }
+    Ok(())
+}
+
 /// Cancel using only durable paths and the waiter's runtime socket.
 pub fn cancel_and_wake_paths(
     paths: &StatePaths,

@@ -2,7 +2,7 @@
 
 A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and `--verify` can re-prompt that turn until a command passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as loop tasks, that plan lives in prompts and in an agent's context, and a dead or compacted agent loses it.
 
-A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a shell command, a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (ordered conditions, a shell command, a script you write, or a model call) and answers with an outcome word. A step launches a fresh agent, optionally with companion agents and commands. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
 
 ## Write a workflow
 
@@ -70,9 +70,9 @@ warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attemp
 
 Every `(default)` edge to `@user` parks the run for you. The `tests` row says a command that cannot start or a log that cannot open (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
 
-The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one.
+The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A turn step whose leader or its subagent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A script check can wait for the reset instead; [the PR example](#wait-on-the-outside-world) links one. A staying step remains open on provider limits.
 
-A step is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The agent's reporting hooks must be installed, and a Codex step needs folder trust for the checkout. `rimz doctor` reports both, and when it says an agent's folder trust is undecided, it names the `rimz trust grant` command that settles it.
+A step's leader is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The leader's reporting hooks must be installed and trusted, its program must be on `PATH`, and its account must trust the checkout. An unset leader permission mode defaults to `auto`. Companion agents use the ordinary layout checks: an undecided folder warns, but saved-untrusted folders and untrusted hooks refuse the workflow launch. `rimz doctor` reports hooks and folder trust, and names the `rimz trust grant` command for an undecided folder.
 
 Then start the run:
 
@@ -117,7 +117,11 @@ RimZ rewrites `work/context.json` before every check and every attempt. It names
 
 A script or shell check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads a script's stdout as its answer; a shell command's output is only a log at `work/<seq>.check.log`. A condition check reads the same [condition keys](./loops.md#wait-for-done-and-green) as a loop, without a child process. A check's optional `timeout` spans evaluations and waits; shell checks do not inherit the loop's default timeout. Timeout, deadline, and cancellation stop the shell's whole process group.
 
-A step launches its agent in a new pane, with the same two variables set. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to it like any agent. When its turn ends, RimZ stops the agent and the subagents it launched, records the commit before and after, and follows `then`. A peer or a team the agent launched keeps running until you stop it.
+A step's `agent` accepts the same layout grammar as `rimz agents`: a kind, profile, virtual cell such as `claude-auto`, or a layout such as `claude,nvim` or `yagni,reflect-notes`. It needs an unambiguous prompt leader and cannot name a team. Judges still take one profile. The layout opens in an unfocused new tab titled `run <leader kind>`. Every agent cell gets the same workflow environment variables; only the leader gets the composed prompt and owns the supervised run. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to every agent. Attempt cost counts the leader only; companion spend still appears on their cards and in stats.
+
+`lifecycle = "turn"` is the default. When the leader's turn ends, RimZ stops every agent cell and its subagents, closes the command cells, records the commit before and after, and follows `then`. A companion's question or limit does not end the leader's attempt. A peer or team launched later by a cell keeps running until you stop it.
+
+Use `lifecycle = "stay"` when you want to work with the agent across turns. The run reads `with you` in `workflow list` and `active (with you)` in `show`. Questions stay on the agent's card: answer in its pane. Turn ends, interruptions, provider limits, and provider session-end hooks do not end the attempt. Exiting the leader's provider process ends it as `ended` after registration, or `died` before registration, and follows `then`; a crash after registration also reads `ended`, so the check judges the work. Every layout cell closes. A staying step refuses `timeout` and `on.asked`; the workflow deadline, cancel, reset, and rebirth still end it as `canceled`.
 
 A step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
@@ -219,7 +223,7 @@ A judge runs headless in the checkout. Its permission mode is automatic unless i
 
 A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run. An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and park policy; `workflow show` includes the upgrade instruction.
 
-`window` holds a judge or a step until the provider's usage window has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows a line such as `waiting: review, window 5h.left=12<40, since 15:02, ×40`.
+`window` holds a judge until its provider's usage window has room, or a step until every agent cell's provider has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows a line such as `waiting: review, window 5h.left=12<40, since 15:02, ×40`.
 
 Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure`, routed to a judge, pays for a model only when it has to.
 
@@ -231,13 +235,13 @@ A run parks when it would otherwise have to guess:
 - a check's `timeout` passed,
 - a `run` script exited nonzero or printed a bad answer, or a shell command could not start or its log could not open,
 - a judge failed twice,
-- a step's agent stopped on a question or a permission prompt, and no `on.asked` edge answers it,
+- a turn step's leader or child stopped on a question or a permission prompt, and no `on.asked` edge answers it,
 - the run's `deadline` passed,
 - a check routed an outcome to `@user`, with its `reason` as the text.
 
 A condition's unread data normally waits rather than parking; an explicit `on.unknown = "@user"` asks you instead.
 
-A question ends the attempt. RimZ notices it within about a minute, stops the agent, and parks the run with the question as its text, so an answer typed into the pane after that reaches nobody. Fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume. The step relaunches, and `prev_attempt.asked` in `context.json` holds the question.
+A question from a turn step's leader or its subagent ends the attempt. RimZ notices it within about a minute, stops the layout, and parks the run with the question as its text, so an answer typed into the pane after that reaches nobody. Fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume. The step relaunches, and `prev_attempt.asked` in `context.json` holds the question. Use a staying step to keep the question live and answer in the pane instead.
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and parks the run, unless `on.deadline` routes it somewhere else.
 
@@ -260,7 +264,7 @@ A run that is still active takes `--extend` too, without `--at`. An extension is
 rimz workflow cancel "$RUN"
 ```
 
-`cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, or the step's agent and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
+`cancel` ends the run as `canceled` and stops whatever it is running: the check's script or shell command, the judge, or every cell of the step's layout and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
 A run started by a loop task can come back. The task starts a new run in any worktree that has none while its condition holds. To stop for good, end the condition or disable the task with `rimz loop disable <name>`.
 
@@ -329,11 +333,11 @@ A condition answer carries `outcome`, the zero-based winning `case` (absent for 
 | `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |
 
-`prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the agent's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`).
+`prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. A staying step ends only as `ended`, `died`, or `canceled` once launched, and records no ask. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the leader's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`).
 
 ## See also
 
 - [Workflow CLI](../reference/cli/workflow.md): every command and flag, the waiting line, park reasons, and the JSON shapes.
 - [Loops](./loops.md): loop tasks that start runs, signals, and window conditions.
-- [Scripting](./scripting.md): the supervised run every step is.
+- [Scripting](./scripting.md): the supervised run each step's leader owns.
 - [Workflow internals](../internals/harness/workflow.md): how the engine decides, for readers of the code.

@@ -204,6 +204,8 @@ pub struct Ending {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiveAttempt {
     pub kind: AttemptKind,
+    #[serde(default, skip_serializing_if = "StepLifecycle::is_turn")]
+    pub lifecycle: StepLifecycle,
     pub seq: u64,
     pub node: String,
     pub started_at: Timestamp,
@@ -222,6 +224,22 @@ pub struct LiveAttempt {
     pub retry: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub woken: bool,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum StepLifecycle {
+    #[default]
+    Turn,
+    Stay,
+}
+
+impl StepLifecycle {
+    pub fn is_turn(&self) -> bool {
+        matches!(self, Self::Turn)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -30,9 +30,11 @@ Before creating a run, the command validates the definition and refuses on any e
 
 When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
+A step's `agent` accepts the fresh-launch layout grammar, including agent and command cells. `lifecycle` is `turn` by default or `stay` to keep the attempt live until the leader's session exits; a staying step has neither `timeout` nor `on.asked`. Teams, command-only layouts, and ambiguous prompt leaders refuse with a field-specific fix. Judge checks still take one profile. A step's `window` gates every agent cell's provider.
+
 ## Inspect runs
 
-`rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`, which is the [waiting line](#the-waiting-line) for a waiting run and the [park reason](#park-reasons) for a parked one. Finished runs are omitted.
+`rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`, which is `with you` for a live staying attempt, the [waiting line](#the-waiting-line) for a waiting run, and the [park reason](#park-reasons) for a parked one. JSON `detail` uses the same text. Finished runs are omitted. `show` prints a live staying attempt's state as `active (with you)`; its JSON record carries `attempt.lifecycle = "stay"`. Turn attempts omit that field.
 
 `rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the agent roster or the project's worktrees cannot be read), one `step <name>: N visits of <max> + <grant> grant` line per recorded step, and the history. An unbounded step prints `unbounded` instead of the limit and grant. A step declaring `max-visits-per-key` adds one indented `  key <json>: N visits of <max-visits-per-key> + <grant> grant` row per recorded key, in record order; unkeyed visits print `key null`. Steps without that field print no key rows. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
 
@@ -74,7 +76,7 @@ An active run accepts `--extend` alone; `--at` needs a parked run. A finished ru
 
 ## Validate and schema
 
-`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, agent profile, or `condition`), `BACKGROUND` (whether the step's agent reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
+`rimz workflow validate [DIR] [--json]` checks one directory, or every directory under `~/.rimz/workflows/`. The table has `WORKFLOW`, `NODE`, `KIND`, `RUNNER` (the run command, shell text, step layout, judge profile, or `condition`), `BACKGROUND` (whether the step's leader reports background work), and `EDGES`, each edge as `outcome → target (explicit|default)`. Errors and `warning:` lines follow. Any error exits 1. `--json` prints `{rows, warnings, errors}`, each error and warning carrying `path` and `message`. Each row has `runner = "run" | "shell" | "agent" | "condition"`, nullable `run`, `shell`, and `agent` fields, `workflow`, `node`, `kind`, `do_background`, and resolved `edges`. Condition stage names use the caller's effective teams plus `Done`; without a resolved workspace, a warning says stage names were not checked. Run admission always checks against the run's project.
 
 `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
@@ -111,7 +113,7 @@ A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar c
 | `deadline` | The run's deadline passed with no `on.deadline` edge. |
 | `timeout` | A check's `timeout` passed with no `on.timeout` edge. |
 | `invalid` | A script check failed or printed a bad object with no `on.invalid` edge. |
-| `asked` | A step's agent blocked on a question or permission prompt with no `on.asked` edge; the text is the prompt. |
+| `asked` | A turn step's leader or child blocked on a question or permission prompt with no `on.asked` edge; the text is the prompt. Staying steps keep asks live. |
 | `check` | A check evaluation failed twice. |
 
 Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./stats.md#the-assist-timeline)). A merged wait appends one route assist when it closes, with its final `count`; an open wait has no route assist yet. Stats renders a closed wait as `workflow <workflow> <node> waited <outcome> ×<count>`.

@@ -50,6 +50,8 @@ pub struct LayoutRequest {
     pub entry: RoomEntry,
     pub starter: Starter,
     pub resident_loop: Option<ResidentLoop>,
+    pub workflow: Option<crate::agents::WorkflowAttemptRef>,
+    pub leader_run: Option<LeaderRun>,
 }
 
 #[derive(Default)]
@@ -109,6 +111,7 @@ pub enum Starter {
     Agent,
     Team,
     Loop,
+    Workflow,
 }
 
 pub struct ResidentLoop {
@@ -309,9 +312,15 @@ struct PreparedLayout {
 }
 
 pub fn prepare_layout(
-    request: LayoutRequest,
+    mut request: LayoutRequest,
     interaction: &mut dyn Interaction,
 ) -> Result<Preparation> {
+    if let Some(mut leader) = request.leader_run.take() {
+        if request.workflow.is_some() {
+            leader.workflow.clone_from(&request.workflow);
+        }
+        return supervised::prepare_run_layout(request, leader, interaction);
+    }
     let mut args = request;
     let ctx = &args.context;
     let machine_config = ctx.machine.clone();
@@ -423,9 +432,18 @@ pub fn prepare_layout(
     }
     let ResolvedLaunch {
         teams,
-        layout,
+        mut layout,
         team_name,
     } = resolved;
+    for row in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        if let Cell::Agent(cell) = row {
+            cell.launch.workflow.clone_from(&args.workflow);
+        }
+    }
     let pick_session = args.launch.selection == Selection::Picker;
     if pick_session {
         validate_picker(&layout, team_name.as_deref())?;
@@ -455,7 +473,7 @@ pub fn prepare_layout(
         )?;
     }
     let projection = store.runtime_projection(crate::RuntimeScope::Audit)?;
-    let caller = if matches!(args.starter, Starter::Loop) {
+    let caller = if matches!(args.starter, Starter::Loop | Starter::Workflow) {
         None
     } else {
         ancestry::resolve_caller(&projection.agents)
@@ -583,6 +601,7 @@ pub fn prepare_layout(
                 },
                 match args.starter {
                     Starter::Loop => Some(trust::Unattended::Loop),
+                    Starter::Workflow => Some(trust::Unattended::Workflow),
                     Starter::Agent => Some(trust::Unattended::Agent),
                     Starter::Team => Some(trust::Unattended::Team),
                     Starter::Human => None,

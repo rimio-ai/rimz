@@ -1059,7 +1059,7 @@ fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
 
     let dir = tempfile::tempdir().unwrap();
     for id in ["attempt", "ordinary"] {
-        let fixture = Fixture::new(&[(id, dir.path(), true)]);
+        let fixture = Fixture::new(&[(id, dir.path(), true), ("companion", dir.path(), true)]);
         let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
         let snapshot = store.snapshot().unwrap();
         let mut record = RunRecord::new(
@@ -1072,6 +1072,7 @@ fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
         record.agent_id = Some(id.into());
         record.status = RunStatus::Running;
         if id == "attempt" {
+            record.lifecycle = crate::store::run::RunLifecycle::Session;
             record.workflow = Some(WorkflowAttemptRef {
                 run: crate::ids::WorkflowRunId::new(),
                 seq: 1,
@@ -1092,6 +1093,16 @@ fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
                     &observation,
                 ))
                 .unwrap();
+            observation.agent_id = Some("companion".into());
+            store
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    fixture.paths.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "SessionStart",
+                    &observation,
+                ))
+                .unwrap();
             let plan = fixture.inspect_with(&MachineConfig::default(), false);
             assert!(
                 plan.planned.entries.is_empty(),
@@ -1099,6 +1110,7 @@ fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
             );
         }
         crate::harness::run::create(&fixture.paths, &record).unwrap();
+        cancel_unserved_workflow_runs(&store, &fixture.paths);
         cancel_child_runs(
             &store,
             &fixture.paths,
@@ -1114,6 +1126,111 @@ fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
             } else {
                 RunStatus::Running
             }
+        );
+    }
+}
+
+#[test]
+fn rebirth_cancels_an_unregistered_workflow_run_outside_the_roster() {
+    use crate::agents::{PermissionMode, WorkflowAttemptRef, WorkflowAttemptRole};
+    use crate::store::run::{RunLifecycle, RunRecord, RunStatus};
+
+    let fixture = Fixture::new(&[]);
+    let mut record = RunRecord::new(
+        fixture.paths.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "task".into(),
+        fixture.project.clone(),
+    );
+    record.lifecycle = RunLifecycle::Session;
+    record.workflow = Some(WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: WorkflowAttemptRole::Step,
+    });
+    crate::harness::run::create(&fixture.paths, &record).unwrap();
+    record_boundary_at(
+        fixture.paths.clone(),
+        fixture.runtime.clone(),
+        &fixture.paths.workspace_id,
+        "rimz-test",
+    );
+    assert_eq!(
+        crate::harness::run::load(&fixture.paths, &record.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled,
+        "rebirth must end a staying attempt even before its leader registers"
+    );
+}
+
+#[test]
+fn rebirth_cancels_only_workflow_runs_without_a_live_owner() {
+    use crate::agents::{PermissionMode, WorkflowAttemptRef, WorkflowAttemptRole};
+    use crate::store::run::{RunLifecycle, RunRecord, RunStatus};
+
+    for owner in ["provider", "wrapper", "other-attempt"] {
+        let fixture = Fixture::new(&[]);
+        let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+        let mut record = RunRecord::new(
+            fixture.paths.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            fixture.project.clone(),
+        );
+        record.lifecycle = RunLifecycle::Session;
+        record.agent_name = Some("starting".into());
+        record.workflow = Some(WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: WorkflowAttemptRole::Step,
+        });
+        if owner == "provider" {
+            record.provider_pid = Some(std::process::id());
+            record.provider_process_start = crate::proc::process_start_token(std::process::id());
+        } else {
+            let mut observation = AgentLifecycleObservation::new(
+                Some("launch_starting".into()),
+                LifecycleSignal::Registered,
+            );
+            observation.agent_name.clone_from(&record.agent_name);
+            observation.launch.workflow.clone_from(&record.workflow);
+            if owner == "other-attempt" {
+                observation.launch.workflow.as_mut().unwrap().seq += 1;
+            }
+            observation.runtime_owner = Some(crate::store::runtime::current_process_owner(
+                crate::pane::RuntimeOwnerKind::Agent,
+                "launch_starting",
+            ));
+            store
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    fixture.paths.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "test",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        crate::harness::run::create(&fixture.paths, &record).unwrap();
+        record_boundary_at(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.paths.workspace_id,
+            "rimz-test",
+        );
+        assert_eq!(
+            crate::harness::run::load(&fixture.paths, &record.run_id)
+                .unwrap()
+                .status,
+            if owner == "other-attempt" {
+                RunStatus::Canceled
+            } else {
+                RunStatus::Pending
+            },
+            "only this attempt's live provider or wrapper owns the run: {owner}"
         );
     }
 }
@@ -1292,6 +1409,20 @@ fn live_entry_defer_ends_children_and_cancels_their_open_runs() {
         record.agent_id = Some("child".into());
         record.status = RunStatus::Running;
         run::create(&fixture.paths, &record).unwrap();
+        let mut launching = RunRecord::new(
+            fixture.paths.workspace_id.clone(),
+            record.kind.clone(),
+            PermissionMode::Auto,
+            "starting workflow".into(),
+            fixture.project.clone(),
+        );
+        launching.lifecycle = crate::store::run::RunLifecycle::Session;
+        launching.workflow = Some(crate::agents::WorkflowAttemptRef {
+            run: crate::ids::WorkflowRunId::new(),
+            seq: 1,
+            role: crate::agents::WorkflowAttemptRole::Step,
+        });
+        run::create(&fixture.paths, &launching).unwrap();
         let plan = inspect_live_scope(
             fixture.paths.clone(),
             fixture.runtime.clone(),
@@ -1322,6 +1453,11 @@ fn live_entry_defer_ends_children_and_cancels_their_open_runs() {
         assert_eq!(
             run::load(&fixture.paths, &record.run_id).unwrap().status,
             RunStatus::Canceled
+        );
+        assert_eq!(
+            run::load(&fixture.paths, &launching.run_id).unwrap(),
+            launching,
+            "a live entry is not rebirth: a concurrent workflow launch must survive"
         );
     }
 }

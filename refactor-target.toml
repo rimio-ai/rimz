@@ -1295,8 +1295,9 @@ path = "crates/rimz/src/launcher"
 # SupervisedContext, LeaderRun, RunCompletion, OpenedRun, prepare_supervised and run_exit_policy (+6).
 # Caller room, checkout anchoring and cwd admission move with supervised preparation (+3).
 # The store-creation doorway is launcher-private (-1).
+# prepare_run_layout joins run-bearing layouts to shared preparation (+1).
 # run_exit_policy moves to the shared pane compiler (-1).
-surface-budget = 99
+surface-budget = 100
 
 [[verdict]]
 kind = "item"
@@ -2426,8 +2427,9 @@ path = "crates/rimz/src/store"
 # ResumeAttempt carries the queue commit's join-or-start decision through dispatch to the doorway (+1).
 # workflow::Wait::is_hold shares hold recognition across workflow settlement and scheduling (+1).
 # RunLifecycle carries the default-compatible turn/session run contract (+1).
+# StepLifecycle and its turn predicate share durable workflow attempt policy (+2).
 # RunSession preserves outgoing session bindings for a session run's total spend (+1).
-surface-budget = 497
+surface-budget = 499
 
 [[verdict]]
 kind = "item"
@@ -3106,7 +3108,13 @@ allowed-dependencies = [
 # Host readers share the crate-private cached listing wrapper (+1).
 # rekey_team_run moves a molting leader's open team run after placement (+1).
 # settle_session_exit settles provider-exit spend before waking a session run (+1).
-surface-budget = 58
+# cancel_unserved_workflow_run rechecks rebirth liveness at the locked mutation (+1).
+surface-budget = 59
+
+[[verdict]]
+kind = "item"
+key = "harness::run::cancel_unserved_workflow_run"
+reason = "Rebirth cancels rosterless workflow runs only after checking provider and wrapper liveness under the mutation lock."
 
 [[verdict]]
 kind = "item"
@@ -8620,6 +8628,11 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 kind = "item"
 key = "store::workflow::AttemptKind"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::StepLifecycle"
+reason = "Step definitions and durable attempts share default-compatible turn/stay lifecycle without store importing harness policy."
 
 [[verdict]]
 kind = "item"

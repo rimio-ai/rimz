@@ -72,10 +72,10 @@ pub enum Occupancy {
 
 pub struct StepLaunch {
     pub workflow: WorkflowAttemptRef,
-    pub profile: String,
+    pub agent: String,
+    pub lifecycle: crate::store::workflow::StepLifecycle,
     pub prompt: String,
     pub cwd: PathBuf,
-    pub project_root: PathBuf,
 }
 
 #[derive(Clone, Debug)]

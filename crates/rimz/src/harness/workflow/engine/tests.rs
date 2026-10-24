@@ -358,6 +358,55 @@ fn invalid_legacy_timeout_returns_an_error_without_panicking() {
 }
 
 #[test]
+fn step_window_waits_for_a_closed_companion_provider() {
+    use crate::agents::{ProviderCapacity, RateLimitWindow};
+    use crate::ids::{AgentKind, LoginKey};
+    let now = Timestamp::now();
+    let (_home, state, record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[steps.pr]\nagent='claude,codex,term'\nprompt-file='prompt.md'\nthen='after'\nwindow='5h.left>=20'\n[checks.after]\nrun='true'\non.ok='@done'\n",
+    );
+    fs::write(record.spec_dir.join("prompt.md"), "Build").unwrap();
+    let windows = WindowReadings::fixed(
+        now,
+        [("claude", 10), ("codex", 100)]
+            .into_iter()
+            .map(|(kind, used)| {
+                (
+                    LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                    ProviderCapacity::from_windows(vec![RateLimitWindow {
+                        used_percentage: Some(used),
+                        resets_at: Some(now + jiff::SignedDuration::from_secs(3600)),
+                        duration_mins: Some(300),
+                        ..Default::default()
+                    }]),
+                )
+            })
+            .collect(),
+    );
+    let result = prepare(
+        &state,
+        &state.workflow(&record.id),
+        &spec,
+        &mut BTreeSet::new(),
+        &super::super::tests::FakeHost::new(),
+        &windows,
+        &mut None,
+    );
+    assert!(
+        result.is_ok(),
+        "a layout window must gate every provider, not refuse the layout: {:?}",
+        result.as_ref().err()
+    );
+    assert!(matches!(result.unwrap(), Decision::Stop));
+    let current = workflow::load(&state.workflow(&record.id)).unwrap();
+    assert_eq!(
+        current.wait.unwrap().detail.as_deref(),
+        Some("5h.left=0<20")
+    );
+    assert!(current.attempt.is_none());
+}
+
+#[test]
 fn provider_windows_close_and_reopen_on_fresh_capacity() {
     use crate::agents::{ProviderCapacity, RateLimitWindow};
     use crate::harness::schedule::when::WindowReadings;

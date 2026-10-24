@@ -141,6 +141,8 @@ pub(super) fn launch_layout(
         entry: rimz::launcher::RoomEntry::Live,
         starter: rimz::launcher::Starter::Human,
         resident_loop: None,
+        workflow: None,
+        leader_run: None,
     };
     let mut interaction = CliInteraction;
     let outcome = match rimz::launcher::prepare_layout(request, &mut interaction)? {

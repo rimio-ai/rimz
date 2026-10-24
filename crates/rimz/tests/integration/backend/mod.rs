@@ -7,6 +7,7 @@ mod shared_view;
 mod single_backend_room;
 mod tmux;
 mod web;
+mod workflow;
 mod zellij;
 
 /// A resume tab whose panes, one column per entry of `rows`, each write their

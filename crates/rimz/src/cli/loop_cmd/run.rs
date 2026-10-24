@@ -292,6 +292,8 @@ pub(super) fn run_one(
                         task: name.to_owned(),
                         reminder: loop_reminder,
                     }),
+                    workflow: None,
+                    leader_run: None,
                 };
                 let mut interaction = crate::cli::launch_interaction::CliInteraction;
                 let prepared = match rimz::launcher::prepare_layout(request, &mut interaction)? {
