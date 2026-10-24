@@ -25,6 +25,141 @@ fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
 }
 
 #[test]
+fn early_reset_detection_excludes_jitter_and_nonrunning_or_nonaccount_windows() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let prior = auth(70, reset, now - SignedDuration::from_secs(100));
+    let mut cases = vec![
+        (Some(prior.clone()), vec![auth(20, reset, now)], true),
+        (
+            Some(prior.clone()),
+            vec![auth(70, reset + SignedDuration::from_secs(61), now)],
+            true,
+        ),
+        (
+            Some(prior.clone()),
+            vec![auth(70, reset - SignedDuration::from_secs(61), now)],
+            true,
+        ),
+        (Some(prior.clone()), vec![], true),
+        (
+            Some(prior.clone()),
+            vec![RateLimitWindow {
+                resets_at: None,
+                ..auth(70, reset, now)
+            }],
+            true,
+        ),
+        (
+            Some(prior.clone()),
+            vec![auth(70, reset + SignedDuration::from_secs(60), now)],
+            false,
+        ),
+        (Some(prior.clone()), vec![auth(70, reset, now)], false),
+        (Some(prior.clone()), vec![auth(80, reset, now)], false),
+        (None, vec![auth(20, reset, now)], false),
+    ];
+    for excluded in [
+        auth(70, now + SignedDuration::from_secs(60), now),
+        auth(0, now + SignedDuration::from_secs(18_000), now),
+        RateLimitWindow {
+            scope: scoped_window("model", "Model", 70, reset).scope,
+            ..prior.clone()
+        },
+        RateLimitWindow {
+            lifted: true,
+            ..prior.clone()
+        },
+        RateLimitWindow {
+            duration_mins: None,
+            ..prior.clone()
+        },
+        RateLimitWindow {
+            source: WindowSource::BestEffort,
+            ..prior.clone()
+        },
+        RateLimitWindow {
+            observed_at: None,
+            ..prior.clone()
+        },
+    ] {
+        cases.push((Some(excluded), vec![auth(0, reset, now)], false));
+    }
+    let expected: Vec<_> = cases.iter().map(|(_, _, expected)| *expected).collect();
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(prior, windows, _)| {
+            let entry = prior.map(|window| RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![window],
+                },
+                ..Default::default()
+            });
+            reset_spotted(entry.as_ref(), &AgentRateLimits { windows }, now)
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn account_reset_stamp_survives_identity_change_repeated_read_and_projection() {
+    for move_reset in [false, true] {
+        let (_dir, workspace, runtime) = runtime();
+        let now = Timestamp::now();
+        let reset = now + SignedDuration::from_secs(3_600);
+        let key = login_key("claude");
+        let old_identity = AccountUsageIdentity {
+            account_key: Some("old".into()),
+            ..Default::default()
+        };
+        merge_account_rate_limits(
+            &runtime,
+            &key,
+            old_identity,
+            AgentRateLimits {
+                windows: vec![auth(70, reset, now)],
+            },
+        );
+        assert_eq!(
+            read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&key]
+                .reset_spotted_at_ms,
+            None
+        );
+        let identity = AccountUsageIdentity {
+            account_key: Some("new".into()),
+            ..Default::default()
+        };
+        let incoming = AgentRateLimits {
+            windows: vec![auth(
+                if move_reset { 70 } else { 20 },
+                if move_reset {
+                    reset + SignedDuration::from_secs(120)
+                } else {
+                    reset
+                },
+                now,
+            )],
+        };
+        merge_account_rate_limits(&runtime, &key, identity.clone(), incoming.clone());
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let stamp = cache.entries[&key].reset_spotted_at_ms;
+        assert!(
+            stamp.is_some(),
+            "both early-reset signatures stamp the login"
+        );
+        merge_account_rate_limits(&runtime, &key, identity, incoming.clone());
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        assert_eq!(cache.entries[&key].reset_spotted_at_ms, stamp);
+        let mut frame =
+            snapshot_with_panels(workspace, vec![provider_panel("claude", incoming.windows)]);
+        frame.now = now;
+        let (next, _) =
+            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
+        assert_eq!(next.unwrap().entries[&key].reset_spotted_at_ms, stamp);
+    }
+}
+
+#[test]
 fn projection_preserves_entry_identity_and_old_bound_truth() {
     let now = fuse_now();
     let reset = now + SignedDuration::from_secs(3_600);
@@ -65,6 +200,7 @@ fn projection_preserves_entry_identity_and_old_bound_truth() {
         let (next, refresh) =
             project_rate_limits(&mut frame, &cached, &RoomLoginSet::native(), true, None);
         let expected = RateLimitCacheEntry {
+            reset_spotted_at_ms: None,
             scope: Default::default(),
             account_key: prior.as_ref().and_then(|entry| entry.account_key.clone()),
             limits: live.clone(),
@@ -384,6 +520,7 @@ fn kind_wide_cache(
     let mut entries = BTreeMap::new();
     for (kind, limits) in windows {
         let entry = RateLimitCacheEntry {
+            reset_spotted_at_ms: None,
             scope: Default::default(),
             account_key: None,
             limits,
@@ -567,6 +704,7 @@ fn account_scope_isolates_cached_windows() {
                 login_key("qwen"),
                 RateLimitCacheEntry {
                     scope: international.clone(),
+                    reset_spotted_at_ms: None,
                     account_key: None,
                     limits: AgentRateLimits {
                         windows: vec![
@@ -1671,6 +1809,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("pi")),
                 RateLimitCacheEntry {
                     scope: openai.clone(),
+                    reset_spotted_at_ms: None,
                     account_key: None,
                     limits: AgentRateLimits {
                         windows: vec![

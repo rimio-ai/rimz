@@ -117,6 +117,47 @@ fn authoritative_windows(prior: Option<&RateLimitCacheEntry>) -> &[RateLimitWind
     })
 }
 
+fn reset_spotted(
+    prior: Option<&RateLimitCacheEntry>,
+    incoming: &AgentRateLimits,
+    now: Timestamp,
+) -> bool {
+    let tolerance = SignedDuration::from_secs(RESET_ADVANCE_SECS);
+    authoritative_windows(prior).iter().any(|previous| {
+        let (Some(duration), Some(reset), Some(observed)) = (
+            previous.duration_mins,
+            previous.resets_at,
+            previous.observed_at,
+        ) else {
+            return false;
+        };
+        if !previous.source.is_authoritative()
+            || previous.scope.is_some()
+            || previous.lifted
+            || previous.not_started(observed)
+            || reset.duration_since(now) <= tolerance
+        {
+            return false;
+        }
+        let Some(window) = incoming
+            .windows
+            .iter()
+            .find(|window| window.scope.is_none() && window.duration_mins == Some(duration))
+        else {
+            return true;
+        };
+        let usage_dropped = matches!(
+            (previous.used_percentage, window.used_percentage),
+            (Some(previous), Some(current)) if current < previous
+        );
+        usage_dropped
+            || window.resets_at.is_none_or(|current| {
+                let difference = current.duration_since(reset);
+                difference > tolerance || difference < -tolerance
+            })
+    })
+}
+
 /// Seed one login's account-scoped windows into the cache out-of-band, so a
 /// logged-in-but-idle provider's budget bars paint from the first frame instead
 /// of staying blank until a live session reports. Read-modify-write over the
@@ -146,9 +187,13 @@ pub(super) fn merge_account_rate_limits(
     // supersedes older best-effort truth outright, even within the same epoch.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
-    let prior_entry = cache
-        .entries
-        .get(key)
+    let prior_entry = cache.entries.get(key);
+    let reset_spotted_at_ms = if reset_spotted(prior_entry, &windows, observed_at) {
+        Some(cache.refreshed_at_ms)
+    } else {
+        prior_entry.and_then(|entry| entry.reset_spotted_at_ms)
+    };
+    let prior_entry = prior_entry
         .filter(|entry| entry.scope == identity.scope && entry.account_key == identity.account_key);
     // Carry the open unknown episode rather than closing it here. This write
     // proves an authoritative attempt landed, not that it carried usable windows;
@@ -163,6 +208,7 @@ pub(super) fn merge_account_rate_limits(
     cache.entries.insert(
         key.clone(),
         RateLimitCacheEntry {
+            reset_spotted_at_ms,
             scope: identity.scope,
             account_key: identity.account_key,
             limits: AgentRateLimits {
@@ -382,10 +428,8 @@ fn project_rate_limits(
         // Complete authoritative omissions against matching persisted truth
         // before indexing the live reading, then fuse each stable duration or
         // named-quota identity independently.
-        let prior_entry = login_key
-            .as_ref()
-            .and_then(|key| cached.entries.get(key))
-            .filter(|entry| entry.scope == panel.account_scope);
+        let cached_entry = login_key.as_ref().and_then(|key| cached.entries.get(key));
+        let prior_entry = cached_entry.filter(|entry| entry.scope == panel.account_scope);
         let foreign_account = matches!(
             (
                 prior_entry.and_then(|entry| entry.account_key.as_deref()),
@@ -482,6 +526,7 @@ fn project_rate_limits(
         // refill, and the open unknown episode's marker. Display-only reset
         // projections and unknown windows are recomputed each frame.
         let entry = RateLimitCacheEntry {
+            reset_spotted_at_ms: cached_entry.and_then(|entry| entry.reset_spotted_at_ms),
             scope: panel.account_scope.clone(),
             account_key: prior_entry.and_then(|prior| prior.account_key.clone()),
             limits: AgentRateLimits {

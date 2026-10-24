@@ -414,17 +414,23 @@ fn complete_direct_account_usage(
     let Some(completion) = complete_provider_account_usage(runtime, key, claim_id, probe) else {
         return false;
     };
+    let windows = completion
+        .snapshot
+        .and_then(|snapshot| snapshot.rate_limits);
     if completion.account_changed {
         tracing::info!(
             target: crate::observability::BREADCRUMB_TARGET,
             kind = key.kind.as_str(),
             "provider account changed; dropping cached windows",
         );
-        drop_login_rate_limits(runtime, key);
+        // A new reading replaces the entry under the merge's lock instead: its
+        // identity filter keeps the old account's windows out of fusion, while
+        // its reset check still compares against them.
+        if windows.is_none() {
+            drop_login_rate_limits(runtime, key);
+        }
     }
-    if let Some(snapshot) = completion.snapshot {
-        publish_account_usage_windows(runtime, key, completion.identity, snapshot.rate_limits);
-    }
+    publish_account_usage_windows(runtime, key, completion.identity, windows);
     true
 }
 

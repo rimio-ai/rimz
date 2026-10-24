@@ -194,6 +194,7 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
             entries: [(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("qwen")),
                 crate::agents::RateLimitCacheEntry {
+                    reset_spotted_at_ms: None,
                     scope: crate::agents::ProviderAccountScope::sub_provider(
                         "alibaba",
                         "international",

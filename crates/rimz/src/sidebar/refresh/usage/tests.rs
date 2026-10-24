@@ -720,6 +720,7 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
             windows: vec![RateLimitWindow {
                 duration_mins: Some(300),
                 used_percentage: Some(88),
+                resets_at: Some(Timestamp::now() + jiff::SignedDuration::from_secs(3_600)),
                 source: crate::agents::context::WindowSource::Authoritative,
                 ..Default::default()
             }],
@@ -757,6 +758,7 @@ fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
 #[test]
 fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_new_owner() {
     let (_dir, runtime) = owned_usage_runtime("owner-a");
+    let reset = windows(&runtime)[0].resets_at;
     assert!(complete_direct_account_usage(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
@@ -769,6 +771,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
                     windows: vec![RateLimitWindow {
                         duration_mins: Some(300),
                         used_percentage: Some(12),
+                        resets_at: reset,
                         source: crate::agents::context::WindowSource::Authoritative,
                         ..Default::default()
                     }],
@@ -778,6 +781,13 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
         },
     ));
     assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
+    let entry = &read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+        [&"antigravity@default".parse().unwrap()];
+    assert_eq!(entry.account_key.as_deref(), Some("owner-b"));
+    assert!(
+        entry.reset_spotted_at_ms.is_some(),
+        "a usage drop across a credential-key change still stamps the login"
+    );
     assert_eq!(
         super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
             [&"antigravity@default".parse().unwrap()]
