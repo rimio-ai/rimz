@@ -830,6 +830,7 @@ fn ensure_room_creators(root: &Path, files: &[PathBuf]) -> Result<()> {
         "cli/room",
         "cli/workspace.rs",
         "cli/supervised/run.rs",
+        "launcher/checkout.rs",
         "room/birth.rs",
         "room/mod.rs",
         "harness/rebirth.rs",

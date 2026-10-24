@@ -52,6 +52,7 @@ layers = [
     "uninstall",
     "daemon_content",
     "channel",
+    "launcher",
 ],
     [
     "bin",
@@ -1280,7 +1281,23 @@ surface-budget = 9
 [[module]]
 path = "crates/rimz/src/lib.rs"
 # The lowest-layer blocker vocabulary is shared with the CLI (+1).
-surface-budget = 71
+# The library launcher owns checkout creation (+1).
+surface-budget = 72
+
+[[module]]
+path = "crates/rimz/src/launcher"
+# Checkout creation moves out of the CLI with its store-creator admission.
+surface-budget = 3
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::record_creation"
+reason = "Launch-checkout creation owns its workspace record and created signal."
+
+[[verdict]]
+kind = "item"
+key = "launcher::checkout::emit_worktree_created"
+reason = "Explicit worktree creation and launch checkout creation share the same signal."
 
 [[module]]
 path = "crates/rimz/src/main.rs"

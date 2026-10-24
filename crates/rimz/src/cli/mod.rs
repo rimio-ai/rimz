@@ -1098,10 +1098,7 @@ fn settle_launch_checkout(
         )?;
     }
     if let Some(marker) = &launch.created {
-        match open_store(workspace) {
-            Ok(store) => emit_worktree_created(&store, workspace, marker),
-            Err(error) => tracing::debug!(%error, "skipping worktree signal: store unavailable"),
-        }
+        rimz::launcher::checkout::record_creation(workspace, marker);
     }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
@@ -1120,46 +1117,6 @@ fn settle_launch_checkout(
         writeln!(render::err(), "warning: {failure}")?;
     }
     Ok(Some(launch))
-}
-
-fn emit_worktree_created(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    marker: &rimz::worktree::WorktreeMarker,
-) {
-    let mut payload = serde_json::Map::from_iter([
-        ("name".into(), serde_json::json!(marker.name)),
-        ("branch".into(), serde_json::json!(marker.branch)),
-        (
-            "path".into(),
-            serde_json::json!(marker.worktree_path.to_string_lossy()),
-        ),
-        (
-            "repo".into(),
-            serde_json::json!(marker.repo_root.to_string_lossy()),
-        ),
-        (
-            "base".into(),
-            serde_json::json!(marker.base_branch.as_deref().unwrap_or(&marker.base_ref)),
-        ),
-    ]);
-    if let Some(number) = marker.from_pr {
-        payload.insert("from_pr".into(), serde_json::json!(number));
-    }
-    let signal = rimz::harness::schedule::signal::Signal {
-        name: "worktree.created"
-            .parse()
-            .expect("built-in signal name is valid"),
-        payload,
-        source: rimz::store::event::SignalSource::Worktree,
-        watch: None,
-    };
-    rimz::harness::schedule::signal::emit_in_process(
-        store,
-        &workspace.session_name,
-        &workspace.project_root,
-        &signal,
-    );
 }
 
 /// The project root of the room this process runs inside, from its verified
