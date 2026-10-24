@@ -1035,11 +1035,8 @@ mod pane_exec {
     }
 
     #[test]
-    fn exit_hint_names_the_kept_worktree_on_every_exit() {
-        // The default `../{repo}-worktrees` template reaches the hint unfolded,
-        // so the input carries the `..` the printed line must not.
-        let path = Path::new("/code/query-engine/../query-engine-worktrees/feat-a");
-        let display = crate::cli::render::home_relative("/code/query-engine-worktrees/feat-a");
+    fn exit_hint_stays_one_line_in_a_worktree() {
+        let path = Path::new("/code/query-engine-worktrees/feat-a");
         let mut request = bare_exec_args();
         request.identity.params.profile = Some("codex-plan".into());
         request.identity.name = Some("bright-otter".into());
@@ -1057,9 +1054,7 @@ mod pane_exec {
             };
             assert_eq!(
                 exit_hint(&request, &status, startup_failure, resumable, None, None,),
-                format!(
-                    "rimz: agent `codex` {action} ({status}); {command}\r\nrimz: worktree {display} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
-                )
+                format!("rimz: agent `codex` {action} ({status}); {command}\r\n")
             );
         }
     }

@@ -962,7 +962,7 @@ fn exit_hint(
 ) -> String {
     let kind = request.kind.as_str();
     let relaunch = relaunch_command(request);
-    let mut hint = if startup_failure {
+    if startup_failure {
         format!("rimz: agent `{kind}` failed to start ({status}); relaunch with `{relaunch}`\r\n")
     } else if resumable {
         let resume =
@@ -979,18 +979,7 @@ fn exit_hint(
         format!("rimz: agent `{kind}` exited ({status}); resume with `{resume}`\r\n")
     } else {
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")
-    };
-    if let Some(path) = request
-        .worktree_path
-        .as_deref()
-        .filter(|_| request.identity.params.checkout.is_none())
-    {
-        let path = crate::cli::render::home_relative_path(path);
-        hint.push_str(&format!(
-            "rimz: worktree {path} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
-        ));
     }
-    hint
 }
 
 #[cfg(unix)]
