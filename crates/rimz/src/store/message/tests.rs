@@ -7,6 +7,29 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn about_run_codec_is_optional_and_requeue_preserves_the_link() {
+    let record = delivery_message(1, &agent("child", None), DeliveryGate::Done, None);
+    let mut encoded = serde_json::to_value(&record).unwrap();
+    assert!(encoded.get("about_run").is_none());
+    assert_eq!(
+        serde_json::from_value::<MessageRecord>(encoded.clone()).unwrap(),
+        record
+    );
+
+    let run_id = serde_json::to_value(crate::ids::RunId::new()).unwrap();
+    encoded["about_run"] = run_id.clone();
+    let linked: MessageRecord = serde_json::from_value(encoded).unwrap();
+    assert_eq!(
+        (
+            serde_json::to_value(&linked).unwrap()["about_run"].clone(),
+            serde_json::to_value(MessageRecord::requeue_from(&linked)).unwrap()["about_run"]
+                .clone(),
+        ),
+        (run_id.clone(), run_id)
+    );
+}
+
+#[test]
 fn status_lookup_reads_live_and_all_retained_history_without_a_fold() {
     let dir = tempfile::tempdir().unwrap();
     let paths = crate::StatePaths::under(

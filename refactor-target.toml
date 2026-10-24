@@ -2430,7 +2430,8 @@ path = "crates/rimz/src/store"
 # RunLifecycle carries the default-compatible turn/session run contract (+1).
 # StepLifecycle and its turn predicate share durable workflow attempt policy (+2).
 # RunSession preserves outgoing session bindings for a session run's total spend (+1).
-surface-budget = 499
+# MessageRecord::with_about_run links queued advisory notices to their child run (+1).
+surface-budget = 500
 
 [[verdict]]
 kind = "item"
