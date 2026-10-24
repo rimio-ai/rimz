@@ -55,3 +55,4 @@ Two figures RimZ prints in more than one place, each correct where it appears. N
 - A page that gains a new kind of content updates its summary line everywhere that links to it (`rg '<page>.md'`), the documentation map included.
 - When a change moves where a behaviour is triggered, search the whole tree for the behaviour's phrase (`rg -i 're-?wake' docs/ crates/`) and update every hit, not only the pages the plan named.
 - A sentence that lists the commands that trigger a behaviour takes them from `rimz lsp callers` on the function that performs it, followed up to every CLI `run` that reaches it: one shared entry (`RoomContext::birth`) can sit under several commands.
+- A doc that cites the code a measurement ran names the trunk commit it was built on (a merge base, which trunk keeps) plus the branch commit's subject, never a branch hash: a rebase renames every branch hash, and a later fix changes the commit's tree.
