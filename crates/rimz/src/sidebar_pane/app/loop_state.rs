@@ -71,7 +71,7 @@ use super::timing::{
 };
 use super::view_state::{FocusMarker, FocusRollback, ReadContext, SelectionFold, ViewContext};
 use super::width_control::WidthController;
-use super::{Result, ServeConfig, fetch_deadline_timeout};
+use super::{Result, ServeConfig};
 #[cfg(test)]
 use crate::mux::focus_anchor::FocusActionError;
 
@@ -592,8 +592,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         self.report_baseline();
-        let (_, mut timeout) = self.frame_timing();
-        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.pane.clock.now());
+        let (_, timeout) = self.frame_timing();
         inbox.wait(timeout);
         self.advance(inbox, fetch, terminal).map(|_| ())
     }
@@ -634,7 +633,6 @@ impl LoopState {
         self.paint_frame_if_due(terminal, active)?;
         let (_, timeout) = self.frame_timing();
         let now = self.pane.clock.now();
-        let timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), now);
         let mut deadline = now + timeout;
         if self.watched()
             && let Some(remaining) =
@@ -747,7 +745,6 @@ impl LoopState {
                 .iter()
                 .find_map(|update| update.preview_for(self.pane.config.own_pane.as_ref()))
                 .is_some_and(|(own_view, viewed)| self.skips_hidden(own_view.as_ref(), viewed));
-        let mut rejected = false;
         if deferred {
             if completed {
                 self.pane.fetched_at = self.pane.clock.now();
@@ -755,21 +752,12 @@ impl LoopState {
             }
         } else {
             for update in pending {
-                rejected |= self.apply_latest_snapshot(update);
+                self.apply_latest_snapshot(update);
             }
             self.pane.own.revision = revision;
         }
         if completed {
             fetch.complete(!self.pane.should_exit);
-        }
-        // A held transient regression schedules one reevaluation at the gate
-        // deadline. Eager finals can otherwise feed themselves through the
-        // fast fold and pin the renderer to its 1 ms gate wakeup.
-        if !self.pane.should_exit && completed && rejected {
-            let defer_for = self
-                .inspect_view(|_, view| gate_remaining(&view.gate, self.pane.clock.timestamp()))
-                .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
-            fetch.defer_until(FetchRequest::default(), self.pane.clock.now() + defer_for);
         }
     }
 
@@ -1883,7 +1871,6 @@ impl LoopState {
         // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(fetch);
-        fetch.fire_due(self.pane.clock.now());
 
         let (gate_due, dwell_due) = self.inspect_view(|_, view| {
             (

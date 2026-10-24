@@ -2383,19 +2383,11 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
     rig.state.pane.request_reload = Box::new(move || {
         requests.send(()).unwrap();
     });
-    rig.fetch.defer_until(
-        FetchRequest::hard_refresh(),
-        Instant::now() + Duration::from_secs(60),
-    );
     rig.state
         .on_wakeup(&mut rig.fetch, &mut rig.terminal, wakeup)
         .unwrap();
     assert_eq!(received.try_recv(), Ok(()));
     assert!(received.try_recv().is_err());
-    assert!(
-        rig.fetch.next_deadline().is_some(),
-        "the host decides without clearing attachment-local deferred work"
-    );
     assert!(
         rig.view().ui().freeze.is_none(),
         "reload must not freeze the refreshed order"

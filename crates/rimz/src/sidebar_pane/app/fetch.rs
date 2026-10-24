@@ -1477,12 +1477,6 @@ fn drive(
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct DeferredFetch {
-    due_at: Instant,
-    request: FetchRequest,
-}
-
 /// The render loop's handle to the fetch worker. It owns immediate, deferred,
 /// in-flight, and follow-up scheduling so request strength and deadlines merge
 /// in one place.
@@ -1490,7 +1484,6 @@ pub(super) struct FetchDispatcher {
     tx: Sender<FetchRequest>,
     in_flight: bool,
     pending_refetch: Option<FetchRequest>,
-    deferred: Option<DeferredFetch>,
 }
 
 impl FetchDispatcher {
@@ -1499,7 +1492,6 @@ impl FetchDispatcher {
             tx,
             in_flight: false,
             pending_refetch: None,
-            deferred: None,
         }
     }
 
@@ -1509,15 +1501,7 @@ impl FetchDispatcher {
     /// the in-flight one returns, so a delta that races an in-flight fetch is
     /// never lost. `request` carries the strongest freshness requirement
     /// currently known.
-    pub(super) fn request(&mut self, mut request: FetchRequest, force_after: bool) {
-        let absorbed = self.deferred.take();
-        if let Some(deferred) = absorbed {
-            request.merge(deferred.request);
-        }
-        self.dispatch(request, force_after || absorbed.is_some());
-    }
-
-    fn dispatch(&mut self, request: FetchRequest, force_after: bool) {
+    pub(super) fn request(&mut self, request: FetchRequest, force_after: bool) {
         if !self.in_flight {
             if self.tx.send(request).is_ok() {
                 self.in_flight = true;
@@ -1528,27 +1512,6 @@ impl FetchDispatcher {
                 None => self.pending_refetch = Some(request),
             }
         }
-    }
-
-    pub(super) fn defer_until(&mut self, request: FetchRequest, due_at: Instant) {
-        if let Some(deferred) = &mut self.deferred {
-            deferred.request.merge(request);
-            deferred.due_at = deferred.due_at.min(due_at);
-        } else {
-            self.deferred = Some(DeferredFetch { due_at, request });
-        }
-    }
-
-    pub(super) fn next_deadline(&self) -> Option<Instant> {
-        self.deferred.map(|deferred| deferred.due_at)
-    }
-
-    pub(super) fn fire_due(&mut self, now: Instant) {
-        let Some(deferred) = self.deferred.filter(|deferred| now >= deferred.due_at) else {
-            return;
-        };
-        self.deferred = None;
-        self.dispatch(deferred.request, true);
     }
 
     pub(super) fn complete(&mut self, dispatch_follow_up: bool) {

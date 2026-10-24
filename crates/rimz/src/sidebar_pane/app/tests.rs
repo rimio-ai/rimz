@@ -476,23 +476,6 @@ fn pixel_pet_disable_retires_sprite_on_next_paint() {
 }
 
 #[test]
-fn deferred_fetch_deadline_caps_event_loop_timeout() {
-    let now = Instant::now();
-    assert_eq!(
-        fetch_deadline_timeout(
-            Duration::from_secs(10),
-            Some(now + Duration::from_secs(3)),
-            now,
-        ),
-        Duration::from_secs(3),
-    );
-    assert_eq!(
-        fetch_deadline_timeout(Duration::from_secs(10), Some(now), now),
-        FRAME_MIN_TIMEOUT,
-    );
-}
-
-#[test]
 fn tick_for_clamps_zero_and_honours_explicit_seconds() {
     assert_eq!(tick_for(5), Duration::from_secs(5));
     assert_eq!(tick_for(0), Duration::from_secs(1));

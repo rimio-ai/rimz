@@ -285,61 +285,6 @@ fn rejected_final_requests_nothing_until_the_gate_deadline() {
 }
 
 #[test]
-fn rejected_final_defers_one_gate_deadline_reevaluation() {
-    let mut rig = Rig::new();
-    rig.view().ctx().current = agent_snapshot(&rig.ws);
-
-    let fold_started = Instant::now();
-    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
-    let first_fold = fold_started.elapsed();
-
-    assert_eq!(
-        rig.view().ctx().gate.rule,
-        Some(crate::diag::record::GateRule::FramelessOverFrame)
-    );
-    assert!(
-        rig.next_request().is_none(),
-        "a rejected final must not immediately feed another fetch"
-    );
-    let deadline = rig
-        .fetch
-        .next_deadline()
-        .expect("one deferred reevaluation");
-    assert!(
-        deadline > Instant::now(),
-        "the reevaluation waits for the gate escape hatch"
-    );
-
-    rig.fold(snapshot(&rig.ws), SnapshotSource::Cached);
-    assert!(
-        rig.next_request().is_none(),
-        "repeated rejected finals remain one deferred fetch"
-    );
-    // Each rejection derives the same absolute deadline from two clocks read
-    // one after the other: an `Instant` plus a gate remainder the wall clock
-    // quantizes to whole milliseconds. A stall between those reads in the
-    // first fold lands its deadline late by the stall, so re-arming, which
-    // keeps the earlier deadline, may pull it forward by up to the first
-    // fold's duration plus one quantum. It never moves later: a second
-    // reevaluation of its own would sit seconds out.
-    let rearmed = rig
-        .fetch
-        .next_deadline()
-        .expect("the deferred reevaluation survives");
-    assert!(
-        rearmed <= deadline,
-        "re-arming never pushes the first gate deadline out; moved by {:?}",
-        rearmed.saturating_duration_since(deadline)
-    );
-    let pulled_forward = deadline.saturating_duration_since(rearmed);
-    assert!(
-        pulled_forward <= first_fold + Duration::from_millis(1),
-        "the first gate deadline remains authoritative; pulled forward by \
-         {pulled_forward:?} after a {first_fold:?} first fold"
-    );
-}
-
-#[test]
 fn self_close_watchdog_verifies_panes_while_empty_confirming() {
     let mut rig = Rig::new();
     let mut empty = agent_snapshot(&rig.ws);
