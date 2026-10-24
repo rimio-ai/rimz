@@ -1086,12 +1086,23 @@ mod parse {
             clap::error::ErrorKind::ArgumentConflict,
         );
         let supervised = parse_agents(&["rimz", "claude", "ship", "-w", "topic", "--fresh", "-p"]);
-        assert!(
-            into_supervised_request(supervised)
+        let accepted = into_supervised_request(supervised).is_ok_and(|(request, _)| request.fresh);
+        let refusals = [
+            vec!["rimz", "claude", "ship", "--fresh", "-p"],
+            vec!["rimz", "claude", "ship", "--worktree=", "--fresh", "-p"],
+        ]
+        .map(|argv| {
+            into_supervised_request(parse_agents(&argv))
                 .err()
-                .expect("fresh is interactive-only")
-                .to_string()
-                .contains("not -p")
+                .map(|error| error.to_string())
+        });
+        assert_eq!(
+            (accepted, refusals),
+            (
+                true,
+                ["--fresh needs a named worktree (-w NAME)"; 2]
+                    .map(|message| Some(message.to_owned()))
+            )
         );
     }
 

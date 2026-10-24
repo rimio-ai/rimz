@@ -1141,6 +1141,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,
+        fresh: false,
         cwd: None,
         from_pr: None,
         channel: None,
