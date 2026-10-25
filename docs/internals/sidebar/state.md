@@ -8,6 +8,8 @@ A room holds one store and one sidebar pane per tab. One room host per mux sessi
 
 Half the inputs are cheap. The store rollup is `cache/snapshots/latest.json` when its recorded log offset equals the live log's length and its `SNAPSHOT_VERSION` matches (`crates/rimz/src/store/snapshot/assemble.rs::read_fresh_latest`, [store.md → truth and cache](../store.md#truth-and-cache)), and otherwise an incremental fold of the log through the host's warm rollup cursor (`crates/rimz/src/sidebar/consumer.rs::rollup_snapshot`). The runtime sidecars and lane caches are small JSON files behind stat gates.
 
+Every producer and consumer enrichment fold also probes the wrapper-held hook-drainer outage leases through `crates/rimz/src/harness/drainer_outage.rs::read`. The snapshot's optional `hook_drainer_outage` carries the earliest start as a `jiff::Timestamp` in `since`, converted once from the runtime record's `since_ms`, and the agents in start order; free, unreadable, malformed, and unknown-version leases contribute nothing. Changes to that set are content, never a clock-only update. Diagnostic logs are not an input.
+
 The other half are expensive. The pane roster costs a multiplexer IPC round trip or a plugin hop, git costs forks per worktree, and provider accounts, usage, and pricing cost subprocesses and network. Paying those once per tab per tick would saturate the mux server and the machine, and a room sits idle most of the time anyway.
 
 Three rules resolve that, and the rest of this page follows from them.

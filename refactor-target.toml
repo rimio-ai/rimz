@@ -2471,7 +2471,18 @@ path = "crates/rimz/src/store"
 # StepLifecycle and its turn predicate share durable workflow attempt policy (+2).
 # RunSession preserves outgoing session bindings for a session run's total spend (+1).
 # MessageRecord::with_about_run links queued advisory notices to their child run (+1).
-surface-budget = 500
+# HookDrainerOutage and HookDrainerOutageAgent carry wrapper outage facts to the renderer (+2).
+surface-budget = 502
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::HookDrainerOutage"
+reason = "Both sidebar fold paths carry the earliest runtime outage and its ordered agents."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::HookDrainerOutageAgent"
+reason = "The snapshot owns the renderer's outage identity without importing harness records into store."
 
 [[verdict]]
 kind = "item"

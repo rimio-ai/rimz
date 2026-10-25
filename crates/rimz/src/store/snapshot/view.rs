@@ -63,6 +63,20 @@ pub struct TruthNotice {
     pub pane_ids: Vec<PaneId>,
 }
 
+/// Active wrapper-reported hook-drainer outages, ordered by start.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookDrainerOutage {
+    pub since: Timestamp,
+    pub agents: Vec<HookDrainerOutageAgent>,
+}
+
+/// One agent whose wrapper cannot reach the hook drainer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookDrainerOutageAgent {
+    pub agent_kind: AgentKind,
+    pub agent_name: Option<String>,
+}
+
 /// Serde default for [`SidebarSnapshot::root_class`]: `Repo` keeps a pre-class
 /// snapshot (and the pure reducer path) on the prior repo-room grouping.
 fn default_root_class() -> RootClass {
@@ -79,7 +93,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 52;
+pub const SNAPSHOT_VERSION: u32 = 53;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -141,6 +155,9 @@ pub struct SidebarSnapshot {
     /// Display-only and renderer-local: the store state stays unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truth_degraded: Option<TruthNotice>,
+    /// Active hook-drainer outage and the affected agents in start order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_drainer_outage: Option<HookDrainerOutage>,
     /// The single instant every time-window verdict in this projection reads —
     /// the compaction head, the stall escalation, rate-limit resets, and
     /// subagent retention all agree on one clock, captured once at
@@ -393,6 +410,7 @@ impl SidebarSnapshot {
             focused_pane: None,
             presence: None,
             truth_degraded: None,
+            hook_drainer_outage: None,
             now,
             worktree_groups: Vec::new().into(),
             agents: Arc::new(agents),
