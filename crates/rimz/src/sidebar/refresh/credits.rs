@@ -499,7 +499,19 @@ fn oauth_read_is_fresh(
     now_ms: u64,
     cached_hint: Option<&AccountUsageIdentity>,
 ) -> bool {
-    if entry.oauth_read_at_ms == 0 || entry.oauth_read_hint.as_ref() != cached_hint {
+    if entry.oauth_read_at_ms == 0 {
+        return false;
+    }
+    let hint_changed = match entry.oauth_read_hint.as_ref() {
+        Some(hint) => cached_hint != Some(hint),
+        None => {
+            let identity = cache_derived_claim_identity(entry, cached_hint.cloned());
+            identity.scope != entry.scope
+                || identity.account_key != entry.account_key
+                || identity.credentials_stamp != entry.credentials_stamp
+        }
+    };
+    if hint_changed {
         return false;
     }
     let ttl = if entry.auth_settled {
