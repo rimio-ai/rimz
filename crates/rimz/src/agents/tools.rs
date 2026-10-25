@@ -3,10 +3,41 @@
 use super::definition::{DefinitionSpec, DefinitionTools};
 use super::{PermissionMode, all_definitions, spec_by_kind};
 
+/// RimZ tool names beside Pi's, read forward by Pi's renderer and backward by parsing.
+pub(super) const PI_TOOL_NAMES: &[(&str, &str)] = &[
+    ("Bash", "bash"),
+    ("Read", "read"),
+    ("Edit", "edit"),
+    ("MultiEdit", "edit"),
+    ("Write", "write"),
+    ("Grep", "grep"),
+    ("Glob", "find"),
+    ("LS", "ls"),
+    ("AskUserQuestion", "ask_user_question"),
+    ("powershell", "powershell"),
+];
+
+/// The RimZ spelling of a Pi-native tool name; any other name as written.
+pub(crate) fn canonical_tool_name(name: &str) -> &str {
+    PI_TOOL_NAMES
+        .iter()
+        .find_map(|&(canonical, native)| (name == native).then_some(canonical))
+        .unwrap_or(name)
+}
+
+/// Parsed definition tools, rendered for the final launch provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ToolSet {
+pub struct ToolSet {
     bases: Vec<String>,
     agent_types: Vec<String>,
+    restrictions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ToolNotice {
+    Dropped(Vec<String>),
+    Restrictions(Vec<String>),
+    NotApplied,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +57,7 @@ impl ToolSet {
         let mut tools = Self {
             bases: Vec::new(),
             agent_types: Vec::new(),
+            restrictions: Vec::new(),
         };
         for entry in entries {
             let entry_text = entry.trim();
@@ -52,8 +84,12 @@ impl ToolSet {
                     entry: entry.clone(),
                 });
             }
+            let base = canonical_tool_name(base);
             if !tools.has(base) {
                 tools.bases.push(base.to_owned());
+            }
+            if suffix.is_some() && !tools.restrictions.iter().any(|name| name == base) {
+                tools.restrictions.push(base.to_owned());
             }
             if base == "Agent" {
                 for name in suffix
@@ -81,6 +117,10 @@ impl ToolSet {
 
     pub(super) fn agent_types(&self) -> &[String] {
         &self.agent_types
+    }
+
+    pub(super) fn restrictions(&self) -> &[String] {
+        &self.restrictions
     }
 }
 
@@ -156,10 +196,25 @@ pub(crate) fn render_tool_args(
 ) -> Result<Vec<String>, ToolErr> {
     match (definitions(kind).tools, tools) {
         (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?),
+        (DefinitionTools::Optional(render), Some(tools)) => Ok(render(tools).0),
         (DefinitionTools::Unsupported, Some(_)) => Err(ToolErr::Unsupported {
             kind: kind.to_owned(),
         }),
         _ => Ok(Vec::new()),
+    }
+}
+
+pub(crate) fn render_launch_tool_args(
+    kind: &str,
+    tools: Option<&ToolSet>,
+) -> Result<(Vec<String>, Vec<ToolNotice>), ToolErr> {
+    let Some(tools) = tools else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    match definitions(kind).tools {
+        DefinitionTools::Optional(render) => Ok(render(tools)),
+        DefinitionTools::Unsupported => Ok((Vec::new(), vec![ToolNotice::NotApplied])),
+        _ => Ok((render_tool_args(kind, Some(tools))?, Vec::new())),
     }
 }
 
@@ -169,6 +224,58 @@ mod tests {
 
     fn tools(entries: &[&str]) -> ToolSet {
         ToolSet::parse(&entries.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn pi_tool_aliases_have_one_portable_spelling() {
+        let parsed = tools(&[
+            "read",
+            "Read(path)",
+            "bash",
+            "Bash",
+            "edit",
+            "write",
+            "grep",
+            "find",
+            "ls",
+            "ask_user_question",
+            "AskUserQuestion",
+            "powershell",
+        ]);
+        assert_eq!(
+            parsed.bases(),
+            [
+                "Read",
+                "Bash",
+                "Edit",
+                "Write",
+                "Grep",
+                "Glob",
+                "LS",
+                "AskUserQuestion",
+                "powershell"
+            ]
+        );
+        assert_eq!(parsed.restrictions(), ["Read"]);
+    }
+
+    #[test]
+    fn pi_reports_restrictions_only_for_mapped_tools() {
+        let parsed = tools(&[
+            "Read(path)",
+            "Agent(Explore)",
+            "WebFetch(url)",
+            "Bash(git *)",
+        ]);
+        let (args, notices) = render_launch_tool_args("pi", Some(&parsed)).unwrap();
+        assert_eq!(args, ["--tools", "read,bash"]);
+        assert_eq!(
+            notices,
+            [
+                ToolNotice::Dropped(vec!["Agent".into(), "WebFetch".into()]),
+                ToolNotice::Restrictions(vec!["Read".into(), "Bash".into()]),
+            ]
+        );
     }
 
     #[test]
@@ -260,7 +367,77 @@ mod tests {
         }
         assert!(!tools_required("pi"));
         assert!(render_tool_args("pi", None).unwrap().is_empty());
-        assert!(render_tool_args("pi", Some(&parsed)).unwrap().is_empty());
+        assert_eq!(
+            render_tool_args("pi", Some(&parsed)).unwrap(),
+            ["--tools", "bash"]
+        );
+        for (entries, expected) in [
+            (vec![], vec!["--no-tools"]),
+            (vec!["WebSearch"], vec!["--no-tools"]),
+            (vec!["Bash(git *)"], vec!["--tools", "bash"]),
+            (
+                vec![
+                    "Bash",
+                    "Read",
+                    "Edit",
+                    "MultiEdit",
+                    "Write",
+                    "Grep",
+                    "Glob",
+                    "LS",
+                    "AskUserQuestion",
+                ],
+                vec![
+                    "--tools",
+                    "bash,read,edit,write,grep,find,ls,ask_user_question",
+                ],
+            ),
+            (
+                vec!["Edit", "MultiEdit", "Read", "Bash", "read"],
+                vec!["--tools", "edit,read,bash"],
+            ),
+            (
+                vec![
+                    "read",
+                    "bash",
+                    "powershell",
+                    "edit",
+                    "write",
+                    "grep",
+                    "find",
+                    "ls",
+                    "ask_user_question",
+                ],
+                vec![
+                    "--tools",
+                    "read,bash,powershell,edit,write,grep,find,ls,ask_user_question",
+                ],
+            ),
+            (
+                vec![
+                    "AskUserQuestion",
+                    "Bash",
+                    "Edit",
+                    "Glob",
+                    "Grep",
+                    "Read",
+                    "Skill",
+                    "WebFetch",
+                    "WebSearch",
+                    "Write",
+                ],
+                vec![
+                    "--tools",
+                    "ask_user_question,bash,edit,find,grep,read,write",
+                ],
+            ),
+        ] {
+            assert_eq!(
+                render_tool_args("pi", Some(&tools(&entries))).unwrap(),
+                expected,
+                "{entries:?}"
+            );
+        }
         assert!(
             matches!(render_tool_args("unregistered", Some(&parsed)), Err(ToolErr::Unsupported { kind }) if kind == "unregistered")
         );

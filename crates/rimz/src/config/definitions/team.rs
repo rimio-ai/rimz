@@ -335,7 +335,10 @@ impl SeatLoader<'_> {
         if team.leader.as_deref() != Some(role.role.as_deref().unwrap_or(&role.agent))
             && let Some(tools) = &mut fm.tools
         {
-            tools.retain(|tool| tool.split('(').next().unwrap_or("").trim() != "AskUserQuestion");
+            tools.retain(|tool| {
+                crate::agents::canonical_tool_name(tool.split('(').next().unwrap_or("").trim())
+                    != "AskUserQuestion"
+            });
         }
         if let Some(skills) = &mut fm.skills
             && !skills.is_empty()

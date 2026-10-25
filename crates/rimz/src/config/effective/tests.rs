@@ -868,6 +868,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
+        tools: None,
         auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,

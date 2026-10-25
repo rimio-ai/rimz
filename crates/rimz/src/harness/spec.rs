@@ -191,6 +191,7 @@ pub struct ResolvedProfile {
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub tools: Option<crate::agents::ToolSet>,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     pub args: Option<String>,
 }
@@ -216,6 +217,7 @@ impl ResolvedProfile {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            tools: None,
             allowed_tools: None,
             isolation_default: None,
             args: None,
@@ -227,6 +229,9 @@ impl ResolvedProfile {
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
+        }
+        if self.tools.is_none() {
+            self.tools.clone_from(&layer.tools);
         }
         if self.allowed_tools.is_none() {
             self.allowed_tools.clone_from(&layer.allowed_tools);
@@ -1065,7 +1070,7 @@ struct PreparedRole {
     role: String,
     profile: String,
     resolved: ResolvedProfile,
-    args: Vec<String>,
+    rendered: (Vec<String>, Vec<CellNotice>),
 }
 
 struct PreparedTeam<'a> {
@@ -1090,7 +1095,7 @@ fn compile_team(
         normalize_budget(&mut role.resolved.launch.budget, &role.profile)?;
         let mut cell = agent_cell_from(
             &role.resolved,
-            role.args,
+            role.rendered,
             Some(role.profile),
             Some(role.role.clone()),
             role.resolved.launch.mode,
@@ -1637,13 +1642,16 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<AgentCell
 
 fn agent_cell_from(
     resolved: &ResolvedProfile,
-    args: Vec<String>,
+    rendered: (Vec<String>, Vec<CellNotice>),
     profile: Option<String>,
     role: Option<String>,
     mode: Option<PermissionMode>,
 ) -> AgentCell {
+    let (args, tool_notices) = rendered;
+    let mut notices = resolved.notices.clone();
+    notices.extend(tool_notices);
     AgentCell {
-        notices: resolved.notices.clone(),
+        notices,
         resume_model_override: false,
         empty_dir: resolved.empty_dir,
         kind: resolved.kind.clone(),
@@ -1665,7 +1673,10 @@ fn agent_cell_from(
     }
 }
 
-fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
+fn render_profile_args(
+    name: &str,
+    resolved: &ResolvedProfile,
+) -> Result<(Vec<String>, Vec<CellNotice>)> {
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     let mut argv = adapter
@@ -1678,6 +1689,14 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
     if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.spec().launch.permission_args(mode));
     }
+    let (tools, notices) =
+        crate::agents::render_launch_tool_args(&resolved.kind, resolved.tools.as_ref()).map_err(
+            |error| LayoutErr::InvalidProfile {
+                profile: name.to_owned(),
+                reason: error.to_string(),
+            },
+        )?;
+    argv.extend(tools);
     if let Some(raw) = resolved
         .args
         .as_deref()
@@ -1689,7 +1708,17 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
         })?;
         argv.append(&mut extra);
     }
-    Ok(argv)
+    let notices = notices
+        .into_iter()
+        .map(|notice| match notice {
+            crate::agents::ToolNotice::Dropped(tools) => CellNotice::DroppedTools { tools },
+            crate::agents::ToolNotice::Restrictions(tools) => {
+                CellNotice::ToolRestrictions { tools }
+            }
+            crate::agents::ToolNotice::NotApplied => CellNotice::ToolsNotApplied,
+        })
+        .collect();
+    Ok((argv, notices))
 }
 
 fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
@@ -1759,11 +1788,11 @@ fn virtual_cell_from(
     let error_origin = profile_name
         .as_deref()
         .unwrap_or_else(|| resolved.kind.as_str());
-    let mut args = render_profile_args(error_origin, &base)?;
+    let (mut args, notices) = render_profile_args(error_origin, &base)?;
     args.extend(extra_args);
     Ok(Cell::Agent(agent_cell_from(
         &resolved,
-        args,
+        (args, notices),
         profile_name,
         None,
         mode,
@@ -2167,12 +2196,12 @@ fn prepare_team<'a>(
                 role: binding.role.clone(),
             });
         }
-        let args = render_profile_args(&binding.profile, &resolved)?;
+        let rendered = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),
             profile: binding.profile.clone(),
             resolved,
-            args,
+            rendered,
         });
     }
     if let Some(leader) = team.leader.as_deref()
@@ -2264,6 +2293,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
+    }
+    if original.tools.is_none() {
+        original.tools.clone_from(&base.tools);
     }
     if original.allowed_tools.is_none() {
         original.allowed_tools.clone_from(&base.allowed_tools);

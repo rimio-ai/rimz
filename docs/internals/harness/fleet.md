@@ -182,10 +182,12 @@ Cells carry pending model and tool notices as typed values, and only the launch 
 | model | the base's when it sets one; otherwise the original's on the same kind or Pi, and unset on another kind |
 | effort | the base's when it sets one, otherwise the original's |
 | raw `args` | the original's, with the base filling a gap, on the same kind; the base's on a different kind |
-| mode, budget, `auto-compact`, skills, system-prompt file | the original's, with the base filling a gap |
+| mode, budget, `auto-compact`, tools, allowed-tools, skills, system-prompt file | the original's, with the base filling a gap |
 | appended system-prompt files | the base's fragments, then the original's |
 
 A different kind takes raw args only from the base. Pi declares that it runs other providers' models and keeps the original model when the base leaves it unset. Other kinds drop that model with a warning, unless a launch model or tier replaces it; an explicit base model stays quiet.
+
+The Markdown tools list stays typed through definition-family copies and profile merges. `render_profile_args` renders it once for the cell's final kind; generated tool flags never enter `Profile.args`. Load still validates the list against the definition's own kind, while a bare-kind launch without a list renders no tool switches. Lossy Pi mappings and carried lists a provider cannot apply become cell notices for finalization; OMP ignores lists silently.
 
 A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell.
 

@@ -140,6 +140,198 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
 }
 
 #[test]
+fn role_tools_render_once_for_every_profile_cell_path() {
+    let tools = crate::agents::ToolSet::parse(
+        &[
+            "AskUserQuestion",
+            "Bash",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Read",
+            "Skill",
+            "WebFetch",
+            "WebSearch",
+            "Write",
+        ]
+        .map(str::to_owned),
+    )
+    .unwrap();
+    let worker = Profile {
+        tools: Some(tools),
+        ..configured_profile("claude", None, None, None, None, None)
+    };
+    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([
+        ("worker".into(), worker.clone()),
+        ("claude".into(), worker),
+    ]));
+    let teams: crate::config::TeamsConfig =
+        toml::from_str("[crew]\nroles = [{role = 'lead', profile = 'worker'}]").unwrap();
+    for spec in [
+        "worker",
+        "claude",
+        "claude-plan",
+        "worker-fast",
+        "claude-plan-fast",
+        "crew",
+        "crew.lead",
+    ] {
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some(spec),
+            &profiles,
+            &profiles,
+            &crate::config::CommandsConfig::default(),
+            &teams,
+            Some("pi"),
+        )
+        .unwrap();
+        let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(
+            cell.args.iter().filter(|arg| *arg == "--tools").count(),
+            1,
+            "{spec}: {:?}",
+            cell.args
+        );
+        assert!(cell.args.windows(2).any(|args| args
+            == [
+                "--tools",
+                "ask_user_question,bash,edit,find,grep,read,write"
+            ]));
+        let notices = warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                LaunchFinalizeWarning::CellNotice { notice, .. } => Some(notice),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            notices,
+            [&crate::harness::spec::CellNotice::DroppedTools {
+                tools: ["Skill", "WebFetch", "WebSearch"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            }],
+            "{spec}: {warnings:?}"
+        );
+        assert!(cell.notices.is_empty());
+        assert!(
+            finalize(&mut layout, &Default::default(), &[])
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
+    for (entries, target, expected_args, expected_notices) in [
+        (
+            vec!["Bash(git *)", "Read", "Read(path)", "WebSearch"],
+            "pi",
+            vec!["--tools", "bash,read"],
+            vec![
+                crate::harness::spec::CellNotice::DroppedTools {
+                    tools: vec!["WebSearch".into()],
+                },
+                crate::harness::spec::CellNotice::ToolRestrictions {
+                    tools: vec!["Bash".into(), "Read".into()],
+                },
+            ],
+        ),
+        (
+            vec!["WebSearch"],
+            "pi",
+            vec!["--no-tools"],
+            vec![crate::harness::spec::CellNotice::DroppedTools {
+                tools: vec!["WebSearch".into()],
+            }],
+        ),
+        (
+            vec!["Read"],
+            "cursor",
+            vec![],
+            vec![crate::harness::spec::CellNotice::ToolsNotApplied],
+        ),
+        (vec!["Read"], "omp", vec![], vec![]),
+    ] {
+        let mut worker = configured_profile("claude", None, None, None, None, None);
+        worker.tools = Some(
+            crate::agents::ToolSet::parse(
+                &entries.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        );
+        let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+            "worker".into(),
+            worker,
+        )]));
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some("worker"),
+            &profiles,
+            &profiles,
+            &crate::config::CommandsConfig::default(),
+            &crate::config::TeamsConfig::default(),
+            Some(target),
+        )
+        .unwrap();
+        let warnings = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        assert_eq!(
+            layout.agent_cells().next().unwrap().args,
+            expected_args,
+            "{target}"
+        );
+        assert_eq!(
+            warnings
+                .into_iter()
+                .map(|warning| match warning {
+                    LaunchFinalizeWarning::CellNotice {
+                        profile,
+                        kind,
+                        notice,
+                    } => {
+                        assert_eq!(profile, "worker");
+                        assert_eq!(kind.as_str(), target);
+                        notice
+                    }
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            expected_notices
+        );
+    }
+    let mut worker = configured_profile("claude", None, None, None, None, None);
+    worker.tools = Some(crate::agents::ToolSet::parse(&["Bash".into()]).unwrap());
+    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+        "worker".into(),
+        worker,
+    )]));
+    let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+        Some("worker"),
+        &profiles,
+        &profiles,
+        &crate::config::CommandsConfig::default(),
+        &crate::config::TeamsConfig::default(),
+        Some("codex"),
+    )
+    .unwrap();
+    assert!(
+        finalize(&mut layout, &Default::default(), &[])
+            .unwrap()
+            .is_empty()
+    );
+    let args = &layout.agent_cells().next().unwrap().args;
+    for value in [
+        "--strict-config",
+        "features.shell_tool=true",
+        "agents.enabled=false",
+        "skills.include_instructions=false",
+    ] {
+        assert!(args.iter().any(|arg| arg == value), "{args:?}");
+    }
+}
+
+#[test]
 fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
     let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
         "compact".into(),
@@ -1113,6 +1305,7 @@ fn configured_profile(
     Profile {
         empty_dir: None,
         definition_renders: None,
+        tools: None,
         auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,
