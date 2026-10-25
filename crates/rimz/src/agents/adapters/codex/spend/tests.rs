@@ -2,7 +2,7 @@ use super::*;
 
 use std::io::Write as _;
 
-use crate::agents::spending::ResponseTiming;
+use crate::agents::spending::{ResponseTiming, ToolCounts};
 use tempfile::TempDir;
 
 fn timing_line(ms: u64, kind: &str, payload: serde_json::Value) -> String {
@@ -370,11 +370,11 @@ fn response_item_tools_attach_to_the_next_usage_entry() {
 
     assert_eq!(
         entries[0].tool_calls,
-        BTreeMap::from([
+        ToolCounts::from(BTreeMap::from([
             ("apply_patch".to_owned(), 1),
             ("shell".to_owned(), 1),
             ("web_search".to_owned(), 1),
-        ])
+        ]))
     );
 }
 

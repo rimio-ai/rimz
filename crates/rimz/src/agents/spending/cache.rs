@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
+use serde::ser::SerializeMap as _;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -286,6 +287,151 @@ impl fmt::Debug for SharedName {
     }
 }
 
+/// Tool calls in byte order, with one name inline and multiple names in a boxed slice.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolCounts(ToolCountStorage);
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum ToolCountStorage {
+    #[default]
+    Empty,
+    One((SharedName, u32)),
+    Many(Box<[(SharedName, u32)]>),
+}
+
+impl ToolCounts {
+    pub fn is_empty(&self) -> bool {
+        matches!(self.0, ToolCountStorage::Empty)
+    }
+
+    /// Count one more call, saturating at `u32::MAX`.
+    pub fn increment(&mut self, name: &str) {
+        self.add(name, 1);
+    }
+
+    /// Add calls to a name, saturating at `u32::MAX`.
+    pub fn add(&mut self, name: &str, count: u32) {
+        match self
+            .as_slice()
+            .binary_search_by(|(stored, _)| stored.as_ref().cmp(name))
+        {
+            Ok(index) => {
+                let total = &mut self.as_mut_slice()[index].1;
+                *total = total.saturating_add(count);
+            }
+            Err(index) => self.insert_at(index, (name.into(), count)),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&u32> {
+        self.as_slice()
+            .binary_search_by(|(stored, _)| stored.as_ref().cmp(name))
+            .ok()
+            .map(|index| &self.as_slice()[index].1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, u32)> {
+        self.as_slice()
+            .iter()
+            .map(|(name, count)| (&**name, *count))
+    }
+
+    fn as_slice(&self) -> &[(SharedName, u32)] {
+        match &self.0 {
+            ToolCountStorage::Empty => &[],
+            ToolCountStorage::One(entry) => std::slice::from_ref(entry),
+            ToolCountStorage::Many(entries) => entries,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [(SharedName, u32)] {
+        match &mut self.0 {
+            ToolCountStorage::Empty => &mut [],
+            ToolCountStorage::One(entry) => std::slice::from_mut(entry),
+            ToolCountStorage::Many(entries) => entries,
+        }
+    }
+
+    fn insert(&mut self, name: SharedName, count: u32) {
+        match self
+            .as_slice()
+            .binary_search_by(|(stored, _)| stored.cmp(&name))
+        {
+            Ok(index) => self.as_mut_slice()[index].1 = count,
+            Err(index) => self.insert_at(index, (name, count)),
+        }
+    }
+
+    fn insert_at(&mut self, index: usize, entry: (SharedName, u32)) {
+        self.0 = match std::mem::take(&mut self.0) {
+            ToolCountStorage::Empty => ToolCountStorage::One(entry),
+            ToolCountStorage::One(previous) => ToolCountStorage::Many(if index == 0 {
+                Box::new([entry, previous])
+            } else {
+                Box::new([previous, entry])
+            }),
+            ToolCountStorage::Many(entries) => {
+                let mut entries = entries.into_vec();
+                entries.insert(index, entry);
+                ToolCountStorage::Many(entries.into_boxed_slice())
+            }
+        };
+    }
+}
+
+impl<N: AsRef<str>> FromIterator<(N, u32)> for ToolCounts {
+    fn from_iter<I: IntoIterator<Item = (N, u32)>>(iter: I) -> Self {
+        let mut counts = Self::default();
+        for (name, count) in iter {
+            counts.insert(name.as_ref().into(), count);
+        }
+        counts
+    }
+}
+
+impl From<BTreeMap<String, u32>> for ToolCounts {
+    fn from(counts: BTreeMap<String, u32>) -> Self {
+        counts.into_iter().collect()
+    }
+}
+
+impl Serialize for ToolCounts {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.as_slice().len()))?;
+        for (name, count) in self.iter() {
+            map.serialize_entry(name, &count)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolCounts {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CountsVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for CountsVisitor {
+            type Value = ToolCounts;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("tool names mapped to counts")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut counts = ToolCounts::default();
+                while let Some((name, count)) = map.next_entry()? {
+                    counts.insert(name, count);
+                }
+                Ok(counts)
+            }
+        }
+
+        deserializer.deserialize_map(CountsVisitor)
+    }
+}
+
 /// A single cost entry with dedup keys for cross-file deduplication.
 ///
 /// `message_id` and `request_id` identify Claude responses. `dedup_key`
@@ -293,7 +439,7 @@ impl fmt::Debug for SharedName {
 /// no message ID. `thread_id` is present when the provider's durable transcript
 /// store exposes a native session id. `is_sidechain` drives the sidechain-replay
 /// suppression logic in the spending walk.
-/// Model names share storage across rows; provider IDs are boxed strings.
+/// Model and tool names share storage across rows; provider IDs are boxed strings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
@@ -325,8 +471,8 @@ pub struct CachedEntry {
     #[serde(default, rename = "r", skip_serializing_if = "is_zero")]
     pub cache_read: u64,
     /// Named tool calls attributed to this provider response.
-    #[serde(default, rename = "n", skip_serializing_if = "BTreeMap::is_empty")]
-    pub tool_calls: BTreeMap<String, u32>,
+    #[serde(default, rename = "n", skip_serializing_if = "ToolCounts::is_empty")]
+    pub tool_calls: ToolCounts,
     /// `message.id` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, rename = "m", skip_serializing_if = "Option::is_none")]
     pub message_id: Option<Box<str>>,
@@ -609,9 +755,8 @@ fn merge_rollup(rollups: &mut BTreeMap<RollupKey, CachedEntry>, entry: CachedEnt
                 total.ms += timing.ms;
                 total.output += timing.output;
             }
-            for (name, count) in &entry.tool_calls {
-                let total = rolled.tool_calls.entry(name.clone()).or_default();
-                *total = total.saturating_add(*count);
+            for (name, count) in entry.tool_calls.iter() {
+                rolled.tool_calls.add(name, count);
             }
         })
         .or_insert(entry);
@@ -753,5 +898,93 @@ mod tests {
         assert!(!SHARED_NAMES.lock().unwrap().contains("unused"));
         assert!(weak.upgrade().is_none());
         assert!(SHARED_NAMES.lock().unwrap().contains("active"));
+    }
+
+    #[test]
+    fn tool_counts_decode_one_inline_and_skip_empty_rows() {
+        let row: CachedEntry = serde_json::from_str(r#"{"t":1,"u":0.0,"n":{"Read":2}}"#).unwrap();
+        assert!(matches!(row.tool_calls.0, ToolCountStorage::One((_, _))));
+        assert_eq!(row.tool_calls.iter().collect::<Vec<_>>(), [("Read", 2)]);
+        let empty: CachedEntry = serde_json::from_str(r#"{"t":1,"u":0.0}"#).unwrap();
+        assert!(matches!(empty.tool_calls.0, ToolCountStorage::Empty));
+        assert!(empty.tool_calls.is_empty());
+        assert!(serde_json::to_value(empty).unwrap().get("n").is_none());
+    }
+
+    #[test]
+    fn tool_counts_decode_many_in_byte_order() {
+        let tools: ToolCounts = serde_json::from_str(r#"{"bash":2,"検索":3,"Bash":1}"#).unwrap();
+        assert!(matches!(tools.0, ToolCountStorage::Many(_)));
+        assert_eq!(
+            tools.iter().collect::<Vec<_>>(),
+            [("Bash", 1), ("bash", 2), ("検索", 3)]
+        );
+        assert_eq!(
+            serde_json::to_string(&tools).unwrap(),
+            r#"{"Bash":1,"bash":2,"検索":3}"#
+        );
+    }
+
+    #[test]
+    fn tool_counts_duplicate_keys_keep_the_last_value_in_canonical_storage() {
+        let tools: ToolCounts = serde_json::from_str(r#"{"Read":7,"Read":0}"#).unwrap();
+        assert!(matches!(tools.0, ToolCountStorage::One((_, _))));
+        assert_eq!(tools.get("Read"), Some(&0));
+        assert_eq!(serde_json::to_string(&tools).unwrap(), r#"{"Read":0}"#);
+        assert_eq!(
+            tools,
+            [("Read", 7), ("Read", 0)]
+                .into_iter()
+                .collect::<ToolCounts>()
+        );
+        assert_eq!(
+            tools,
+            ToolCounts::from(BTreeMap::from([("Read".to_owned(), 0)]))
+        );
+    }
+
+    #[test]
+    fn tool_counts_increment_and_add_preserve_sorted_union() {
+        let mut tools: ToolCounts = [("Read", 1)].into_iter().collect();
+        tools.increment("Read");
+        tools.add("Read", 3);
+        tools.increment("Bash");
+        assert_eq!(tools.iter().collect::<Vec<_>>(), [("Bash", 1), ("Read", 5)]);
+    }
+
+    #[test]
+    fn tool_counts_increment_and_add_saturate() {
+        let mut incremented: ToolCounts = [("Read", u32::MAX - 1)].into_iter().collect();
+        incremented.increment("Read");
+        incremented.increment("Read");
+        let mut added: ToolCounts = [("Read", u32::MAX - 1)].into_iter().collect();
+        added.add("Read", 2);
+        assert_eq!(
+            [incremented.get("Read").copied(), added.get("Read").copied()],
+            [Some(u32::MAX), Some(u32::MAX)]
+        );
+    }
+
+    #[test]
+    fn rollup_tool_counts_sum_shared_names_and_sorted_union() {
+        let mut rollups = BTreeMap::new();
+        for tools in [
+            [("Bash", 1), ("Read", u32::MAX - 1), ("Zed", 4)],
+            [("Bash", 2), ("Read", 2), ("bash", 3)],
+        ] {
+            merge_rollup(
+                &mut rollups,
+                CachedEntry {
+                    tool_calls: tools.into_iter().collect(),
+                    rolled: true,
+                    ..CachedEntry::default()
+                },
+            );
+        }
+        let rolled = rollups.into_values().next().unwrap();
+        assert_eq!(
+            rolled.tool_calls.iter().collect::<Vec<_>>(),
+            [("Bash", 3), ("Read", u32::MAX), ("Zed", 4), ("bash", 3)]
+        );
     }
 }

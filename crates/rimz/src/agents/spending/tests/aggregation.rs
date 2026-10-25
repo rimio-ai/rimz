@@ -810,7 +810,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
 fn tool_calls_populate_each_trailing_window_and_provider_tally() {
     let file = PathBuf::from("/x/opencode.db");
     let mut entry = cached_entry(NOW_SECS - 8 * 86_400, 0.01, "session-a");
-    entry.tool_calls = BTreeMap::from([("bash".to_owned(), 2), ("read".to_owned(), 3)]);
+    entry.tool_calls = BTreeMap::from([("bash".to_owned(), 2), ("read".to_owned(), 3)]).into();
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file(&file, vec![entry])]),
         ..Default::default()
@@ -1754,7 +1754,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         output: 50,
         cache_write: 10,
         cache_read: 70,
-        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]),
+        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]).into(),
         message_id: Some("msg-1".into()),
         request_id: Some("req-1".into()),
         dedup_key: None,
@@ -1780,7 +1780,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         output: 20,
         cache_write: 0,
         cache_read: 40,
-        tool_calls: BTreeMap::from([("Bash".to_owned(), 1)]),
+        tool_calls: BTreeMap::from([("Bash".to_owned(), 1)]).into(),
         message_id: None,
         request_id: None,
         dedup_key: None,

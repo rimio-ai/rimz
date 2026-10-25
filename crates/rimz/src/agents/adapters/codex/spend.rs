@@ -151,7 +151,7 @@ pub(crate) fn parse_codex_spend(
                 codex_event_dedup_key(&event.timestamp, model, &event).into_boxed_str(),
             ),
             model: Some(model.into()),
-            tool_calls: event.tool_calls,
+            tool_calls: event.tool_calls.into(),
             timing: event.timing,
             ..CachedEntry::new(ts_secs, cost, &split)
         });

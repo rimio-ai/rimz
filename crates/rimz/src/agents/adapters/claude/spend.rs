@@ -472,8 +472,7 @@ pub fn parse_claude_spend(
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            let count = main_entry.tool_calls.entry(name.to_owned()).or_default();
-            *count = count.saturating_add(1);
+            main_entry.tool_calls.increment(name);
         }
         if origin.is_none() {
             origin = origin_path(entry.cwd.as_deref());
