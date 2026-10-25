@@ -10,6 +10,7 @@ use std::time::SystemTime;
 
 use serde::ser::SerializeMap as _;
 use serde::{Deserialize, Serialize};
+use serde_json::value::{RawValue, to_raw_value};
 use tracing::{debug, warn};
 
 use super::SpendingFile;
@@ -159,12 +160,13 @@ pub struct FileCacheEntry {
 }
 
 /// Where an incremental spend parse left off: the byte offset just past the
-/// last consumed line, plus the adapter's opaque cross-line state (Codex
-/// carries its cumulative token totals and tracked model so a resumed delta
-/// subtraction stays exact; Claude carries its pricing fingerprint and the
-/// input and in-flight message timestamps). Stored per file in the spending
-/// cache; a state shape change bumps `SPENDING_CACHE_VERSION`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// last consumed line, plus the adapter's cross-line state, held as JSON text
+/// and decoded on use (Codex carries its cumulative token totals and tracked
+/// model so a resumed delta subtraction stays exact; Claude carries its
+/// pricing fingerprint and the input and in-flight message timestamps).
+/// Stored per file in the spending cache; a state shape change bumps
+/// `SPENDING_CACHE_VERSION`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SpendCursor {
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub offset: u64,
@@ -173,27 +175,60 @@ pub struct SpendCursor {
     #[serde(default, rename = "a", skip_serializing_if = "Option::is_none")]
     pub anchor: Option<u32>,
     #[serde(default, rename = "s", skip_serializing_if = "Option::is_none")]
-    pub state: Option<serde_json::Value>,
+    state: Option<Box<RawValue>>,
 }
 
 impl SpendCursor {
+    /// A stateless cursor at the next byte offset.
+    pub fn new(offset: u64) -> Self {
+        Self {
+            offset,
+            ..Self::default()
+        }
+    }
+
     /// Decode the adapter's cross-line state. The state was serialized by the
     /// same adapter under the current `SPENDING_CACHE_VERSION` (a shape change
     /// bumps it and cold-rebuilds), so a missing or odd value degrades to a
     /// fresh fold rather than failing the pass.
     pub fn state_as<T: serde::de::DeserializeOwned + Default>(&self) -> T {
         self.state
-            .clone()
-            .and_then(|value| serde_json::from_value(value).ok())
+            .as_ref()
+            .and_then(|value| serde_json::from_str(value.get()).ok())
             .unwrap_or_default()
     }
 
-    /// Build the cursor an adapter hands back after folding to `offset`.
+    /// Build the cursor an adapter hands back after folding to `offset`. The
+    /// state passes through a `serde_json::Value` first, so its text keeps the
+    /// sorted keys the cache has always written.
     pub fn with_state<T: Serialize>(offset: u64, state: &T) -> Self {
         Self {
             offset,
             anchor: None,
-            state: serde_json::to_value(state).ok(),
+            state: serde_json::to_value(state)
+                .ok()
+                .and_then(|value| to_raw_value(&value).ok()),
+        }
+    }
+
+    pub(in crate::agents) fn state(&self) -> Option<&RawValue> {
+        self.state.as_deref()
+    }
+}
+
+impl PartialEq for SpendCursor {
+    fn eq(&self, other: &Self) -> bool {
+        if self.offset != other.offset || self.anchor != other.anchor {
+            return false;
+        }
+        match (&self.state, &other.state) {
+            (None, None) => true,
+            (Some(left), Some(right)) if left.get() == right.get() => true,
+            (Some(left), Some(right)) => serde_json::from_str::<serde_json::Value>(left.get())
+                .ok()
+                .zip(serde_json::from_str::<serde_json::Value>(right.get()).ok())
+                .is_some_and(|(left, right)| left == right),
+            _ => false,
         }
     }
 }
@@ -986,5 +1021,74 @@ mod tests {
             rolled.tool_calls.iter().collect::<Vec<_>>(),
             [("Bash", 3), ("Read", u32::MAX), ("Zed", 4), ("bash", 3)]
         );
+    }
+
+    #[test]
+    fn cursor_decode_retains_state_text_verbatim() {
+        let source = r#"{"o":7,"s":{ "z":2, "a":1 }}"#;
+        let cursor: SpendCursor = serde_json::from_str(source).unwrap();
+        assert_eq!(serde_json::to_string(&cursor).unwrap(), source);
+    }
+
+    #[test]
+    fn cursor_with_state_canonicalizes_struct_fields_and_handles_serialization_failure() {
+        #[derive(Serialize)]
+        struct State {
+            z: u32,
+            a: u32,
+        }
+        let cursor = SpendCursor::with_state(7, &State { z: 2, a: 1 });
+        assert_eq!(
+            serde_json::to_string(&cursor).unwrap(),
+            r#"{"o":7,"s":{"a":1,"z":2}}"#
+        );
+        assert_eq!(
+            cursor.state_as::<serde_json::Value>(),
+            serde_json::json!({"a":1,"z":2})
+        );
+        let failed = SpendCursor::with_state(7, &BTreeMap::from([((1, 2), 3)]));
+        assert_eq!(serde_json::to_string(&failed).unwrap(), r#"{"o":7}"#);
+        assert!(failed.state_as::<BTreeMap<String, u32>>().is_empty());
+        let wrong_shape = SpendCursor::with_state(7, &"not an object");
+        assert!(wrong_shape.state_as::<BTreeMap<String, u32>>().is_empty());
+    }
+
+    #[test]
+    fn cursor_equality_compares_json_values_offset_and_anchor() {
+        let mut canonical = SpendCursor::with_state(7, &serde_json::json!({"a":1,"z":2}));
+        canonical.anchor = Some(123);
+        let pretty: SpendCursor =
+            serde_json::from_str(r#"{"o":7,"a":123,"s":{ "z":2, "a":1 }}"#).unwrap();
+        assert_eq!(canonical, pretty);
+        assert_eq!(pretty, pretty.clone());
+        let mut different = pretty.clone();
+        different.offset = 8;
+        assert_ne!(canonical, different);
+        different.offset = 7;
+        different.anchor = None;
+        assert_ne!(canonical, different);
+        let changed: SpendCursor =
+            serde_json::from_str(r#"{"o":7,"a":123,"s":{"a":2,"z":2}}"#).unwrap();
+        assert_ne!(canonical, changed);
+        let absent: SpendCursor = serde_json::from_str(r#"{"o":7,"a":123}"#).unwrap();
+        assert_ne!(canonical, absent);
+    }
+
+    #[test]
+    fn cursor_default_skip_distinguishes_offset_anchor_and_state() {
+        let skipped: Vec<_> = [r#"{}"#, r#"{"o":1}"#, r#"{"a":0}"#, r#"{"s":{}}"#]
+            .into_iter()
+            .map(|source| {
+                let file = FileCacheEntry {
+                    stat: TranscriptStat::default(),
+                    cursor: serde_json::from_str(source).unwrap(),
+                    origin_path: None,
+                    entries: Vec::new(),
+                    unknown_models: BTreeMap::new(),
+                };
+                serde_json::to_value(file).unwrap().get("c").is_none()
+            })
+            .collect();
+        assert_eq!(skipped, [true, false, false, false]);
     }
 }

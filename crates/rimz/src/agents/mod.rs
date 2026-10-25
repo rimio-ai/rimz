@@ -1443,10 +1443,7 @@ mod tests {
     #[test]
     fn local_spend_fold_resume_replays_legacy_and_truncated_folds() {
         let legacy = LocalSpendFold {
-            cursor: spending::SpendCursor {
-                offset: 10,
-                ..spending::SpendCursor::default()
-            },
+            cursor: spending::SpendCursor::new(10),
             input: 99,
             ..LocalSpendFold::default()
         };

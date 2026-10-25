@@ -30,11 +30,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     {
         return SpendParse {
             origin,
-            cursor: SpendCursor {
-                anchor: None,
-                offset: next,
-                state: None,
-            },
+            cursor: SpendCursor::new(next),
             update: SpendUpdate::Replace,
             ..SpendParse::default()
         };
@@ -54,11 +50,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     } else {
         (folded_completions(&suffix), next)
     };
-    let cursor = SpendCursor {
-        anchor: None,
-        offset,
-        state: None,
-    };
+    let cursor = SpendCursor::new(offset);
     let fallback_session_id = path
         .parent()
         .and_then(Path::file_name)

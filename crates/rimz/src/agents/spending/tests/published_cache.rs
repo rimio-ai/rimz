@@ -465,11 +465,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
                 len: 456,
             }),
         },
-        cursor: SpendCursor {
-            anchor: None,
-            offset: 77,
-            state: Some(serde_json::json!({"acc": 3})),
-        },
+        cursor: SpendCursor::with_state(77, &serde_json::json!({"acc": 3})),
         origin_path: Some(PathBuf::from("/tmp/repo")),
         entries: vec![codex],
         unknown_models: BTreeMap::from([("new-model".to_owned(), 66_666)]),

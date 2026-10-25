@@ -489,11 +489,7 @@ mod tests {
     fn cached(stat: TranscriptStat) -> FileCacheEntry {
         FileCacheEntry {
             stat,
-            cursor: SpendCursor {
-                anchor: None,
-                offset: 10,
-                state: None,
-            },
+            cursor: SpendCursor::new(10),
             origin_path: None,
             entries: Vec::new(),
             unknown_models: BTreeMap::new(),
@@ -535,11 +531,7 @@ mod tests {
                     len: 10,
                     ..TranscriptStat::default()
                 },
-                cursor: SpendCursor {
-                    anchor: None,
-                    offset: 10,
-                    state: None,
-                },
+                cursor: SpendCursor::new(10),
                 origin_path: None,
                 entries: vec![entry(1)],
                 unknown_models: BTreeMap::new(),
@@ -554,11 +546,7 @@ mod tests {
                 len: 20,
                 ..TranscriptStat::default()
             },
-            resume: Some(SpendCursor {
-                anchor: None,
-                offset: 10,
-                state: None,
-            }),
+            resume: Some(SpendCursor::new(10)),
             parse_origin: None,
             now_secs: 2,
         };

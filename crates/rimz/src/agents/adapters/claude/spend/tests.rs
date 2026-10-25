@@ -78,13 +78,17 @@ fn pricing_fingerprint_shares_an_object_cursor_with_response_timing() {
     assert!(
         parsed
             .cursor
-            .state
+            .state_as::<Option<serde_json::Value>>()
             .as_ref()
             .is_some_and(serde_json::Value::is_object)
     );
     assert!(ClaudeAdapter.spend_pricing_is_current(&parsed.cursor));
-    let mut stale = parsed.cursor;
-    stale.state.as_mut().unwrap()["pricing_fingerprint"] = serde_json::json!("old-pricing");
+    let mut state = parsed
+        .cursor
+        .state_as::<Option<serde_json::Value>>()
+        .unwrap();
+    state["pricing_fingerprint"] = serde_json::json!("old-pricing");
+    let stale = SpendCursor::with_state(parsed.cursor.offset, &state);
     assert!(!ClaudeAdapter.spend_pricing_is_current(&stale));
 }
 

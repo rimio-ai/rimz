@@ -938,11 +938,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
                 companion: None,
             }),
             spend_fold: crate::agents::FieldPatch::Set(LocalSpendFold {
-                cursor: crate::agents::spending::SpendCursor {
-                    anchor: None,
-                    offset: 42,
-                    state: None,
-                },
+                cursor: crate::agents::spending::SpendCursor::new(42),
                 total_usd: 0.42,
                 ..LocalSpendFold::default()
             }),
