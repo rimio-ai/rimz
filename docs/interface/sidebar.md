@@ -722,7 +722,7 @@ Claude · work v2.1.158                                                         
 |---------|---------|
 | `plan lapsed · no Claude access · since …` and no bars | Claude Code subscription access was rejected, never an API-billed login running out of credit. The header has no plan label, and the timestamp is when RimZ first saw the rejection, in local time. A successful usage read clears the lapse; it does not age into an unknown track. |
 | a partly filled bar and `↻ 1h47m` | The window is running. The fill slides from green through gold and amber to red as it empties. |
-| a full bar and no countdown | The window has not started. Providers start the clock at your first token, so there is no reset to count down to yet. |
+| a full bar and no countdown | The sliding window has not started: its clock starts at your first token. Fixed periods, including billing months, count down even with no usage. |
 | an empty track, all red | The window is spent. |
 | a short window painted spent while a longer one is spent | The longer window gates it: a spent `7d` makes `5h` unusable until the `7d` resets, so `5h` shows red with no countdown whatever its own reading. |
 | a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |

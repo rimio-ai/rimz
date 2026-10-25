@@ -343,6 +343,9 @@ fn push_window(
         duration_mins: Some(duration_mins),
         observed_at: Some(now),
         source: WindowSource::Authoritative,
+        // The bill month runs on the billing cycle; the 5h and week windows
+        // keep sliding-window detection.
+        fixed_period: duration_mins == 43_200,
         ..Default::default()
     });
 }
@@ -518,9 +521,13 @@ mod tests {
         assert_eq!(
             windows
                 .iter()
-                .map(|window| window.duration_mins)
+                .map(|window| (window.duration_mins, window.fixed_period))
                 .collect::<Vec<_>>(),
-            [Some(300), Some(10_080), Some(43_200)]
+            [
+                (Some(300), false),
+                (Some(10_080), false),
+                (Some(43_200), true)
+            ]
         );
         assert_eq!(windows[0].used_percentage, Some(25));
         assert_eq!(windows[2].used_percentage, Some(30));

@@ -97,24 +97,28 @@ fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
             .map(|window| (
                 window["duration_mins"].as_u64(),
                 window["used_percentage"].as_u64(),
-                window["amount"].clone()
+                window["amount"].clone(),
+                window.get("fixed_period").cloned()
             ))
             .collect::<Vec<_>>(),
         [
             (
                 Some(300),
                 Some(0),
-                serde_json::json!({"used":1,"limit":1000})
+                serde_json::json!({"used":1,"limit":1000}),
+                None
             ),
             (
                 Some(10_080),
                 Some(0),
-                serde_json::json!({"used":2,"limit":2000})
+                serde_json::json!({"used":2,"limit":2000}),
+                Some(serde_json::json!(true))
             ),
             (
                 Some(43_200),
                 Some(0),
-                serde_json::json!({"used":3,"limit":3000})
+                serde_json::json!({"used":3,"limit":3000}),
+                Some(serde_json::json!(true))
             ),
         ]
     );

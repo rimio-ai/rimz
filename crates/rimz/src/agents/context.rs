@@ -1077,6 +1077,12 @@ pub struct RateLimitWindow {
     /// that reports the duration replaces this marker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub lifted: bool,
+    /// The clock runs on a fixed schedule whether or not anything is used, as
+    /// a billing month does, so the window is never
+    /// [`not_started`](Self::not_started). `duration_mins` stays its identity
+    /// and nominal length even when the period runs longer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fixed_period: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -1146,7 +1152,9 @@ impl RateLimitWindow {
     /// `1.0` means the current spend rate exactly lasts to reset. The first slice
     /// of a fresh window is floored so a tiny amount of usage does not explode the
     /// ratio, while the returned elapsed share remains raw for signal gating.
-    /// Overdue reset times clamp to a full elapsed window.
+    /// Overdue reset times clamp to a full elapsed window. A reset at or beyond
+    /// the window's length means a sliding clock has not begun, so there is no
+    /// pace; a fixed period there is in its first slice and reads zero elapsed.
     pub fn pace(&self, now: Timestamp) -> Option<PaceReading> {
         let used_percentage = self.used_percentage?;
         let duration = SignedDuration::from_secs(i64::from(self.duration_mins?) * 60);
@@ -1156,7 +1164,7 @@ impl RateLimitWindow {
             return None;
         }
         let elapsed_secs = duration_secs - until_reset.as_secs();
-        if elapsed_secs <= 0 {
+        if elapsed_secs <= 0 && !self.fixed_period {
             return None;
         }
         let elapsed_share = (elapsed_secs as f64 / duration_secs as f64).clamp(0.0, 1.0);
@@ -1196,6 +1204,7 @@ impl RateLimitWindow {
                 observed_at: self.observed_at,
                 source: self.source,
                 lifted: self.lifted,
+                fixed_period: self.fixed_period,
             },
             _ => self,
         }
@@ -1226,10 +1235,12 @@ impl RateLimitWindow {
     /// any usage above the ~1% floor short-circuits to "started" regardless of
     /// the reset (this also covers a spent window at 100%). An absent reset or
     /// duration can't be judged this way, so it reads as started: a known
-    /// reading whose countdown is a real one. Drives the dashboard's
-    /// no-countdown "ready to start" treatment.
+    /// reading whose countdown is a real one. A
+    /// [`fixed_period`](Self::fixed_period) window, such as a billing month,
+    /// runs whatever the usage and always reads as started. Drives the
+    /// dashboard's no-countdown "ready to start" treatment.
     pub fn not_started(&self, now: Timestamp) -> bool {
-        if self.used_percentage > Some(FRESH_WINDOW_USAGE_FLOOR) {
+        if self.fixed_period || self.used_percentage > Some(FRESH_WINDOW_USAGE_FLOOR) {
             return false;
         }
         let (Some(reset), Some(mins)) = (self.resets_at, self.duration_mins) else {

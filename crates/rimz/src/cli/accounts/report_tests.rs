@@ -2072,6 +2072,14 @@ fn window_rendering_marks_ready_lifted_and_unknown_states() {
         block_window(&ready, now).as_deref(),
         Some("100% left · ready")
     );
+    let month = RateLimitWindow {
+        fixed_period: true,
+        ..window(43_200, 0, Some(31 * 86_400), now)
+    };
+    assert_eq!(
+        block_window(&month, now).as_deref(),
+        Some("100% left · resets in 31d00h · pace –")
+    );
     assert_eq!(
         block_window(&window(5 * 60, 45, Some(70 * 60), now), now).as_deref(),
         Some("55% left · resets in 1h10m · pace 0.6x")
