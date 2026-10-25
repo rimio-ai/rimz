@@ -78,7 +78,14 @@ pub(in crate::cli) fn restart_resolved(
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    let cell = restart_cell(agent, &posture);
+    let mut cell = restart_cell(agent, &posture);
+    if let Cell::Agent(cell) = &mut cell {
+        let profile = agent.profile.as_deref().unwrap_or(agent.kind.as_str());
+        for warning in rimz::harness::plan::LaunchFinalizeWarning::take_cell_notices(cell, profile)
+        {
+            writeln!(crate::cli::render::err(), "{warning}")?;
+        }
+    }
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -396,6 +403,7 @@ pub(super) fn restart_posture(
 /// the agent's durable identity.
 pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
+        notices: posture.launch.notices.clone(),
         empty_dir: None,
         resume_model_override: false,
         kind: agent.kind.clone(),

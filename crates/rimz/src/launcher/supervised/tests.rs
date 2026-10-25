@@ -33,6 +33,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     .expect("provider binding");
     let worktree = Path::new("/tmp/child-worktree");
     let cell = rimz::harness::spec::AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: Some(rimz::config::Isolation::Scoped),

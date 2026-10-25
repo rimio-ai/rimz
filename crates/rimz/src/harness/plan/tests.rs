@@ -831,6 +831,7 @@ fn child_permission_resume_refuses_replayed_modes_above_the_current_parent() {
 #[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -851,6 +852,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         },
     };
     let AgentCell {
+        notices,
         empty_dir: _,
         resume_model_override,
         isolation_default,
@@ -869,6 +871,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         ResumeLaunchPosture::from(&cell),
         ResumeLaunchPosture {
             resume_model_override,
+            notices,
             record: None,
             tier: None,
             isolation_default,
@@ -920,6 +923,7 @@ fn role_binding(role: &str) -> RoleBinding {
 
 fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -1002,6 +1006,7 @@ fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
 
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -2086,6 +2091,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
         Cell::Agent(AgentCell {
+            notices: Vec::new(),
             empty_dir: None,
             resume_model_override: false,
             isolation_default: None,
@@ -2183,6 +2189,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 #[test]
 fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -2568,6 +2575,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
 #[test]
 fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -3230,6 +3238,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
@@ -3343,6 +3352,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        notices: Vec::new(),
         empty_dir: None,
         resume_model_override: false,
         isolation_default: None,

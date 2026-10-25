@@ -1188,7 +1188,9 @@ path = "crates/rimz/src/harness"
 # DeliveryOwner, delivery_owner and watch_lost share record provenance and watcher grace (+3).
 # worktree_entry, WorktreeEntry, occupied, and read share launch-entry facts across CLI doorways (+4).
 # drainer_outage shares its tracker, observations, transitions and sidebar reader (+9).
-surface-budget = 992
+# CellNotice carries spec losses to the launch finalizer without printing (+1).
+# LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
+surface-budget = 994
 
 [[verdict]]
 kind = "item"
@@ -1219,6 +1221,11 @@ reason = "Sidebar enrichment reads versioned, held runtime outage facts without 
 kind = "item"
 key = "harness::drainer_outage::read"
 reason = "The sidebar reads known held leases in start order and never fails a fold."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::CellNotice"
+reason = "Resolved cells carry launch losses through resume rebuilding to the existing notice sink."
 
 [[verdict]]
 kind = "item"
@@ -3018,7 +3025,8 @@ allowed-dependencies = [
 # ResumeLaunchPosture::into_cell shares finalization with single-session restore (+1).
 # LayoutRunParams lowers the leader's supervised binding through the shared pane compiler (+1).
 # run_exit_policy shares fresh and resumed run wrapper policy (+1).
-surface-budget = 51
+# LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
+surface-budget = 52
 
 [[verdict]]
 kind = "item"
