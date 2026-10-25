@@ -231,7 +231,7 @@ Streaming reads the provider's transcript at `record.transcript_path`. Both `--o
 
 ## Launch options on `-p`
 
-A run launches through the same layout resolution and finalization as an interactive launch, so model, effort, profile `auto-compact`, system-prompt files, and the adapter's refusal of a setting it cannot render all behave as [fleet.md § From spec to panes](./fleet.md#from-spec-to-panes) describes. Four things are specific to `-p`:
+A run launches through the same layout resolution and finalization as an interactive launch, so model, effort, profile `auto-compact`, system-prompt files, and fast behave as [fleet.md § From spec to panes](./fleet.md#from-spec-to-panes) describes. Unsupported auto-compact and fast warn and launch without the setting; unsupported model, effort, and system prompts still refuse. Four things are specific to `-p`:
 
 - An unset permission mode defaults to `auto`, and a profile or virtual cell keeps its declared mode. Explicit `--ask` or `--yolo` replaces either declaration, and the two flags conflict. For a subagent with a caller, the planner caps this choice against the caller's recorded mode before finalization (unrecorded is auto), refusing an explicit higher mode and lowering a higher default. Peers, loops, workflows, and caller-less launches are not capped. `rimz subagents` exposes only `--yolo`, not `--ask`.
 - `--max-turns` renders through the adapter's turn-limit argv, and an adapter without one refuses it at finalization.

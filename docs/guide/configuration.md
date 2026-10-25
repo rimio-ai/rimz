@@ -234,7 +234,7 @@ Claude and Codex compact automatically when a conversation reaches their native 
 auto_compact = "272k"
 ```
 
-The built-in default is `272k`. The value takes a token count from `100k` through `1M` inclusive (`"272k"`, `"272000"`, or `"1m"`), never a percentage. Set it to `"off"` to pass no window and leave the provider's default alone. It applies to Markdown definitions and trusted project TOML profiles on Claude and Codex; other providers and bare-kind launches such as `rimz agents claude` are unchanged. A profile's own `auto-compact`, inherited values, and explicit team role overrides still win. Claude caps the native window at the model's context window; Codex clamps it to 90% ([provider support](../reference/agent-support.md#auto-compaction-window)). On any model whose window is at or below `258k` (a 200k Claude model, or Codex GPT-5.5 after its 90% clamp), the native ceiling sits below the built-in smart threshold, so smart compaction never fires there unless you lower it.
+The built-in default is `272k`. The value takes a token count from `100k` through `1M` inclusive (`"272k"`, `"272000"`, or `"1m"`), never a percentage. Set it to `"off"` to pass no window and leave the provider's default alone. It applies to Markdown definitions and trusted project TOML profiles on Claude and Codex; other providers and bare-kind launches such as `rimz agents claude` are unchanged. Switching a profile onto a provider without a window flag silently drops the injected default. A profile's own `auto-compact`, inherited values, and explicit team role overrides still win, and warn when the final provider cannot express them. Claude caps the native window at the model's context window; Codex clamps it to 90% ([provider support](../reference/agent-support.md#auto-compaction-window)). On any model whose window is at or below `258k` (a 200k Claude model, or Codex GPT-5.5 after its 90% clamp), the native ceiling sits below the built-in smart threshold, so smart compaction never fires there unless you lower it.
 
 ### Smart compaction
 
@@ -650,7 +650,7 @@ A profile is a named agent preset, loaded from `agents/<name>.md` for one you la
 
 `auto-compact` sets the provider's own native compaction window, a token count from `100k` through `1M`, never a percentage. Profiles without a value inherit the machine [`auto_compact`](#native-auto-compaction) default on the kinds that support it ([provider support](../reference/agent-support.md#auto-compaction-window)). A role's `flip-compact` is a different field, covered under [hand-off compaction](#hand-off-compaction).
 
-`fast: true` launches the profile in the provider's fast mode, which serves turns sooner at a higher price; reach for it on a profile whose turns you sit and wait on. Claude, Codex, and Amp support it; on any other kind the definition fails to load and names the alternative, such as a fast model ID on Cursor. Leaving `fast` off adds nothing to the launch, so a fast mode you set inside the provider still applies. The exact switch each provider receives is in [provider support](../reference/agent-support.md#fast-mode).
+`fast: true` launches the profile in the provider's fast mode, which serves turns sooner at a higher price; reach for it on a profile whose turns you sit and wait on. Claude, Codex, and Amp support it; on any other kind the launch warns, names the alternative such as a fast model ID on Cursor, and runs without it. Leaving `fast` off adds nothing to the launch, so a fast mode you set inside the provider still applies. The exact switch each provider receives is in [provider support](../reference/agent-support.md#fast-mode).
 
 On the command line, `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile, and repeated `--append-system-prompt-file` values replace its fragment list for that launch while leaving the team layer intact. `--agent <PROFILE|KIND>` swaps the engine and keeps the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions accept no raw `args` and no prompt-path keys: tools generate the arguments, and bodies supply the prompt.
 
@@ -702,7 +702,7 @@ An inline spec such as `rimz agents "claude,codex+term"` names the cells to laun
 3. the built-in `term`,
 4. a registered agent kind,
 5. an adapter-supported `<kind>-<mode>` cell (`claude-auto`, `codex-ask`, `codex-yolo`, and so on; the [agents reference](../reference/cli/agents.md#permission-mode-cells) lists which kinds have which),
-6. a `<base>-fast` cell over a profile, kind, or `<kind>-<mode>` cell, launched in the provider's fast mode ([fast cells](../reference/cli/agents.md#fast-cells)); a base whose kind has no fast switch refuses here instead of reaching step 7,
+6. a `<base>-fast` cell over a profile, kind, or `<kind>-<mode>` cell, launched in the provider's fast mode ([fast cells](../reference/cli/agents.md#fast-cells)); a base whose kind has no fast switch warns and launches without it, never reaching step 7,
 7. an executable of that name on `PATH`.
 
 `rimz subagents` uses the same order with one change: step 2 reads child profiles from `subagents/`. A profile that exists only in the other namespace fails the launch and names the namespace to move or copy it to.

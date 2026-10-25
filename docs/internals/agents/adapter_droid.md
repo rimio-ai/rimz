@@ -89,8 +89,9 @@ Launch argv comes from `DROID_DESCRIPTOR.launch`. Interactive Droid accepts unkn
 | Yolo | no argument: `--skip-permissions-unsafe` exists only on `droid exec`, and RimZ does not rewrite persistent autonomy settings |
 | launch reminder | `--append-system-prompt <text>` (`SystemTextChannel::TextFlag`) |
 | `system-prompt-file` and `append-system-prompt-files` | refused when the launch is finalized (`LaunchFinalizeError::UnsupportedSystemPrompt` in `harness/plan.rs`): Droid's CLI only appends, so it cannot replace the system prompt |
-| `model`, `effort`, `auto-compact` profile fields | refused (`UnsupportedField`): interactive Droid has no `--model` or `--reasoning-effort` flag |
-| fast mode | refused, with the fix `toggle /fast inside the session` |
+| `model`, `effort` profile fields | refused (`UnsupportedField`): interactive Droid has no `--model` or `--reasoning-effort` flag |
+| `auto-compact` profile field | skipped with a warning at launch |
+| fast mode | skipped with a warning and the alternative `toggle /fast inside the session` |
 
 A user who wants Droid's append-only behaviour puts `--append-system-prompt-file <path>` in raw profile `args`. Model and effort are chosen in the session (`/model`, Tab) or through `droid exec`. Interactive `--settings <path>` can carry `model`, `reasoningEffort`, and `autonomyLevel`, but RimZ has no typed contract for such a side file (see [Known gaps](#known-gaps)).
 

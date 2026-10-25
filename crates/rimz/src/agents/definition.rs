@@ -143,6 +143,16 @@ impl std::fmt::Display for PermissionMode {
     }
 }
 
+/// A launch setting omitted because the final provider has no switch for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkippedPresetField {
+    AutoCompact(String),
+    /// The provider's fast alternative, when it has one.
+    Fast {
+        alternative: Option<&'static str>,
+    },
+}
+
 /// Static launch shapes shared by built-in and process-plugin adapters.
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchSpec {
@@ -262,12 +272,34 @@ impl LaunchSpec {
         })
     }
 
-    /// The provider argv that turns fast mode on, or the refusal's fix text.
+    /// The provider argv that turns fast mode on, or the provider's alternative.
     pub fn fast_args(self) -> Result<Vec<String>, &'static str> {
         match self.presets.fast {
             FastSwitch::Args(args) => Ok(args.iter().map(|arg| (*arg).to_owned()).collect()),
             FastSwitch::Unsupported { fix } => Err(fix),
         }
+    }
+
+    /// Omit unsupported flag mappings, leaving model and effort rendering strict.
+    pub(crate) fn normalize_preset(
+        self,
+        mut preset: LaunchPreset,
+    ) -> (LaunchPreset, Vec<SkippedPresetField>) {
+        let mut skipped = Vec::new();
+        if self.presets.auto_compact.is_none()
+            && let Some(value) = preset.auto_compact.take()
+        {
+            skipped.push(SkippedPresetField::AutoCompact(value));
+        }
+        if preset.fast == Some(true)
+            && let Err(fix) = self.fast_args()
+        {
+            preset.fast = Some(false);
+            skipped.push(SkippedPresetField::Fast {
+                alternative: (self.presets.fast != FastSwitch::NONE).then_some(fix),
+            });
+        }
+        (preset, skipped)
     }
 
     /// Remove every exact rendered fast switch from launch argv.
@@ -517,7 +549,7 @@ impl PresetMatchers {
 ///
 /// Fast is on or off: on renders the switch, off renders nothing, so the
 /// provider's own default stands. A provider without a launch switch carries
-/// the fix a refusal prints.
+/// the alternative its skip warning names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FastSwitch {
     /// Exact argv appended when fast is on and stripped when a launch turns it
@@ -529,7 +561,7 @@ pub enum FastSwitch {
 }
 
 impl FastSwitch {
-    /// The refusal for a provider with no fast mode RimZ can reach.
+    /// A provider with no fast mode RimZ can reach and no alternative to name.
     pub const NONE: Self = Self::Unsupported {
         fix: "launch without --fast",
     };

@@ -1444,6 +1444,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 definition_renders: None,
+                auto_compact_default: None,
                 model_tier: None,
                 tier_stamp: None,
                 agent: agent.to_owned(),
@@ -1473,6 +1474,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 definition_renders: None,
+                auto_compact_default: None,
                 model_tier: None,
                 tier_stamp: None,
                 agent: "claude".to_owned(),

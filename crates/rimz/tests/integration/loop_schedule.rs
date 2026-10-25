@@ -10818,11 +10818,11 @@ fn loop_add_judge_names_the_profile_and_rejects_unsupported_kinds() {
 }
 
 #[test]
-fn loop_add_rejects_unsupported_fast_before_saving() {
+fn loop_add_saves_and_warns_for_unsupported_fast() {
     let env = Env::new();
     env.install_agent_hooks("cursor");
     write_loop_config(&env, "");
-    let (_, error) = loop_fail(
+    let (_, error) = loop_ok_with_stderr(
         &env,
         &[
             "loop", "add", "bad-fast", "--agent", "cursor", "--fast", "--prompt", "p", "--every",
@@ -10830,12 +10830,15 @@ fn loop_add_rejects_unsupported_fast_before_saving() {
         ],
     );
     assert!(
-        error.contains("cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"),
+        error.contains("fast")
+            && error.contains("cursor")
+            && error.contains("launching without")
+            && error.contains("fast model id"),
         "{error}"
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(!config.tasks.0.contains_key("bad-fast"));
+    assert!(config.tasks.0.contains_key("bad-fast"));
 }
 
 #[test]
@@ -10871,10 +10874,10 @@ fn loop_add_rejects_unsupported_effort_before_saving() {
 }
 
 #[test]
-fn loop_add_rejects_unsupported_fast_on_nonleader_before_saving() {
+fn loop_add_saves_and_warns_for_unsupported_fast_on_nonleader() {
     let env = Env::new();
     write_loop_config(&env, "");
-    let (_, error) = loop_fail(
+    let (_, error) = loop_ok_with_stderr(
         &env,
         &[
             "loop",
@@ -10891,16 +10894,19 @@ fn loop_add_rejects_unsupported_fast_on_nonleader_before_saving() {
         ],
     );
     assert!(
-        error.contains("cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"),
+        error.contains("fast")
+            && error.contains("cursor")
+            && error.contains("launching without")
+            && error.contains("fast model id"),
         "{error}"
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(!config.tasks.0.contains_key("bad-resident"));
+    assert!(config.tasks.0.contains_key("bad-resident"));
 }
 
 #[test]
-fn loop_add_rejects_unsupported_fast_on_team_member_before_saving() {
+fn loop_add_saves_and_warns_for_unsupported_fast_on_team_member() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
     env.record(&env.project_root);
@@ -10921,7 +10927,7 @@ fn loop_add_rejects_unsupported_fast_on_team_member_before_saving() {
     );
     loop_ok(&env, &["trust", "grant"]);
     write_loop_config(&env, "");
-    let (_, error) = loop_fail(
+    let (_, error) = loop_ok_with_stderr(
         &env,
         &[
             "loop", "add", "bad-team", "--agent", "forge", "--stay", "--fast", "--when", "pr=open",
@@ -10929,12 +10935,15 @@ fn loop_add_rejects_unsupported_fast_on_team_member_before_saving() {
         ],
     );
     assert!(
-        error.contains("cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"),
+        error.contains("fast")
+            && error.contains("cursor")
+            && error.contains("launching without")
+            && error.contains("fast model id"),
         "{error}"
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
-    assert!(!config.tasks.0.contains_key("bad-team"));
+    assert!(config.tasks.0.contains_key("bad-team"));
 }
 
 #[test]
@@ -11282,13 +11291,20 @@ fn loop_add_rejects_invalid_action_shapes() {
 }
 
 fn loop_ok(env: &Env, args: &[&str]) -> String {
+    loop_ok_with_stderr(env, args).0
+}
+
+fn loop_ok_with_stderr(env: &Env, args: &[&str]) -> (String, String) {
     let output = env.rimz().args(args).output().expect("rimz loop");
     assert!(
         output.status.success(),
         "rimz {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).expect("stdout")
+    (
+        String::from_utf8(output.stdout).expect("stdout"),
+        String::from_utf8(output.stderr).expect("stderr"),
+    )
 }
 
 fn calling_loop(env: &Env, session: &str) -> Command {

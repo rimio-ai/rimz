@@ -106,6 +106,40 @@ fn recorded_fast_replays_over_the_current_profile() {
 }
 
 #[test]
+fn resume_posture_normalizes_unmapped_flags_before_recording() {
+    let profiles = profiles(
+        "worker",
+        toml::from_str("agent = 'pi'\nfast = true\nauto-compact = '272000'").unwrap(),
+    );
+    let record = crate::agents::LaunchRecord {
+        fast: true,
+        ..Default::default()
+    };
+    for record in [None, Some(&record)] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record,
+                profile: Some("worker"),
+                kind: &AgentKind::new_unchecked("pi"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        assert!(!posture.launch.fast, "{record:?}: {:?}", posture.launch);
+        assert!(posture.launch.args.is_empty(), "{:?}", posture.launch.args);
+        let replayed = crate::agents::LaunchRecord::replay_or_new(
+            posture.launch.record.as_deref(),
+            posture.launch.model.as_deref(),
+            posture.launch.effort.as_deref(),
+            posture.launch.fast,
+        );
+        assert!(!replayed.fast, "{replayed:?}");
+    }
+}
+
+#[test]
 fn off_record_keeps_a_fast_switch_the_profile_writes_in_raw_args() {
     let resolve = |profile: Profile, fast| {
         let record = crate::agents::LaunchRecord {

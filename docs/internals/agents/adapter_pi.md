@@ -198,7 +198,7 @@ Profile presets render through `PresetMatchers`, pinned in `crates/rimz/src/agen
 | `model` | `--model <value>` |
 | `effort` | `--thinking <value>` |
 | `system-prompt-file` | `--system-prompt <text>`, the file's contents as one argument |
-| `auto-compact` | refused at launch (`PresetErr::UnsupportedField`) |
+| `auto-compact` | skipped with a warning at launch |
 
 The full replacement prompt is visible in the process argv, so RimZ refuses a text over 120 KiB before exec (`crates/rimz/src/harness/prompt_compose.rs::TEXT_PROMPT_LIMIT`). A Markdown agent definition that names no effort launches Pi at `xhigh` (`DEFINITIONS`), and a definition's `tools` list is ignored (`DefinitionTools::Ignored`).
 

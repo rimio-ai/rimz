@@ -148,7 +148,7 @@ The observation carries only the session ID, workspace, the question or the fixe
 | fresh launch | the located `cursor-agent` path, else the bare name for `$PATH` lookup at spawn (`mod.rs::cursor_launch_binary`) |
 | startup prompt | positional after `--` |
 | profile `model` | `--model <model>` |
-| fast mode | refused: the fix names a fast model ID for `--model` |
+| fast mode | skipped with a warning naming a fast model ID for `--model` |
 | permission `ask` | none (the native default) |
 | permission `plan` | `--mode=plan` |
 | permission `auto` | `--auto-review`: allowlisted and sandboxable calls run, and Cursor's classifier judges the rest |

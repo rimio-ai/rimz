@@ -42,6 +42,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         fast: None,
         budget: None,
         auto_compact: None,
+        auto_compact_default: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         args: None,
@@ -401,7 +402,6 @@ impl Resolver<'_> {
             for (field, name, value) in [
                 (PresetField::Model, "model", &fm.model),
                 (PresetField::Effort, "effort", &fm.effort),
-                (PresetField::AutoCompact, "auto-compact", &fm.auto_compact),
             ] {
                 if value.is_some() && definition.spec().launch.preset_arg_matcher(field).is_none() {
                     return Err(DefinitionErr::new(
@@ -413,17 +413,6 @@ impl Resolver<'_> {
                         .to_string(),
                     ));
                 }
-            }
-            if fm.fast == Some(true)
-                && let Err(fix) = definition.spec().launch.fast_args()
-            {
-                return Err(DefinitionErr::new(
-                    path,
-                    format!(
-                        "sets `fast: true`, but {} has no fast-mode launch switch; {fix}, or remove `fast`",
-                        definition.spec().kind
-                    ),
-                ));
             }
         }
         if let Some(model) = fm.model.as_deref()
@@ -550,11 +539,10 @@ impl Resolver<'_> {
         profile.auto_compact = fm
             .auto_compact
             .clone()
-            .or_else(|| {
-                super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind)
-            })
             .map(|value| auto_compact(path, &value))
             .transpose()?;
+        profile.auto_compact_default =
+            super::super::agents::native_auto_compact(self.scope.native_auto_compact, kind);
         profile.fast = fm.fast;
         profile.budget = fm.budget.clone();
         if let Some(crate::config::KeepWarmPolicy::Block(fields)) = &fm.keep_warm

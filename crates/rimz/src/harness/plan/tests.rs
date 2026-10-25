@@ -69,7 +69,7 @@ fn finalized_launch_stamps_verbatim_record() {
 }
 
 #[test]
-fn fast_override_renders_strips_stamps_and_refuses_where_unsupported() {
+fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
     let on = crate::agents::LaunchPreset {
         fast: Some(true),
         ..Default::default()
@@ -110,14 +110,121 @@ fn fast_override_renders_strips_stamps_and_refuses_where_unsupported() {
     assert!(!cell.launch.record.as_deref().unwrap().fast);
     assert_eq!(cell.args, ["--dangerously-allow-all"]);
 
-    // Off never refuses; on refuses with the adapter's fix.
+    // Off stays quiet; on skips with the adapter's alternative.
     let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
     finalize(&mut layout, &off, &[]).unwrap();
     let mut layout = LayoutSpec::single(preset_cell("cursor", &[], None, None));
-    assert_eq!(
-        finalize(&mut layout, &on, &[]).unwrap_err().to_string(),
-        "cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"
+    let warnings = finalize(&mut layout, &on, &[]).expect("unsupported fast still launches");
+    let cell = layout.agent_cells().next().unwrap();
+    assert!(!cell.launch.fast);
+    assert!(!cell.launch.record.as_deref().unwrap().fast);
+    assert!(cell.args.is_empty());
+    assert_eq!(warnings.len(), 1);
+    let warning = warnings[0].to_string();
+    assert!(
+        warning.contains("cursor") && warning.contains("fast"),
+        "{warning}"
     );
+    assert!(
+        warning.contains("launching without") && warning.contains("fast model id"),
+        "{warning}"
+    );
+
+    // A provider with no alternative names none.
+    let mut layout = LayoutSpec::single(preset_cell("pi", &[], None, None));
+    let warnings = finalize(&mut layout, &on, &[]).expect("unsupported fast still launches");
+    assert_eq!(
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["warning: `pi-coder` fast is unsupported on pi; launching without it"]
+    );
+}
+
+#[test]
+fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
+    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
+        "compact".into(),
+        Profile {
+            auto_compact: Some("272k".into()),
+            ..configured_profile("pi", None, None, None, None, None)
+        },
+    )]));
+    let mut layout = LayoutSpec::single(Cell::Agent(
+        crate::harness::spec::profile_cell("compact", &profiles).expect("profile renders"),
+    ));
+    let warnings = finalize(&mut layout, &Default::default(), &[]).expect("launch proceeds");
+    let cell = layout.agent_cells().next().unwrap();
+    assert!(cell.auto_compact.is_none());
+    assert!(cell.args.is_empty());
+    assert_eq!(warnings.len(), 1);
+    let warning = warnings[0].to_string();
+    for text in [
+        "compact",
+        "auto-compact",
+        "272000",
+        "pi",
+        "launching without",
+    ] {
+        assert!(warning.contains(text), "{warning}");
+    }
+}
+
+#[test]
+fn compaction_default_follows_the_engine_but_declared_values_warn() {
+    let root = tempfile::tempdir().unwrap();
+    for namespace in ["agents", "subagents", "teams"] {
+        std::fs::create_dir(root.path().join(namespace)).unwrap();
+    }
+    for kind in ["claude", "codex", "pi"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Foundation.\n---\nBase.",
+        )
+        .unwrap();
+    }
+    for (name, extra) in [("inherited", ""), ("declared", "\nauto-compact: 272k")] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Probe.\nagent: claude\ntools: []{extra}\n---\n"),
+        )
+        .unwrap();
+    }
+    let loaded = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &Default::default(),
+        &Default::default(),
+        Some(272_000),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for (name, kind, warnings, value) in [
+        ("inherited", "pi", 0, None),
+        ("declared", "pi", 1, None),
+        ("inherited", "codex", 0, Some("272000")),
+        ("declared", "codex", 0, Some("272000")),
+    ] {
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some(name),
+            &loaded.agent_profiles,
+            &loaded.agent_profiles,
+            &Default::default(),
+            &Default::default(),
+            Some(kind),
+        )
+        .expect("switched profile renders");
+        let notices = finalize(&mut layout, &Default::default(), &[]).unwrap();
+        assert_eq!(notices.len(), warnings, "{name} on {kind}: {notices:?}");
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.auto_compact.as_deref(), value);
+        if kind == "pi" {
+            assert!(!cell.args.iter().any(|arg| arg.contains("compact")));
+        } else {
+            assert!(
+                cell.args
+                    .windows(2)
+                    .any(|pair| pair == ["-c", "model_auto_compact_token_limit=272000"])
+            );
+        }
+    }
 }
 
 #[test]
@@ -134,15 +241,9 @@ fn launch_preset_validation_matches_provider_support() {
         effort: Some("high".into()),
         ..Default::default()
     };
-    assert_eq!(validate_launch_preset("claude", &on), Ok(()));
-    assert_eq!(validate_launch_preset("cursor", &off), Ok(()));
-    assert_eq!(
-        validate_launch_preset("cursor", &on),
-        Err(LaunchFinalizeError::UnsupportedFast {
-            agent: "cursor",
-            fix: "choose a fast model id with --model, e.g. claude-opus-5-5-fast",
-        })
-    );
+    assert!(validate_launch_preset("claude", &on).is_ok());
+    assert!(validate_launch_preset("cursor", &off).is_ok());
+    assert!(validate_launch_preset("cursor", &on).is_ok());
     assert_eq!(
         validate_launch_preset("cursor", &effort),
         Err(LaunchFinalizeError::UnsupportedPresetField {
@@ -951,6 +1052,7 @@ fn configured_profile(
     Profile {
         empty_dir: None,
         definition_renders: None,
+        auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,
         agent: agent.to_owned(),

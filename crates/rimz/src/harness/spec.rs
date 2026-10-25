@@ -173,6 +173,7 @@ pub struct ResolvedProfile {
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
+    pub auto_compact_default: Option<String>,
     /// Fast mode as the chain set it; unset is off. Kept apart from
     /// `launch.fast` so a nearer layer's `false` wins over a base's `true`.
     pub fast: Option<bool>,
@@ -198,6 +199,7 @@ impl ResolvedProfile {
             layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
+            auto_compact_default: None,
             fast: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
@@ -231,6 +233,10 @@ impl ResolvedProfile {
         if self.auto_compact.is_none() {
             self.auto_compact.clone_from(&layer.auto_compact);
         }
+        if self.auto_compact_default.is_none() {
+            self.auto_compact_default
+                .clone_from(&layer.auto_compact_default);
+        }
         self.fast = self.fast.or(layer.fast);
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
@@ -244,6 +250,16 @@ impl ResolvedProfile {
         if self.args.is_none() {
             self.args.clone_from(&layer.args);
         }
+    }
+
+    fn effective_auto_compact(&self) -> Option<String> {
+        self.auto_compact.clone().or_else(|| {
+            crate::agents::find_definition(&self.kind)?
+                .spec()
+                .launch
+                .preset_arg_matcher(crate::agents::PresetField::AutoCompact)?;
+            self.auto_compact_default.clone()
+        })
     }
 
     fn apply_role(&mut self, binding: &RoleBinding) {
@@ -405,12 +421,6 @@ pub enum LayoutErr {
     },
     #[error("layout spec is empty")]
     Empty,
-    #[error("cell `{cell}`: {kind} has no fast-mode launch switch; {fix}")]
-    UnsupportedFastCell {
-        cell: String,
-        kind: String,
-        fix: &'static str,
-    },
     #[error("empty layout cell in `{0}`")]
     EmptyCell(String),
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
@@ -1253,7 +1263,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         .render_preset(&profile_preset(&resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
-            reason: profile_preset_reason(&err),
+            reason: err.to_string(),
         })?;
     normalize_budget(&mut resolved.launch.budget, name)?;
     Ok(resolved)
@@ -1626,7 +1636,7 @@ fn agent_cell_from(
         kind: resolved.kind.clone(),
         isolation_default: resolved.isolation_default,
         args,
-        auto_compact: resolved.auto_compact.clone(),
+        auto_compact: resolved.effective_auto_compact(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
@@ -1650,7 +1660,7 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
         .render_preset(&profile_preset(resolved))
         .map_err(|err| LayoutErr::InvalidProfile {
             profile: name.to_owned(),
-            reason: profile_preset_reason(&err),
+            reason: err.to_string(),
         })?;
     if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.spec().launch.permission_args(mode));
@@ -1669,25 +1679,20 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
     Ok(argv)
 }
 
-/// Why a profile's launch fields do not render, naming the profile field.
-fn profile_preset_reason(err: &crate::agents::PresetErr) -> String {
-    match err {
-        crate::agents::PresetErr::UnsupportedFast { agent, fix } => format!(
-            "field `fast = true`: agent `{agent}` has no fast-mode launch switch; {fix}, or remove `fast`"
-        ),
-        crate::agents::PresetErr::UnsupportedField { .. }
-        | crate::agents::PresetErr::UnsupportedValue { .. } => err.to_string(),
-    }
-}
-
 fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
-    crate::agents::LaunchPreset {
+    let preset = crate::agents::LaunchPreset {
         model: resolved.launch.model.clone(),
         effort: resolved.launch.effort.clone(),
-        auto_compact: resolved.auto_compact.clone(),
+        auto_compact: resolved.effective_auto_compact(),
         fast: resolved.fast.filter(|fast| *fast),
         ..Default::default()
-    }
+    };
+    crate::agents::find_definition(&resolved.kind)
+        .expect("resolved profile terminal kind is known")
+        .spec()
+        .launch
+        .normalize_preset(preset)
+        .0
 }
 
 fn command_cell(name: &str, raw: &str) -> Result<Cell> {
@@ -1781,8 +1786,8 @@ pub(crate) fn fast_suffix_base(raw: &str) -> Option<&str> {
 
 /// `<base>[-<mode>]-fast`: the base profile or kind, launched as `--fast`
 /// would launch it. The profile name stays the base and fast is stamped on
-/// the cell; a kind without a fast switch refuses here rather than falling
-/// through to a PATH executable. Exact command, profile, `term`, and kind
+/// the cell; a kind without a fast switch still builds its base cell rather
+/// than falling through to a PATH executable. Exact command, profile, `term`, and kind
 /// names were tried first, so a profile literally named `x-fast` wins.
 fn fast_suffix_cell(
     raw: &str,
@@ -1816,13 +1821,6 @@ fn fast_suffix_cell(
     };
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
-    if let Err(fix) = adapter.spec().launch.fast_args() {
-        return Err(LayoutErr::UnsupportedFastCell {
-            cell: raw.to_owned(),
-            kind: resolved.kind.to_string(),
-            fix,
-        });
-    }
     resolved.fast = Some(true);
     let Some(mode) = mode else {
         return Ok(Some(match profile_name {
@@ -2266,6 +2264,11 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.auto_compact.is_none() {
         original.auto_compact.clone_from(&base.auto_compact);
+    }
+    if original.auto_compact_default.is_none() {
+        original
+            .auto_compact_default
+            .clone_from(&base.auto_compact_default);
     }
     if original.system_prompt_file.is_none() {
         original

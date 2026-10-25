@@ -941,7 +941,7 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
         let profile = &loaded.agent_profiles.0[&role.profile];
         assert_eq!(profile.agent, "claude");
         assert_eq!(profile.model.as_deref(), Some("opus"));
-        assert_eq!(profile.auto_compact.as_deref(), Some("272000"));
+        assert_eq!(profile.auto_compact_default.as_deref(), Some("272000"));
         assert_eq!(
             profile
                 .skills
@@ -1387,11 +1387,7 @@ fn flip_compact_accepts_yaml_off_and_rejects_other_shapes() {
 
 #[test]
 fn unsupported_preset_fields_fail_at_the_definition() {
-    for (kind, field, value) in [
-        ("pi", "auto-compact", "200k"),
-        ("amp", "effort", "high"),
-        ("droid", "model", "custom"),
-    ] {
+    for (kind, field, value) in [("amp", "effort", "high"), ("droid", "model", "custom")] {
         let root = fixture();
         definition(
             root.path(),
@@ -1423,7 +1419,7 @@ fn unsupported_preset_fields_fail_at_the_definition() {
 }
 
 #[test]
-fn fast_on_an_unsupported_kind_fails_at_the_definition() {
+fn unsupported_fast_and_auto_compact_load_for_launch_time_normalization() {
     let root = fixture();
     definition(
         root.path(),
@@ -1440,6 +1436,12 @@ fn fast_on_an_unsupported_kind_fails_at_the_definition() {
     definition(root.path(), "agents/swift.md", "agent: amp\nfast: true", "");
     definition(
         root.path(),
+        "agents/compact.md",
+        "agent: pi\nauto-compact: 200k",
+        "",
+    );
+    definition(
+        root.path(),
         "agents/steady.md",
         "agent: swift\nfast: false",
         "",
@@ -1451,15 +1453,12 @@ fn fast_on_an_unsupported_kind_fails_at_the_definition() {
         &crate::config::tiers::TierConfig::default(),
         Some(272_000),
     );
-    assert!(
-        loaded.errors.iter().any(|error| error.path
-            == root.path().join("agents/quick.md")
-            && error.message
-                == "sets `fast: true`, but cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast, or remove `fast`"),
-        "{:?}",
-        loaded.errors
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(loaded.agent_profiles.0["quick"].fast, Some(true));
+    assert_eq!(
+        loaded.agent_profiles.0["compact"].auto_compact.as_deref(),
+        Some("200k")
     );
-    assert!(!loaded.agent_profiles.0.contains_key("quick"));
     assert_eq!(
         loaded.agent_profiles.0.get("off").map(|p| p.fast),
         Some(Some(false)),
@@ -1880,7 +1879,7 @@ fn runtime_resolution_aliases_and_defaults() {
         assert_eq!(profile.model.as_deref(), Some(model));
         assert_eq!(profile.effort.as_deref(), Some(effort));
         assert_eq!(
-            profile.auto_compact.as_deref(),
+            profile.auto_compact_default.as_deref(),
             if kind == "pi" { None } else { Some("272000") }
         );
         assert!(profile.append_system_prompt_files.is_empty());
@@ -2275,7 +2274,7 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
                 None
             };
             assert_eq!(
-                loaded.agent_profiles.0[&format!("{kind}-worker")].auto_compact,
+                loaded.agent_profiles.0[&format!("{kind}-worker")].auto_compact_default,
                 expected
             );
         }
@@ -2284,6 +2283,7 @@ fn native_compaction_default_is_configurable_and_preserves_inheritance() {
             Some("200k")
         );
         assert_eq!(loaded.agent_profiles.0["claude"].auto_compact, None);
+        assert_eq!(loaded.agent_profiles.0["claude"].auto_compact_default, None);
     }
     let root = team_fixture();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");

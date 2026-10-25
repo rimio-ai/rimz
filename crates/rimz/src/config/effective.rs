@@ -455,7 +455,7 @@ pub fn load_with_roots(
             .collect();
         for (name, profile) in &mut profiles.0 {
             if profile.auto_compact.is_none() && !chained.contains(name) {
-                profile.auto_compact =
+                profile.auto_compact_default =
                     super::agents::native_auto_compact(native_auto_compact, &profile.agent);
             }
         }
