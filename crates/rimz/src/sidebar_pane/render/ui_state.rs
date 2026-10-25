@@ -51,6 +51,7 @@ pub(in crate::sidebar_pane) struct UiState {
 /// Client presentation state, independent of a pane's render resources and hit geometry.
 #[derive(Clone, Debug, Default)]
 pub(in crate::sidebar_pane) struct ViewState {
+    pub(in crate::sidebar_pane) hook_drainer_alert: Option<Alert>,
     pub(in crate::sidebar_pane) selected_index: Option<usize>,
     pub(in crate::sidebar_pane) help_visible: bool,
     /// Wall-clock animation frame counter, advanced by the serve loop's
@@ -330,12 +331,12 @@ impl LayoutFreeze {
     }
 }
 
-/// A sticky health alert pinned to the bottom of the sidebar.
+/// A sticky alert pinned to the bottom of the sidebar.
 ///
 /// `since` is when the unhealthy episode began, so an active alert can show
 /// `for Ns`. `recovered_at` is `None` while the loop is still unhealthy and
 /// `Some(t)` once it healed — a recovered alert lingers as a dismissable
-/// "last alert" notice rather than vanishing the instant a fetch succeeds.
+/// "last alert" notice rather than vanishing at the recovery observation.
 #[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct Alert {
     pub(in crate::sidebar_pane) reason: String,

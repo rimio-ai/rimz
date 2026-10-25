@@ -185,7 +185,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `zᶻ idle`, `zᶻ away` | you are away from the terminal |
 | `⇄ remote 210ms` | SSH link round-trip time |
 | `/ auth` | the text search, above the dashboard |
-| `⚠` | a pane-source notice or health alert |
+| `⚠` | a notice or alert |
 
 `🮇` is from Unicode's Symbols for Legacy Computing block. A font without it may show a placeholder at the lane's right edge; nothing else depends on it.
 
@@ -776,7 +776,7 @@ Each row reads sessions, total tokens, input including cache creation, output, c
 
 ## Bottom chrome
 
-The footer is the last line, apart from a recovered alert, which sits beneath it. The cards give up space before the dashboard or the footer do, so neither scrolls away.
+The footer is the last line, apart from hook-drainer alerts and recovered refresh alerts, which sit beneath it. The cards give up space before the dashboard or the footer do, so neither scrolls away.
 
 ```
  zᶻ away                 ? for help
@@ -822,6 +822,20 @@ After recovery the alert stays as a dim notice until you press `x`, so a failure
 ```
 
 If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sidebar-degraded-banner).
+
+If an agent's hook drainer stays unreachable for 10 seconds, a separate alert warns that its card may be stale. It names the card by its displayed label, falling back to `@name` or the provider name if the card is missing:
+
+```
+ ⚠ hook drainer unreachable for 40s · coder's card may be stale
+```
+
+When several agents are affected, it names the earliest one's card: `coder and 2 other cards may be stale`. The dashboard, footer, notices, pets, and search stay usable; this alert never discards a search draft. Pressing `x` cannot dismiss an active hook-drainer alert. After recovery it stays active for about 3 seconds, then lingers dimly until `x`:
+
+```
+ ⚠ last alert 2m ago: hook drainer unreachable for 40s · x dismiss
+```
+
+An active `Sidebar degraded` alert hides the hook-drainer line; after refresh recovery both lines can show, with the hook-drainer line directly above the refresh alert. Short reconnects never raise a sidebar alert. `rimz doctor` retains the outage evidence even after dismissal; see [troubleshooting](../guide/troubleshooting.md#the-hook-drainer-unreachable-alert).
 
 ### The help overlay
 
@@ -871,7 +885,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `←` / `→` | switch the dashboard tab |
 | `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `r` | reload this tab's sidebar |
-| `x` | dismiss a recovered alert |
+| `x` | dismiss recovered alerts, or an active `Sidebar degraded` alert |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
 | `Esc` | clear only the text search; while help is open, close help only |

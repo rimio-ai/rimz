@@ -4,6 +4,56 @@
 use super::*;
 
 #[test]
+fn hook_drainer_alert_dismissal_and_search_do_not_change_refresh_health() {
+    use crate::store::snapshot::{HookDrainerOutage, HookDrainerOutageAgent};
+
+    let mut rig = Rig::new();
+    let mut fetched = agent_snapshot(&rig.ws);
+    fetched.hook_drainer_outage = Some(HookDrainerOutage {
+        since: fetched.now,
+        agents: vec![HookDrainerOutageAgent {
+            agent_kind: crate::ids::AgentKind::new_unchecked("claude"),
+            agent_name: Some("coder".into()),
+        }],
+    });
+    rig.fold(fetched.clone(), SnapshotSource::Cached);
+    assert!(
+        rig.view().ui().hook_drainer_alert.is_some(),
+        "the outage needs its own alert slot"
+    );
+    assert!(!rig.state.alert_active());
+    rig.input(KeyAction::Dismiss);
+    assert!(
+        rig.view()
+            .ui()
+            .hook_drainer_alert
+            .as_ref()
+            .unwrap()
+            .is_active()
+    );
+    rig.input(KeyAction::Search);
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some(""));
+    rig.view().ui().search_draft = Some("cod".into());
+    fetched.now += jiff::SignedDuration::from_secs(1);
+    rig.fold(fetched.clone(), SnapshotSource::Cached);
+    assert_eq!(rig.view().ui().search_draft.as_deref(), Some("cod"));
+    rig.view().ui().search_draft = None;
+    fetched.hook_drainer_outage = None;
+    rig.fold(fetched, SnapshotSource::Cached);
+    assert!(
+        rig.view()
+            .ui()
+            .hook_drainer_alert
+            .as_ref()
+            .unwrap()
+            .recovered_at
+            .is_some()
+    );
+    rig.input(KeyAction::Dismiss);
+    assert!(rig.view().ui().hook_drainer_alert.is_none());
+}
+
+#[test]
 fn coalesced_idle_interim_and_final_complete_without_reapplying_content() {
     let mut rig = Rig::new();
     let mut snapshot = agent_snapshot(&rig.ws);

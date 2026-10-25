@@ -83,7 +83,7 @@ If Claude Code subscription access is refused while you are still logged in, the
 
 ### Bottom chrome
 
-The footer holds `? for help`, which opens the key and filter overlay in place. Search lives on its own line above the dashboard, banded with a cursor while typing and a chip after `Enter`, with a match count at the right. When you have been away from the keyboard, a quiet `zᶻ idle` badge appears in the footer; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
+The footer holds `? for help`, which opens the key and filter overlay in place. Search lives on its own line above the dashboard, banded with a cursor while typing and a chip after `Enter`, with a match count at the right. When you have been away from the keyboard, a quiet `zᶻ idle` badge appears in the footer; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room. A hook drainer unreachable for 10 seconds raises its own alert below the footer without hiding the dashboard or blocking search; after recovery it stays active for about 3 seconds before lingering until `x` ([notices and alerts](../interface/sidebar.md#notices-and-alerts)).
 
 ### Setting the width
 

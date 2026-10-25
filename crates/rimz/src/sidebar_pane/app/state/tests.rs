@@ -661,6 +661,81 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
 }
 
 #[test]
+fn hook_drainer_alert_tracks_committed_facts_on_both_fold_paths() {
+    use crate::store::snapshot::{HookDrainerOutage, HookDrainerOutageAgent};
+
+    for source in [SnapshotSource::Cached, SnapshotSource::Produced] {
+        let mut fetched = snapshot(&workspace());
+        fetched.now = fixed_time(1_700_000_040);
+        fetched.hook_drainer_outage = Some(HookDrainerOutage {
+            since: fixed_time(1_700_000_000),
+            agents: vec![HookDrainerOutageAgent {
+                agent_kind: crate::ids::AgentKind::new_unchecked("claude"),
+                agent_name: Some("coder".into()),
+            }],
+        });
+        let mut context = ViewContext::new(snapshot(&workspace()), std::time::Instant::now());
+        let mut ui = ViewState {
+            search_draft: Some("cod".into()),
+            ..Default::default()
+        };
+        let update = |snapshot: SidebarSnapshot| FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            phase: FetchPhase::Final,
+            source,
+        };
+        let (_, rejected, diagnostics) =
+            context.commit_fetch(update(fetched.clone()), &mut ui, fetched.now);
+        assert!(!rejected);
+        assert!(
+            ui.hook_drainer_alert.as_ref().is_some_and(Alert::is_active),
+            "a committed outage must activate the separate drainer alert"
+        );
+        assert_eq!(
+            ui.hook_drainer_alert.as_ref().unwrap().since,
+            fixed_time(1_700_000_000)
+        );
+        assert!(context.health.alert.is_none());
+        assert_eq!(ui.search_draft.as_deref(), Some("cod"));
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|event| matches!(event, DiagEvent::HealthAlert { .. }))
+        );
+
+        context.commit_fetch(
+            FetchUpdate::Failed {
+                error: "unreadable".into(),
+            },
+            &mut ui,
+            fetched.now,
+        );
+        assert!(ui.hook_drainer_alert.as_ref().unwrap().is_active());
+
+        fetched.hook_drainer_outage = None;
+        fetched.now += jiff::SignedDuration::from_secs(10);
+        context.commit_fetch(
+            update(fetched.clone()),
+            &mut ui,
+            fetched.now + std::time::Duration::from_secs(60),
+        );
+        let recovered = ui.hook_drainer_alert.as_ref().unwrap();
+        assert_eq!(
+            recovered.recovered_at,
+            Some(fetched.now),
+            "recovery uses the snapshot clock"
+        );
+        fetched.now += jiff::SignedDuration::from_secs(10);
+        context.commit_fetch(update(fetched.clone()), &mut ui, fetched.now);
+        assert_eq!(
+            ui.hook_drainer_alert.as_ref().unwrap().recovered_at,
+            Some(fixed_time(1_700_000_050)),
+            "later folds preserve the lingering episode"
+        );
+    }
+}
+
+#[test]
 fn accepted_final_then_failed_final_keeps_rendered_facts() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
