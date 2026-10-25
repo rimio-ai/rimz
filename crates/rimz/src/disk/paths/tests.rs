@@ -116,6 +116,7 @@ impl RuntimePaths {
             self.hook_drainer_socket_path(),
             self.hook_drainer_lock(),
             self.hook_drainer_spawn_lock(),
+            self.hook_drainer_outages_dir(),
         ]
     }
 }

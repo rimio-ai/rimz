@@ -808,7 +808,8 @@ allowed-dependencies = [
 # RuntimePaths::group_roots_path gives the fetch writer its own cache lane (+1).
 # StatePaths::lsp_usage_paths keeps usage records and locks in their lifetime classes (+1).
 # WorkflowPaths::check_log owns per-evaluation shell output paths (+1).
-surface-budget = 281
+# RuntimePaths::hook_drainer_outages_dir owns wrapper outage lease locations (+1).
+surface-budget = 282
 
 [[verdict]]
 kind = "item"
@@ -1171,7 +1172,38 @@ path = "crates/rimz/src/harness"
 # WhenTerm::wake_selector derives workflow subscriptions from parsed condition keys (+1).
 # DeliveryOwner, delivery_owner and watch_lost share record provenance and watcher grace (+3).
 # worktree_entry, WorktreeEntry, occupied, and read share launch-entry facts across CLI doorways (+4).
-surface-budget = 983
+# drainer_outage shares its tracker, observations, transitions and sidebar reader (+9).
+surface-budget = 992
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage"
+reason = "Wrapper lease-gap tracking and runtime outage facts share one sidebar-safe owner."
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage::Tracker"
+reason = "The parked supervisor retains one outage across provider startup relaunches."
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage::LeaseRefresh"
+reason = "The socket lease distinguishes healthy checks from successful reconnects."
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage::Transition"
+reason = "The CLI turns domain transitions into agent-attributed diagnostic evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage::OutageRecord"
+reason = "Sidebar enrichment reads versioned, held runtime outage facts without store writers."
+
+[[verdict]]
+kind = "item"
+key = "harness::drainer_outage::read"
+reason = "The sidebar reads known held leases in start order and never fails a fold."
 
 [[verdict]]
 kind = "item"
