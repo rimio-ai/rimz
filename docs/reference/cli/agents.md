@@ -705,7 +705,7 @@ Identity
   pane:     tmux:%14
 ```
 
-The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch.
+The Identity section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch. When requested and running effort are both known and differ, an `effort` row reads, for example, `running max, requested xhigh`. This text-only notice leaves the launch request and JSON unchanged.
 
 Context labels window occupancy separately from lifetime tokens spent, cache reads, cost, and active time. Lifetime figures cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 

@@ -2360,7 +2360,7 @@ mod render {
             super::report::ReportOverrides::default(),
         );
         let mut out = anstream::StripStream::new(Vec::new());
-        super::show::render_identity_section(&mut out, &report, None).unwrap();
+        super::show::render_identity_section(&mut out, &report, None, None).unwrap();
         let text = String::from_utf8(out.into_inner()).unwrap();
 
         assert!(
