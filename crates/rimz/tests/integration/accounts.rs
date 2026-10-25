@@ -1572,6 +1572,107 @@ fn write_fake_claude(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
 
 #[cfg(unix)]
 #[test]
+fn console_login_ignores_a_cached_lapse_but_setup_token_keeps_it() {
+    let env = Env::new();
+    let (answer, _) = write_fake_claude(&env);
+    std::fs::write(answer, "echo '{\"loggedIn\":false}'\n").unwrap();
+    for name in ["console", "setup"] {
+        let home = env.home_root.join(name);
+        succeeded(&accounts(
+            &env,
+            &["add", "claude", name, "--home", home.to_str().unwrap()],
+        ));
+        std::fs::write(home.join(".credentials.json"), "{}").unwrap();
+        std::fs::write(
+            home.join("claude-auth"),
+            "echo '{\"loggedIn\":true,\"authMethod\":\"oauth_token\",\"apiProvider\":\"firstParty\"}'\n",
+        )
+        .unwrap();
+        if name == "setup" {
+            let settings = home.join("settings.json");
+            let mut body: Value =
+                serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+            body["env"] = json!({"CLAUDE_CODE_OAUTH_TOKEN":"synthetic"});
+            std::fs::remove_file(&settings).unwrap();
+            std::fs::write(settings, body.to_string()).unwrap();
+        }
+    }
+    let store = env.home_root.join("anthropic");
+    std::fs::create_dir_all(store.join("configs")).unwrap();
+    std::fs::create_dir_all(store.join("credentials")).unwrap();
+    std::fs::write(
+        store.join("configs/default.json"),
+        r#"{"authentication":{"type":"user_oauth"}}"#,
+    )
+    .unwrap();
+    std::fs::write(store.join("credentials/default.json"), "synthetic").unwrap();
+    let entry = json!({
+        "observed_at_ms":1,"ok":true,"entitlement":{"lapsed":{"since_ms":1}},
+        "extra_credits":{"known":{"used_usd":7.0,"remaining_usd":43.0,"limit_usd":50.0}}
+    });
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let credits_path = runtime.shared_credits_path();
+    std::fs::write(
+        &credits_path,
+        json!({"refreshed_at_ms":1,"logins":{
+            "claude@console":entry,"claude@setup":entry
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    for args in [
+        &["list", "--json"][..],
+        &["show", "claude@console", "--json"][..],
+    ] {
+        let rows: Value = serde_json::from_str(&succeeded(&accounts(&env, args))).unwrap();
+        let console = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["account"] == "claude@console")
+            .unwrap();
+        assert_eq!(console["metered"], false, "{console}");
+        assert_eq!(console["entitlement"], "ok", "{console}");
+        assert_eq!(console["status"], "ready", "{console}");
+        assert!(console.get("problem").is_none(), "{console}");
+        assert!(console["windows"].as_array().unwrap().is_empty());
+        assert!(console["extra_credits"]["known"]["remaining_usd"].is_null());
+        if args[0] == "list" {
+            let setup = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["account"] == "claude@setup")
+                .unwrap();
+            assert_eq!(setup["metered"], true, "{setup}");
+            assert_eq!(setup["entitlement"], entry["entitlement"], "{setup}");
+            assert!(
+                setup["problem"].as_str().unwrap().contains("plan lapsed"),
+                "{setup}"
+            );
+        }
+    }
+    let text = succeeded(&accounts(&env, &[]));
+    let row = text.lines().find(|line| line.contains("console")).unwrap();
+    assert!(
+        !row.contains("lapsed") && !row.contains("never read"),
+        "{text}"
+    );
+    let show = succeeded(&accounts(&env, &["show", "claude@console"]));
+    assert!(
+        show.contains("no limit") && !show.contains("lapsed"),
+        "{show}"
+    );
+    let credits: Value = serde_json::from_slice(&std::fs::read(credits_path).unwrap()).unwrap();
+    assert_eq!(
+        credits["logins"]["claude@console"]["entitlement"],
+        entry["entitlement"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn live_profile_corrects_only_its_owner_and_obeys_cache_refresh_failure_and_offline() {
     let env = Env::new();
     let (answer, _) = write_fake_claude(&env);

@@ -94,7 +94,7 @@ Missing-reading labels appear only for quotas RimZ can read on that account, or 
 
 #### Budget is not spend
 
-A block's `5h` and `7d` bars measure a different thing from the dollar figure above them. They are your subscription plan's included usage, draining toward the reset printed beside them (`↻ 1h47m`), and a bar fills with what is left. Claude Max, ChatGPT Pro, and plans like them refill on those windows automatically, so the bars are your read on pace, not a bill. An API-key account has no such window and carries a single `api` row instead; an uncapped key reads as a full bar with `∞`.
+A block's `5h` and `7d` bars measure a different thing from the dollar figure above them. They are your subscription plan's included usage, draining toward the reset printed beside them (`↻ 1h47m`), and a bar fills with what is left. Claude Max, ChatGPT Pro, and plans like them refill on those windows automatically, so the bars are your read on pace, not a bill. An API-key or Claude Console account has no such window and carries a single `api` row instead; an uncapped account reads as a full bar with `∞`.
 
 A `$` bar is different: it is the Claude apps gateway spend cap your organisation sets, a real dollar limit, shown as the percentage left. An agent stopped by it does not resume itself at the reset; its row turns actionable so you can resume it.
 

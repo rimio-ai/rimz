@@ -155,7 +155,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `cr`, `bld`, `dep` | a quota the provider or a plugin names |
 | `$` | the organisation spend limit of a Claude apps gateway |
 | `ex` | paid extra usage |
-| `api` | an API-key budget |
+| `api` | an API-key or Claude Console budget |
 | `↻ 1h47m` | time until the window resets |
 | `↻ 2` in a block header | Codex reset credits with auto-redeem off, or Claude limit resets: redeeming is yours to do ([`rimz accounts redeem`](../reference/cli/accounts.md#redeem) for either provider) |
 | `⟳ 2` in a block header | auto-redeem armed: a credit would be spent if the longest window ran dry and parked an agent now |
@@ -707,7 +707,7 @@ Stacked blocks (`provider_tabs = "never"`):
 
 A bar's filled part is the budget left. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
-A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
+A lapsed subscription keeps the historical stats but removes the plan label and replaces all bars with one bold alarm row. An API-billed login never shows this alarm. The header uses the account's valid display label or its name (here `work`), and the row names the product alone. The first-seen local timestamp is truncated with the row at narrow widths, never wrapped:
 
 ```
 ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -720,15 +720,15 @@ Claude · work v2.1.158                                                         
 
 | you see | meaning |
 |---------|---------|
-| `plan lapsed · no Claude access · since …` and no bars | Claude Code subscription access was rejected. The header has no plan label, and the timestamp is when RimZ first saw the rejection, in local time. A successful usage read clears the lapse; it does not age into an unknown track. |
+| `plan lapsed · no Claude access · since …` and no bars | Claude Code subscription access was rejected, never an API-billed login running out of credit. The header has no plan label, and the timestamp is when RimZ first saw the rejection, in local time. A successful usage read clears the lapse; it does not age into an unknown track. |
 | a partly filled bar and `↻ 1h47m` | The window is running. The fill slides from green through gold and amber to red as it empties. |
 | a full bar and no countdown | The window has not started. Providers start the clock at your first token, so there is no reset to count down to yet. |
 | an empty track, all red | The window is spent. |
 | a short window painted spent while a longer one is spent | The longer window gates it: a spent `7d` makes `5h` unusable until the `7d` resets, so `5h` shows red with no countdown whatever its own reading. |
 | a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
-| a full bar and `∞` | No limit applies: an API key without a budget, extra usage with no limit or balance figure, a quota the provider reports as unlimited, or a limit the provider has lifted for now. |
+| a full bar and `∞` | No limit applies: an API-key or Claude Console login without a budget, extra usage with no limit or balance figure, a quota the provider reports as unlimited, or a limit the provider has lifted for now. |
 | an `ex` row | Paid extra usage on accounts with only time windows, shown while an included window is spent and extra usage is available: the longest spent window comes first, then `ex`. The figure is dollars left, never the budget size. With a limit the bar drains; without one a positive balance draws full. Reported unlimited extra usage draws full with `∞`, whether or not a display ceiling is set. There is no `ex` row when the provider reports nothing, extra usage is off, or no dollars are left. Without usable extra usage, a longer spent window replaces the second included row (`5h` and `mo` when the month is spent). Dollar figures on `ex` and `api` floor: cents below $10 (dropping `.00`), grouped whole dollars below $100,000, whole thousands below $1 million, then millions with one decimal. |
-| an `api` row | An API key. With a display budget configured, the bar drains against your trailing-month spend and the dollars left sit on the right. Without one, the bar is full and reads `∞`. |
+| an `api` row | An API-key or Claude Console login. With a display budget configured, the bar drains against your history pool's trailing-month spend and the dollars left sit on the right. Without one, the bar is full and reads `∞`. It never shows the provider's credit balance. |
 | `cr`, `bld`, `dep`, and other names | A quota the provider or a plugin names, such as Copilot's AI credits. Named quotas are independent: one spent quota does not mark another spent. A named quota with no reported length shows its reset in a quiet tone. |
 
 The color of the `↻` glyph beside the countdown shows your pace. It is neutral when the current burn rate lasts to the reset, slides through gold and amber to red as spending outruns the window, and cools toward green when spending runs well under pace, once 40% of the window has passed. The stops are `[theme.display.budget_bar.burn_rate]` ([theming: display](../guide/theme.md#display)).
