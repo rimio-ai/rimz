@@ -21,8 +21,8 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::diag::record::{DiagEvent, SidebarHostUnavailableCause};
-use crate::ids::{PaneId, SidebarInstanceId};
-use crate::sidebar_pane::app::{EventForwarder, ServeConfig};
+use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::sidebar_pane::app::EventForwarder;
 use crate::sidebar_pane::attach::Control;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 use tracing::debug;
@@ -67,6 +67,19 @@ const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
 const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SUPERVISOR_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Pane identity and cadence from argv and the mux environment, without machine settings.
+#[derive(Clone, Debug)]
+pub struct SupervisorConfig {
+    pub workspace_id: WorkspaceId,
+    pub mux: MuxName,
+    pub session_name: String,
+    pub instance_id: SidebarInstanceId,
+    pub tick_seconds: u64,
+    pub refresh_ms_override: Option<u16>,
+    pub own_pane: PaneId,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
     #[error(
@@ -104,13 +117,13 @@ impl Drop for StopSignal {
     }
 }
 
-pub fn run(config: ServeConfig) -> Result<()> {
+pub fn run(config: SupervisorConfig) -> Result<()> {
     use std::io::IsTerminal;
 
-    let mut record_watch = RecordWatch::new(&config.room.workspace_id);
+    let mut record_watch = RecordWatch::new(&config.workspace_id);
     if crate::workspace::record::read(&record_watch.record_path).is_err() {
         let no_room = crate::workspace::WorkspaceErr::NoRoom {
-            location: format!("for workspace {}", config.room.workspace_id),
+            location: format!("for workspace {}", config.workspace_id),
         };
         let _ = writeln!(io::stderr(), "rimz sidebar serve: {no_room}; stopping");
         return Ok(());
@@ -118,17 +131,15 @@ pub fn run(config: ServeConfig) -> Result<()> {
     if !io::stdout().is_terminal() {
         return Err(SidebarSuperviseErr::NotTerminal);
     }
-    let runtime = crate::RuntimePaths::for_workspace(config.room.workspace_id.clone())?;
-    let state = crate::StatePaths::for_workspace(config.room.workspace_id.clone())?;
+    let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
+    let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
     #[cfg(feature = "testkit")]
     thread::sleep(duration_override(TEST_HOLD_DELAY_MS_ENV, Duration::ZERO));
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
-    if let Err(error) =
-        crate::mux::backend_for(config.room.mux).close_pane_on_exit(&config.own_pane)
-    {
+    if let Err(error) = crate::mux::backend_for(config.mux).close_pane_on_exit(&config.own_pane) {
         tracing::warn!(
-            session = %config.room.session_name,
+            session = %config.session_name,
             error = %error,
             "sidebar pane retention pin failed; continuing with the user's setting",
         );
@@ -162,7 +173,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
             remove_orphan_runtime_files(&config);
             return Ok(());
         }
-        let target = crate::reload::recorded_reexec_target(&config.room.workspace_id);
+        let target = crate::reload::recorded_reexec_target(&config.workspace_id);
         exec_state.observe(&target, supervisor_build);
         // Atomic installs can leave this image unlinked. Start the host from
         // the durable room target, even when its bytes match this supervisor.
@@ -326,7 +337,7 @@ struct Attached {
 
 /// Hand this pane to the session's host, or explain why it cannot paint yet.
 fn attach_to_host(
-    config: &ServeConfig,
+    config: &SupervisorConfig,
     runtime: &crate::RuntimePaths,
     state: &crate::StatePaths,
     exe: &Path,
@@ -336,9 +347,9 @@ fn attach_to_host(
     use std::os::fd::AsFd;
 
     let stdout = io::stdout();
-    let log = state.sidebar_host_log(config.room.mux, &config.room.session_name);
-    let stream = host_link::connect(&config.room, runtime, host_link::HOST_WAIT, || {
-        host_link::spawn_host(exe, &config.room, runtime, state, &log)
+    let log = state.sidebar_host_log(config.mux, &config.session_name);
+    let stream = host_link::connect(config, runtime, host_link::HOST_WAIT, || {
+        host_link::spawn_host(exe, config, runtime, state, &log)
     })
     .map_err(|error| AttachFailure::StartFailed { error, log })?
     .ok_or(AttachFailure::NoAnswer)?;
@@ -439,7 +450,7 @@ fn host_executable(
 fn exec_supervisor(
     exe: &Path,
     args: &[OsString],
-    config: &ServeConfig,
+    config: &SupervisorConfig,
     baseline_pane: Option<&PaneId>,
 ) -> Result<()> {
     use std::os::unix::process::CommandExt;
@@ -620,12 +631,12 @@ struct PaneWatchdog {
 }
 
 impl PaneWatchdog {
-    fn from_config(config: &ServeConfig) -> Self {
+    fn from_config(config: &SupervisorConfig) -> Self {
         Self {
             pane: config.own_pane.clone(),
-            mux: config.room.mux,
-            session_name: config.room.session_name.clone(),
-            workspace_id: config.room.workspace_id.clone(),
+            mux: config.mux,
+            session_name: config.session_name.clone(),
+            workspace_id: config.workspace_id.clone(),
             next_probe: Instant::now() + pane_probe_interval(),
             strikes: 0,
             last_observed_at_ms: None,
@@ -788,7 +799,7 @@ fn self_close_verdict(
     }
 }
 
-fn confirm_self_close(config: &ServeConfig, watchdog: &PaneWatchdog) -> SelfCloseConfirmation {
+fn confirm_self_close(config: &SupervisorConfig, watchdog: &PaneWatchdog) -> SelfCloseConfirmation {
     #[cfg(feature = "testkit")]
     if let Some(confirmation) = forced_self_close_confirmation() {
         return confirmation;
@@ -821,8 +832,8 @@ fn confirm_self_close(config: &ServeConfig, watchdog: &PaneWatchdog) -> SelfClos
             if floating_siblings == 0 {
                 return SelfCloseConfirmation::Close;
             }
-            match crate::mux::backend_for(config.room.mux)
-                .close_view_floating_panes(&config.room.session_name, &watchdog.pane)
+            match crate::mux::backend_for(config.mux)
+                .close_view_floating_panes(&config.session_name, &watchdog.pane)
             {
                 Ok(_) => SelfCloseConfirmation::Close,
                 Err(err) => SelfCloseConfirmation::Keep {
@@ -967,7 +978,7 @@ fn sleep_respawn_backoff(
     }
 }
 
-fn record_pane_gone(config: &ServeConfig, diag: &crate::diag::DiagSink) {
+fn record_pane_gone(config: &SupervisorConfig, diag: &crate::diag::DiagSink) {
     diag.emit(DiagEvent::SupervisorPaneGone {
         pane_id: config.own_pane.to_string(),
     });
@@ -1005,16 +1016,16 @@ fn record_confirmed_self_close(diag: &crate::diag::DiagSink) {
     });
 }
 
-fn diag_sink(config: &ServeConfig) -> crate::diag::DiagSink {
+fn diag_sink(config: &SupervisorConfig) -> crate::diag::DiagSink {
     crate::diag::DiagSink::for_workspace(
-        config.room.workspace_id.clone(),
-        config.room.session_name.clone(),
+        config.workspace_id.clone(),
+        config.session_name.clone(),
         Some(config.instance_id.clone()),
     )
 }
 
-fn remove_orphan_runtime_files(config: &ServeConfig) {
-    let runtime = match crate::RuntimePaths::for_workspace(config.room.workspace_id.clone()) {
+fn remove_orphan_runtime_files(config: &SupervisorConfig) {
+    let runtime = match crate::RuntimePaths::for_workspace(config.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
             debug!(error = %err, "sidebar supervisor orphan runtime cleanup unavailable");

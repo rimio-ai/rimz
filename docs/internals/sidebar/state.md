@@ -79,8 +79,8 @@ The renderer threads, in `crates/rimz/src/sidebar_pane/`:
 | Module | What it owns |
 | --- | --- |
 | [`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs), [`attach.rs`](../../../crates/rimz/src/sidebar_pane/attach.rs) | The room host (the attach listener, one attachment thread per pane, lifetime and reload) and the attach wire it shares with the supervisor. |
-| [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs) | The pane's process shell: terminal modes, the event reader, notice and retry, self-close confirmation, watchdog, and build promotion. |
-| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | Shared `RoomConfig`, `ServeConfig`, `SidebarAppErr`, `install_panic_diagnostic_hook`, and runtime-file cleanup. |
+| [`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs) | The pane's process shell: its `SupervisorConfig` from argv and the pane environment (no machine config), terminal modes, the event reader, notice and retry, self-close confirmation, watchdog, and build promotion. |
+| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | The host-built `RoomConfig` and `ServeConfig`, `SidebarAppErr`, `install_panic_diagnostic_hook`, and runtime-file cleanup. |
 | [`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs), [`app/backend.rs`](../../../crates/rimz/src/sidebar_pane/app/backend.rs) | One pane: runtime-file guards, the fixed-timestep loop, and the terminal backend bound to the pane's output fd. |
 | [`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs) | The data plane one process runs for all its panes, and each pane's subscription to it. |
 | [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | Request coalescing, and the fetch worker's produce cadence and result publication. |

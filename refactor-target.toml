@@ -2343,6 +2343,11 @@ surface-budget = 61
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::supervise::SupervisorConfig"
+reason = "The CLI passes argv and pane identity to the supervisor without host-owned machine settings."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::render::ui_state::ViewState"
 reason = "Portable presentation excludes pane-bound caches and hit geometry."
 

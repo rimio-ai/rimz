@@ -225,6 +225,8 @@ The foreground hook never waits on the workspace lock for an ordinary append. It
 
 ### Helper processes stay cheap
 
+The per-tab sidebar supervisor loads no machine config, so its retained state does not grow with agent, subagent, or team definitions. The room host owns the settings and definition-backed work.
+
 The build id is computed once per process from the linker build identity in the first 1 MiB of the image, and the whole image is hashed only when that identity is missing. `main` warms it off-thread at startup ([`build_id.rs`](../../crates/rimz/src/build_id.rs)). Self-spawns resolve through one helper, `rimz_exe`, which honors `RIMZ_BIN` and repairs Linux `current_exe()` paths ending in ` (deleted)` after an atomic reinstall. The Zellij presence plugin hashes the stable manifest fields before projecting pane fields, so title-only `PaneUpdate` storms skip projection ([`policy.rs`](../../crates/rimz-presence-zellij/src/policy.rs)). Zellij rooms start with `disable_session_metadata true` by default, which stops the server rewriting `session-metadata.kdl` and running command-discovery `ps` for the room.
 
 ### Codex context stays warm

@@ -1,14 +1,24 @@
 use super::*;
 
+pub(super) fn supervisor_config(workspace_id: &WorkspaceId) -> SupervisorConfig {
+    SupervisorConfig {
+        workspace_id: workspace_id.clone(),
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: SidebarInstanceId::new(),
+        tick_seconds: 1,
+        refresh_ms_override: None,
+        own_pane: PaneId::from_parts(MuxName::Zellij, "sidebar_test"),
+    }
+}
+
 /// A link whose host says each of `controls` and then closes.
 fn link_to_a_host_saying(controls: Vec<Control>) -> HostLink {
     use crate::sidebar_pane::attach::{self, ControlLine, Reply};
     use std::os::fd::AsFd;
 
     let (pane, host) = std::os::unix::net::UnixStream::pair().unwrap();
-    let config = crate::sidebar_pane::app::fixtures::serve_config(
-        &crate::sidebar_pane::app::fixtures::workspace(),
-    );
+    let config = supervisor_config(&crate::sidebar_pane::app::fixtures::workspace());
     thread::spawn(move || {
         let _hello = attach::recv_hello(&host).unwrap().unwrap();
         attach::write_line(&host, &Reply::Accept { build: None }).unwrap();
@@ -31,9 +41,7 @@ fn watch(mut link: HostLink) -> RoundExit {
             baseline_pane: &mut None,
             supervisor_build: None,
             started: Instant::now(),
-            watchdog: &mut PaneWatchdog::from_config(
-                &crate::sidebar_pane::app::fixtures::serve_config(&workspace),
-            ),
+            watchdog: &mut PaneWatchdog::from_config(&supervisor_config(&workspace)),
             stopped: &AtomicBool::new(false),
         },
     )
