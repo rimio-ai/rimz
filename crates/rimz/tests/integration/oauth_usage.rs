@@ -18,6 +18,119 @@ fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
+    let env = Env::new();
+    let data = env.home_root.join("opencode-data");
+    std::fs::create_dir_all(&data).unwrap();
+    let db = rimz::testkit::opencode::OpenCodeDb::new(&data.join("opencode.db"), false, true);
+    db.session("go-session", &env.project_root);
+    db.message(
+        "go-message",
+        "go-session",
+        "assistant",
+        1,
+        r#"{"model":{"providerID":"opencode-go","id":"test-model"}}"#,
+    );
+    let credential = r#"{
+        "type":"oauth", "access":"private-go-token", "expires":4102444800000,
+        "metadata":{"orgID":"private-go-org"}
+    }"#;
+    db.credential("console", "opencode", Some(true), (1, 2), credential);
+    let claim_id = env.seed_usage_claim("opencode");
+    let scope = serde_json::json!({"kind":"sub_provider","provider":"opencode","variant":"oauth"});
+    let credits_path = env.runtime_paths().shared_credits_path();
+    let mut credits = read_json(credits_path.clone());
+    credits["logins"]["opencode@default"]["direct_query_claim"]["requested_scope"] = scope.clone();
+    std::fs::write(&credits_path, serde_json::to_vec(&credits).unwrap()).unwrap();
+    let body = r#"{
+        "product":"go",
+        "access":{"meters":{
+            "fiveHour":{
+                "usedMicroCents":"1", "limitMicroCents":"1000",
+                "resetsAt":"2100-01-01T00:00:00Z"
+            },
+            "week":{
+                "usedMicroCents":"2", "limitMicroCents":"2000",
+                "resetsAt":"2100-01-01T00:00:00Z"
+            },
+            "month":{
+                "usedMicroCents":"3", "limitMicroCents":"3000",
+                "resetsAt":"2100-01-01T00:00:00Z"
+            }
+        }}
+    }"#;
+    let (origin, server) = serve_http_routes(
+        vec![("GET /console/api/go/status", 200, body.to_owned())],
+        1,
+    );
+    let output = env
+        .rimz()
+        .args(refresh_usage_argv(&env, "opencode", &claim_id))
+        .env("RIMZ_OPENCODE_DATA_DIR", &data)
+        .env(
+            "RIMZ_OPENCODE_GO_USAGE_URL",
+            format!("{origin}/console/api/go/status"),
+        )
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let credits = read_json(credits_path);
+    let entry = &credits["logins"]["opencode@default"];
+    assert_eq!(
+        entry["ok"], true,
+        "Go status must publish a successful reading"
+    );
+    assert_eq!(entry["plan"], "go");
+    assert_eq!(entry["scope"], scope);
+    let limits = read_json(env.runtime_paths().shared_rate_limits_path());
+    let limit_entry = &limits["entries"]["opencode@default"];
+    assert_eq!(limit_entry["scope"], scope);
+    assert_eq!(limit_entry["account_key"], entry["account_key"]);
+    let windows = limit_entry["limits"]["windows"].as_array().unwrap();
+    assert_eq!(
+        windows
+            .iter()
+            .map(|window| (
+                window["duration_mins"].as_u64(),
+                window["used_percentage"].as_u64(),
+                window["amount"].clone()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                Some(300),
+                Some(0),
+                serde_json::json!({"used":1,"limit":1000})
+            ),
+            (
+                Some(10_080),
+                Some(0),
+                serde_json::json!({"used":2,"limit":2000})
+            ),
+            (
+                Some(43_200),
+                Some(0),
+                serde_json::json!({"used":3,"limit":3000})
+            ),
+        ]
+    );
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    let request = requests[0].to_ascii_lowercase();
+    assert!(request.contains("authorization: bearer private-go-token\r\n"));
+    assert!(request.contains("x-org-id: private-go-org\r\n"));
+    for secret in ["private-go-token", "private-go-org"] {
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        assert!(!credits.to_string().contains(secret));
+        assert!(!limits.to_string().contains(secret));
+    }
+}
+
+#[test]
 fn claude_organization_rejection_records_lapsed_entitlement_without_body_text() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("claude");
