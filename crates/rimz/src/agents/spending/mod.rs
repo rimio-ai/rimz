@@ -65,7 +65,7 @@ pub(in crate::agents) use cache::response_timing;
 use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
 pub use cache::{
     CachedEntry, FileCacheEntry, ResponseTiming, SharedName, SpendCursor, SpendParse, SpendUpdate,
-    SpendingDiskCache, read_spending_cache, write_spending_cache,
+    SpendingDiskCache, ToolCounts, read_spending_cache, write_spending_cache,
 };
 #[cfg(test)]
 pub(crate) use cache::{compact_spending_cache, peek_cache_version};

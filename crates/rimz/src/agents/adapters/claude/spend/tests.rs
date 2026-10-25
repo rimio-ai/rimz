@@ -1,7 +1,7 @@
 use super::super::ClaudeAdapter;
 use super::*;
 use crate::agents::capabilities::SpendingCapability;
-use crate::agents::spending::{ResponseTiming, session_entries};
+use crate::agents::spending::{ResponseTiming, ToolCounts, session_entries};
 use std::io::Write as _;
 use tempfile::TempDir;
 
@@ -225,7 +225,10 @@ fn captures_named_tool_use_blocks_on_the_priced_response() {
 
     assert_eq!(
         entries[0].tool_calls,
-        BTreeMap::from([("Bash".to_owned(), 1), ("Read".to_owned(), 2)])
+        ToolCounts::from(BTreeMap::from([
+            ("Bash".to_owned(), 1),
+            ("Read".to_owned(), 2)
+        ]))
     );
 }
 

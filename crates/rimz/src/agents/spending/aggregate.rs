@@ -84,10 +84,10 @@ impl SpendWindow {
             self.timed_ms += timing.ms;
             self.timed_output += timing.output;
         }
-        for (name, count) in &entry.tool_calls {
-            let count = u64::from(*count);
+        for (name, count) in entry.tool_calls.iter() {
+            let count = u64::from(count);
             self.tool_calls = self.tool_calls.saturating_add(count);
-            let total = self.tools.entry(name.clone()).or_default();
+            let total = self.tools.entry(name.to_owned()).or_default();
             *total = total.saturating_add(count);
         }
     }

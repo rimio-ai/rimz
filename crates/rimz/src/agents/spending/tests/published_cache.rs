@@ -372,7 +372,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         output: 20,
         cache_write: 3,
         cache_read: 4,
-        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]),
+        tool_calls: BTreeMap::from([("Read".to_owned(), 2)]).into(),
         message_id: Some("msg-1".into()),
         request_id: Some("req-1".into()),
         dedup_key: None,

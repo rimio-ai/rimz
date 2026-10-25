@@ -20,7 +20,8 @@ use std::path::PathBuf;
 use super::database::{MessageTime, open_readonly};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, ToolCounts, origin_path,
+    record_unknown_model,
 };
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
@@ -261,14 +262,13 @@ fn parse_message_entry(
         };
     }
 
-    let mut tool_calls = BTreeMap::<String, u32>::new();
+    let mut tool_calls = ToolCounts::default();
     for part in message.content {
         if part.kind.as_deref() != Some("tool") {
             continue;
         }
         if let Some(name) = non_empty(part.name.as_deref()) {
-            let count = tool_calls.entry(name.to_owned()).or_default();
-            *count = count.saturating_add(1);
+            tool_calls.increment(name);
         }
     }
     Some(CachedEntry {
@@ -535,7 +535,10 @@ mod tests {
 
         assert_eq!(
             parsed.entries[0].tool_calls,
-            BTreeMap::from([("bash".to_owned(), 1), ("read".to_owned(), 2)])
+            ToolCounts::from(BTreeMap::from([
+                ("bash".to_owned(), 1),
+                ("read".to_owned(), 2)
+            ]))
         );
     }
 

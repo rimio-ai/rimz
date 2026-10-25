@@ -262,7 +262,8 @@ upward-dependencies = ["address"]
 # WindowAmount and its used_percentage derivation share integer quota facts (+2).
 # AccountCapability::account_inputs_stamp lets the accounts lane re-probe on adapter input changes (+1).
 # SharedName shares model and tool names across public spending rows (+1).
-surface-budget = 1137
+# ToolCounts exposes compact, canonical counts on public spending rows (+1).
+surface-budget = 1138
 
 [[verdict]]
 kind = "item"
@@ -548,7 +549,8 @@ path = "crates/rimz/src/agents/spending"
 # EffortWindow::merge sums effort for the stats rows that fold several roles (+1).
 # ChartSpend carries bounded model dollars across the publication/stats seam (+1).
 # SharedName shares model and tool names across public spending rows (+1).
-surface-budget = 108
+# ToolCounts exposes compact, canonical counts on public spending rows (+1).
+surface-budget = 109
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -4386,6 +4388,11 @@ reason = "One durable normalized row: aggregation, dedup and compaction read tok
 kind = "item"
 key = "agents::spending::cache::SharedName"
 reason = "Model and tool names share storage across cache rows and public parser results, including bench, example and integration row builders."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::cache::ToolCounts"
+reason = "Public spending rows expose canonical compact tool counts to parser, aggregation, bench, example and integration consumers."
 
 [[verdict]]
 kind = "item"

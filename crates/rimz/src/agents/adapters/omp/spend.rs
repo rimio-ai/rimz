@@ -143,8 +143,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
             {
-                let count = cached.tool_calls.entry(name.to_owned()).or_default();
-                *count = count.saturating_add(1);
+                cached.tool_calls.increment(name);
             }
         }
         entries.push(cached);

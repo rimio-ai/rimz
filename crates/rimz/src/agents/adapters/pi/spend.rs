@@ -314,8 +314,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            let count = cached.tool_calls.entry(name.to_owned()).or_default();
-            *count = count.saturating_add(1);
+            cached.tool_calls.increment(name);
         }
         out.push(cached);
     }
@@ -422,7 +421,10 @@ mod tests {
 
         assert_eq!(
             entries[0].tool_calls,
-            BTreeMap::from([("bash".to_owned(), 1), ("read".to_owned(), 2)])
+            crate::agents::spending::ToolCounts::from(BTreeMap::from([
+                ("bash".to_owned(), 1),
+                ("read".to_owned(), 2),
+            ]))
         );
     }
 
