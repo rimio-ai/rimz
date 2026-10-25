@@ -82,14 +82,14 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
-fn subagent_lockdown_merges_opencode_permissions() {
+fn native_subagent_denial_merges_opencode_permissions() {
     let deny = json!({ "action": "subagent", "resource": "*", "effect": "deny" });
     for value in [None, Some(""), Some("not JSON"), Some("[]"), Some("null")] {
         let mut env = BTreeMap::new();
         if let Some(value) = value {
             env.insert("OPENCODE_CONFIG_CONTENT".to_owned(), value.to_owned());
         }
-        OpencodeAdapter.lockdown_subagent_env(&mut env);
+        OpencodeAdapter.disable_native_subagent_env(&mut env);
         assert_eq!(
             env.get("OPENCODE_CONFIG_CONTENT")
                 .and_then(|raw| serde_json::from_str::<Value>(raw).ok()),
@@ -102,7 +102,7 @@ fn subagent_lockdown_merges_opencode_permissions() {
         "OPENCODE_CONFIG_CONTENT".to_owned(),
         "{/* preserve this config */\"theme\":\"dark\",\"permissions\":[{\"action\":\"subagent\",\"resource\":\"review\",\"effect\":\"allow\"},],}".to_owned(),
     )]);
-    OpencodeAdapter.lockdown_subagent_env(&mut env);
+    OpencodeAdapter.disable_native_subagent_env(&mut env);
     assert_eq!(
         serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
         json!({ "theme": "dark", "permissions": [allow, deny] })

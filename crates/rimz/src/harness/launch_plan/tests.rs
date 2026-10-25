@@ -1527,6 +1527,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");
     let mut machine_config = crate::config::MachineConfig::default();
+    machine_config.subagents.profiles = toml::from_str("[explorer]\nagent = 'claude'\n").unwrap();
     machine_config.agents.teams.0.insert(
         "forge".to_owned(),
         crate::config::Team {
@@ -1587,11 +1588,17 @@ fn resolves_team_for_launch_context_from_effective_config() {
     request.identity.params = crate::agents::LaunchParams {
         team: Some("forge".to_owned()),
         role: Some("coder".to_owned()),
+        profile: Some("forge.coder".to_owned()),
         channel: Some("feature".to_owned()),
         ..crate::agents::LaunchParams::default()
     };
 
     let reminders = exec_launch_reminders(&request, &machine_config, project.path(), config.path());
+    assert!(matches!(
+        reminders.subagent_catalog,
+        Some(super::super::subagent_policy::SubagentCatalog::Available(ref profiles))
+            if profiles.len() == 1 && profiles[0].name == "explorer"
+    ));
     let team = reminders.team.expect("team");
     assert_eq!(team.team.leader.as_deref(), Some("planner"));
     assert_eq!(
@@ -1639,6 +1646,50 @@ fn omits_team_context_without_team_identity_and_catalog_for_children() {
     assert!(reminders.subagent_catalog.is_none());
     assert!(reminders.team.is_none());
     assert!(reminders.model);
+}
+
+#[test]
+fn headless_requests_keep_native_delegation_without_a_catalog() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    machine.subagents.profiles = toml::from_str("[explorer]\nagent = 'claude'\n").unwrap();
+    let mut request = request("claude", action_with_args("launch", vec![]));
+    assert!(matches!(
+        exec_launch_reminders(&request, &machine, project.path(), config.path()).subagent_catalog,
+        Some(super::super::subagent_policy::SubagentCatalog::Available(_))
+    ));
+    request.headless = Some(crate::agents::HeadlessRequest {
+        schema_open: false,
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/check/schema.json".into(),
+        verdict_file: "/check/verdict.json".into(),
+    });
+
+    let reminders = exec_launch_reminders(&request, &machine, project.path(), config.path());
+    assert!(reminders.subagent_catalog.is_none());
+    assert!(!reminders.disable_native_subagents(&request));
+}
+
+#[test]
+fn headless_judge_reminder_omits_subagents_with_profiles_configured() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    machine.subagents.profiles = toml::from_str("[explorer]\nagent = 'claude'\n").unwrap();
+    let mut request = request("claude", action_with_args("launch", vec![]));
+    request.headless = Some(crate::agents::HeadlessRequest {
+        schema_open: false,
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/check/schema.json".into(),
+        verdict_file: "/check/verdict.json".into(),
+    });
+    request.loop_reminder = Some("Decide without a user or pane.".into());
+    let reminders = exec_launch_reminders(&request, &machine, project.path(), config.path());
+    let text = super::super::launch_reminders::render(&request, &reminders, project.path(), None);
+
+    assert!(text.contains("### Judge\n\nDecide without a user or pane."));
+    assert!(!text.contains("### Subagents"), "{text}");
 }
 
 #[test]

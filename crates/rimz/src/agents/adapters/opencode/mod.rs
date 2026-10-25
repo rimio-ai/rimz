@@ -369,7 +369,7 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
     }
 
-    fn lockdown_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
+    fn disable_native_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
         const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
         let mut config = env
             .get(CONFIG_ENV)

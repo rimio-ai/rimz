@@ -1095,13 +1095,29 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         })
     }
 
-    fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
-        crate::agents::PresetArgMatcher::ConfigKey {
-            flags: vec!["-c".to_owned(), "--config".to_owned()],
-            key: "features.multi_agent".to_owned(),
+    fn disable_native_subagent_args(&self, extra_args: &mut Vec<String>) {
+        for key in ["agents.enabled", "features.multi_agent_v2"] {
+            crate::agents::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: key.to_owned(),
+            }
+            .remove_occurrences(extra_args);
         }
-        .remove_occurrences(extra_args);
-        extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
+        let enables = crate::agents::PresetArgMatcher::Flag(vec!["--enable".to_owned()]);
+        for occurrence in enables.occurrences(extra_args).iter().rev() {
+            if occurrence.value == "multi_agent_v2" {
+                extra_args.drain(occurrence.argv_range.clone());
+            }
+        }
+        extra_args.extend(
+            [
+                "-c",
+                "agents.enabled=false",
+                "-c",
+                "features.multi_agent_v2=false",
+            ]
+            .map(str::to_owned),
+        );
     }
 
     fn has_native_sandbox(&self) -> bool {
