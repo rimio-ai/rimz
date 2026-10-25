@@ -3,7 +3,8 @@
 //!
 //! The renderer receives only `PetView` data. Network, disk, decode, and
 //! memoized cell-art work stays here, owned by the serve loop; prepared
-//! sheets are shared across the host's panes through a process-wide weak cache.
+//! sheets and their in-flight loads are shared across the host's panes through
+//! a process-wide table that holds completed sheets only weakly.
 
 mod asset;
 mod catalog;
@@ -15,7 +16,7 @@ mod preview;
 mod voice;
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::thread;
 
@@ -230,12 +231,57 @@ enum LoadedPetAsset {
 
 type LoadResult = Result<Arc<LoadedPetAsset>, String>;
 
-fn prepared_pets() -> MutexGuard<'static, HashMap<PetLoadRequest, Weak<LoadedPetAsset>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PetLoadRequest, Weak<LoadedPetAsset>>>> = OnceLock::new();
+enum PreparedPet {
+    Loading(Vec<Sender<LoadResult>>),
+    Loaded(Weak<LoadedPetAsset>),
+}
+
+fn prepared_pets() -> MutexGuard<'static, HashMap<PetLoadRequest, PreparedPet>> {
+    static CACHE: OnceLock<Mutex<HashMap<PetLoadRequest, PreparedPet>>> = OnceLock::new();
     CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct PetLoadGuard {
+    request: PetLoadRequest,
+    result: Option<LoadResult>,
+}
+
+impl PetLoadGuard {
+    fn finish(mut self, result: LoadResult) {
+        self.result = Some(result);
+    }
+}
+
+impl Drop for PetLoadGuard {
+    fn drop(&mut self) {
+        let mut cache = prepared_pets();
+        let Some(PreparedPet::Loading(waiters)) = cache.remove(&self.request) else {
+            return;
+        };
+        // Unwind and a failed spawn drop every sender without a result.
+        let Some(result) = self.result.take() else {
+            return;
+        };
+        if let Ok(asset) = &result {
+            cache.insert(
+                self.request.clone(),
+                PreparedPet::Loaded(Arc::downgrade(asset)),
+            );
+        }
+        // The last waiter takes the loader's own copy, so no strong reference outlives the
+        // fan-out: a pane that drops the sheet right after receiving it frees it.
+        let mut waiters = waiters.into_iter();
+        let last = waiters.next_back();
+        for waiter in waiters {
+            let _ = waiter.send(result.clone());
+        }
+        if let Some(last) = last {
+            let _ = last.send(result);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -497,6 +543,21 @@ impl PetAssets {
         phase: u64,
         refresh_ms: u16,
     ) {
+        self.ensure_loading_with(source, key, phase, refresh_ms, load_prepared_pet);
+    }
+
+    fn ensure_loading_with<P>(
+        &mut self,
+        source: &PetSource,
+        key: PreparationKey,
+        phase: u64,
+        refresh_ms: u16,
+        prepare: P,
+    ) where
+        P: FnOnce(PetSource, PreparationKey) -> Result<Arc<LoadedPetAsset>, asset::AssetErr>
+            + Send
+            + 'static,
+    {
         let id = source.id();
         let id: &str = id.as_ref();
         if self.load_state.matches(id, key)
@@ -526,18 +587,39 @@ impl PetAssets {
             id: id.to_owned(),
             key,
         };
-        if let Some(asset) = prepared_pets().get(&request).and_then(Weak::upgrade) {
+        let mut cache = prepared_pets();
+        if let Some(PreparedPet::Loaded(asset)) = cache.get(&request)
+            && let Some(asset) = asset.upgrade()
+        {
             self.load_state = PetLoadState::Loaded { request, asset };
             return;
         }
         let (sender, receiver) = mpsc::channel();
-        let source = source.clone();
-        let spawned = thread::Builder::new()
-            .name("rimz-pet-assets".to_owned())
-            .spawn(move || {
-                let result = load_prepared_pet(source, key).map_err(|err| err.to_string());
-                let _ = sender.send(result);
+        let spawned = if let Some(PreparedPet::Loading(waiters)) = cache.get_mut(&request) {
+            waiters.push(sender);
+            drop(cache);
+            Ok(())
+        } else {
+            cache.retain(|_, entry| match entry {
+                PreparedPet::Loading(_) => true,
+                PreparedPet::Loaded(asset) => asset.strong_count() > 0,
             });
+            cache.insert(request.clone(), PreparedPet::Loading(vec![sender]));
+            let load = PetLoadGuard {
+                request: request.clone(),
+                result: None,
+            };
+            // Spawn failure drops the closure here, so its guard must be able to lock.
+            drop(cache);
+            let source = source.clone();
+            thread::Builder::new()
+                .name("rimz-pet-assets".to_owned())
+                .spawn(move || {
+                    let result = prepare(source, key).map_err(|err| err.to_string());
+                    load.finish(result);
+                })
+                .map(|_| ())
+        };
         match spawned {
             Ok(_) => {
                 self.load_state = match retrying {
@@ -686,18 +768,7 @@ fn load_prepared_pet(
                 .collect(),
         )),
     })?;
-    let request = PetLoadRequest {
-        id: source.id().into_owned(),
-        key,
-    };
-    let mut cache = prepared_pets();
-    if let Some(shared) = cache.get(&request).and_then(Weak::upgrade) {
-        return Ok(shared);
-    }
-    cache.retain(|_, asset| asset.strong_count() > 0);
-    let asset = Arc::new(asset);
-    cache.insert(request, Arc::downgrade(&asset));
-    Ok(asset)
+    Ok(Arc::new(asset))
 }
 
 #[cfg(test)]
