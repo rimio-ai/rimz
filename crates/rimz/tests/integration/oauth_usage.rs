@@ -2026,8 +2026,10 @@ fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows
     record.probed_at_ms -= 60_000;
     env.publish_accounts(&cache);
 
+    let user_session =
+        cwd.join("2026-10-25T04-04-42-704Z_00000000-0000-4000-8000-000000000002.jsonl");
     std::fs::write(
-        cwd.join("2026-10-25T04-04-42-704Z_00000000-0000-4000-8000-000000000002.jsonl"),
+        &user_session,
         concat!(
             r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000002"}"#,
             "\n",
@@ -2038,6 +2040,11 @@ fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows
         ),
     )
     .expect("write new pi session");
+    // Keep both new-file triggers distinct even with coarse filesystem timestamps.
+    std::fs::File::open(&cwd)
+        .unwrap()
+        .set_modified(an_hour_ago + Duration::from_secs(1))
+        .unwrap();
     let codex_scope = ProviderAccountScope::sub_provider("openai", "oauth");
     let window = |used, duration_mins| RateLimitWindow {
         used_percentage: Some(used),
@@ -2062,15 +2069,15 @@ fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows
         ..Default::default()
     });
 
-    let snapshot = snapshot();
+    let produced = snapshot();
     let record = &accounts().logins[&pi_key];
     let account = record.account.as_ref().expect("pi account");
     assert_eq!(account.sub_provider.as_deref(), Some("openai-codex"));
     assert_eq!(account.scope, codex_scope);
-    let panel = snapshot["providers"]
+    let panel = produced["providers"]
         .as_array()
         .and_then(|panels| panels.iter().find(|panel| panel["kind"] == "pi"))
-        .unwrap_or_else(|| panic!("no pi panel: {}", snapshot["providers"]));
+        .unwrap_or_else(|| panic!("no pi panel: {}", produced["providers"]));
     let windows: Vec<_> = panel["windows"]
         .as_array()
         .unwrap_or_else(|| panic!("pi panel has no windows: {panel}"))
@@ -2087,6 +2094,44 @@ fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows
         vec![(Some(15), Some(300)), (Some(52), Some(10_080))],
         "{panel}"
     );
+
+    let mut cache = accounts();
+    let record = cache.logins.get_mut(&pi_key).expect("pi record");
+    let parent_stamp = record.inputs_stamp;
+    record.probed_at_ms -= 60_000;
+    let previous_probe = record.probed_at_ms;
+    env.publish_accounts(&cache);
+    // Newer than the old session and older than the child, whatever the
+    // filesystem's timestamp granularity.
+    std::fs::File::open(&user_session)
+        .unwrap()
+        .set_modified(an_hour_ago + Duration::from_secs(60))
+        .unwrap();
+    let child_header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": "00000000-0000-4000-8000-000000000003",
+        "parentSession": user_session
+    });
+    std::fs::write(
+        cwd.join("2026-10-25T05-00-00-000Z_00000000-0000-4000-8000-000000000003.jsonl"),
+        format!(
+            "{child_header}\n{}\n",
+            r#"{"type":"message","message":{"role":"assistant","provider":"anthropic"}}"#
+        ),
+    )
+    .expect("write tintinweb pi child");
+
+    snapshot();
+    let record = &accounts().logins[&pi_key];
+    assert_ne!(
+        record.inputs_stamp, parent_stamp,
+        "the child moves the stamp"
+    );
+    assert!(record.probed_at_ms > previous_probe, "the probe ran again");
+    let account = record.account.as_ref().expect("pi account");
+    assert_eq!(account.sub_provider.as_deref(), Some("openai-codex"));
+    assert_eq!(account.scope, codex_scope);
 }
 
 fn read_json(path: std::path::PathBuf) -> Value {
