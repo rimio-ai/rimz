@@ -424,22 +424,14 @@ fn hook_drainer_outage_lease_is_released_on_recovery_and_drop() {
 #[cfg(target_os = "linux")]
 fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
     let env = Env::new();
-    let ready = env.project_root.join("provider-ready");
     let exit = env.project_root.join("provider-exit");
-    let mut wrapper = drainer_lease_command(&env).spawn().unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !ready.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "provider did not start"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    let wrapper = spawn_parked_drainer_wrapper(&env, drainer_lease_command(&env));
     let socket = env.store().runtime_paths().hook_drainer_socket_path();
     assert!(
         socket.exists(),
         "the host wrapper must establish a lease before starting the sandbox provider"
     );
+    // Observe the parked lease beyond the drainer's 100 ms idle deadline.
     std::thread::sleep(std::time::Duration::from_millis(400));
     assert!(
         std::os::unix::net::UnixStream::connect(&socket).is_ok(),
@@ -450,29 +442,38 @@ fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
         .unwrap()
         .pid();
     drop(stream);
+    let spawning =
+        rimz::disk::lock::WorkspaceLock::acquire(&env.runtime_paths().hook_drainer_spawn_lock())
+            .unwrap();
     nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGKILL,
     )
     .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket)
-            && nix::sys::socket::getsockopt(&stream, nix::sys::socket::sockopt::PeerCredentials)
-                .unwrap()
-                .pid()
-                != pid
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the wrapper must replace a dead drainer"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    // Leave polling slack around the 650 ms gap whose diagnostic we assert below.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    drop(spawning);
+    wait_for_drainer("wrapper never recorded reconnection", || {
+        hook_drainer_diagnostics(&env).iter().any(|event| {
+            matches!(
+                event,
+                rimz::diag::record::DiagEvent::HookDrainerReconnected { .. }
+            )
+        })
+    });
     std::fs::write(exit, "exit").unwrap();
-    assert!(wrapper.wait().unwrap().success());
+    let output = wrapper.wait_with_output().unwrap();
+    assert_drainer_silent(&output);
+    let records = hook_drainer_diagnostics(&env);
+    assert!(
+        matches!(
+            records.as_slice(),
+            [rimz::diag::record::DiagEvent::HookDrainerReconnected {
+                agent_kind, gap_ms, error: Some(error), ..
+            }] if agent_kind.as_str() == "claude" && *gap_ms >= 650 && !error.is_empty()
+        ),
+        "one quiet gap must leave one diagnostic: {records:?}"
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while socket.exists() {
         assert!(
@@ -481,6 +482,168 @@ fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+#[cfg(target_os = "linux")]
+fn hook_drainer_diagnostics(env: &Env) -> Vec<rimz::diag::record::DiagEvent> {
+    use rimz::diag::record::{DiagEnvelope, DiagEvent};
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    let sink = rimz::diag::DiagSink::under(
+        env.store().paths().root.clone(),
+        workspace.workspace_id,
+        workspace.session_name,
+        None,
+    );
+    std::fs::read_to_string(sink.log_path().unwrap())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<DiagEnvelope>(line).ok())
+        .map(|record| record.event)
+        .filter(|event| {
+            matches!(
+                event,
+                DiagEvent::HookDrainerReconnected { .. } | DiagEvent::HookDrainerUnreachable { .. }
+            )
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn assert_drainer_silent(output: &std::process::Output) {
+    assert!(output.status.success(), "{output:?}");
+    for stream in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(stream);
+        assert!(
+            !text.contains("hook drainer"),
+            "pane must stay clean: {text}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_drainer(reason: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready() {
+        assert!(std::time::Instant::now() < deadline, "{reason}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_parked_drainer_wrapper(
+    env: &Env,
+    mut command: std::process::Command,
+) -> std::process::Child {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+
+    let barrier = env.runtime_paths().sock_dir.join("outage-handoff.sock");
+    let listener = UnixListener::bind(&barrier).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let wrapper = command
+        .env("RIMZ_TEST_DRAINER_LEASE_HANDOVER", &barrier)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_drainer("provider did not start", || {
+        env.project_root.join("provider-ready").exists()
+    });
+    let mut release = None;
+    wait_for_drainer("parked image never reached the lease handoff", || {
+        release = listener.accept().ok().map(|(stream, _)| stream);
+        release.is_some()
+    });
+    let argv = rimz::proc::argv(wrapper.id()).unwrap();
+    let state_index = argv.iter().position(|arg| arg == "--supervise").unwrap() + 1;
+    let state: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(&argv[state_index]).unwrap()).unwrap();
+    let inherited_fd = state["drainer_lease_fd"].as_i64().unwrap();
+    let fd_path = format!("/proc/{}/fd/{inherited_fd}", wrapper.id());
+    let inherited_socket = std::fs::read_link(&fd_path).unwrap();
+    release.unwrap().write_all(&[1]).unwrap();
+    // Successful handover closes the inherited socket after its own lease is answered.
+    wait_for_drainer("parked image never acquired its own drainer lease", || {
+        std::fs::read_link(&fd_path).ok().as_ref() != Some(&inherited_socket)
+    });
+    wrapper
+}
+
+#[cfg(target_os = "linux")]
+fn exercise_wrapper_outage(recover: bool) {
+    use rimz::diag::record::DiagEvent;
+    use rimz::harness::drainer_outage::testkit;
+    use std::time::Duration;
+
+    let env = Env::new();
+    let mut command = drainer_lease_command(&env);
+    command.env("RIMZ_TEST_HOOK_DRAINER_OUTAGE_MS", "300");
+    let wrapper = spawn_parked_drainer_wrapper(&env, command);
+    let runtime = env.runtime_paths();
+    let spawning =
+        rimz::disk::lock::WorkspaceLock::acquire(&runtime.hook_drainer_spawn_lock()).unwrap();
+    let stream =
+        std::os::unix::net::UnixStream::connect(runtime.hook_drainer_socket_path()).unwrap();
+    let pid = nix::sys::socket::getsockopt(&stream, nix::sys::socket::sockopt::PeerCredentials)
+        .unwrap()
+        .pid();
+    drop(stream);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    wait_for_drainer("wrapper never published its prolonged outage", || {
+        testkit::read(&runtime).len() == 1 && hook_drainer_diagnostics(&env).len() == 1
+    });
+    // Keep the crossed state open through several more lease polls.
+    std::thread::sleep(Duration::from_millis(650));
+    let records = testkit::read(&runtime);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["agent_kind"], "claude");
+    assert!(records[0]["since_ms"].as_u64().unwrap() > 0);
+    assert!(matches!(
+        hook_drainer_diagnostics(&env).as_slice(),
+        [DiagEvent::HookDrainerUnreachable {
+            recovered_after_ms: None,
+            ..
+        }]
+    ));
+    if recover {
+        drop(spawning);
+        wait_for_drainer("wrapper never recorded recovery", || {
+            testkit::read(&runtime).is_empty() && hook_drainer_diagnostics(&env).len() == 2
+        });
+        assert!(matches!(
+            hook_drainer_diagnostics(&env).as_slice(),
+            [
+                DiagEvent::HookDrainerUnreachable { recovered_after_ms: None, .. },
+                DiagEvent::HookDrainerUnreachable {
+                    recovered_after_ms: Some(gap_ms), error: Some(error), ..
+                },
+            ] if *gap_ms >= 300 && !error.is_empty()
+        ));
+    }
+    std::fs::write(env.project_root.join("provider-exit"), "exit").unwrap();
+    assert_drainer_silent(&wrapper.wait_with_output().unwrap());
+    assert!(testkit::read(&runtime).is_empty());
+    assert_eq!(
+        hook_drainer_diagnostics(&env).len(),
+        if recover { 2 } else { 1 }
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_wrapper_records_a_prolonged_drainer_outage_and_its_recovery() {
+    exercise_wrapper_outage(true);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_wrapper_releases_a_drainer_outage_when_the_provider_exits() {
+    exercise_wrapper_outage(false);
 }
 
 #[test]

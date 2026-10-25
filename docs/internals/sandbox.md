@@ -41,7 +41,7 @@ The same planner caps the child's permission mode and notes a yolo child that re
 
 ## Provider command sandboxes
 
-Each level also maps to provider flags, which the adapters own. The process compiler passes the resolved level to `LaunchCapability::configure_room_permissions` at every level. Only scoped isolation builds a mount plan, maps temp paths, or holds a host hook-drainer lease. Provider sandbox hooks use host paths.
+Each level also maps to provider flags, which the adapters own. The process compiler passes the resolved level to `LaunchCapability::configure_room_permissions` at every level. Only scoped isolation builds a mount plan, maps temp paths, or holds a host hook-drainer lease. Its host wrapper reconnects without pane output and records lease gaps ([resident wrapper](./harness/fleet.md#resident-wrapper)). Provider sandbox hooks use host paths.
 
 Codex keeps its native command sandbox under host and scoped isolation and adds only room-root write grants where the selected permissions support them ([adapter launch](./agents/adapter_codex.md#launch)). Under `sandbox`, it appends `--sandbox workspace-write` only when the launch's arguments and config select no mode. A selected mode stays, full access and Yolo included. RimZ never adds `--sandbox danger-full-access`.
 
