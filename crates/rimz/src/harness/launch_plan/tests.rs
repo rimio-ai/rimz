@@ -1523,6 +1523,47 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
 }
 
 #[test]
+fn malformed_opencode_delegation_config_surfaces_as_a_launch_warning() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("opencode"), Vec::new());
+    request.subagent = true;
+    let mut actual = Vec::new();
+    for raw in ["not JSON", "[]", r#"{"plugins":false}"#] {
+        let ambient_env = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient_env,
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        actual.push(
+            plan.warnings
+                .iter()
+                .filter(|warning| matches!(warning, LaunchPlanWarning::NativeSubagentEnv(_)))
+                .count(),
+        );
+    }
+    assert_eq!(actual, [1, 1, 1]);
+}
+
+#[test]
 fn resolves_team_for_launch_context_from_effective_config() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");

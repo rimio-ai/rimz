@@ -2013,7 +2013,72 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
 }
 
 #[test]
-fn process_compiler_locks_down_opencode_subagent_environment() {
+fn opencode_delegation_uses_composed_config_over_inherited_config() {
+    use crate::harness::subagent_policy::{
+        SubagentCatalog, SubagentProfile, SubagentProfileSource,
+    };
+
+    let project = tempfile::tempdir().unwrap();
+    let catalog = SubagentCatalog::Available(vec![SubagentProfile {
+        name: "explorer".into(),
+        source: SubagentProfileSource::Profile,
+        agent: Some("opencode".into()),
+        model: None,
+        effort: None,
+        description: None,
+    }]);
+    let mut actual = Vec::new();
+    for subagent in [false, true] {
+        for composed in [None, Some(r#"{"theme":"composed","plugins":["custom"]}"#)] {
+            let mut invocation = request(
+                "opencode",
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            );
+            invocation.subagent = subagent;
+            let extra = composed
+                .map(|value| env(&[("OPENCODE_CONFIG_CONTENT", value)]))
+                .unwrap_or_default();
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &invocation,
+                project.path(),
+                &extra,
+                &LaunchReminders {
+                    subagent_catalog: Some(catalog.clone()),
+                    settings: Some((
+                        project.path().into(),
+                        env(&[(
+                            "OPENCODE_CONFIG_CONTENT",
+                            r#"{"theme":"inherited","permissions":["keep"]}"#,
+                        )]),
+                    )),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            actual.push(
+                serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_CONFIG_CONTENT"])
+                    .unwrap(),
+            );
+        }
+    }
+    let inherited = serde_json::json!({
+        "theme": "inherited", "permissions": ["keep"], "plugins": ["-opencode.tool.subagent"]
+    });
+    let composed =
+        serde_json::json!({"theme":"composed","plugins":["custom","-opencode.tool.subagent"]});
+    assert_eq!(
+        actual,
+        [inherited.clone(), composed.clone(), inherited, composed]
+    );
+}
+
+#[test]
+fn process_compiler_disables_opencode_native_subagents() {
     let project = tempfile::tempdir().expect("project");
     let mut invocation = request(
         "opencode",
@@ -2024,8 +2089,18 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
     );
     invocation.subagent = true;
 
-    let process = compile_agent_process(project.path(), &invocation, project.path(), None)
-        .expect("subagent process");
+    let process = compile_agent_process_with_extra_env(
+        None,
+        project.path(),
+        &invocation,
+        project.path(),
+        &BTreeMap::new(),
+        &LaunchReminders {
+            settings: Some((project.path().into(), BTreeMap::new())),
+            ..Default::default()
+        },
+    )
+    .expect("subagent process");
 
     // OpenCode's TUI drops arguments after `--`; the task must ride `--prompt`.
     assert!(
@@ -2039,9 +2114,7 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
             .env
             .get("OPENCODE_CONFIG_CONTENT")
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()),
-        Some(
-            serde_json::json!({ "permissions": [{ "action": "subagent", "resource": "*", "effect": "deny" }] })
-        )
+        Some(serde_json::json!({ "plugins": ["-opencode.tool.subagent"] }))
     );
     assert!(
         process
@@ -2834,6 +2907,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
     );
     let process = CompiledAgentProcess {
         host_skills: None,
+        native_subagent_env_warning: None,
         settings_artifact: None,
         provider_argv,
         provider_program: "claude".to_owned(),

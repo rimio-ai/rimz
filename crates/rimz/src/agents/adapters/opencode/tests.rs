@@ -82,30 +82,72 @@ fn opencode_activity_filter_and_launch_commands_build() {
 }
 
 #[test]
-fn native_subagent_denial_merges_opencode_permissions() {
-    let deny = json!({ "action": "subagent", "resource": "*", "effect": "deny" });
-    for value in [None, Some(""), Some("not JSON"), Some("[]"), Some("null")] {
+fn native_subagent_denial_preserves_opencode_config_and_appends_plugin_selector() {
+    let selector = "-opencode.tool.subagent";
+    let allow = json!({ "action": "other", "resource": "review", "effect": "allow" });
+    let raw = format!(
+        "{{/* JSONC */\"theme\":\"dark\",\"permissions\":[{allow},],\"plugins\":[\"custom\",],}}"
+    );
+    let mut actual = Vec::new();
+    for value in [
+        None,
+        Some(raw.as_str()),
+        Some(r#"{"plugins":["custom","-opencode.tool.subagent"]}"#),
+    ] {
+        let inherited = value
+            .map(|value| BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), value.into())]))
+            .unwrap_or_default();
         let mut env = BTreeMap::new();
-        if let Some(value) = value {
-            env.insert("OPENCODE_CONFIG_CONTENT".to_owned(), value.to_owned());
-        }
-        OpencodeAdapter.disable_native_subagent_env(&mut env);
-        assert_eq!(
-            env.get("OPENCODE_CONFIG_CONTENT")
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok()),
-            Some(json!({ "permissions": [deny] })),
-            "invalid or absent config must become the deny object"
-        );
+        let warning = OpencodeAdapter.disable_native_subagent_env(&inherited, &mut env);
+        actual.push((
+            serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
+            warning,
+        ));
     }
-    let allow = json!({ "action": "subagent", "resource": "review", "effect": "allow" });
-    let mut env = BTreeMap::from([(
-        "OPENCODE_CONFIG_CONTENT".to_owned(),
-        "{/* preserve this config */\"theme\":\"dark\",\"permissions\":[{\"action\":\"subagent\",\"resource\":\"review\",\"effect\":\"allow\"},],}".to_owned(),
-    )]);
-    OpencodeAdapter.disable_native_subagent_env(&mut env);
     assert_eq!(
-        serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
-        json!({ "theme": "dark", "permissions": [allow, deny] })
+        actual,
+        vec![
+            (json!({"plugins":[selector]}), None),
+            (
+                json!({"theme":"dark", "permissions":[allow], "plugins":["custom",selector]}),
+                None
+            ),
+            (json!({"plugins":["custom",selector]}), None),
+        ]
+    );
+}
+
+#[test]
+fn native_subagent_denial_warns_when_opencode_config_is_ignored() {
+    let mut actual = Vec::new();
+    for (raw, problem) in [
+        ("not JSON", "not valid JSONC"),
+        ("[]", "not a JSON object"),
+        (r#"{"plugins":{}}"#, "not an array"),
+    ] {
+        let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
+        let mut env = BTreeMap::new();
+        let warning = OpencodeAdapter
+            .disable_native_subagent_env(&inherited, &mut env)
+            .unwrap_or_default();
+        actual.push((
+            serde_json::from_str::<Value>(&env["OPENCODE_CONFIG_CONTENT"]).unwrap(),
+            [
+                "OPENCODE_CONFIG_CONTENT",
+                problem,
+                "ignored the configured value",
+                "JSON object",
+                "plugins",
+                "array",
+                "unset",
+            ]
+            .iter()
+            .all(|part| warning.contains(part)),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![(json!({"plugins":["-opencode.tool.subagent"]}), true); 3]
     );
 }
 
