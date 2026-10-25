@@ -369,23 +369,47 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
     }
 
-    fn disable_native_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
+    fn disable_native_subagent_env(
+        &self,
+        login_env: &std::collections::BTreeMap<String, String>,
+        env: &mut std::collections::BTreeMap<String, String>,
+    ) -> Option<String> {
         const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
-        let mut config = env
-            .get(CONFIG_ENV)
-            .and_then(|value| {
-                crate::agents::jsonc::from_slice::<serde_json::Map<String, Value>>(value.as_bytes())
-                    .ok()
-            })
-            .unwrap_or_default();
-        let mut permissions = config
-            .remove("permissions")
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default();
-        permissions
-            .push(serde_json::json!({ "action": "subagent", "resource": "*", "effect": "deny" }));
-        config.insert("permissions".to_owned(), Value::Array(permissions));
+        const SELECTOR: &str = "-opencode.tool.subagent";
+        let parsed = login_env.get(CONFIG_ENV).map_or_else(
+            || Ok(serde_json::Map::new()),
+            |raw| {
+                let value = crate::agents::jsonc::from_slice::<Value>(raw.as_bytes())
+                    .map_err(|_| "is not valid JSONC")?;
+                let Value::Object(config) = value else {
+                    return Err("is not a JSON object");
+                };
+                if config.get("plugins").is_some_and(|value| !value.is_array()) {
+                    return Err("has a plugins value that is not an array");
+                }
+                Ok(config)
+            },
+        );
+        let (mut config, warning) = match parsed {
+            Ok(config) => (config, None),
+            Err(problem) => (
+                serde_json::Map::new(),
+                Some(format!(
+                    "{CONFIG_ENV} {problem}; this launch ignored the configured value; \
+                     set it to a JSON object whose plugins is an array, or unset it"
+                )),
+            ),
+        };
+        let mut plugins = match config.remove("plugins") {
+            Some(Value::Array(plugins)) => plugins,
+            _ => Vec::new(),
+        };
+        if plugins.last().and_then(Value::as_str) != Some(SELECTOR) {
+            plugins.push(Value::String(SELECTOR.to_owned()));
+        }
+        config.insert("plugins".to_owned(), Value::Array(plugins));
         env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
+        warning
     }
 }
 

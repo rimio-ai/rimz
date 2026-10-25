@@ -244,6 +244,7 @@ type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
+    pub(super) native_subagent_env_warning: Option<String>,
     pub(super) settings_artifact: Option<crate::agents::skills::LaunchSettingsArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
@@ -938,9 +939,10 @@ fn compile_agent_process_with_extra_env(
         .env(&crate::agents::ambient_env()),
     };
     login_env.extend(env.clone());
-    if reminders.disable_native_subagents(request) {
-        adapter.disable_native_subagent_env(&mut env);
-    }
+    let native_subagent_env_warning = reminders
+        .disable_native_subagents(request)
+        .then(|| adapter.disable_native_subagent_env(&login_env, &mut env))
+        .flatten();
     let ask = adapter
         .spec()
         .launch
@@ -1121,6 +1123,7 @@ fn compile_agent_process_with_extra_env(
     }
     let mut process = CompiledAgentProcess {
         host_skills,
+        native_subagent_env_warning,
         settings_artifact,
         provider_argv,
         provider_program,

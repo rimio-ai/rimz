@@ -641,9 +641,16 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Disable provider-native delegation through launch environment for
-    /// children and launches offered RimZ delegation. Applied after configured variables;
-    /// the default leaves the environment unchanged.
-    fn disable_native_subagent_env(&self, _env: &mut BTreeMap<String, String>) {}
+    /// children and launches offered RimZ delegation. Reads the effective login
+    /// environment and writes the final overrides, returning a warning if configured
+    /// content was ignored. The default leaves the environment unchanged.
+    fn disable_native_subagent_env(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _env: &mut BTreeMap<String, String>,
+    ) -> Option<String> {
+        None
+    }
 
     /// Environment a newly-born room exports for direct agent launches. The
     /// mux layer carries this opaque map; provider policy stays in adapters.

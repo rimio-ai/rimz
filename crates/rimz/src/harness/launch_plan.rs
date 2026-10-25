@@ -65,6 +65,8 @@ pub struct LaunchPlan {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchPlanWarning {
+    #[error("{0}")]
+    NativeSubagentEnv(String),
     #[error("sandbox isolation adds no sandbox flag for {kind}; launching as at host isolation")]
     NoSandboxFlag { kind: crate::ids::AgentKind },
     #[error(
@@ -819,6 +821,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     }
     let process = &*process;
     let mut env = login_env;
+    if let Some(warning) = &process.native_subagent_env_warning {
+        warnings.push(LaunchPlanWarning::NativeSubagentEnv(warning.clone()));
+    }
     if process.host_skills == Some(crate::agents::skills::HostSkillPlan::Unenforced) {
         warnings.push(LaunchPlanWarning::HostSkillsUnenforced {
             kind: request.kind.clone(),
