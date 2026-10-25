@@ -218,7 +218,7 @@ The producer mirrors each fused window and its account scope into `rate_limits.j
 | Situation | The panel shows |
 | --- | --- |
 | before the window's reset | the last fused reading |
-| a shorter duration window reset while the longest cached duration window is still future | 0% used, reset set to now plus one window length, until a live reading overwrites it |
+| a shorter duration window reset while the longest cached duration window is still future | 0% used, reset set to now plus one window length, until a live reading overwrites it; a `fixed_period` window instead steps from its old reset by whole window lengths, so its countdown keeps the provider's schedule |
 | a named window's reset passed | unknown, per window, since named windows never roll forward |
 | the freshness ceiling (the longest dated window's reset) passed with no fresh reading | every bar of the provider as an unknown empty track |
 | every window undated, and the newest observation older than the shortest reported duration | every bar of the provider as an unknown empty track |
