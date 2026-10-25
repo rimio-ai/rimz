@@ -129,7 +129,7 @@ A petdex install is a directory holding `pet.json` beside its sheet. RimZ reads 
 ```text
                  ┌────────────── cache hit ──────────────┐
                  │                                       ▼
-            ┌────┴────┐  spawn   ┌─────────┐   Ok    ┌────────┐
+            ┌────┴────┐ new/join ┌─────────┐   Ok    ┌────────┐
    (none) ─►│  Empty  │─────────►│ Loading │────────►│ Loaded │
             └─────────┘          └────┬────┘         └────────┘
                  ▲                    │ Err                ▲
@@ -139,12 +139,12 @@ A petdex install is a directory holding `pet.json` beside its sheet. RimZ reads 
      (from any state)            └─────────┘
                                    │     ▲
                      cooldown over │     │ retry Err
-                     spawn retry   └─────┘
+                    new/join retry └─────┘
 ```
 
 A load is keyed by the pet id and a `PreparationKey` of `(tier, footprint, cell aspect)`. The aspect is part of the key only for the cell tier, and the pixel tier pins it to `CellAspect::NEUTRAL`. `clear_mismatched_pet` drops any state whose pet id or key differs from this frame's.
 
-Prepared sheets are shared across all the host's panes through a process-wide weak cache (`prepared_pets`). A live cache hit enters `Loaded` at once without a loader thread, from `Empty` or from a `Failed` state whose retry is due. Concurrent misses may decode twice, and each adopts the first live result when it finishes. Dead entries are pruned on insertion. A sheet lives while any pane holds it: changing pets, tiers, or cell aspect releases the pane's hold, and so does closing the pane. An edited local or petdex sheet is therefore read again only after every holder releases it, not when another pane attaches while it is still held. Disabling pets clears the load state, action, jump, caption, and unread rows.
+Prepared sheets are shared across all the host's panes through a process-wide table (`prepared_pets`): in-flight loads hold waiters, and completed sheets are held only weakly. A live cache hit enters `Loaded` at once without a loader thread, from `Empty` or from a `Failed` state whose retry is due. Concurrent misses for one key join one loader, and every waiter receives the same result. A failed load fans its error out to every waiter and leaves no entry; an unwind or failed spawn disconnects the waiters, who read `pet loader stopped`. Dead weak entries are pruned on insertion, while in-flight entries stay. A sheet lives while any pane holds it: changing pets, tiers, or cell aspect releases the pane's hold, and so does closing the pane. An edited local or petdex sheet is therefore read again only after every holder releases it, not when another pane attaches while it is still held. Disabling pets clears the load state, action, jump, caption, and unread rows.
 
 The two tiers keep different things in a prepared sheet. The cell tier converts all 72 frames on the loader thread and keeps only the `PetCellGrid`s (character, foreground, and background per cell). The pixel tier encodes all 72 frames to PNG on that thread and keeps the byte arrays, which every pane's painter transmits without a copy of its own. Both drop the decoded RGBA before the result crosses the channel.
 

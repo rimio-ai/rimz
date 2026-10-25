@@ -1,5 +1,7 @@
 use super::*;
 use crate::config::{PetsGlyphMode, PixelMode};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Barrier, Condvar};
 
 const REFRESH_MS: u16 = 100;
 
@@ -72,6 +74,226 @@ fn loaded_asset(assets: &PetAssets) -> &Arc<LoadedPetAsset> {
         panic!("expected loaded sheet");
     };
     asset
+}
+
+#[derive(Default)]
+struct HeldPetLoad {
+    calls: AtomicUsize,
+    released: Mutex<bool>,
+    gate: Condvar,
+}
+
+impl HeldPetLoad {
+    fn wait(&self) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        drop(
+            self.gate
+                .wait_while(self.released.lock().unwrap(), |released| !*released)
+                .unwrap(),
+        );
+    }
+
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.gate.notify_all();
+    }
+}
+
+fn start_held_pet_loads(
+    id: &str,
+    load: &Arc<HeldPetLoad>,
+    prepare: fn() -> Result<Arc<LoadedPetAsset>, asset::AssetErr>,
+) -> Vec<PetAssets> {
+    let source = PetSource::Petdex(id.to_owned());
+    let start = Barrier::new(4);
+    thread::scope(|scope| {
+        let handles = (0..4)
+            .map(|index| {
+                let source = &source;
+                let start = &start;
+                let load = Arc::clone(load);
+                scope.spawn(move || {
+                    let mut assets = PetAssets::default();
+                    if index % 2 != 0 {
+                        assets.load_state = PetLoadState::Failed {
+                            request: PetLoadRequest {
+                                id: source.id().into_owned(),
+                                key: cell_key(),
+                            },
+                            failed_at_phase: 0,
+                            retry_receiver: None,
+                        };
+                    }
+                    start.wait();
+                    assets.ensure_loading_with(source, cell_key(), 200, REFRESH_MS, move |_, _| {
+                        load.wait();
+                        prepare()
+                    });
+                    if index % 2 != 0 {
+                        assert!(matches!(
+                            assets.load_state,
+                            PetLoadState::Failed {
+                                failed_at_phase: 0,
+                                retry_receiver: Some(_),
+                                ..
+                            }
+                        ));
+                    }
+                    assets
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    })
+}
+
+fn held_pet_receiver(assets: &PetAssets) -> &Receiver<LoadResult> {
+    match &assets.load_state {
+        PetLoadState::Loading { receiver, .. }
+        | PetLoadState::Failed {
+            retry_receiver: Some(receiver),
+            ..
+        } => receiver,
+        _ => panic!("expected pending load"),
+    }
+}
+
+#[test]
+fn concurrent_pet_requests_prepare_once_and_share_the_cached_result() {
+    let id = "single-flight-success";
+    let load = Arc::new(HeldPetLoad::default());
+    let panes = start_held_pet_loads(id, &load, || Ok(Arc::new(LoadedPetAsset::Cell(Vec::new()))));
+    let source = PetSource::Petdex(id.to_owned());
+    let mut cooling = PetAssets {
+        load_state: PetLoadState::Failed {
+            request: PetLoadRequest {
+                id: id.to_owned(),
+                key: cell_key(),
+            },
+            failed_at_phase: 0,
+            retry_receiver: None,
+        },
+        ..Default::default()
+    };
+    cooling.ensure_loading_with(&source, cell_key(), 199, REFRESH_MS, |_, _| {
+        panic!("cooldown must not join or prepare")
+    });
+    assert!(!cooling.load_state.is_loading());
+
+    load.release();
+    let results = panes
+        .iter()
+        .map(|pane| {
+            held_pet_receiver(pane)
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("every waiter receives the result")
+                .expect("successful preparation")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(load.calls.load(Ordering::SeqCst), 1, "one preparation");
+    assert!(results.iter().all(|asset| Arc::ptr_eq(asset, &results[0])));
+
+    let mut late = PetAssets::default();
+    late.ensure_loading_with(&source, cell_key(), 200, REFRESH_MS, |_, _| {
+        panic!("a live cache hit must not prepare again")
+    });
+    assert!(Arc::ptr_eq(loaded_asset(&late), &results[0]));
+    cooling.ensure_loading_with(&source, cell_key(), 199, REFRESH_MS, |_, _| {
+        panic!("cooldown must hold even with a live cache hit")
+    });
+    assert!(matches!(cooling.load_state, PetLoadState::Failed { .. }));
+    cooling.ensure_loading_with(&source, cell_key(), 200, REFRESH_MS, |_, _| {
+        panic!("a due retry must use the live cache hit")
+    });
+    assert!(Arc::ptr_eq(loaded_asset(&cooling), &results[0]));
+}
+
+#[test]
+fn failed_pet_preparation_releases_every_waiter_and_allows_retry() {
+    let id = "single-flight-failure";
+    let load = Arc::new(HeldPetLoad::default());
+    let panes = start_held_pet_loads(id, &load, || Err(asset::AssetErr::Offline));
+    load.release();
+    for pane in &panes {
+        assert!(matches!(
+            held_pet_receiver(pane).recv_timeout(std::time::Duration::from_secs(20)),
+            Ok(Err(error)) if error == "pet asset fetches are disabled"
+        ));
+    }
+    assert_eq!(
+        load.calls.load(Ordering::SeqCst),
+        1,
+        "one failed preparation"
+    );
+
+    let mut retry = PetAssets::default();
+    let retried_load = Arc::clone(&load);
+    retry.ensure_loading_with(
+        &PetSource::Petdex(id.to_owned()),
+        cell_key(),
+        200,
+        REFRESH_MS,
+        move |_, _| {
+            retried_load.wait();
+            Ok(Arc::new(LoadedPetAsset::Cell(Vec::new())))
+        },
+    );
+    finish_load(&mut retry);
+    assert_eq!(
+        load.calls.load(Ordering::SeqCst),
+        2,
+        "failure is not latched"
+    );
+}
+
+#[test]
+fn panicked_pet_preparation_disconnects_every_waiter_and_allows_retry() {
+    let id = "single-flight-unwind";
+    let load = Arc::new(HeldPetLoad::default());
+    let mut panes = start_held_pet_loads(id, &load, || panic!("held preparation panicked"));
+    load.release();
+    for pane in &mut panes {
+        assert!(matches!(
+            held_pet_receiver(pane).recv_timeout(std::time::Duration::from_secs(20)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        pane.poll_loader(200);
+        assert!(matches!(
+            pane.load_state,
+            PetLoadState::Failed {
+                failed_at_phase: 200,
+                retry_receiver: None,
+                ..
+            }
+        ));
+    }
+    assert_eq!(
+        load.calls.load(Ordering::SeqCst),
+        1,
+        "one panicked preparation"
+    );
+
+    let mut retry = PetAssets::default();
+    let retried_load = Arc::clone(&load);
+    retry.ensure_loading_with(
+        &PetSource::Petdex(id.to_owned()),
+        cell_key(),
+        200,
+        REFRESH_MS,
+        move |_, _| {
+            retried_load.wait();
+            Ok(Arc::new(LoadedPetAsset::Cell(Vec::new())))
+        },
+    );
+    finish_load(&mut retry);
+    assert_eq!(
+        load.calls.load(Ordering::SeqCst),
+        2,
+        "unwind releases the key"
+    );
 }
 
 #[test]
