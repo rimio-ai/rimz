@@ -518,7 +518,8 @@ surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/opencode"
-surface-budget = 1
+# go_usage, GoUsageErr, and fetch_usage_with_token serve delegated Console OAuth reads (+3).
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/pi"

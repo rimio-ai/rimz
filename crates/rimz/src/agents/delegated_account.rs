@@ -1,7 +1,8 @@
 //! Shared credential-loader account seam for Pi and OpenCode.
 //!
 //! Both adapters load provider credentials into the same map shape and delegate
-//! Anthropic/OpenAI quota reads to RimZ's provider-owned normalizers.
+//! Anthropic/OpenAI quota reads to RimZ's provider-owned normalizers. OpenCode
+//! also delegates Console Go status reads.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -64,6 +65,8 @@ pub(super) struct Credential {
 struct CredentialMetadata {
     #[serde(rename = "accountID")]
     account_id: Option<String>,
+    #[serde(rename = "orgID")]
+    org_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +76,7 @@ struct SelectedCredential {
     account_key: String,
     scope: ProviderAccountScope,
     account_id: Option<String>,
+    org_id: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +116,12 @@ pub(super) enum Error {
         #[source]
         source: super::adapters::codex::oauth_usage::CodexOauthUsageErr,
     },
+    #[error("{adapter}: {source}")]
+    Go {
+        adapter: &'static str,
+        #[source]
+        source: super::adapters::opencode::go_usage::GoUsageErr,
+    },
 }
 
 impl AccountUsageReportable for Error {
@@ -124,6 +134,7 @@ impl AccountUsageReportable for Error {
             Self::Io { .. } | Self::Parse { .. } => AccountUsageFault::Transient,
             Self::Claude { source, .. } => source.fault(),
             Self::Codex { source, .. } => source.fault(),
+            Self::Go { source, .. } => source.fault(),
         }
     }
 }
@@ -140,7 +151,8 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
         return AccountProbe::LoggedOut;
     }
     let used_provider = (config.used_provider)();
-    let Some((provider, credential)) = select_display(&credentials, used_provider.as_deref())
+    let Some((provider, credential)) =
+        select_display(&credentials, used_provider.as_deref(), config.adapter)
     else {
         return AccountProbe::LoggedOut;
     };
@@ -151,7 +163,10 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
         .unwrap_or_default();
     AccountProbe::Found(AgentAccount {
         scope,
-        plan: Some(provider_label(config, provider, kind)),
+        plan: match (config.adapter, provider.as_str(), kind) {
+            (Adapter::OpenCode, "opencode", Some("oauth")) => None,
+            _ => Some(provider_label(config, provider, kind)),
+        },
         metered: if kind == Some("oauth") {
             Some(true)
         } else if kind.is_some_and(|kind| config.api_key_types.contains(&kind)) {
@@ -205,6 +220,14 @@ pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
             adapter: config.adapter.name(),
             source,
         }),
+        Some(QuotaSurface::Go) => super::adapters::opencode::go_usage::fetch_usage_with_token(
+            &selected.access_token,
+            selected.org_id.as_deref(),
+        )
+        .map_err(|source| Error::Go {
+            adapter: config.adapter.name(),
+            source,
+        }),
         None => Err(Error::UnsupportedProvider {
             adapter: config.adapter.name(),
             provider: selected.provider,
@@ -216,15 +239,32 @@ pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
 fn select_display<'a>(
     credentials: &'a BTreeMap<String, Credential>,
     used_provider: Option<&str>,
+    adapter: Adapter,
 ) -> Option<(&'a String, &'a Credential)> {
-    used_provider
-        .and_then(|provider| credentials.get_key_value(provider))
+    used_credential(credentials, used_provider, adapter)
         .or_else(|| {
             credentials
                 .iter()
                 .find(|(_, credential)| credential.kind.as_deref() == Some("oauth"))
         })
         .or_else(|| credentials.iter().next())
+}
+
+fn used_credential<'a>(
+    credentials: &'a BTreeMap<String, Credential>,
+    used_provider: Option<&str>,
+    adapter: Adapter,
+) -> Option<(&'a String, &'a Credential)> {
+    let provider = used_provider?;
+    let provider = if adapter == Adapter::OpenCode
+        && provider == "opencode-go"
+        && !credentials.contains_key(provider)
+    {
+        "opencode"
+    } else {
+        provider
+    };
+    credentials.get_key_value(provider)
 }
 
 pub(super) fn load_auth_file(path: &Path, adapter: Adapter) -> Credentials {
@@ -273,10 +313,8 @@ fn select_usage_entries(
         });
     }
     let used_provider = (config.used_provider)();
-    let Some((provider, credential)) = used_provider
-        .as_deref()
-        .and_then(|provider| credentials.get_key_value(provider))
-        .or_else(|| {
+    let Some((provider, credential)) =
+        used_credential(credentials, used_provider.as_deref(), config.adapter).or_else(|| {
             credentials
                 .iter()
                 .find(|(_, credential)| credential.kind.as_deref() == Some("oauth"))
@@ -312,6 +350,11 @@ fn select_usage_entries(
         .or(credential.metadata.account_id.as_ref())
         .filter(|id| !id.is_empty())
         .cloned();
+    let org_id = credential
+        .metadata
+        .org_id
+        .clone()
+        .filter(|id| !id.is_empty());
     let refresh_token = credential
         .refresh
         .as_deref()
@@ -326,6 +369,14 @@ fn select_usage_entries(
     );
     let account_key = if scope == ProviderAccountScope::sub_provider("openai", "oauth") {
         account_id.clone().unwrap_or(fallback)
+    } else if scope == ProviderAccountScope::sub_provider("opencode", "oauth")
+        && let Some(org_id) = &org_id
+    {
+        hashed_account_key(
+            config.account_key_domain,
+            "console-org",
+            &format!("{fallback}\0{org_id}"),
+        )
     } else {
         fallback
     };
@@ -335,18 +386,21 @@ fn select_usage_entries(
         account_key,
         scope,
         account_id,
+        org_id,
     })
 }
 
 enum QuotaSurface {
     Anthropic,
     Codex,
+    Go,
 }
 
 fn quota_surface(adapter: Adapter, provider: &str) -> Option<QuotaSurface> {
     match (adapter, provider) {
         (_, "anthropic") => Some(QuotaSurface::Anthropic),
         (_, "openai-codex") | (Adapter::OpenCode, "openai") => Some(QuotaSurface::Codex),
+        (Adapter::OpenCode, "opencode") => Some(QuotaSurface::Go),
         _ => None,
     }
 }
@@ -377,6 +431,7 @@ fn oauth_scope(adapter: Adapter, provider: &str) -> Option<ProviderAccountScope>
     quota_surface(adapter, provider).map(|surface| match surface {
         QuotaSurface::Anthropic => ProviderAccountScope::sub_provider("anthropic", "oauth"),
         QuotaSurface::Codex => ProviderAccountScope::sub_provider("openai", "oauth"),
+        QuotaSurface::Go => ProviderAccountScope::sub_provider("opencode", "oauth"),
     })
 }
 
@@ -487,6 +542,10 @@ mod tests {
         Some("opencode".to_owned())
     }
 
+    fn go_used_provider() -> Option<String> {
+        Some("opencode-go".to_owned())
+    }
+
     fn config(adapter: Adapter, used: Option<&str>, domain: &'static [u8]) -> Config {
         Config {
             adapter,
@@ -497,6 +556,7 @@ mod tests {
             used_provider: match used {
                 Some("openai") => openai_used_provider,
                 Some("opencode") => opencode_used_provider,
+                Some("opencode-go") => go_used_provider,
                 Some(other) => panic!("missing test resolver for {other}"),
                 None => no_used_provider,
             },
@@ -513,6 +573,98 @@ mod tests {
     }
 
     #[test]
+    fn go_sessions_link_console_credentials_but_exact_credentials_win() {
+        let outcomes = [None, Some("oauth"), Some("key")].map(|exact_kind| {
+            let mut body = serde_json::json!({
+                "anthropic": {"type":"oauth", "access":"a", "expires":future_ms()},
+                "opencode": {"type":"oauth", "access":"c", "expires":future_ms()}
+            });
+            if let Some(kind) = exact_kind {
+                body["opencode-go"] = serde_json::json!({
+                    "type":kind, "access":"exact", "expires":future_ms()
+                });
+            }
+            let mut config = config(Adapter::OpenCode, Some("opencode-go"), b"open");
+            let display_body = body.clone();
+            config.load_credentials = Box::new(move || Credentials {
+                stamp: Some(42),
+                entries: Ok(serde_json::from_value(display_body.clone()).unwrap()),
+            });
+            let AccountProbe::Found(account) = probe_account(&config) else {
+                panic!("Go session should select a stored credential")
+            };
+            let usage = select_usage(body.to_string().as_bytes(), &config)
+                .map(|selected| selected.provider)
+                .map_err(|error| matches!(error, Error::ApiKeyOnly { .. }));
+            (account.sub_provider, usage)
+        });
+        assert_eq!(
+            outcomes,
+            [
+                (Some("opencode".to_owned()), Ok("opencode".to_owned())),
+                (Some("opencode-go".to_owned()), Ok("opencode-go".to_owned())),
+                (Some("opencode-go".to_owned()), Err(true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn console_oauth_has_display_only_scope_and_leaves_the_plan_to_usage() {
+        let surfaces =
+            [Adapter::OpenCode, Adapter::Pi].map(|adapter| adapter.has_quota_surface("opencode"));
+        assert_eq!(surfaces, [true, false]);
+        let mut config = config(Adapter::OpenCode, Some("opencode"), b"open");
+        config.load_credentials = Box::new(|| Credentials {
+            stamp: Some(42),
+            entries: Ok(serde_json::from_str(r#"{"opencode":{"type":"oauth"}}"#).unwrap()),
+        });
+        let AccountProbe::Found(account) = probe_account(&config) else {
+            panic!("Console credential should select an account")
+        };
+        assert_eq!(
+            account.scope,
+            ProviderAccountScope::sub_provider("opencode", "oauth")
+        );
+        assert_eq!(account.plan, None);
+        assert_eq!(account.metered, Some(true));
+        let kind = crate::ids::AgentKind::new_unchecked("opencode");
+        assert!(expects_usage_reading(&kind, Some(true), Some("opencode")));
+        assert!(!expects_usage_reading(&kind, Some(false), Some("opencode")));
+    }
+
+    #[test]
+    fn console_org_changes_account_identity_without_exposing_it() {
+        let keys = [
+            None,
+            Some(""),
+            Some("private-org-one"),
+            Some("private-org-two"),
+        ]
+        .map(|org| {
+            let body = serde_json::json!({"opencode": {
+                "type":"oauth", "access":"same-token", "refresh":"stable-refresh",
+                "expires":future_ms(), "metadata":{"orgID":org}
+            }});
+            let selected = select_usage(
+                body.to_string().as_bytes(),
+                &config(Adapter::OpenCode, Some("opencode"), b"open"),
+            )
+            .unwrap();
+            selected.account_key
+        });
+        assert_eq!(keys[0], keys[1]);
+        assert_ne!(
+            keys[2], keys[3],
+            "a Console org switch changes the cache owner"
+        );
+        for key in keys {
+            assert_eq!(key.len(), 64);
+            assert!(!key.contains("private-org"));
+            assert!(!key.contains("same-token"));
+        }
+    }
+
+    #[test]
     fn pi_opencode_display_selection_preserves_priority_labels_and_metering() {
         let credentials: BTreeMap<String, Credential> = serde_json::from_str(
             r#"{
@@ -522,7 +674,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let selected = select_display(&credentials, Some("openai")).unwrap();
+        let selected = select_display(&credentials, Some("openai"), Adapter::OpenCode).unwrap();
         assert_eq!(selected.0, "openai");
         assert_eq!(
             provider_label(
@@ -548,7 +700,12 @@ mod tests {
             provider_label(&config(Adapter::Pi, None, b"pi"), "opencode", None),
             "opencode"
         );
-        assert_eq!(select_display(&credentials, None).unwrap().0, "anthropic");
+        assert_eq!(
+            select_display(&credentials, None, Adapter::OpenCode)
+                .unwrap()
+                .0,
+            "anthropic"
+        );
     }
 
     #[test]

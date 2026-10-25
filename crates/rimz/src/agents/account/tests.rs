@@ -218,6 +218,30 @@ fn capacity_keeps_both_live_logins_separate() {
 }
 
 #[test]
+fn go_console_windows_do_not_feed_kind_wide_capacity() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let (_dir, runtime) = runtime();
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: BTreeMap::from([(
+                login_key("opencode"),
+                RateLimitCacheEntry {
+                    scope: ProviderAccountScope::sub_provider("opencode", "oauth"),
+                    limits: AgentRateLimits {
+                        windows: vec![window(now, Some(100), 3_600, Some(300))],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    assert!(ProviderCapacity::read(&runtime, &login_key("opencode")).is_none());
+    assert!(ProviderCapacity::read_all(&runtime, &RoomLoginSet::native()).is_empty());
+}
+
+#[test]
 fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");

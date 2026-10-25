@@ -18,6 +18,7 @@
 
 mod account;
 mod database;
+pub(in crate::agents) mod go_usage;
 mod payloads;
 mod spend;
 mod transcript;

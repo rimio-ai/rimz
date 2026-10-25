@@ -13,10 +13,11 @@ RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs:
 | `crates/rimz/src/agents/adapters/opencode/payloads.rs` | `OpencodeHookPayload`, the typed envelope, and its tolerant parse |
 | `crates/rimz/src/agents/adapters/opencode/database.rs` | Database discovery, the logical stat, read-only SQLite access, and credential loading |
 | `crates/rimz/src/agents/adapters/opencode/account.rs` | The OpenCode `Config` for the shared delegated-account probes |
+| `crates/rimz/src/agents/adapters/opencode/go_usage.rs` | The Console [Go status](#go-status) read: the URL override's trust check, the wire, and the 5h, 7d, and month windows with their amounts |
 | `crates/rimz/src/agents/adapters/opencode/transcript.rs` | Transcript reads, the assistant-page cursor, and the final message |
 | `crates/rimz/src/agents/adapters/opencode/spend.rs` | The spend parser |
 
-Only the registry reaches `OpencodeAdapter`. The modules above stay private to the adapter directory.
+Only the registry reaches `OpencodeAdapter`. The modules above stay private to the adapter directory, except `go_usage`: it is visible to `crate::agents` so that `crates/rimz/src/agents/delegated_account.rs::probe_account_usage` can call it.
 
 ## The plugin
 
@@ -149,20 +150,32 @@ The account probe and the usage probe select the credential differently:
 
 | Step | Account probe (`select_display`) | Usage probe (`select_usage_entries`) |
 | --- | --- | --- |
-| 1 | the provider of the latest assistant row, across databases | the same |
-| 2 | the first OAuth credential | the same |
-| 3 | the first credential in provider-key order | none: no credentials |
+| 1 | the exact provider key of the latest assistant row, across databases | the same |
+| 2 | for `opencode-go` without an exact credential, the `opencode` Console credential | the same |
+| 3 | the first OAuth credential in provider-key order | the same |
+| 4 | the first credential in provider-key order | none: no credentials |
 | a non-OAuth pick | shown, with its metering | refused as API-key only |
 
-The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, and the raw provider key becomes `sub_provider`. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain.
+The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, except for the Console `opencode` OAuth credential, whose plan comes from the Go status reply. The selected credential's raw provider key becomes `sub_provider`. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain. Console credentials also hash a non-empty `metadata.orgID` into that key, so an organization switch changes the cache owner without recording the organization id.
 
 | OpenCode provider | Quota surface | Account scope |
 | --- | --- | --- |
 | `anthropic` | Claude OAuth usage | `anthropic` OAuth |
 | `openai`, `openai-codex` | Codex OAuth usage | `openai` OAuth |
+| `opencode` | Go status | `opencode` OAuth |
 | any other | none | none |
 
 `crates/rimz/src/agents/delegated_account.rs::quota_surface` owns the table. An API-key, external, or unsupported credential carries no OAuth scope ([providers.md](./providers.md#account-scope)). The plugin wires no response-header enrichment, so the out-of-band usage probe is the only source of the bars ([providers.md](./providers.md#the-out-of-band-probe)).
+
+### Go status
+
+`crates/rimz/src/agents/adapters/opencode/go_usage.rs::fetch_usage_with_token` reads `GET https://opencode.ai/console/api/go/status` with the Console bearer token and, when present and non-empty, `metadata.orgID` as `x-org-id`. It uses the shared bounded OAuth transport, never the Zen usage endpoint, and never refreshes or writes credentials. `RIMZ_OPENCODE_GO_USAGE_URL` may override the URL only on loopback or the official HTTPS origin. Diagnostics retain status or schema classifications, never the reply, token, or organization id.
+
+The reply's `product` supplies the plan: `go` renders as `Go`, `go-plus` as `Go Plus`, and an unknown product is title-cased without being mapped to Go. `access.meters.fiveHour`, `week`, and `month` supply integer `usedMicroCents` and `limitMicroCents` amounts and reset timestamps. The stable durations are 300, 10,080, and 43,200 minutes, independent of the subscription month's calendar length. Percentages use the shared floor derivation, reaching 100 only at the cap. The sidebar normally draws `5h` and `7d`; a tighter month contributes a ceiling tick, or takes the second row as `mo` when spent ([budget bars](../../interface/sidebar.md#budget-bars)).
+
+An absent or expired `fiveHour` is a full, not-started bar with no countdown; an expired meter retains its limit with zero used. Missing week or month meters, invalid amounts, zero limits, and invalid reset timestamps fail the reading, leaving the cache's last truth. A 404 or a successful reply without `access` means no Go subscription; 401 and 403 mean rejected credentials. These are settled `NoCredentials` outcomes, not a lapsed-plan alarm. Other HTTP, transport, and schema failures are `Failed`. Without a prior cached Go reading, a Console login without Go has no usage-sourced plan or known windows and may read `never read` in `rimz accounts`; an unchanged owner's last reading follows the shared cache retention rules.
+
+Go readings, including their cached entries, use `ProviderAccountScope::sub_provider("opencode", "oauth")`. They are display-only: kind-wide capacity reads do not expose them to auto-continue, auto-redeem, launch gates, or loop budget policy. Pi gains no Go quota surface. A stored `opencode-go` credential still wins over the Console alias, including an API-key credential, whose Go quota is unsupported.
 
 ## Cost
 
