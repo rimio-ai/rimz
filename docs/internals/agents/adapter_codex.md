@@ -377,7 +377,7 @@ Codex writes most provider errors to the rollout. An error record is a `turn_err
 | `context_window_exceeded`, `unauthorized`, `bad_request`, `sandbox_error`, `cyber_policy`, `thread_rollback_failed`, `bio_policy`, `invalid_prompt`, `too_many_denials`, `misalignment_policy_violation`, `session_budget_exceeded` | `Failed` |
 | `other`, unknown, or absent | the label, through [`TurnErrorClass::classify_label`](../../../crates/rimz/src/agents/context.rs) |
 
-`classify_label` maps spend-limit text to `PausedSpendLimit`, rate-limit and quota text or HTTP 429 to `PausedRateLimit`, overload, server-error, timeout, and connection text or HTTP 5xx to `PausedOverloaded`, and everything else to `Failed`. On `Stop` the same record marks the turn errored, and the projection shows the row paused or failed by class.
+`classify_label` first keeps a `reached your specified … usage limits` cap terminal as `Failed`, then maps spend-limit text to `PausedSpendLimit`, rate-limit and quota text or HTTP 429 to `PausedRateLimit`, overload, server-error, timeout, and connection text or HTTP 5xx to `PausedOverloaded`, and everything else to `Failed`. On `Stop` the same record marks the turn errored, and the projection shows the row paused or failed by class.
 
 A `task_complete` with no final message is the silent capacity kill: Codex can end a turn on a capacity or usage limit with no error record and no `Stop`, showing the warning only in the TUI. The local refresh records it as class unknown with the label `turn ended with no final message`, and two confirmation steps try to name it:
 

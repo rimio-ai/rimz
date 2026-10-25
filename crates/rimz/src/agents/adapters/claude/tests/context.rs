@@ -342,12 +342,53 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
 }
 
 #[test]
+fn console_usage_cap_fails_across_error_sources() {
+    let label = concat!(
+        "API Error: 400 You have reached your specified API usage limits.",
+        " You will regain access on 2026-11-01 at 00:00 UTC."
+    );
+    let mut actual = Vec::new();
+    for error in [Some("unknown"), Some("invalid_request"), None] {
+        actual.push(super::super::statusline::classify_api_error(
+            error,
+            error.map(|_| 400),
+            Some(label),
+        ));
+        let tail = json!({
+            "type":"assistant","isApiErrorMessage":true,
+            "timestamp":"2026-10-25T08:00:00Z","error":error,"apiErrorStatus":400,
+            "message":{"content":[{"type":"text","text":label}]}
+        });
+        actual.push(
+            super::super::statusline::detect_turn_error(&tail.to_string())
+                .unwrap()
+                .class,
+        );
+    }
+    for error in ["unknown", "invalid_request"] {
+        actual.push(
+            hook_output(
+                &ClaudeAdapter,
+                "StopFailure",
+                &json!({
+                    "session_id":"sess-1","error":error,"last_assistant_message":label
+                }),
+            )
+            .turn_error()
+            .unwrap()
+            .class,
+        );
+    }
+    assert_eq!(actual, [TurnErrorClass::Failed; 8]);
+}
+
+#[test]
 fn entitlement_turn_death_is_a_typed_actionable_failure() {
     for error in ["oauth_org_not_allowed", "billing_error"] {
         let class = super::super::statusline::classify_api_error(
             Some(error),
             None,
-            Some("Subscription access denied"),
+            Some("Credit balance is too low"),
         );
         assert_eq!(serde_json::to_value(class).unwrap(), json!("not_entitled"));
         assert_eq!(class.words(), "plan lapsed");
@@ -358,7 +399,7 @@ fn entitlement_turn_death_is_a_typed_actionable_failure() {
             "StopFailure",
             &json!({
                 "session_id": "sess-1", "error": error,
-                "last_assistant_message": "Subscription access denied"
+                "last_assistant_message": "Credit balance is too low"
             }),
         )
         .turn_error()

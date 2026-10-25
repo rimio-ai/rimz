@@ -880,3 +880,12 @@ A turn that dies on an API error leaves two lines, milliseconds apart: an `assis
 ```
 
 The same failure fires [`StopFailure`](#hooks-rimz-wires) when hooks are installed, and its `last_assistant_message` holds the same error text. The transcript lines remain the evidence for sessions whose hooks were installed after the failure. How RimZ classifies the label is [adapter_claude.md → Turn-death marker](../../internals/agents/adapter_claude.md#turn-death-marker).
+
+The [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310) sets `error: "billing_error"` only when the source error's message contains `credit balance is too low` (case-insensitive). Its stored `message.content[].text` is `Credit balance is too low`. The Console usage-cap label reported below instead goes through the generic `API Error: 400 …` builder: `error` is `unknown` in its generic fallback, or `invalid_request` through its invalid-request branches, never `billing_error`. These source-reconstructed assistant bodies omit timestamps and other envelope fields:
+
+```json
+{"type":"assistant","isApiErrorMessage":true,"error":"billing_error","message":{"content":[{"type":"text","text":"Credit balance is too low"}]}}
+{"type":"assistant","isApiErrorMessage":true,"error":"unknown","apiErrorStatus":400,"message":{"content":[{"type":"text","text":"API Error: 400 You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}]}}
+```
+
+Claude's own analytics names the second case `usage_cap_reached`, matching `/reached your specified[\w\s-]*?usage limits/` against its lowercased error text. It is not a subscription renewal failure or a refillable rate window.

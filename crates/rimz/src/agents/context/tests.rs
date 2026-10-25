@@ -637,6 +637,34 @@ fn turn_error_label_classifier_maps_provider_labels() {
 }
 
 #[test]
+fn console_usage_cap_matches_only_the_provider_pattern() {
+    let cases = [
+        (
+            "REACHED YOUR SPECIFIED API USAGE LIMITS",
+            TurnErrorClass::Failed,
+        ),
+        (
+            "reached your specified org-wide_API\nusage limits",
+            TurnErrorClass::Failed,
+        ),
+        ("reached your specifiedusage limits", TurnErrorClass::Failed),
+        (
+            "reached your specified API: usage limits",
+            TurnErrorClass::PausedRateLimit,
+        ),
+        (
+            "reached your specified API usage limit",
+            TurnErrorClass::PausedRateLimit,
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(label, _)| TurnErrorClass::classify_label(Some(label)))
+        .collect();
+    assert_eq!(actual, cases.map(|(_, class)| class));
+}
+
+#[test]
 fn turn_error_label_cap_trims_drops_blank_and_keeps_80_chars() {
     assert_eq!(cap_turn_error_label(""), None);
     assert_eq!(cap_turn_error_label(" \n\t "), None);
