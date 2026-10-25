@@ -440,10 +440,67 @@ fn agent_section_shows_only_named_accounts() {
             jiff::Timestamp::UNIX_EPOCH,
             ReportOverrides::default(),
         );
-        let text = strip(|out| render_identity_section(out, &entry, None));
+        let text = strip(|out| render_identity_section(out, &entry, None, None));
         assert_eq!(text.contains("account"), state.login.is_some(), "{text}");
         if state.login.is_some() {
             assert!(text.contains("codex@work"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn identity_shows_requested_and_running_effort_only_when_they_differ() {
+    for (requested, scalar, context, expected) in [
+        (
+            Some("xhigh"),
+            Some("max"),
+            None,
+            Some("running max, requested xhigh"),
+        ),
+        (
+            Some("xhigh"),
+            Some("xhigh"),
+            Some("max"),
+            Some("running max, requested xhigh"),
+        ),
+        (Some("high"), Some("max"), Some("high"), None),
+        (Some("high"), Some("high"), None, None),
+        (None, Some("max"), None, None),
+        (Some("xhigh"), None, None, None),
+    ] {
+        let mut state = rimz::testkit::agent_state("pi", "effort", jiff::Timestamp::UNIX_EPOCH);
+        state.record = requested.map(|effort| {
+            Box::new(rimz::agents::LaunchRecord {
+                effort: Some(effort.into()),
+                ..Default::default()
+            })
+        });
+        state.effort = scalar.map(str::to_owned);
+        state.context = context.map(|effort| rimz::agents::AgentContext {
+            effort: Some(effort.into()),
+            ..Default::default()
+        });
+        let entry = build_entry(
+            &Default::default(),
+            &state,
+            None,
+            None,
+            "@effort".into(),
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            ReportOverrides::default(),
+        );
+        let report = ShowReport {
+            agent_state: Some(state),
+            ..Default::default()
+        };
+        let text =
+            strip(|out| render_show_sections(out, &report, &entry, jiff::Timestamp::UNIX_EPOCH));
+        if let Some(expected) = expected {
+            let identity = text.split("Identity\n").nth(1).unwrap();
+            assert!(identity.contains(expected), "{identity}");
+        } else {
+            assert!(!text.contains("requested "), "{text}");
         }
     }
 }
@@ -467,7 +524,7 @@ fn agent_section_shows_launch_warnings_only_when_present() {
             ReportOverrides::default(),
         );
         let mut output = Vec::new();
-        render_identity_section(&mut output, &entry, None).unwrap();
+        render_identity_section(&mut output, &entry, None, None).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert_eq!(
             output.contains("launch_warnings"),

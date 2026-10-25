@@ -131,7 +131,7 @@ Identity
 
 Run, Messages, and Recent transcript appear before Context when present, so recent activity comes before stable facts. Waiting cards give you the next answer command, or point to the pane when the prompt needs its own UI. Live runs show a moving duration; only a finished run has an exit code. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
 
-If the provider's screen hid a launch warning, find it under `launch_warnings` in the Identity section. A clean relaunch clears those warnings.
+If the provider's screen hid a launch warning, find it under `launch_warnings` in the Identity section. A clean relaunch clears those warnings. When the provider reports an effort different from the launch's request, Identity adds an `effort` row, for example `running max, requested xhigh`. This read-time notice changes neither the saved request nor JSON output.
 
 **Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript. Your own prompts appear as `user → @coder`, the agent's replies under its handle, so you watch a long run from the pane you are already in:
 

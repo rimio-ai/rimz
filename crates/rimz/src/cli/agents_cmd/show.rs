@@ -221,7 +221,12 @@ fn render_show_sections(
         writeln!(w)?;
     }
     render_context_section(w, agent, now)?;
-    render_identity_section(w, agent, report.tmp_dir.as_deref())?;
+    render_identity_section(
+        w,
+        agent,
+        report.tmp_dir.as_deref(),
+        report.agent_state.as_ref(),
+    )?;
     writeln!(w)?;
     if let Some(capture) = report.capture.as_ref() {
         render_capture_section(w, capture)?;
@@ -600,6 +605,7 @@ pub(super) fn render_identity_section(
     w: &mut impl Write,
     agent: &AgentReportEntry,
     tmp_dir: Option<&Path>,
+    state: Option<&AgentState>,
 ) -> std::io::Result<()> {
     section(w, "Identity")?;
     let mut kv = render::KeyVals::new().indent(2);
@@ -658,6 +664,24 @@ pub(super) fn render_identity_section(
                 .launch_warnings
                 .iter()
                 .map(|warning| vec![render::cell(warning).fg(render::palette::warn())]),
+        );
+    }
+    if let Some(state) = state
+        && let Some(requested) = state
+            .record
+            .as_ref()
+            .and_then(|record| record.effort.as_deref())
+        && let Some(running) = state
+            .context
+            .as_ref()
+            .and_then(|context| context.effort.as_deref())
+            .or(state.effort.as_deref())
+        && running != requested
+    {
+        kv.push(
+            "effort",
+            render::cell(format!("running {running}, requested {requested}"))
+                .fg(render::palette::warn()),
         );
     }
     kv.render(w)
