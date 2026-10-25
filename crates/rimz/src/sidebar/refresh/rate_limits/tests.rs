@@ -785,6 +785,7 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
                     entitlement: Default::default(),
                     observed_at_ms: 1,
                     oauth_read_at_ms: 1234,
+                    oauth_read_hint: None,
                     auth_settled: false,
                     credentials_stamp: None,
                     account_key: None,
@@ -795,6 +796,7 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
                     direct_query_claim: Some(crate::sidebar::refresh::credits::DirectQueryClaim {
                         nonce: uuid::Uuid::nil(),
                         claimed_at_ms: 1,
+                        hint: None,
                         requested_scope: Default::default(),
                         credentials_stamp: None,
                         preflight_account_key: None,
@@ -830,6 +832,7 @@ fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u6
                     entitlement: Default::default(),
                     observed_at_ms: oauth_read_at_ms,
                     oauth_read_at_ms,
+                    oauth_read_hint: None,
                     auth_settled: true,
                     credentials_stamp: None,
                     account_key: None,

@@ -38,16 +38,19 @@ pub(crate) struct ProviderCreditsEntry {
     #[serde(default)]
     pub entitlement: Entitlement,
     pub observed_at_ms: u64,
-    /// Last OAuth account-usage attempt. App-server/realtime credit writes
-    /// preserve this stamp and its settled-auth state and never advance the
-    /// OAuth cadence.
+    /// Last OAuth account-usage attempt. Same-identity app-server/realtime
+    /// writes preserve this stamp, its published hint and its settled-auth
+    /// state; they never advance the OAuth cadence.
     #[serde(default)]
     pub oauth_read_at_ms: u64,
+    /// Published account hint under which the last direct read was claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_read_hint: Option<AccountUsageIdentity>,
     /// Last OAuth attempt settled as an auth or entitlement rejection: retried on the long TTL
-    /// until the credential source changes.
+    /// until the published account hint changes.
     #[serde(default)]
     pub auth_settled: bool,
-    /// Credential-source stamp at that settled attempt.
+    /// Credential-source stamp of the reading cached here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,
     /// Stable local OAuth account identifier for the facts cached here.
@@ -70,6 +73,9 @@ pub(crate) struct ProviderCreditsEntry {
 pub(crate) struct DirectQueryClaim {
     pub nonce: Uuid,
     pub claimed_at_ms: u64,
+    /// Raw published account hint, before same-scope identity fallbacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<AccountUsageIdentity>,
     pub requested_scope: ProviderAccountScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,

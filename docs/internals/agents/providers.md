@@ -158,7 +158,7 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 | --- | --- | --- |
 | `accounts.json` | `logins` | resolved `AgentAccount` per login, the probe's `login` outcome (`logged_in` or `logged_out`, absent after a failed probe), and optional profile attempt and answer state |
 | `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker, and optional `reset_spotted_at_ms`, schema gated by `RATE_LIMITS_CACHE_VERSION` (6) |
-| `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, entitlement with its first-seen time, the usage owner identity, and the direct-query claim |
+| `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, entitlement with its first-seen time, the usage owner identity, the last direct read's published account hint, and the direct-query claim |
 
 An `accounts.json` record's `login` field says whether the account is logged in. The account alone cannot: a logout probed while the kind has a live agent keeps the CLI version, the same bytes as a login the provider reports no facts about. `ProviderStatus::from_record` is the one reader. A record without the field is inferred from `ok` and the account, and its version-only shape reads as unavailable. Launch gates treat it as unknown until the next probe, and [the accounts command](#the-accounts-command) re-probes it on the spot for Claude and Codex.
 
@@ -244,15 +244,15 @@ The producer keeps each metered account current between turns when its spec decl
 | Clock | Value | Governs |
 | --- | --- | --- |
 | `OAUTH_USAGE_TTL` | 5 minutes | the ordinary refresh |
-| `OAUTH_USAGE_SETTLED_TTL` | 1 hour | a login whose last read settled as an auth failure (missing or rejected credentials) and whose credential stamp is unchanged |
+| `OAUTH_USAGE_SETTLED_TTL` | 1 hour | a login whose last read settled as an auth failure (missing or rejected credentials) and whose published account hint is unchanged since that read was claimed |
 | `IDLE_OAUTH_USAGE_TTL` | 3 hours | an [idle account](#idle-accounts), after every outcome |
 | `ACCOUNT_USAGE_CLAIM_TTL` | 90 seconds | the lease on each helper segment |
 
-A changed published scope, credential stamp, or account key reopens the claim at once. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for the process tree, and `0`, `false`, and an empty value read as off.
+A published scope or credential stamp that changed since the last read was claimed reopens the claim at once. A reading whose own identity differs from the published account record waits the ordinary cadence while that record is unchanged. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for the process tree, and `0`, `false`, and an empty value read as off.
 
 ### The usage claim
 
-The claim makes the helper safe across rooms. Under the shared credits lock, scheduling derives the claim from the published account scope and credential stamp plus the prior same-scope usage owner. It records a UUID nonce, the claim time, the requested scope, and the optional stamp and owner. The helper receives the nonce and the `LoginKey` in its request. Only the worker holding the matching nonce resolves credentials, contacts the provider, and publishes. Because the claim and `oauth_read_at_ms` share one lock, rooms admit one fetch. A failed spawn cancels its claim, and an expired claim becomes retryable.
+The claim makes the helper safe across rooms. Under the shared credits lock, scheduling derives the claim from the published account scope and credential stamp plus the prior same-scope usage owner. It records a UUID nonce, the claim time, the requested scope, the optional stamp and owner, and the raw published hint before derivation. Completion keeps that hint as `oauth_read_hint` beside `oauth_read_at_ms`, so a hint that moves during the read still makes the next pass due. The helper receives the nonce and the `LoginKey` in its request. Only the worker holding the matching nonce resolves credentials, contacts the provider, and publishes. Because the claim and `oauth_read_at_ms` share one lock, rooms admit one fetch. A failed spawn cancels its claim, and an expired claim becomes retryable. Neither records its hint on the entry.
 
 Before any provider call the helper re-reads the room's defaults and cached agent rollup. It cancels the claim only when the login is neither in use (a default or a resolvable live root stamp) nor an idle account (`crates/rimz/src/sidebar/refresh/usage.rs::refresh_claimed_account_usage_with`).
 
@@ -260,13 +260,13 @@ Before any provider call the helper re-reads the room's defaults and cached agen
 
 The first segment is the realtime leg, and it runs only for the room-default login of an adapter that has one (Codex's app-server). That app server belongs to this room and speaks for the room's own login, so every other login, in use or idle, gets the direct probe alone. The leg publishes its reading with the identity the reading carries: for Codex, the `auth.json` account id and auth stamp read before the attempt, and a reading whose stamp moved during the read is dropped. Then it renews the claim.
 
-The credits merge takes that identity whole. The entry's account key and stamp come from the reading, and the prior entry's entitlement and missing display fields carry over only for the same account, so an unbound reading never inherits another account's plan. The direct read's freshness (`oauth_read_at_ms`, settled auth) carries over only when the stamp is unchanged too, so a credentials rewrite still reopens the claim.
+The credits merge takes that identity whole. The entry's account key and stamp come from the reading, and the prior entry's entitlement and missing display fields carry over only for the same account, so an unbound reading never inherits another account's plan. The direct read's freshness (`oauth_read_at_ms`, `oauth_read_hint`, settled auth) carries over only when the stamp is unchanged too, so a credentials rewrite still reopens the claim.
 
 The second segment runs the direct query and publishes again. A missing, replaced, or lock-contended claim cannot renew, and the direct segment does not start. Completion re-checks the nonce, so a superseded writer is rejected. Both segments publish an `AccountUsageSnapshot`: windows go through `fuse_window`, and plan, paid usage, and reset credits go through one cache conversion. Direct-query windows are authoritative and merge after the realtime fold, so a fresh credential read replaces a stale realtime process. A detached writer waits on the bounded rate-cache lock and publishes before returning. The producer's per-frame path falls back to a non-blocking read under contention.
 
 ### Reads that fusion pulls forward
 
-When the producer persists a new reset epoch, parks a new pending refill, or first shows an unknown panel, it clears `oauth_read_at_ms`, the settled state, and any stale claim, so scheduling in the same pass re-probes. An already pending refill does not force another read. A successful authoritative response clears it, so a later contradictory low reading can park and request again.
+When the producer persists a new reset epoch, parks a new pending refill, or first shows an unknown panel, it clears `oauth_read_at_ms`, `oauth_read_hint`, the settled state, and any stale claim, so scheduling in the same pass re-probes. An already pending refill does not force another read. A successful authoritative response clears it, so a later contradictory low reading can park and request again.
 
 ### Idle accounts
 

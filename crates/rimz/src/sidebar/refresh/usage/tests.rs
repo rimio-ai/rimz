@@ -35,6 +35,7 @@ fn entitlement_marker_creates_an_entry_and_keeps_first_seen() {
     entry.direct_query_claim = Some(super::super::credits::DirectQueryClaim {
         nonce: Uuid::from_u128(1),
         claimed_at_ms: 50,
+        hint: None,
         requested_scope: Default::default(),
         credentials_stamp: Some(7),
         preflight_account_key: Some("owner".to_owned()),
@@ -841,6 +842,81 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
 }
 
 #[test]
+fn lagging_published_hint_spawns_once_until_it_moves() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "claude@default".parse().unwrap();
+    let mut accounts = AccountsCache {
+        logins: BTreeMap::from([(
+            key.clone(),
+            ProviderRecord {
+                probed_at_ms: crate::utils::time::unix_now_ms(),
+                ok: true,
+                account: Some(AgentAccount {
+                    metered: Some(true),
+                    credentials_updated_at_ms: Some(7),
+                    ..Default::default()
+                }),
+                login: None,
+                profile: None,
+                probe_error: None,
+            },
+        )]),
+    };
+    super::super::accounts::write_accounts_cache(&runtime.shared_accounts_path(), &accounts);
+    let snapshot = snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    let set = RoomLoginSet::native();
+    let mut claims = Vec::new();
+    refresh_account_usage_with(&snapshot, &runtime, &set, |_, _, claim| {
+        claims.push(claim);
+        true
+    });
+    assert_eq!(claims.len(), 1, "pass 1: {claims:?}");
+    assert!(refresh_claimed_account_usage_with(
+        &runtime,
+        &key,
+        claims[0],
+        &set,
+        |_, _, _| None,
+        |_, _| crate::agents::AccountUsageProbe::Found {
+            identity: AccountUsageIdentity {
+                credentials_stamp: Some(8),
+                ..Default::default()
+            },
+            snapshot: AccountUsageSnapshot::default(),
+        },
+    ));
+
+    claims.clear();
+    refresh_account_usage_with(&snapshot, &runtime, &set, |_, _, claim| {
+        claims.push(claim);
+        true
+    });
+    assert_eq!(
+        claims.len(),
+        0,
+        "pass 2: unchanged published hint: {claims:?}"
+    );
+
+    accounts
+        .logins
+        .get_mut(&key)
+        .unwrap()
+        .account
+        .as_mut()
+        .unwrap()
+        .credentials_updated_at_ms = Some(8);
+    super::super::accounts::write_accounts_cache(&runtime.shared_accounts_path(), &accounts);
+    refresh_account_usage_with(&snapshot, &runtime, &set, |_, _, claim| {
+        claims.push(claim);
+        true
+    });
+    assert_eq!(claims.len(), 1, "pass 3: moved published hint: {claims:?}");
+}
+
+#[test]
 fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -873,6 +949,10 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: crate::utils::time::unix_now_ms(),
+                    oauth_read_hint: Some(AccountUsageIdentity {
+                        credentials_stamp: Some(7),
+                        ..Default::default()
+                    }),
                     credentials_stamp: Some(7),
                     account_key: Some("owner".to_owned()),
                     ok: true,
@@ -937,6 +1017,10 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: crate::utils::time::unix_now_ms(),
+                    oauth_read_hint: Some(AccountUsageIdentity {
+                        credentials_stamp: Some(7),
+                        ..Default::default()
+                    }),
                     credentials_stamp: Some(7),
                     account_key: Some("owner".to_owned()),
                     ok: true,
@@ -962,6 +1046,13 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
         .unwrap();
     assert_eq!(claim.credentials_stamp, Some(8));
     assert_eq!(claim.preflight_account_key.as_deref(), Some("owner"));
+    assert_eq!(
+        claim.hint,
+        Some(AccountUsageIdentity {
+            credentials_stamp: Some(8),
+            ..Default::default()
+        })
+    );
 }
 
 #[test]

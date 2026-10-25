@@ -317,6 +317,93 @@ fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
 }
 
 #[test]
+fn lagging_published_hint_does_not_repeat_the_usage_request_on_the_next_snapshot() {
+    let env = Env::new();
+    let claude_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    write_claude_credentials(&claude_home, "lagging-hint");
+    let bin_dir = env.home_root.join("bin");
+    write_fake_claude(&bin_dir);
+    let panes = env.write_pane_fixture(&[]);
+    let accounts = rimz::agents::account::AccountsCache {
+        logins: std::collections::BTreeMap::from([(
+            "claude@default".parse().unwrap(),
+            rimz::agents::account::ProviderRecord {
+                probed_at_ms: rimz::utils::time::unix_now_ms(),
+                ok: true,
+                account: Some(rimz::agents::AgentAccount {
+                    metered: Some(true),
+                    credentials_updated_at_ms: Some(7),
+                    ..Default::default()
+                }),
+                login: Some(rimz::agents::account::RecordedLogin::LoggedIn),
+                profile: None,
+                probe_error: None,
+            },
+        )]),
+    };
+    env.publish_accounts(&accounts);
+    let (origin, server) = serve_after_failures(
+        0,
+        r#"{"five_hour":{"utilization":12.5,"resets_at":"2100-01-01T00:00:00Z"}}"#,
+    );
+    run_sidebar_snapshot(
+        &env,
+        &env.project_root,
+        env.workspace_id.as_str(),
+        &bin_dir,
+        &panes,
+        Some(&origin),
+    );
+
+    let runtime = env.runtime_paths();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let first_read_at = loop {
+        let credits = std::fs::read(runtime.shared_credits_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if let Some(entry) = credits
+            .as_ref()
+            .map(|cache| &cache["logins"]["claude@default"])
+            && let Some(at) = entry["oauth_read_at_ms"].as_u64().filter(|at| *at > 0)
+            && entry["direct_query_claim"].is_null()
+        {
+            assert_ne!(entry["credentials_stamp"], 7);
+            break at;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first usage read did not settle: {credits:?}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(server.join().expect("server request").len(), 1);
+    run_sidebar_snapshot(
+        &env,
+        &env.project_root,
+        env.workspace_id.as_str(),
+        &bin_dir,
+        &panes,
+        Some(&origin),
+    );
+    let published = read_json(runtime.shared_accounts_path());
+    assert_eq!(
+        published["logins"]["claude@default"]["account"]["credentials_updated_at_ms"], 7,
+        "the published account hint must still lag",
+    );
+    let credits = read_json(runtime.shared_credits_path());
+    let entry = &credits["logins"]["claude@default"];
+    assert!(
+        entry["direct_query_claim"].is_null(),
+        "snapshot 2 reclaimed unchanged hint: {entry}"
+    );
+    assert_eq!(
+        entry["oauth_read_at_ms"], first_read_at,
+        "snapshot 2 repeated the read: {entry}"
+    );
+}
+
+#[test]
 fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("claude");
