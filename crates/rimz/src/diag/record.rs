@@ -656,6 +656,22 @@ pub enum DiagEvent {
         startup_ms: u64,
         relaunches: u8,
     },
+    HookDrainerReconnected {
+        agent_kind: AgentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        since_ms: u64,
+        gap_ms: u64,
+        error: Option<String>,
+    },
+    HookDrainerUnreachable {
+        agent_kind: AgentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        since_ms: u64,
+        error: Option<String>,
+        recovered_after_ms: Option<u64>,
+    },
     ScopedBindRestored {
         agent_kind: AgentKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -748,7 +764,8 @@ impl DiagEvent {
                 ModelCatalogFallback::CachedCatalog => DiagSeverity::Info,
                 ModelCatalogFallback::Baked => DiagSeverity::Warn,
             },
-            Self::HookDrainLag { .. }
+            Self::HookDrainerUnreachable { .. }
+            | Self::HookDrainLag { .. }
             | Self::HookApplyFailed { .. }
             | Self::HookIngressSkipped { .. }
             | Self::HookIngressTruncated { .. }
@@ -805,7 +822,8 @@ impl DiagEvent {
             Self::RendererExit {
                 cause: RendererExitCause::DegradedGaveUp,
             } => DiagSeverity::Warn,
-            Self::FrameShrinkVerified { .. }
+            Self::HookDrainerReconnected { .. }
+            | Self::FrameShrinkVerified { .. }
             | Self::WorkflowRetry { .. }
             | Self::WorkflowRerun { .. }
             | Self::ResolutionFallback { .. }
@@ -855,6 +873,8 @@ impl DiagEvent {
 
     pub(super) fn kind_name(&self) -> &'static str {
         match self {
+            Self::HookDrainerReconnected { .. } => "hook_drainer_reconnected",
+            Self::HookDrainerUnreachable { .. } => "hook_drainer_unreachable",
             Self::WorkflowRetry { .. } => "workflow_retry",
             Self::WorkflowRerun { .. } => "workflow_rerun",
             Self::HookDrainLag { .. } => "hook_drain_lag",
@@ -1189,6 +1209,26 @@ impl DiagEvent {
                 agent_name,
                 ..
             } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
+            Self::HookDrainerReconnected {
+                agent_kind,
+                agent_name,
+                since_ms,
+                ..
+            } => format!(
+                "{}:{agent_kind}:{agent_name:?}:{since_ms}",
+                self.kind_name()
+            ),
+            Self::HookDrainerUnreachable {
+                agent_kind,
+                agent_name,
+                since_ms,
+                recovered_after_ms,
+                ..
+            } => format!(
+                "{}:{agent_kind}:{agent_name:?}:{since_ms}:{}",
+                self.kind_name(),
+                recovered_after_ms.is_some()
+            ),
             Self::ScopedBindRestored {
                 agent_kind,
                 agent_name,
@@ -1235,6 +1275,9 @@ impl DiagEvent {
     /// within a family collapse onto one key so repeats fold into one row.
     pub fn family_key(&self) -> String {
         match self {
+            Self::HookDrainerReconnected { .. } | Self::HookDrainerUnreachable { .. } => {
+                self.kind_name().to_owned()
+            }
             Self::GateHold { rule, .. } | Self::GateRelease { rule, .. } => {
                 format!("gate:{rule:?}")
             }
@@ -1281,6 +1324,37 @@ impl DiagEvent {
     /// A one-line human description of what this event records.
     pub fn summary(&self) -> String {
         match self {
+            Self::HookDrainerReconnected {
+                agent_kind,
+                agent_name,
+                error,
+                ..
+            }
+            | Self::HookDrainerUnreachable {
+                agent_kind,
+                agent_name,
+                error,
+                ..
+            } => {
+                let agent = agent_name
+                    .as_ref()
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| agent_kind.to_string());
+                let mut summary = match self {
+                    Self::HookDrainerReconnected { gap_ms, .. } => {
+                        format!("{agent}: hook drainer reconnected after {gap_ms}ms")
+                    }
+                    Self::HookDrainerUnreachable {
+                        recovered_after_ms: Some(gap_ms),
+                        ..
+                    } => format!("{agent}: hook drainer unreachable, recovered after {gap_ms}ms"),
+                    _ => format!("{agent}: hook drainer unreachable"),
+                };
+                if let Some(error) = error {
+                    summary.push_str(&format!("; last error: {error}"));
+                }
+                summary
+            }
             Self::ScopedBindRestored {
                 agent_kind,
                 agent_name,
