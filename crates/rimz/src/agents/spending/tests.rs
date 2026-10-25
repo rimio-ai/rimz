@@ -533,6 +533,7 @@ fn sample_spending() -> Spending {
 }
 
 mod aggregation;
+mod cache_wire;
 mod compaction;
 mod discovery;
 mod published_cache;
