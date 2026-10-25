@@ -467,7 +467,7 @@ mod tests {
         let probe = dir.path().join("account");
         fs::write(
             &probe,
-            "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"plan\":\"pro\",\"account_id\":\"acct-1\",\"rate_limit_windows\":[{\"used_percentage\":42,\"duration_mins\":300}]}'\n",
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"plan\":\"pro\",\"account_id\":\"acct-1\",\"rate_limit_windows\":[{\"used_percentage\":42,\"duration_mins\":300,\"amount\":{\"used\":42,\"limit\":100}}]}'\n",
         )
         .unwrap();
         fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
@@ -484,12 +484,11 @@ mod tests {
         else {
             panic!("account usage probe should find windows");
         };
+        let window = usage.rate_limits.unwrap().windows.remove(0);
+        assert_eq!(window.used_percentage, Some(42));
         assert_eq!(
-            usage
-                .rate_limits
-                .and_then(|limits| limits.windows.first().cloned())
-                .and_then(|window| window.used_percentage),
-            Some(42)
+            serde_json::to_value(window).unwrap()["amount"],
+            serde_json::json!({"used": 42, "limit": 100})
         );
     }
 }

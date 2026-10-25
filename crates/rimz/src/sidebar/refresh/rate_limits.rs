@@ -285,6 +285,7 @@ fn longest_cached_window_expired(
 fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
     RateLimitWindow {
         used_percentage: None,
+        amount: None,
         resets_at: None,
         ..cached
     }
