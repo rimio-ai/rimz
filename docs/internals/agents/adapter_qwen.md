@@ -161,7 +161,7 @@ A credential value resolves from the login env, then the `.env` beside the setti
 
 ### Alibaba quota
 
-The Alibaba quota read is experimental. `alibaba_usage::probe` posts the selected API key to the region's fixed Alibaba console host. The transport takes no browser cookies, no endpoint override, no redirect, and no fallback to the other region. The response yields authoritative 5-hour, 7-day, and 30-day windows from the chosen instance's quota. `select_instance` takes the one explicitly active instance (`ACTIVE` or `VALID`), or a sole instance not explicitly inactive. A response with no instance list can still yield windows from top-level quota data.
+The Alibaba quota read is experimental. `alibaba_usage::probe` posts the selected API key to the region's fixed Alibaba console host. The transport takes no browser cookies, no endpoint override, no redirect, and no fallback to the other region. The response yields authoritative 5-hour, 7-day, and 30-day (`mo`) windows from the chosen instance's quota. All three retain integer request amounts in `WindowAmount`; percentages floor and reach 100 only at the cap, so 99.5% does not block a launch. Comparable request units let the dashboard mark a tighter longer allowance with a ceiling tick. `select_instance` takes the one explicitly active instance (`ACTIVE` or `VALID`), or a sole instance not explicitly inactive. A response with no instance list can still yield windows from top-level quota data.
 
 The rate-limit cache entry carries the exact scope and account key that produced its windows. A switch of region, provider, or key replaces the entry, so the old account's windows neither paint nor gate the new one.
 

@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::selection::{AlibabaRegion, SelectedProvider, Selection};
-use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
+use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowAmount, WindowSource};
 use crate::agents::credits::oauth_http_post_json;
 use crate::agents::{AccountUsageProbe, AccountUsageSnapshot, HttpErrKind};
 
@@ -327,20 +327,18 @@ fn push_window(
     duration_mins: u32,
     now: Timestamp,
 ) {
-    let Some(total) = value_for(quota, total_keys).and_then(number) else {
+    let Some(limit) = value_for(quota, total_keys)
+        .and_then(quota_amount)
+        .filter(|limit| *limit > 0)
+    else {
         return;
     };
-    if !total.is_finite() || total <= 0.0 {
-        return;
-    }
-    let used_percentage = value_for(quota, used_keys)
-        .and_then(number)
-        .and_then(|used| {
-            used.is_finite()
-                .then_some(((used.max(0.0).min(total) / total) * 100.0).round() as u8)
-        });
+    let amount = value_for(quota, used_keys)
+        .and_then(quota_amount)
+        .map(|used| WindowAmount { used, limit });
     windows.push(RateLimitWindow {
-        used_percentage,
+        used_percentage: amount.map(WindowAmount::used_percentage),
+        amount,
         resets_at: value_for(quota, reset_keys).and_then(timestamp),
         duration_mins: Some(duration_mins),
         observed_at: Some(now),
@@ -351,6 +349,15 @@ fn push_window(
 
 fn value_for<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|key| object.get(*key))
+}
+
+/// A request count. A fractional JSON number truncates, as CodexBar's reader
+/// does, rather than dropping the window; a negative one reads as zero.
+fn quota_amount(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_f64().map(|count| count as u64))
+        .or_else(|| value.as_str()?.trim().parse().ok())
 }
 
 fn number(value: &Value) -> Option<f64> {
@@ -517,6 +524,54 @@ mod tests {
         );
         assert_eq!(windows[0].used_percentage, Some(25));
         assert_eq!(windows[2].used_percentage, Some(30));
+        let amounts: Vec<_> = windows
+            .iter()
+            .map(|window| serde_json::to_value(window).unwrap()["amount"].clone())
+            .collect();
+        assert_eq!(
+            amounts,
+            [
+                json!({"used":25,"limit":100}),
+                json!({"used":50,"limit":200}),
+                json!({"used":3,"limit":10})
+            ]
+        );
+    }
+
+    #[test]
+    fn integer_request_amounts_do_not_exhaust_a_window_below_the_cap() {
+        let now = Timestamp::from_second(2_000_000_000).unwrap();
+        let actual: Vec<_> = [json!("995"), json!(1000), json!(1001), json!(999.5)]
+            .into_iter()
+            .map(|used| {
+                let quota = json!({"used":used,"limit":1000});
+                let mut windows = Vec::new();
+                push_window(
+                    &mut windows,
+                    quota.as_object().unwrap(),
+                    &["used"],
+                    &["limit"],
+                    &["reset"],
+                    43_200,
+                    now,
+                );
+                let window = &windows[0];
+                (
+                    window.used_percentage,
+                    window.is_spent(),
+                    serde_json::to_value(window).unwrap()["amount"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (Some(99), false, json!({"used":995,"limit":1000})),
+                (Some(100), true, json!({"used":1000,"limit":1000})),
+                (Some(100), true, json!({"used":1001,"limit":1000})),
+                (Some(99), false, json!({"used":999,"limit":1000}))
+            ]
+        );
     }
 
     #[test]
