@@ -285,22 +285,35 @@ fn fixed_period_windows_are_started_at_and_beyond_the_nominal_length() {
 }
 
 #[test]
-fn fixed_period_projection_preserves_the_running_clock() {
+fn fixed_period_projection_steps_from_the_old_reset() {
     let now = Timestamp::UNIX_EPOCH;
-    let projected = RateLimitWindow {
-        used_percentage: Some(100),
-        duration_mins: Some(43_200),
-        resets_at: Some(now - SignedDuration::from_secs(1)),
-        fixed_period: true,
-        ..Default::default()
-    }
-    .projected_at(now);
-    assert!(projected.fixed_period);
-    assert!(!projected.not_started(now));
-    assert_eq!(projected.used_percentage, Some(0));
+    let day = SignedDuration::from_hours(24);
+    let projected = |mins, resets_at, fixed_period| {
+        RateLimitWindow {
+            used_percentage: Some(100),
+            duration_mins: Some(mins),
+            resets_at: Some(resets_at),
+            fixed_period,
+            ..Default::default()
+        }
+        .projected_at(now)
+    };
+    let month_reset = now - SignedDuration::from_secs(1);
+    let month = projected(43_200, month_reset, true);
+    assert!(month.fixed_period);
+    assert!(!month.not_started(now));
+    assert_eq!(month.used_percentage, Some(0));
     assert_eq!(
-        projected.resets_at,
-        Some(now + SignedDuration::from_mins(43_200))
+        [
+            month.resets_at,
+            projected(10_080, now - day * 8, true).resets_at,
+            projected(10_080, now - day * 8, false).resets_at,
+        ],
+        [
+            Some(month_reset + SignedDuration::from_mins(43_200)),
+            Some(now + day * 6),
+            Some(now + day * 7),
+        ]
     );
 }
 

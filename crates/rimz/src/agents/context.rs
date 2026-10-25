@@ -1193,21 +1193,40 @@ impl RateLimitWindow {
     /// Project dated unscoped windows to `now`, refilling and rolling their reset forward. Scoped readings retain provider truth so status consumers can distinguish spent and elapsed quotas; display consumers clear expired scoped usage separately.
     pub fn projected_at(self, now: Timestamp) -> Self {
         match (self.resets_at, self.duration_mins) {
-            (Some(resets_at), Some(mins)) if self.scope.is_none() && resets_at <= now => Self {
-                scope: self.scope,
-                used_percentage: Some(0),
-                amount: self.amount.map(|amount| WindowAmount { used: 0, ..amount }),
-                resets_at: now
-                    .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
-                    .ok(),
-                duration_mins: Some(mins),
-                observed_at: self.observed_at,
-                source: self.source,
-                lifted: self.lifted,
-                fixed_period: self.fixed_period,
-            },
+            (Some(resets_at), Some(mins)) if self.scope.is_none() && resets_at <= now => {
+                let resets_at = self.rolled_reset(resets_at, mins, now);
+                Self {
+                    scope: self.scope,
+                    used_percentage: Some(0),
+                    amount: self.amount.map(|amount| WindowAmount { used: 0, ..amount }),
+                    resets_at,
+                    duration_mins: Some(mins),
+                    observed_at: self.observed_at,
+                    source: self.source,
+                    lifted: self.lifted,
+                    fixed_period: self.fixed_period,
+                }
+            }
             _ => self,
         }
+    }
+
+    /// The next reset of a window whose reset at `resets_at` has passed. A fixed
+    /// period begins each period at the last one's reset, so it steps from
+    /// `resets_at` by whole periods; a sliding clock restarts from `now`.
+    fn rolled_reset(&self, resets_at: Timestamp, mins: u32, now: Timestamp) -> Option<Timestamp> {
+        let period = SignedDuration::from_secs(i64::from(mins) * 60);
+        let periods_passed = now
+            .duration_since(resets_at)
+            .as_secs()
+            .checked_div(period.as_secs());
+        let start = match periods_passed {
+            Some(periods) if self.fixed_period => resets_at
+                .checked_add(SignedDuration::from_secs(periods * period.as_secs()))
+                .ok()?,
+            _ => now,
+        };
+        start.checked_add(period).ok()
     }
 
     /// Whether this window's budget is spent — the provider reports the cap as
