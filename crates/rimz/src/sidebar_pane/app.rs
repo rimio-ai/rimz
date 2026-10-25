@@ -78,7 +78,7 @@ thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// One session's settings, shared by the host, the data plane and every pane.
+/// One session's settings, built by the host for its data plane and pane attachments.
 #[derive(Clone, Debug)]
 pub struct RoomConfig {
     pub workspace_id: WorkspaceId,

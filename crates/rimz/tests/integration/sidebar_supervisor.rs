@@ -381,6 +381,40 @@ fn lost_host_paints_notice_and_record_update_cuts_backoff_short() {
 }
 
 #[test]
+fn sidebar_supervisor_loads_no_machine_config_through_record_update_and_reexec() {
+    let env = Env::new();
+    std::fs::write(env.rimz_home().join("config.toml"), "timezone = 'UTC'\n").unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "explorer",
+        "agent: codex\ndescription: Maps the workspace",
+        "Read the workspace before making changes.",
+    );
+    let loads = env.home_root.join("machine-config-loads");
+    std::fs::write(&loads, "").unwrap();
+    let mut pane = Pane::new(&env);
+    let proxy = proxy_rimz(&env);
+    let build = rimz::build_id::of_file(&proxy).unwrap();
+    pane.start(|command| {
+        command
+            .env("RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG", &loads)
+            .env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "30");
+    });
+    let (stream, _) = pane.accept(Some(build.clone()));
+    record_target(&env, &proxy);
+    assert_eq!(pane.event("supervisor_convergence")["target_build"], build);
+    drop(stream);
+    let (_stream, _) = pane.accept(None);
+    assert!(env.home_root.join("proxy-started").exists());
+    assert_eq!(
+        std::fs::read_to_string(&loads).unwrap(),
+        "",
+        "the supervisor must not build machine config, including after self-exec"
+    );
+}
+
+#[test]
 fn sidebar_supervisor_pulls_a_record_update_without_external_wakeup() {
     let env = Env::new();
     let mut pane = Pane::new(&env);

@@ -1087,16 +1087,10 @@ fn serve(
         );
     };
     let (workspace_id, session_name) = resolve_serve_identity(globals, workspace_id, session_name)?;
-    let machine_config = rimz::config::MachineConfig::load_lenient();
-    let config = rimz::sidebar_pane::app::ServeConfig {
-        room: rimz::sidebar_pane::app::RoomConfig {
-            workspace_id,
-            mux,
-            session_name,
-            tick_seconds,
-            timezone: machine_config.time_zone(),
-            notification_prefs: machine_config.notifications.clone(),
-        },
+    let config = rimz::sidebar_pane::supervise::SupervisorConfig {
+        workspace_id,
+        mux,
+        session_name,
         instance_id: rimz::sidebar_pane::supervise::instance_id(),
         tick_seconds,
         refresh_ms_override: refresh_ms,
