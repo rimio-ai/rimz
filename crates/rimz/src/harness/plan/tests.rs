@@ -408,6 +408,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
         )
         .unwrap();
         let record = ProviderRecord {
+            inputs_stamp: None,
             profile: None,
             probe_error: None,
             login: None,
@@ -452,6 +453,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
     // A logout probed while the kind had a live agent keeps the CLI version;
     // the recorded outcome, not the account's presence, is what skips it.
     let version_only = |login| ProviderRecord {
+        inputs_stamp: None,
         profile: None,
         probe_error: None,
         login,
@@ -3498,6 +3500,7 @@ fn supervised_loop_account_pin_keeps_the_provider_while_unpinned_falls_back() {
             logins: [(
                 "claude@rimio".parse().unwrap(),
                 crate::agents::account::ProviderRecord {
+                    inputs_stamp: None,
                     profile: None,
                     probe_error: None,
                     login: Some(crate::agents::account::RecordedLogin::LoggedOut),

@@ -1245,6 +1245,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
     accounts.logins.insert(
         key.clone(),
         crate::agents::account::ProviderRecord {
+            inputs_stamp: None,
             profile: None,
             probe_error: None,
             login: None,

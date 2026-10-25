@@ -606,6 +606,10 @@ impl crate::agents::capabilities::AccountCapability for PiAdapter {
         account::probe()
     }
 
+    fn account_inputs_stamp(&self, _login_env: &BTreeMap<String, String>) -> Option<u64> {
+        Some(account::inputs_stamp())
+    }
+
     fn probe_account_usage(
         &self,
         _login_env: &BTreeMap<String, String>,

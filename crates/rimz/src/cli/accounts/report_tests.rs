@@ -196,6 +196,7 @@ fn assemble_reports(
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        inputs_stamp: None,
         profile: None,
         probe_error: None,
         login: None,

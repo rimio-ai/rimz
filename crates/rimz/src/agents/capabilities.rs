@@ -1028,6 +1028,17 @@ pub trait AccountCapability: CoreCapability {
         account::AccountProbe::LoggedOut
     }
 
+    /// An opaque stamp over the inputs [`Self::probe_account`] derives its
+    /// answer from, compared only for equality: a successful cached probe
+    /// whose stamp moved is due again behind the retry floor. Reads metadata
+    /// only (no subprocess, file contents, or network), so it is cheap enough
+    /// for every refresh pass, and encodes the same inputs the same way in
+    /// every process and build. Defaults to `None`: no stamp, so the account
+    /// waits out its TTL.
+    fn account_inputs_stamp(&self, _login_env: &BTreeMap<String, String>) -> Option<u64> {
+        None
+    }
+
     /// Query this provider's account usage (included rate-limit windows + paid
     /// extra credits) from its selected local credentials. The identity and
     /// normalized [`AccountUsageSnapshot`] return together in one

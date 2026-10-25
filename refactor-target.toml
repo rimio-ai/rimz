@@ -260,7 +260,8 @@ upward-dependencies = ["address"]
 # AccountProfileProbe, probe_account_profile and oauth_http_get_once share bounded plan reads (+3).
 # INFORMATIONAL_PROBE_TIMEOUT and OAUTH_HTTP_TIMEOUT_SECS share refresh wait deadlines (+2).
 # WindowAmount and its used_percentage derivation share integer quota facts (+2).
-surface-budget = 1135
+# AccountCapability::account_inputs_stamp lets the accounts lane re-probe on adapter input changes (+1).
+surface-budget = 1136
 
 [[verdict]]
 kind = "item"

@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        inputs_stamp: None,
         profile: None,
         probe_error: None,
         login: None,
@@ -34,6 +35,13 @@ fn fresh_cache(now_ms: u64) -> AccountsCache {
             .map(|kind| (key(kind), record(now_ms, true, None)))
             .collect(),
     }
+}
+
+fn stamped_cache(mut cache: AccountsCache, stamp: u64) -> AccountsCache {
+    for record in cache.logins.values_mut() {
+        record.inputs_stamp = Some(stamp);
+    }
+    cache
 }
 
 fn snapshot_with(kind: &str) -> SidebarSnapshot {
@@ -56,6 +64,7 @@ fn successful_probe(kind: &str) -> ProviderProbeResult {
     ProviderProbeResult {
         profile: None,
         key: key(kind),
+        inputs_stamp: None,
         outcome: AccountProbe::Found(AgentAccount {
             plan: Some(kind.to_owned()),
             ..Default::default()
@@ -407,8 +416,14 @@ fn profile_failure_changes_only_the_attempt_and_an_unrecognised_answer_ends_over
         .logins
         .insert(key("claude"), record(100, true, Some(account.clone())));
     assert!(
-        due_provider_logins(&cache, &empty_snapshot(), &native_logins(), 100 + floor + 1)
-            .contains(&key("claude")),
+        due_provider_logins(
+            &cache,
+            &empty_snapshot(),
+            &native_logins(),
+            &BTreeMap::new(),
+            100 + floor + 1
+        )
+        .contains(&key("claude")),
         "the floor expires no later than the account cadence re-probes the login"
     );
     assert!(!profile_read_due(
@@ -519,6 +534,7 @@ fn unavailable_coordination_reads_profiles_only_when_forced() {
             std::slice::from_ref(&login),
             force,
             Duration::ZERO,
+            |_| None,
             |_, _, _, cache, policy| {
                 observed.set(Some(policy));
                 let _ = read_account_profile(
@@ -669,6 +685,7 @@ fn forced_query_waits_for_a_peer_then_probes_and_reads_once() {
             std::slice::from_ref(&login),
             true,
             Duration::from_secs(3),
+            |_| None,
             |_, _, due, cache, policy| {
                 probes.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(
@@ -745,6 +762,7 @@ fn forced_query_serves_cache_when_a_peer_outlives_the_wait_bound() {
         &native_logins(),
         true,
         wait_bound,
+        |_| None,
         |_, _, _, _, _| panic!("a contending query must never probe without the lock"),
     );
     assert!(
@@ -781,6 +799,7 @@ fn unforced_query_keeps_the_short_contention_wait() {
         &native_logins(),
         false,
         forced_wait,
+        |_| None,
         |_, _, _, _, _| panic!("an unforced contender must serve cache without probing"),
     );
     assert!(started.elapsed() >= ACCOUNTS_WAIT_STEP * ACCOUNTS_WAIT_STEPS);
@@ -839,6 +858,7 @@ fn provider_query_force_bypasses_ttl_for_every_registered_kind() {
         &native_logins(),
         true,
         Duration::ZERO,
+        |_| None,
         |_, _, kinds, cache, _policy| {
             due.lock().unwrap().push(kinds.clone());
             cache.clone()
@@ -858,7 +878,7 @@ fn provider_query_preserves_normal_per_provider_ttls() {
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_shared_dirs().unwrap();
-    let expected = fresh_cache(unix_now_ms());
+    let expected = stamped_cache(fresh_cache(unix_now_ms()), 7);
     write_accounts_cache(&runtime.shared_accounts_path(), &expected);
     let probes = AtomicUsize::new(0);
 
@@ -868,6 +888,7 @@ fn provider_query_preserves_normal_per_provider_ttls() {
         &native_logins(),
         false,
         Duration::ZERO,
+        |_| Some(7),
         |_, _, _, cache, _policy| {
             probes.fetch_add(1, Ordering::SeqCst);
             cache.clone()
@@ -876,6 +897,185 @@ fn provider_query_preserves_normal_per_provider_ttls() {
 
     assert_eq!(cached, expected);
     assert_eq!(probes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn provider_query_reprobes_only_the_login_whose_inputs_stamp_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_shared_dirs().unwrap();
+    let past_floor_ms = unix_now_ms().saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
+    let mut cache = stamped_cache(fresh_cache(past_floor_ms), 7);
+    cache.logins.get_mut(&key("claude")).unwrap().inputs_stamp = None;
+    write_accounts_cache(&runtime.shared_accounts_path(), &cache);
+    let asked = Mutex::new(Vec::new());
+    let probed = Mutex::new(Vec::new());
+
+    query_provider_accounts_with(
+        &empty_snapshot(),
+        &runtime,
+        &native_logins(),
+        false,
+        Duration::ZERO,
+        |login| {
+            let kind = login.kind().as_str().to_owned();
+            let stamp = if kind == "pi" { 8 } else { 7 };
+            asked.lock().unwrap().push(kind);
+            Some(stamp)
+        },
+        |_, _, due, cache, _policy| {
+            probed.lock().unwrap().extend(due.iter().cloned());
+            cache.clone()
+        },
+    );
+
+    assert_eq!(*probed.lock().unwrap(), vec![key("pi")]);
+    let asked = asked.into_inner().unwrap();
+    assert!(
+        !asked.iter().any(|kind| kind == "claude"),
+        "a record without a stored stamp never asks its adapter"
+    );
+    assert_eq!(
+        asked.iter().filter(|kind| *kind == "pi").count(),
+        1,
+        "current stamps are read once per query"
+    );
+}
+
+#[test]
+fn inputs_stamp_due_rule_covers_each_record_state() {
+    let now_ms = unix_now_ms();
+    let inside_floor_ms = now_ms;
+    let past_floor_ms = now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
+    let past_ttl_ms = now_ms.saturating_sub(ACCOUNTS_TTL.as_millis() as u64 + 1);
+    let snapshot = empty_snapshot();
+    let due = |probed_at_ms, ok, stored: Option<u64>, current: Option<u64>| {
+        let mut cache = fresh_cache(now_ms);
+        cache.logins.insert(
+            key("pi"),
+            ProviderRecord {
+                inputs_stamp: stored,
+                ..record(probed_at_ms, ok, None)
+            },
+        );
+        let stamps = current
+            .map(|stamp| (key("pi"), stamp))
+            .into_iter()
+            .collect();
+        due_provider_logins(&cache, &snapshot, &native_logins(), &stamps, now_ms)
+            .contains(&key("pi"))
+    };
+
+    for (probed_at_ms, ok, stored, current, expected, why) in [
+        (
+            past_floor_ms,
+            true,
+            Some(1),
+            Some(2),
+            true,
+            "a moved stamp past the floor",
+        ),
+        (
+            inside_floor_ms,
+            true,
+            Some(1),
+            Some(2),
+            false,
+            "a moved stamp inside the floor",
+        ),
+        (
+            past_floor_ms,
+            true,
+            Some(1),
+            Some(1),
+            false,
+            "an unchanged stamp",
+        ),
+        (past_floor_ms, true, None, Some(2), false, "no stored stamp"),
+        (
+            past_floor_ms,
+            true,
+            Some(1),
+            None,
+            false,
+            "no current stamp",
+        ),
+        (
+            past_ttl_ms,
+            true,
+            Some(1),
+            Some(1),
+            true,
+            "an unchanged stamp past the TTL",
+        ),
+        (
+            past_floor_ms,
+            false,
+            Some(1),
+            Some(1),
+            true,
+            "a failed probe past the floor",
+        ),
+        (
+            inside_floor_ms,
+            false,
+            Some(1),
+            Some(2),
+            false,
+            "a failed probe inside the floor",
+        ),
+    ] {
+        assert_eq!(due(probed_at_ms, ok, stored, current), expected, "{why}");
+    }
+}
+
+#[test]
+fn merge_stores_each_probed_logins_pre_probe_stamp_and_keeps_the_rest() {
+    let previous = stamped_cache(fresh_cache(10), 1);
+    let probed = |kind: &str, outcome: AccountProbe, outcome_class| ProviderProbeResult {
+        inputs_stamp: Some(2),
+        outcome,
+        outcome_class,
+        ..successful_probe(kind)
+    };
+    let merged = merge_probe_results(
+        &previous,
+        &BTreeSet::new(),
+        20,
+        [
+            successful_probe("pi"),
+            probed(
+                "codex",
+                AccountProbe::LoggedOut,
+                ProbeOutcomeClass::LoggedOut,
+            ),
+            probed(
+                "claude",
+                AccountProbe::Unavailable(crate::agents::account::AccountProbeError::TimedOut),
+                ProbeOutcomeClass::Unavailable,
+            ),
+            ProviderProbeResult {
+                inputs_stamp: Some(2),
+                ..successful_probe("amp")
+            },
+        ],
+    );
+
+    let stamp = |kind| merged.logins[&key(kind)].inputs_stamp;
+    assert_eq!(
+        stamp("pi"),
+        None,
+        "a probe without a stamp clears the stored one"
+    );
+    assert_eq!(stamp("codex"), Some(2), "logged out");
+    assert_eq!(stamp("claude"), Some(2), "unavailable");
+    assert_eq!(stamp("amp"), Some(2), "found");
+    assert_eq!(
+        stamp("kimi"),
+        Some(1),
+        "a login outside the batch keeps its stamp"
+    );
 }
 
 #[test]
@@ -906,7 +1106,13 @@ fn failed_provider_retries_alone_without_refreshing_successful_records() {
         ),
     );
     let snapshot = empty_snapshot();
-    let due = due_provider_logins(&cache, &snapshot, &native_logins(), now_ms);
+    let due = due_provider_logins(
+        &cache,
+        &snapshot,
+        &native_logins(),
+        &BTreeMap::new(),
+        now_ms,
+    );
     assert_eq!(due, BTreeSet::from([key("copilot")]));
 
     let successful = cache.logins[&key("claude")].clone();
@@ -1197,7 +1403,7 @@ fn old_schema_cache_is_discarded_and_every_provider_is_due() {
     assert!(cache.logins.is_empty());
     let snapshot = empty_snapshot();
     assert_eq!(
-        due_provider_logins(&cache, &snapshot, &native_logins(), 100),
+        due_provider_logins(&cache, &snapshot, &native_logins(), &BTreeMap::new(), 100),
         native_logins().iter().map(ProviderLogin::key).collect()
     );
 }
@@ -1220,20 +1426,41 @@ fn missing_probeable_versions_refresh_per_provider_on_retry_cadence() {
             ),
         );
         assert!(
-            !due_provider_logins(&cache, &snapshot, &native_logins(), now_ms).contains(&key(kind))
+            !due_provider_logins(
+                &cache,
+                &snapshot,
+                &native_logins(),
+                &BTreeMap::new(),
+                now_ms
+            )
+            .contains(&key(kind))
         );
 
         cache.logins.get_mut(&key(kind)).unwrap().probed_at_ms =
             now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
         assert!(
-            due_provider_logins(&cache, &snapshot, &native_logins(), now_ms).contains(&key(kind)),
+            due_provider_logins(
+                &cache,
+                &snapshot,
+                &native_logins(),
+                &BTreeMap::new(),
+                now_ms
+            )
+            .contains(&key(kind)),
             "an active {kind} account without a version re-probes after the retry window"
         );
 
         cache.logins.get_mut(&key(kind)).unwrap().ok = false;
         cache.logins.get_mut(&key(kind)).unwrap().probed_at_ms = now_ms;
         assert!(
-            !due_provider_logins(&cache, &snapshot, &native_logins(), now_ms).contains(&key(kind)),
+            !due_provider_logins(
+                &cache,
+                &snapshot,
+                &native_logins(),
+                &BTreeMap::new(),
+                now_ms
+            )
+            .contains(&key(kind)),
             "a failed {kind} probe waits for its own failure TTL"
         );
     }
@@ -1270,6 +1497,7 @@ fn whitespace_only_reported_version_does_not_stop_the_version_reprobe() {
             &cache,
             &snapshot_reporting(version),
             &native_logins(),
+            &BTreeMap::new(),
             now_ms,
         )
         .contains(&key("codex"))
