@@ -306,6 +306,10 @@ The first line is the header; every later line is a tree entry with an `id` (usu
 
 The session format is at version 3 (`CURRENT_SESSION_VERSION`): v1 was linear, v2 added the `id`/`parentId` tree, and v3 renamed the `hookMessage` role to `custom`. Pi migrates older files on load, so a reader outside Pi keys on `version`. `parentSession` is present only for a fork, clone, or `newSession({ parentSession })`.
 
+**Write order, checked at v1.4.0.** [`SessionManager::_persist`](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/session-manager.ts) creates the file lazily at the first user or assistant message. It opens the path with `openSync(path, "wx")`, then writes each buffered entry separately, header first. A reader can therefore see an empty or partially written file. Later entries normally append; migration rewrites in place, while legacy migration can rename a file. Resuming alone appends no entry.
+
+[`createAgentSession`](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/sdk.ts) buffers the initial `model_change` only when a model is available (`if (model)`). That entry lands in the first flush, but is not guaranteed by the format or guaranteed to be line 2. Later in-session model choices append another `model_change`; a virtual selection can name a virtual provider while assistant messages name the physical provider.
+
 | Entry `type` | Carries |
 | --- | --- |
 | `message` | a `message` object; see below |

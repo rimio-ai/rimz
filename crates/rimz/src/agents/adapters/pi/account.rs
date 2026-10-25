@@ -47,11 +47,20 @@ fn used_provider_from(files: impl IntoIterator<Item = std::path::PathBuf>) -> Op
         })
         .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?;
     let tail = read_transcript_tail(&newest)?;
-    tail.lines().rev().find_map(provider_of_line)
+    tail.lines().rev().find_map(provider_of_line).or_else(|| {
+        tail.lines()
+            .rev()
+            .filter_map(|line| serde_json::from_str::<ProviderEntry>(line).ok())
+            .filter(|entry| entry.kind.as_deref() == Some("model_change"))
+            .find_map(|entry| entry.provider.filter(|provider| !provider.is_empty()))
+    })
 }
 
 #[derive(Deserialize)]
 struct ProviderEntry {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    provider: Option<String>,
     message: Option<ProviderMessage>,
 }
 
@@ -80,6 +89,53 @@ mod tests {
         let line = r#"{"type":"message","message":{"role":"assistant","provider":"openai-codex"}}"#;
         assert_eq!(provider_of_line(line).as_deref(), Some("openai-codex"));
         assert_eq!(provider_of_line(r#"{"type":"session"}"#), None);
+    }
+
+    fn session_provider(contents: &str) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, contents).unwrap();
+        used_provider_from([path])
+    }
+
+    #[test]
+    fn new_session_uses_last_nonempty_model_change() {
+        let provider = session_provider(
+            r#"{"type":"session"}
+{"type":"model_change","provider":"anthropic"}
+{"type":"model_change","provider":"openai-codex"}
+{"type":"model_change","provider":""}
+{"type":"message","message":{"role":"user","content":"hello"}}"#,
+        );
+        assert_eq!(provider.as_deref(), Some("openai-codex"));
+    }
+
+    #[test]
+    fn assistant_provider_overrides_initial_model_change() {
+        let provider = session_provider(
+            r#"{"type":"model_change","provider":"anthropic"}
+{"type":"message","message":{"role":"assistant","provider":"openai-codex"}}"#,
+        );
+        assert_eq!(provider.as_deref(), Some("openai-codex"));
+    }
+
+    #[test]
+    fn assistant_provider_overrides_later_model_change() {
+        let provider = session_provider(
+            r#"{"type":"message","message":{"role":"assistant","provider":"anthropic"}}
+{"type":"message","message":{"role":"assistant","provider":"openai-codex"}}
+{"type":"message","message":{"role":"assistant","provider":""}}
+{"type":"model_change","provider":"anthropic"}"#,
+        );
+        assert_eq!(provider.as_deref(), Some("openai-codex"));
+    }
+
+    #[test]
+    fn usage_provider_is_not_an_account_provider() {
+        assert_eq!(
+            session_provider(r#"{"type":"usage","provider":"openai-codex"}"#),
+            None
+        );
     }
 
     #[test]
