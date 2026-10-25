@@ -442,6 +442,11 @@ exit "$advance_rc""#,
             advance_status = shlex::try_quote(advance_status.to_str().unwrap()).unwrap(),
         ),
     );
+    let host = || {
+        show(&env, id)["record"]["attempt"]["host"]["pid"]
+            .as_u64()
+            .unwrap()
+    };
     let mut first_host = None;
     for evaluation in 1..=2 {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -455,11 +460,7 @@ exit "$advance_rc""#,
             );
             std::thread::sleep(Duration::from_millis(10));
         };
-        let host = show(&env, id)["record"]["attempt"]["host"]["pid"]
-            .as_u64()
-            .unwrap();
         if evaluation == 1 {
-            first_host = Some(host);
             success(
                 env.rimz()
                     .args(["events", "emit", "review.ready"])
@@ -467,6 +468,7 @@ exit "$advance_rc""#,
                     .output()
                     .unwrap(),
             );
+            first_host = Some(host());
             let deadline = Instant::now() + Duration::from_secs(30);
             let advance_rc = loop {
                 if let Ok(code) = fs::read_to_string(&advance_status) {
@@ -481,7 +483,7 @@ exit "$advance_rc""#,
             assert_eq!(advance_rc.trim(), "0", "wake-spawned advance must succeed");
         } else {
             assert_eq!(
-                Some(host),
+                Some(host()),
                 first_host,
                 "the woken host must re-evaluate inline"
             );
