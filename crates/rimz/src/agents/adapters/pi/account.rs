@@ -1,20 +1,20 @@
 //! Pi account path and active-provider discovery.
 
 use std::ffi::OsStr;
+use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::PiAdapter;
 use super::spend::{pi_config_dir, pi_session_roots};
-use crate::agents::capabilities::SpendingCapability as _;
 use crate::agents::delegated_account::{Adapter, Config};
 use crate::agents::{AccountUsageProbe, read_transcript_tail};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 const INPUTS_STAMP_DOMAIN: &[u8] = b"rimz/pi-account-inputs/v1";
+const MAX_SESSION_HEADER_BYTES: usize = 1024 * 1024;
 
 fn config() -> Config {
     Config {
@@ -107,19 +107,41 @@ fn hash_modified(hasher: &mut Sha256, modified: Option<Duration>) {
     }
 }
 
-/// Provider of the freshest Pi session, tail-scanned newest-first.
+/// Provider of the freshest root Pi session, tail-scanned newest-first.
 fn used_provider() -> Option<String> {
-    used_provider_from(PiAdapter.transcript_files(&crate::agents::ambient_env()))
+    used_provider_from(&pi_session_roots())
 }
 
-fn used_provider_from(files: impl IntoIterator<Item = std::path::PathBuf>) -> Option<String> {
-    let (_, newest) = files
-        .into_iter()
-        .filter_map(|path| {
-            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some((modified, path))
+fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
+    let directories = roots.iter().flat_map(|root| {
+        let subdirectories = std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                std::fs::metadata(entry.path())
+                    .ok()?
+                    .is_dir()
+                    .then(|| entry.path())
+            });
+        std::iter::once(root.clone()).chain(subdirectories)
+    });
+    let mut candidates: Vec<_> = directories
+        .flat_map(|directory| std::fs::read_dir(directory).into_iter().flatten().flatten())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension()? != "jsonl" {
+                return None;
+            }
+            let metadata = std::fs::metadata(&path).ok()?;
+            metadata.is_file().then_some((mtime(&metadata)?, path))
         })
-        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?;
+        .collect();
+    candidates.sort_unstable();
+    let (_, newest) = candidates
+        .into_iter()
+        .rev()
+        .find(|(_, path)| !has_parent_session(path))?;
     let tail = read_transcript_tail(&newest)?;
     tail.lines().rev().find_map(provider_of_line).or_else(|| {
         tail.lines()
@@ -128,6 +150,30 @@ fn used_provider_from(files: impl IntoIterator<Item = std::path::PathBuf>) -> Op
             .filter(|entry| entry.kind.as_deref() == Some("model_change"))
             .find_map(|entry| entry.provider.filter(|provider| !provider.is_empty()))
     })
+}
+
+fn has_parent_session(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut first = String::new();
+    if BufReader::new(file.take(MAX_SESSION_HEADER_BYTES as u64 + 1))
+        .read_line(&mut first)
+        .is_err()
+        || first.len() > MAX_SESSION_HEADER_BYTES
+    {
+        return false;
+    }
+    serde_json::from_str::<SessionHeader>(&first)
+        .ok()
+        .and_then(|header| header.parent_session)
+        .is_some_and(|parent| !parent.is_empty())
+}
+
+#[derive(Deserialize)]
+struct SessionHeader {
+    #[serde(rename = "parentSession")]
+    parent_session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -169,7 +215,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, contents).unwrap();
-        used_provider_from([path])
+        used_provider_from(&[dir.path().to_owned()])
     }
 
     #[test]
@@ -270,10 +316,9 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join("history/old.jsonl");
-        let newest = dir.path().join("history/deep/new.jsonl");
+        let old = dir.path().join("--cwd--/old.jsonl");
+        let newest = dir.path().join("--cwd--/new.jsonl");
         std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(newest.parent().unwrap()).unwrap();
         std::fs::write(
             &old,
             r#"{"type":"message","message":{"provider":"anthropic"}}"#,
@@ -290,8 +335,86 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            used_provider_from([newest, old]).as_deref(),
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
             Some("openai-codex")
         );
+    }
+
+    fn write_session(
+        path: &Path,
+        parent: Option<&Path>,
+        provider: Option<&str>,
+        modified_secs: u64,
+    ) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut header = serde_json::json!({"type": "session"});
+        if let Some(parent) = parent {
+            header["parentSession"] = serde_json::json!(parent);
+        }
+        let message = serde_json::json!({
+            "type": "message",
+            "message": {"role": "assistant", "provider": provider}
+        });
+        std::fs::write(path, format!("{header}\n{message}\n")).unwrap();
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(modified_secs))
+            .unwrap();
+    }
+
+    #[test]
+    fn nicobailon_nested_run_does_not_select_the_account_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("--cwd--/parent.jsonl");
+        let child = dir.path().join("--cwd--/parent/run-id/run-0/session.jsonl");
+        write_session(&parent, None, Some("anthropic"), 1);
+        write_session(&child, None, Some("openai-codex"), 2);
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn tintinweb_sibling_does_not_select_the_account_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("--cwd--/parent.jsonl");
+        let child = dir.path().join("--cwd--/child.jsonl");
+        write_session(&parent, None, Some("anthropic"), 1);
+        write_session(&child, Some(&parent), Some("openai-codex"), 2);
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn flat_root_excludes_the_shallowest_nicobailon_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("parent.jsonl");
+        let child = dir.path().join("parent/async-id/child.jsonl");
+        write_session(&parent, None, Some("anthropic"), 1);
+        write_session(&child, None, Some("openai-codex"), 2);
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn newest_root_without_a_provider_does_not_fall_back_to_an_older_session() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session(
+            &dir.path().join("--cwd--/old.jsonl"),
+            None,
+            Some("anthropic"),
+            1,
+        );
+        write_session(&dir.path().join("--cwd--/new.jsonl"), None, None, 2);
+
+        assert_eq!(used_provider_from(&[dir.path().to_owned()]), None);
     }
 }
