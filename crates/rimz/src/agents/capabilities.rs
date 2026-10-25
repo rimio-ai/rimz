@@ -527,10 +527,11 @@ pub trait LaunchCapability: CoreCapability {
         Vec::new()
     }
 
-    /// Restrict provider-native delegation for a `rimz subagents` child.
+    /// Disable provider-native delegation for children and launches offered
+    /// RimZ delegation through a callable skill and an available catalog.
     /// The default leaves argv unchanged for providers without a verified
     /// native restriction.
-    fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
+    fn disable_native_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
     /// Add launch-scoped permissions for routine RimZ coordination, where supported.
     fn allow_routine_rimz_args(
@@ -639,10 +640,10 @@ pub trait LaunchCapability: CoreCapability {
         Vec::new()
     }
 
-    /// Restrict provider-native delegation through launch environment for a
-    /// `rimz subagents` child. Applied after every configured launch variable;
+    /// Disable provider-native delegation through launch environment for
+    /// children and launches offered RimZ delegation. Applied after configured variables;
     /// the default leaves the environment unchanged.
-    fn lockdown_subagent_env(&self, _env: &mut BTreeMap<String, String>) {}
+    fn disable_native_subagent_env(&self, _env: &mut BTreeMap<String, String>) {}
 
     /// Environment a newly-born room exports for direct agent launches. The
     /// mux layer carries this opaque map; provider policy stays in adapters.

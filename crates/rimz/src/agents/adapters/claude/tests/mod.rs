@@ -993,7 +993,7 @@ fn claude_commands_and_permission_args_match_run_posture() {
 }
 
 #[test]
-fn subagent_lockdown_merges_claude_disallowed_tools_once() {
+fn native_subagent_denial_merges_claude_disallowed_tools_once() {
     let mut args = [
         "--disallowedTools",
         "Agent(fork)",
@@ -1010,7 +1010,7 @@ fn subagent_lockdown_merges_claude_disallowed_tools_once() {
     .map(ToOwned::to_owned)
     .to_vec();
 
-    ClaudeAdapter.lockdown_subagent_args(&mut args);
+    ClaudeAdapter.disable_native_subagent_args(&mut args);
 
     assert_eq!(
         args,
@@ -1029,18 +1029,18 @@ fn subagent_lockdown_merges_claude_disallowed_tools_once() {
 }
 
 #[test]
-fn subagent_lockdown_handles_claude_equals_and_empty_forms() {
+fn native_subagent_denial_handles_claude_equals_and_empty_forms() {
     let mut equals = vec!["--disallowedTools=Read".to_owned()];
-    ClaudeAdapter.lockdown_subagent_args(&mut equals);
+    ClaudeAdapter.disable_native_subagent_args(&mut equals);
     assert_eq!(equals, vec!["--disallowedTools", "Read", "Agent"]);
 
     let mut empty = vec!["--model".to_owned(), "opus".to_owned()];
-    ClaudeAdapter.lockdown_subagent_args(&mut empty);
+    ClaudeAdapter.disable_native_subagent_args(&mut empty);
     assert_eq!(empty, vec!["--model", "opus", "--disallowedTools", "Agent"]);
 }
 
 #[test]
-fn shared_lsp_denial_composes_with_child_lockdown_in_either_order() {
+fn shared_lsp_denial_composes_with_native_subagent_denial_in_either_order() {
     for child_first in [false, true] {
         let mut args = [
             "--disallowedTools=Read",
@@ -1052,12 +1052,12 @@ fn shared_lsp_denial_composes_with_child_lockdown_in_either_order() {
         .map(str::to_owned)
         .to_vec();
         if child_first {
-            ClaudeAdapter.lockdown_subagent_args(&mut args);
+            ClaudeAdapter.disable_native_subagent_args(&mut args);
         }
         ClaudeAdapter.disable_native_lsp_args(&mut args);
         if !child_first {
             assert!(!args.iter().any(|arg| arg == "Agent"));
-            ClaudeAdapter.lockdown_subagent_args(&mut args);
+            ClaudeAdapter.disable_native_subagent_args(&mut args);
         }
         assert_eq!(
             args.iter()

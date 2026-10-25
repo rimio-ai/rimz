@@ -938,6 +938,9 @@ fn compile_agent_process_with_extra_env(
         .env(&crate::agents::ambient_env()),
     };
     login_env.extend(env.clone());
+    if reminders.disable_native_subagents(request) {
+        adapter.disable_native_subagent_env(&mut env);
+    }
     let ask = adapter
         .spec()
         .launch
@@ -970,8 +973,8 @@ fn compile_agent_process_with_extra_env(
     {
         adapter.disable_native_lsp_args(action.extra_args_mut());
     }
-    if request.subagent {
-        adapter.lockdown_subagent_args(action.extra_args_mut());
+    if reminders.disable_native_subagents(request) {
+        adapter.disable_native_subagent_args(action.extra_args_mut());
     }
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
@@ -1364,9 +1367,6 @@ fn compose_agent_env(
     }
     env.extend(extra_env.clone());
     env.extend(exec_identity_env(request));
-    if request.subagent {
-        adapter.lockdown_subagent_env(&mut env);
-    }
     if let Some(key) = invalid_env_key(&env) {
         return Err(AgentProcessCompileErr::InvalidEnvKey {
             kind: request.kind.to_string(),

@@ -866,7 +866,7 @@ fn process_compiler_composes_adapter_and_identity_environment() {
 }
 
 #[test]
-fn process_compiler_locks_down_only_subagent_launches() {
+fn native_subagent_denial_applies_to_children_without_a_catalog() {
     let project = tempfile::tempdir().expect("project");
     for (kind, profile_args, expected_suffix) in [
         (
@@ -888,10 +888,12 @@ fn process_compiler_locks_down_only_subagent_launches() {
         ),
         (
             "codex",
-            vec!["-c".to_owned(), "features.multi_agent=true".to_owned()],
+            vec!["-c".to_owned(), "agents.enabled=true".to_owned()],
             vec![
                 "-c".to_owned(),
-                "features.multi_agent=false".to_owned(),
+                "agents.enabled=false".to_owned(),
+                "-c".to_owned(),
+                "features.multi_agent_v2=false".to_owned(),
                 "-c".to_owned(),
                 format!(
                     "developer_instructions={}",
@@ -1250,6 +1252,102 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
             }
         }
     }
+}
+
+#[test]
+fn native_delegation_matches_catalog_and_skills_on_every_action() {
+    use crate::harness::subagent_policy::{
+        SubagentCatalog, SubagentProfile, SubagentProfileSource,
+    };
+
+    let available = SubagentCatalog::Available(vec![SubagentProfile {
+        name: "explorer".into(),
+        source: SubagentProfileSource::Profile,
+        agent: Some("claude".into()),
+        model: None,
+        effort: None,
+        description: None,
+    }]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["claude", "codex"] {
+        for action in [
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+            ExecAction::Resume {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+            ExecAction::Fork {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+        ] {
+            for subagent in [false, true] {
+                for catalog in [
+                    None,
+                    Some(SubagentCatalog::Disabled),
+                    Some(available.clone()),
+                ] {
+                    for (skills, callable) in [
+                        (None, true),
+                        (Some(vec!["rimz-subagents"]), true),
+                        (Some(vec!["commit"]), false),
+                        (Some(vec![]), false),
+                    ] {
+                        let mut invocation = request(kind, action.clone());
+                        invocation.subagent = subagent;
+                        invocation.skills = skills.map(|names| {
+                            names
+                                .into_iter()
+                                .map(|name| name.parse().unwrap())
+                                .collect()
+                        });
+                        let process = compile_agent_process_with_extra_env(
+                            None,
+                            Path::new("/checkout"),
+                            &invocation,
+                            Path::new("/checkout"),
+                            &BTreeMap::new(),
+                            &LaunchReminders {
+                                subagent_catalog: catalog.clone(),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
+                        let disabled = if kind == "claude" {
+                            process
+                                .provider_argv
+                                .windows(2)
+                                .any(|args| args == ["--disallowedTools", "Agent"])
+                        } else {
+                            ["agents.enabled", "features.multi_agent_v2"]
+                                .iter()
+                                .all(|key| {
+                                    process.provider_argv.windows(2).any(|args| {
+                                        args[0] == "-c" && args[1] == format!("{key}=false")
+                                    })
+                                })
+                        };
+                        let case = format!(
+                            "{kind} {action:?} child={subagent} catalog={catalog:?} skills={:?}",
+                            invocation.skills
+                        );
+                        actual.push((case.clone(), disabled));
+                        expected.push((
+                            case,
+                            subagent
+                                || (callable
+                                    && matches!(catalog, Some(SubagentCatalog::Available(_)))),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -1863,7 +1961,9 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
     ] {
         let mut profile_args = vec![
             "-c".to_owned(),
-            "features.multi_agent=false".to_owned(),
+            "agents.enabled=true".to_owned(),
+            "-c".to_owned(),
+            "features.multi_agent_v2=true".to_owned(),
             "-c".to_owned(),
             "network_access=\"enabled\"".to_owned(),
         ];
@@ -1894,7 +1994,7 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
             child
                 .provider_argv
                 .windows(2)
-                .any(|args| args == ["-c", "features.multi_agent=false"])
+                .any(|args| args == ["-c", "agents.enabled=false"])
         );
         assert!(
             child

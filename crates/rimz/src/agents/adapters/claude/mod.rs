@@ -838,7 +838,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         ]
     }
 
-    fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
+    fn disable_native_subagent_args(&self, extra_args: &mut Vec<String>) {
         deny_native_tool(extra_args, "Agent");
     }
 

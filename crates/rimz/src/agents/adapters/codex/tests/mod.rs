@@ -878,31 +878,58 @@ fn provider_sandbox_defaults_only_without_a_selection_and_reads_profile_layers()
 }
 
 #[test]
-fn subagent_lockdown_replaces_codex_multi_agent_overrides() {
-    let mut args = [
-        "-c",
-        "features.multi_agent=true",
-        "--config",
-        "model_reasoning_effort=high",
-        "--config",
-        "features.multi_agent=true",
-        "--model",
-        "gpt-5",
-    ]
-    .map(ToOwned::to_owned)
-    .to_vec();
+fn native_subagent_denial_replaces_codex_multi_agent_overrides() {
+    let tools = crate::agents::ToolSet::parse(&["Agent".into()]).unwrap();
+    let rendered = render_definition_tools(&tools).unwrap();
+    let mut args: Vec<String> = rendered
+        .windows(2)
+        .filter(|args| {
+            args[0] == "-c"
+                && (args[1].starts_with("agents.enabled=")
+                    || args[1].starts_with("features.multi_agent"))
+        })
+        .flat_map(|args| args.iter().cloned())
+        .collect();
+    args.extend(
+        [
+            "-c=agents.enabled=true",
+            "--config=features.multi_agent_v2={enabled=true}",
+            "--config",
+            "model_reasoning_effort=high",
+            "--config",
+            "agents.enabled=true",
+            "--enable",
+            "multi_agent_v2",
+            "--enable=multi_agent_v2",
+            "--enable",
+            "other_feature",
+            "-c",
+            "features.multi_agent=true",
+            "--model",
+            "gpt-5",
+        ]
+        .map(ToOwned::to_owned),
+    );
 
-    CodexAdapter.lockdown_subagent_args(&mut args);
+    CodexAdapter.disable_native_subagent_args(&mut args);
 
     assert_eq!(
         args,
         [
+            "-c",
+            "features.multi_agent=true",
             "--config",
             "model_reasoning_effort=high",
+            "--enable",
+            "other_feature",
+            "-c",
+            "features.multi_agent=true",
             "--model",
             "gpt-5",
             "-c",
-            "features.multi_agent=false",
+            "agents.enabled=false",
+            "-c",
+            "features.multi_agent_v2=false",
         ]
         .map(ToOwned::to_owned)
     );

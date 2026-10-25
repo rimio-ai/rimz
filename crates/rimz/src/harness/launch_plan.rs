@@ -1040,12 +1040,14 @@ fn reminders(
             Vec::new(),
         );
     }
-    let subagent_catalog = Some(super::subagent_policy::catalog(
-        request.identity.params.profile.as_deref(),
-        &effective.profiles,
-        &effective.subagent_profiles,
-        commands,
-    ));
+    let subagent_catalog = request.headless.is_none().then(|| {
+        super::subagent_policy::catalog(
+            request.identity.params.profile.as_deref(),
+            &effective.profiles,
+            &effective.subagent_profiles,
+            commands,
+        )
+    });
     let mut warnings = Vec::new();
     let team = request.identity.params.team.as_deref().and_then(|name| {
         let team = effective.teams.0.get(name).cloned();

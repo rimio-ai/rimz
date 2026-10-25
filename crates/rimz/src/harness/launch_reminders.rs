@@ -76,6 +76,14 @@ impl Default for LaunchReminders {
     }
 }
 
+impl LaunchReminders {
+    pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
+        request.subagent
+            || (skill_is_callable(request.skills.as_deref(), "rimz-subagents")
+                && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
+    }
+}
+
 const SUBAGENT_REMINDER_BODY: &str = concat!(
     "### Subagents\n\n",
     "You are a subagent: a supervised child launched by another agent to ",
