@@ -147,7 +147,7 @@ What remains after a child ends is its run record under `~/.rimz/ws/<workspace-d
 
 ## Children cannot delegate
 
-A child does its assignment itself. RimZ refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch from a child, tells the child so in its prompt, and switches off the provider's own delegation where it has a verified switch: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's built-in subagent tool is removed. Other providers get the instruction only.
+A child does its assignment itself. RimZ refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch from a child, tells the child so in its prompt, and switches off the provider's own delegation where it has a verified switch: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's built-in subagent tool is removed. Other providers keep their native tools. The child's [skill view](./configuration.md#skills) also withholds model invocation of `rimz-subagents` where supported, even without a profile skill list.
 
 That keeps delegation one level deep. A parent's children are the whole family, the sidebar shows them all under one card, and stopping the parent reaches every one. For the same reason `[agents] max-chain-length` does not count subagent launches; it limits agents launching peers, below.
 
