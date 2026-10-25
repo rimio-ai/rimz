@@ -290,7 +290,7 @@ The rollup holds the agent-reported lifecycle status. `rimz sidebar snapshot` re
 
 That pending wait also holds a supervised run open at a clean turn end. Agent status and run status stay separate: a sleeping card can have a `Running` run with `parked_at` set.
 
-A marker counts only when it is newer than `last_activity`, so any newer hook event clears it. The exception is a `failed` row's turn-error marker, which counts when `turn_started_at` is present and the marker is at or after it.
+A marker counts only when it is newer than `last_activity`, so any newer hook event clears it. The exception is a `failed` row's turn-error marker, which counts when `turn_started_at` is present and the marker is at or after it. For legacy sidecars, [`effective_turn_error_class`](../../../crates/rimz/src/agents/state.rs) displays a `failed` marker as a spend- or rate-limit park when its label matches that limit; a Console usage-cap label stays `failed`.
 
 ### The sidebar ladder
 

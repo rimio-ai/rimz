@@ -1040,6 +1040,35 @@ fn effective_turn_error_class_parks_legacy_limit_labels() {
     );
 }
 
+#[test]
+fn effective_turn_error_class_keeps_usage_cap_failed() {
+    let error = AgentTurnError {
+        class: TurnErrorClass::Failed,
+        at: Timestamp::from_second(1_010).unwrap(),
+        label: crate::agents::context::cap_turn_error_label(concat!(
+            "API Error: 400 You have reached your specified API usage limits.",
+            " You will regain access on 2026-11-01 at 00:00 UTC."
+        )),
+    };
+    let mut actual = Vec::new();
+    for status in [AgentStatus::Running, AgentStatus::Failed] {
+        let mut agent = test_agent(status, 1_000);
+        agent.turn_started_at = Some(Timestamp::from_second(990).unwrap());
+        agent.context = Some(AgentContext {
+            turn_error: Some(error.clone()),
+            ..AgentContext::new("claude", error.at)
+        });
+        actual.push((
+            effective_turn_error_class(&error),
+            agent.displayed_turn_error().map(|(class, _)| class),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [(TurnErrorClass::Failed, Some(TurnErrorClass::Failed)); 2]
+    );
+}
+
 fn test_agent(status: AgentStatus, activity: i64) -> AgentState {
     let at = Timestamp::from_second(activity).unwrap();
     AgentState {

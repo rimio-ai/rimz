@@ -1333,6 +1333,9 @@ impl TurnErrorClass {
             return Self::Failed;
         };
         let lower = label.to_ascii_lowercase();
+        if is_usage_cap_error(&lower) {
+            return Self::Failed;
+        }
         let status = http_error_status(&lower);
         if lower.contains("spend limit") {
             Self::PausedSpendLimit
@@ -1352,6 +1355,21 @@ impl TurnErrorClass {
             Self::Failed
         }
     }
+}
+
+/// Whether the text is the Anthropic API's spend cap, which no window refills:
+/// Claude Code's `usage_cap_reached` matcher,
+/// `/reached your specified[\w\s-]*?usage limits/`, over the lowercased text.
+fn is_usage_cap_error(lower: &str) -> bool {
+    lower.split("reached your specified").skip(1).any(|suffix| {
+        suffix
+            .split_once("usage limits")
+            .is_some_and(|(middle, _)| {
+                middle.chars().all(|ch| {
+                    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') || ch.is_whitespace()
+                })
+            })
+    })
 }
 
 /// The HTTP status a provider error text reports. The status must immediately

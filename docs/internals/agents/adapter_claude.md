@@ -275,6 +275,7 @@ Every statusline push re-derives the marker, so `StopFailure` shares the classif
 | `error` of `oauth_org_not_allowed` or `billing_error` | `not_entitled`: an actionable failed row with the upstream label, never a resumable park |
 | `error: "rate_limit"` or `apiErrorStatus: 429`, whatever the text (a model cap such as "You've reached your Fable limit") | `paused_rate_limit` |
 | `error` of `overloaded` or `server_error`, whatever the text | `paused_overloaded` |
+| `unknown`/`invalid_request` or a label-only error matching the shared `classify_label` rule for `reached your specified[\w\s-]*?usage limits`, case-insensitive ([native error bodies](../../externals/agent-adapter/claude-reference.md#transcript-death-certificate)) | `failed`: an actionable turn, never a resumable park or a plan lapse |
 | anything else | `classify_label` over the label: rate-limit text or HTTP 429 pauses on the rate limit, transient server or connection text or HTTP 5xx pauses on backoff, and anything else fails |
 
 The marker changes display only: [model.md](./model.md#displayed-status) pauses or fails the row, and the rollup does not change ([upstream shape](../../externals/agent-adapter/claude-reference.md#transcript-death-certificate)).

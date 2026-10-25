@@ -30,6 +30,29 @@ fn entitlement_failure_takes_attention_without_a_resume_park() {
 }
 
 #[test]
+fn console_usage_cap_marker_fails_instead_of_parking() {
+    let label = concat!(
+        "API Error: 400 You have reached your specified API usage limits.",
+        " You will regain access on 2026-11-01 at 00:00 UTC."
+    );
+    let mut actual = Vec::new();
+    for status in [AgentStatus::Running, AgentStatus::Failed] {
+        let session = agent("claude", "usage-capped", status, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .turn_started_ago(120)
+            .active_ago(60)
+            .turn_error(10, label);
+        let snapshot =
+            room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        let row = row(&snapshot, "usage-capped");
+        actual.push(row.status());
+        assert_eq!(row.turn_error_label(), Some(label));
+    }
+    assert_eq!(actual, [Some(AgentStatus::Failed); 2]);
+}
+
+#[test]
 fn api_error_turn_escalates_running_to_attention() {
     // A turn that died on a provider API error fires no Stop hook, so the
     // rollup keeps `running` — but the transcript marker postdates the
