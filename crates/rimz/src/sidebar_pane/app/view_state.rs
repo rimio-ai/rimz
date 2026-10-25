@@ -380,6 +380,18 @@ impl ViewContext {
         self.gate = next_gate;
         self.health = state.health;
         let previous = std::mem::replace(&mut self.current, state.snapshot);
+        if fetch_was_ok {
+            if let Some(outage) = &self.current.hook_drainer_outage {
+                ui.hook_drainer_alert = Some(render::Alert::active(
+                    "hook drainer unreachable",
+                    outage.since,
+                ));
+            } else if let Some(alert) = &mut ui.hook_drainer_alert
+                && alert.is_active()
+            {
+                alert.recovered_at = Some(self.current.now);
+            }
+        }
         if self
             .health
             .alert

@@ -300,6 +300,14 @@ A banner such as `⚠ Sidebar degraded for 8s: snapshot failed` means a render c
 
 Once it recovers, the banner steps down to a dim, dismissable notice (`⚠ last alert 8s ago: …  ·  x dismiss`), so a failure that flickered past is still visible after the fact. Press `x` to clear it; two consecutive failed renders re-arm it, which is why a single bad frame does not.
 
+### The "hook drainer unreachable" alert
+
+`⚠ hook drainer unreachable for 40s · coder's card may be stale` means an agent's updates may not be reaching the room: its hook drainer has been unreachable for at least 10 seconds. The agent keeps running, and the sidebar's dashboard, footer, and search still work. The label matches the card when present; with several affected agents the line names the earliest one and counts the other cards.
+
+Run `rimz doctor` for the outage and reconnect error. The incident stays Investigate with Warn impact even after recovery. The alert stays active for about 3 seconds after recovery, then becomes a dim `last alert … ago: hook drainer unreachable for … · x dismiss` line until you press `x`; `x` cannot dismiss it while active. A refresh failure's active `Sidebar degraded` alert takes precedence over this line.
+
+Reconnect attempts never print into the agent's pane. A gap closed under 10 seconds leaves only a Contained diagnostic, detailed under `rimz doctor --audit`, and no sidebar alert. Doctor also retains outages that start and finish while a sidebar view is hidden, or whose lingering notice is lost when the host restarts.
+
 ### Colors, glyphs, or pets don't render
 
 Two upgrades need terminal support beyond color:

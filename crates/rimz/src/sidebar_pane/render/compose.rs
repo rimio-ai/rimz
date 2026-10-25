@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 
 use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
-    repo_header_lines, search_line, truth_notice_lines,
+    hook_drainer_alert_lines, repo_header_lines, search_line, truth_notice_lines,
 };
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
@@ -45,10 +45,10 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// summary, make-up line, the conditional unread banner, and fixed separator),
 /// a scroll viewport over the agent cards, and the bottom chrome pinned to the
 /// bottom edge like a status bar — the search line, provider dashboard, store, centered
-/// navigation footer, and beneath them the sticky health alert. Space for the
+/// navigation footer, and beneath them the drainer and refresh alerts. Space for the
 /// pinned zones is always reserved — including the fixed separators under the
 /// cockpit and above the provider dashboard — so the scroll zone is windowed
-/// before either pinned edge is ever clipped. While an alert is *active* the
+/// before either pinned edge is ever clipped. While a refresh alert is *active* the
 /// body is a stale/empty fetch, so the footer steps aside and the alert speaks
 /// beneath any committed search.
 ///
@@ -470,10 +470,10 @@ fn visible_scroll_block(
 /// dashboard is present, the per-provider dashboard (account-scoped budgets +
 /// brand emblem, which opens with its own top hairline — the tab rail when
 /// several accounts register), the fallback fleet store for no-table layouts,
-/// the navigation footer (centered), then the sticky health alert. While an
-/// alert is active the body is a stale/empty fetch, so the panel and footer step
-/// aside and the alert speaks beneath any committed search. Every chrome line is gutter-padded so it
-/// breathes in the same one-cell frame as the body.
+/// the navigation footer (centered), then the drainer and refresh alerts. While a
+/// refresh alert is active the body is a stale/empty fetch, so the panel and footer
+/// step aside and that alert speaks beneath any committed search. Every chrome line
+/// is gutter-padded so it breathes in the same one-cell frame as the body.
 #[derive(Clone, Copy)]
 enum BottomCorner {
     FleetTotal,
@@ -597,6 +597,13 @@ pub(super) fn build_bottom_chrome(
             bottom.push_inert(Line::from(""));
             bottom.extend_inert(footer.into_iter().map(pad_chrome));
         }
+    }
+    if !alert.is_some_and(Alert::is_active) {
+        bottom.extend_inert(
+            hook_drainer_alert_lines(theme, snapshot, view.hook_drainer_alert.as_ref())
+                .into_iter()
+                .map(pad_chrome),
+        );
     }
     if plan.alert
         && let Some(alert) = alert

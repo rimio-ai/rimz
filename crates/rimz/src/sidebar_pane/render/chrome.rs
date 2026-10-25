@@ -3,7 +3,8 @@ use crate::config::{GlyphRole, SidebarKeys};
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot, TruthNotice,
+    HookDrainerOutageAgent, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarSnapshot, TruthNotice,
 };
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -113,6 +114,69 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             theme.warn(Modifier::DIM),
         )]
     }
+}
+
+pub(super) fn hook_drainer_alert_lines(
+    theme: &Theme,
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+) -> Vec<Line<'static>> {
+    if let Some(outage) = &snapshot.hook_drainer_outage {
+        let Some(agent) = outage.agents.first() else {
+            return Vec::new();
+        };
+        let elapsed = age_short(outage.since, snapshot.now);
+        let label = hook_drainer_card_label(snapshot, agent);
+        let cards = if outage.agents.len() == 1 {
+            format!("{label}'s card")
+        } else {
+            format!("{label} and {} other cards", outage.agents.len() - 1)
+        };
+        return vec![Line::styled(
+            format!(
+                "{} hook drainer unreachable for {elapsed}{}{cards} may be stale",
+                theme.glyph(GlyphRole::ChromeAlert),
+                value_seam(theme)
+            ),
+            theme.alarm(Modifier::BOLD),
+        )];
+    }
+    let Some(alert) = alert else {
+        return Vec::new();
+    };
+    let Some(recovered_at) = alert.recovered_at else {
+        return Vec::new();
+    };
+    let recovered = Alert {
+        reason: format!(
+            "{} for {}",
+            alert.reason,
+            age_short(alert.since, recovered_at)
+        ),
+        ..alert.clone()
+    };
+    alert_lines(theme, &recovered, snapshot.now)
+}
+
+fn hook_drainer_card_label(snapshot: &SidebarSnapshot, outage: &HookDrainerOutageAgent) -> String {
+    let row = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.kind == outage.agent_kind && agent.name == outage.agent_name)
+        .find_map(|agent| {
+            snapshot.rows().find(|row| {
+                row.is_agent() && row.name == agent.kind && row.id == agent.agent_id.as_str()
+            })
+        });
+    if let Some(row) = row {
+        return row.display_name().to_owned();
+    }
+    if let Some(name) = &outage.agent_name {
+        return format!("@{name}");
+    }
+    crate::agents::spec_by_kind(outage.agent_kind.as_str())
+        .map_or(outage.agent_kind.as_str(), |spec| spec.display_name)
+        .to_owned()
 }
 
 pub(super) fn truth_notice_lines(

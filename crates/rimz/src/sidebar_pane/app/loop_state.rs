@@ -2630,6 +2630,13 @@ impl PaneState {
             }
             if applied.effects.contains(&InputEffect::DismissAlert) {
                 v.context.health.alert = None;
+                if v.state
+                    .hook_drainer_alert
+                    .as_ref()
+                    .is_some_and(|alert| !alert.is_active())
+                {
+                    v.state.hook_drainer_alert = None;
+                }
             }
             outcome.redraw |= applied.redraw;
             outcome.effects.extend(applied.effects);
