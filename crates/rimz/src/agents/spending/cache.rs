@@ -1,9 +1,11 @@
 //! Cursor-cache types, disk I/O, file stamps, and raw-row compaction for spending walks.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -219,6 +221,71 @@ pub enum SpendUpdate {
     Rewritten,
 }
 
+// Before each insertion, evict names held only by the table: at most the distinct
+// names live at the last insertion plus the new name remain retained.
+static SHARED_NAMES: LazyLock<Mutex<HashSet<Arc<str>>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// A model or tool name shared process-wide across cache rows and parser results.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct SharedName(Arc<str>);
+
+impl From<&str> for SharedName {
+    fn from(name: &str) -> Self {
+        let mut names = SHARED_NAMES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(shared) = names.get(name) {
+            return Self(Arc::clone(shared));
+        }
+        names.retain(|shared| Arc::strong_count(shared) > 1);
+        let shared = Arc::from(name);
+        names.insert(Arc::clone(&shared));
+        Self(shared)
+    }
+}
+
+impl<'de> Deserialize<'de> for SharedName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NameVisitor;
+
+        impl serde::de::Visitor<'_> for NameVisitor {
+            type Value = SharedName;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a model or tool name")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
+                Ok(SharedName::from(name))
+            }
+        }
+
+        deserializer.deserialize_str(NameVisitor)
+    }
+}
+
+impl std::ops::Deref for SharedName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SharedName {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl fmt::Debug for SharedName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, formatter)
+    }
+}
+
 /// A single cost entry with dedup keys for cross-file deduplication.
 ///
 /// `message_id` and `request_id` identify Claude responses. `dedup_key`
@@ -226,6 +293,7 @@ pub enum SpendUpdate {
 /// no message ID. `thread_id` is present when the provider's durable transcript
 /// store exposes a native session id. `is_sidechain` drives the sidechain-replay
 /// suppression logic in the spending walk.
+/// Model names share storage across rows; provider IDs are boxed strings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
@@ -261,17 +329,17 @@ pub struct CachedEntry {
     pub tool_calls: BTreeMap<String, u32>,
     /// `message.id` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, rename = "m", skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<String>,
+    pub message_id: Option<Box<str>>,
     /// `requestId` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, rename = "q", skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
+    pub request_id: Option<Box<str>>,
     /// Provider-namespaced exact-record key for wires without message IDs.
     #[serde(default, rename = "k", skip_serializing_if = "Option::is_none")]
-    pub dedup_key: Option<String>,
+    pub dedup_key: Option<Box<str>>,
     /// Provider-native billing thread/session id, used for stores where many
     /// sessions live in one transcript file or database.
     #[serde(default, rename = "h", skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub thread_id: Option<Box<str>>,
     /// `isSidechain` flag from Claude entries.
     #[serde(default, rename = "s", skip_serializing_if = "is_false")]
     pub is_sidechain: bool,
@@ -286,7 +354,7 @@ pub struct CachedEntry {
     /// transcript named no model. Carried through dedup so a kept turn keeps its
     /// model.
     #[serde(default, rename = "l", skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    pub model: Option<SharedName>,
     /// Synthetic per-day rollup produced by recency compaction. Rolled rows
     /// carry no dedup IDs because compaction runs after cross-file dedup.
     /// Native thread ids are retained so old multi-session stores keep session
@@ -414,7 +482,7 @@ fn retained_raw_message_ids(
     cache: &SpendingDiskCache,
     files: &[SpendingFile],
     now_secs: u64,
-) -> BTreeSet<String> {
+) -> BTreeSet<Box<str>> {
     let mut message_ids = BTreeSet::new();
     for SpendingFile { path: file, .. } in files {
         let file_key = file.to_string_lossy().into_owned();
@@ -435,7 +503,7 @@ fn retained_raw_message_ids(
 fn raw_entry_ready_for_compaction(
     entry: &CachedEntry,
     now_secs: u64,
-    retained_message_ids: &BTreeSet<String>,
+    retained_message_ids: &BTreeSet<Box<str>>,
 ) -> bool {
     !entry.rolled
         && !within_raw_retain_window(entry.ts_secs, now_secs)
@@ -448,8 +516,8 @@ fn raw_entry_ready_for_compaction(
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RollupKey {
     day: u64,
-    model: Option<String>,
-    thread_id: Option<String>,
+    model: Option<SharedName>,
+    thread_id: Option<Box<str>>,
 }
 
 impl RollupKey {
@@ -478,7 +546,7 @@ fn old_counted_entries_for_compaction(
     cache: &SpendingDiskCache,
     files: &[SpendingFile],
     now_secs: u64,
-    retained_message_ids: &BTreeSet<String>,
+    retained_message_ids: &BTreeSet<Box<str>>,
 ) -> Vec<CompactionSourceEntry> {
     let mut deduped = SidechainDedup::default();
     for SpendingFile { path: file, .. } in files {
@@ -636,5 +704,54 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
             );
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_name_construction_shares_allocation_and_text_semantics() {
+        let first = SharedName::from("Read");
+        let second = SharedName::from("Read");
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+        assert_eq!(serde_json::to_string(&first).unwrap(), r#""Read""#);
+        assert_eq!(format!("{first:?}"), r#""Read""#);
+        assert_eq!(HashSet::from([first, second]).len(), 1);
+        let mut names = ["bash", "検索", "Bash"].map(SharedName::from);
+        names.sort();
+        assert_eq!(
+            names.each_ref().map(|name| &**name),
+            ["Bash", "bash", "検索"]
+        );
+    }
+
+    #[test]
+    fn decoded_models_share_allocation_including_escaped_names() {
+        let rows: Vec<CachedEntry> = serde_json::from_str(concat!(
+            r#"[{"t":1,"u":0.0,"l":"modèle"},"#,
+            r#"{"t":2,"u":0.0,"l":"mod\u00e8le"}]"#,
+        ))
+        .unwrap();
+        let first = rows[0].model.as_ref().unwrap();
+        let second = rows[1].model.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+    }
+
+    #[test]
+    fn shared_name_table_prunes_unreferenced_names_on_the_next_miss() {
+        let unused = SharedName::from("unused");
+        let active = SharedName::from("active");
+        let weak = Arc::downgrade(&unused.0);
+        assert!(SHARED_NAMES.lock().unwrap().contains("unused"));
+        drop(unused);
+        let hit = SharedName::from("active");
+        assert!(weak.upgrade().is_some());
+        assert!(Arc::ptr_eq(&active.0, &hit.0));
+        let _next = SharedName::from("next");
+        assert!(!SHARED_NAMES.lock().unwrap().contains("unused"));
+        assert!(weak.upgrade().is_none());
+        assert!(SHARED_NAMES.lock().unwrap().contains("active"));
     }
 }

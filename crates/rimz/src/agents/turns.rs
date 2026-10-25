@@ -156,7 +156,7 @@ mod tests {
             message_id: None,
             request_id: None,
             dedup_key: None,
-            thread_id: thread_id.map(ToOwned::to_owned),
+            thread_id: thread_id.map(Into::into),
             is_sidechain: false,
             has_speed: false,
             fast: false,
@@ -242,8 +242,8 @@ mod tests {
             message(TranscriptRole::User, 200, "second"),
         ];
         let mut repeated = entry(105, None);
-        repeated.message_id = Some("message-1".to_owned());
-        repeated.request_id = Some("request-1".to_owned());
+        repeated.message_id = Some("message-1".into());
+        repeated.request_id = Some("request-1".into());
         let mut richer = repeated.clone();
         richer.ts_secs = 115;
         richer.cost_usd = 0.5;

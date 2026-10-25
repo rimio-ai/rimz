@@ -111,10 +111,10 @@ fn priced_entry(
     let split = TokenSplit::new(input, output).cached(0, cached);
     let cost_usd = price_split(prices, model, split, timestamp, unknown_models).unwrap_or(0.0);
     Some(CachedEntry {
-        message_id: record.uuid.clone(),
-        thread_id: record.session_id.clone(),
+        message_id: record.uuid.clone().map(String::into_boxed_str),
+        thread_id: record.session_id.clone().map(String::into_boxed_str),
         is_sidechain: record.is_sidechain == Some(true) || record.agent_id.is_some(),
-        model: Some(model.to_owned()),
+        model: Some(model.into()),
         ..CachedEntry::new(timestamp, cost_usd, &split)
     })
 }

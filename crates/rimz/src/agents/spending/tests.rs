@@ -362,7 +362,7 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
         message_id: None,
         request_id: None,
         dedup_key: None,
-        thread_id: Some(thread_id.to_owned()),
+        thread_id: Some(thread_id.into()),
         is_sidechain: false,
         has_speed: false,
         fast: false,
@@ -437,20 +437,20 @@ fn session_token_totals_sum_and_scope_fresh_tokens() {
 #[test]
 fn session_entries_dedup_exact_keys_and_sidechain_replays_in_file_order() {
     let mut first = cached_entry(100, 1.0, "sess-1");
-    first.message_id = Some("msg-a".to_owned());
-    first.request_id = Some("req-a".to_owned());
+    first.message_id = Some("msg-a".into());
+    first.request_id = Some("req-a".into());
     let mut richer = first.clone();
     richer.ts_secs = 101;
     richer.cost_usd = 2.0;
     richer.input = 20;
     let mut sidechain = first.clone();
     sidechain.ts_secs = 102;
-    sidechain.request_id = Some("req-sidechain".to_owned());
+    sidechain.request_id = Some("req-sidechain".into());
     sidechain.is_sidechain = true;
     sidechain.input = 50_000;
     let mut second = cached_entry(103, 3.0, "sess-1");
-    second.message_id = Some("msg-b".to_owned());
-    second.request_id = Some("req-b".to_owned());
+    second.message_id = Some("msg-b".into());
+    second.request_id = Some("req-b".into());
     let entries = vec![first, richer, sidechain, second];
 
     let counted = session_entries(&entries, "sess-1");
@@ -464,7 +464,7 @@ fn session_entries_dedup_exact_keys_and_sidechain_replays_in_file_order() {
     );
 
     let mut other_session = entries[1].clone();
-    other_session.thread_id = Some("sess-2".to_owned());
+    other_session.thread_id = Some("sess-2".into());
     other_session.input = 100;
     let mut selected = entries[0].clone();
     selected.input = 15;

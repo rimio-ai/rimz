@@ -261,7 +261,8 @@ upward-dependencies = ["address"]
 # INFORMATIONAL_PROBE_TIMEOUT and OAUTH_HTTP_TIMEOUT_SECS share refresh wait deadlines (+2).
 # WindowAmount and its used_percentage derivation share integer quota facts (+2).
 # AccountCapability::account_inputs_stamp lets the accounts lane re-probe on adapter input changes (+1).
-surface-budget = 1136
+# SharedName shares model and tool names across public spending rows (+1).
+surface-budget = 1137
 
 [[verdict]]
 kind = "item"
@@ -546,7 +547,8 @@ path = "crates/rimz/src/agents/spending"
 # RoleTally, EffortTally and EffortWindow carry recorded effort beside published role spend (+3).
 # EffortWindow::merge sums effort for the stats rows that fold several roles (+1).
 # ChartSpend carries bounded model dollars across the publication/stats seam (+1).
-surface-budget = 107
+# SharedName shares model and tool names across public spending rows (+1).
+surface-budget = 108
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -4369,6 +4371,11 @@ reason = "Public with new, walk, walk_local, WalkRequest, SilentWalk, WalkStats,
 kind = "item"
 key = "agents::spending::cache::CachedEntry"
 reason = "One durable normalized row: aggregation, dedup and compaction read token, cost, tool, model and identity fields together (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::cache::SharedName"
+reason = "Model and tool names share storage across cache rows and public parser results, including bench, example and integration row builders."
 
 [[verdict]]
 kind = "item"

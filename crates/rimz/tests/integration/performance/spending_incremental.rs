@@ -80,14 +80,14 @@ fn cached_entries(count: usize) -> Vec<CachedEntry> {
             cache_write: 0,
             cache_read: 800,
             tool_calls: Default::default(),
-            message_id: Some(format!("msg-{index}")),
-            request_id: Some(format!("req-{index}")),
+            message_id: Some(format!("msg-{index}").into_boxed_str()),
+            request_id: Some(format!("req-{index}").into_boxed_str()),
             dedup_key: None,
-            thread_id: Some(format!("thread-{index}")),
+            thread_id: Some(format!("thread-{index}").into_boxed_str()),
             is_sidechain: false,
             has_speed: false,
             fast: false,
-            model: Some("claude-opus-4-8".to_owned()),
+            model: Some("claude-opus-4-8".into()),
             rolled: false,
             timing: None,
         })
@@ -111,9 +111,9 @@ fn seed_spending_cache(
             .enumerate()
             .map(|(offset, mut entry)| {
                 let index = start + offset;
-                entry.message_id = Some(format!("msg-{index}"));
-                entry.request_id = Some(format!("req-{index}"));
-                entry.thread_id = Some(format!("thread-{index}"));
+                entry.message_id = Some(format!("msg-{index}").into_boxed_str());
+                entry.request_id = Some(format!("req-{index}").into_boxed_str());
+                entry.thread_id = Some(format!("thread-{index}").into_boxed_str());
                 entry
             })
             .collect();
@@ -341,14 +341,14 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
                 cache_write: 0,
                 cache_read: 800,
                 tool_calls: Default::default(),
-                message_id: Some("msg-edge".to_owned()),
-                request_id: Some("req-edge".to_owned()),
+                message_id: Some("msg-edge".into()),
+                request_id: Some("req-edge".into()),
                 dedup_key: None,
-                thread_id: Some("thread-edge".to_owned()),
+                thread_id: Some("thread-edge".into()),
                 is_sidechain: false,
                 has_speed: false,
                 fast: false,
-                model: Some("claude-opus-4-8".to_owned()),
+                model: Some("claude-opus-4-8".into()),
                 rolled: false,
                 timing: None,
             }],

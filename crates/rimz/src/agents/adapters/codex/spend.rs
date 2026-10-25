@@ -147,8 +147,10 @@ pub(crate) fn parse_codex_spend(
             }
         };
         out.push(CachedEntry {
-            dedup_key: Some(codex_event_dedup_key(&event.timestamp, model, &event)),
-            model: Some(model.to_owned()),
+            dedup_key: Some(
+                codex_event_dedup_key(&event.timestamp, model, &event).into_boxed_str(),
+            ),
+            model: Some(model.into()),
             tool_calls: event.tool_calls,
             timing: event.timing,
             ..CachedEntry::new(ts_secs, cost, &split)

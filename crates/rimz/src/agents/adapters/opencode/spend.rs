@@ -272,8 +272,8 @@ fn parse_message_entry(
         }
     }
     Some(CachedEntry {
-        thread_id,
-        model: Some(model.to_owned()),
+        thread_id: thread_id.map(String::into_boxed_str),
+        model: Some(model.into()),
         tool_calls,
         ..CachedEntry::new(ts_secs, cost, &split)
     })

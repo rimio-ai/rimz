@@ -1553,14 +1553,14 @@ fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
         cache_write: 0,
         cache_read: 0,
         tool_calls: Default::default(),
-        message_id: Some("msg-rich".to_owned()),
-        request_id: Some("req-rich".to_owned()),
+        message_id: Some("msg-rich".into()),
+        request_id: Some("req-rich".into()),
         dedup_key: None,
         thread_id: None,
         is_sidechain: true,
         has_speed: false,
         fast: false,
-        model: Some("claude-opus-4-8".to_owned()),
+        model: Some("claude-opus-4-8".into()),
         rolled: false,
         timing: None,
     };
@@ -1755,14 +1755,14 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         cache_write: 10,
         cache_read: 70,
         tool_calls: BTreeMap::from([("Read".to_owned(), 2)]),
-        message_id: Some("msg-1".to_owned()),
-        request_id: Some("req-1".to_owned()),
+        message_id: Some("msg-1".into()),
+        request_id: Some("req-1".into()),
         dedup_key: None,
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
         fast: false,
-        model: Some("claude-opus-4-8".to_owned()),
+        model: Some("claude-opus-4-8".into()),
         rolled: false,
         timing: None,
     };
@@ -1788,7 +1788,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         is_sidechain: false,
         has_speed: false,
         fast: false,
-        model: Some("gpt-5-codex".to_owned()),
+        model: Some("gpt-5-codex".into()),
         rolled: false,
         timing: None,
     };
@@ -1798,7 +1798,7 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         input: 300,
         output: 30,
         cache_read: 60,
-        model: Some("gpt-5-old".to_owned()),
+        model: Some("gpt-5-old".into()),
         ..codex.clone()
     };
     let claude_file = PathBuf::from("/x/claude.jsonl");
@@ -1931,7 +1931,7 @@ fn timed_windows_use_ratio_of_sums() {
 #[test]
 fn duplicate_timing_breaks_only_usage_ties_in_both_folds() {
     let mut first = cached_entry(NOW_SECS, 1.0, "session");
-    first.message_id = Some("message".to_owned());
+    first.message_id = Some("message".into());
     let mut timed = first.clone();
     timed.timing = Some(ResponseTiming {
         ms: 1_000,

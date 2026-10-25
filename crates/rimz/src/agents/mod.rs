@@ -873,12 +873,14 @@ impl LocalSpendFold {
 impl From<&spending::CachedEntry> for FoldedRequest {
     fn from(entry: &spending::CachedEntry) -> Self {
         Self {
-            key: entry
-                .message_id
-                .clone()
-                .map(|message_id| (message_id, entry.request_id.clone())),
+            key: entry.message_id.clone().map(|message_id| {
+                (
+                    message_id.into_string(),
+                    entry.request_id.clone().map(String::from),
+                )
+            }),
             group: entry.message_id.as_deref().map(|message_id| {
-                entry.request_id.clone().map_or_else(
+                entry.request_id.clone().map(String::from).map_or_else(
                     || {
                         FoldedRequestGroup::Message(
                             advisor_parent_message_id(message_id).to_owned(),
@@ -1408,8 +1410,8 @@ mod tests {
         spending::CachedEntry {
             input,
             cost_usd,
-            message_id: key.map(|(message_id, _)| message_id.to_owned()),
-            request_id: key.map(|(_, request_id)| request_id.to_owned()),
+            message_id: key.map(|(message_id, _)| message_id.into()),
+            request_id: key.map(|(_, request_id)| request_id.into()),
             ..spending::CachedEntry::default()
         }
     }
