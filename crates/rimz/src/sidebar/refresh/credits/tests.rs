@@ -109,6 +109,114 @@ fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
 }
 
 #[test]
+fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
+    let hint = identity(Some(7), None, ProviderAccountScope::KindWide);
+    for (case, reading, due) in [
+        (
+            "agreeing reading",
+            identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
+            false,
+        ),
+        (
+            "stamp lag",
+            identity(Some(8), Some("owner"), ProviderAccountScope::KindWide),
+            true,
+        ),
+        (
+            "scope lag",
+            identity(
+                Some(7),
+                Some("owner"),
+                ProviderAccountScope::sub_provider("openai", "oauth"),
+            ),
+            true,
+        ),
+    ] {
+        let (_dir, runtime) = runtime();
+        let key: LoginKey = "codex@default".parse().unwrap();
+        let now = 1_000_000;
+        let claim = claim_provider_account_usage_with_hint_at(
+            &runtime,
+            &key,
+            Some(hint.clone()),
+            now - 1,
+            nonce(1),
+        )
+        .unwrap();
+        let mut cache = read_credits_cache(&runtime.shared_credits_path());
+        let (mut entry, _) = cache
+            .logins
+            .remove(&key)
+            .unwrap()
+            .complete_account_usage(
+                claim,
+                AccountUsageProbe::Found {
+                    identity: reading.clone(),
+                    snapshot: AccountUsageSnapshot::default(),
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(entry.oauth_read_hint, Some(hint.clone()));
+        entry.oauth_read_hint = None;
+        cache.logins.insert(key.clone(), entry);
+        write_credits_cache(&runtime.shared_credits_path(), &cache);
+
+        let claim = claim_provider_account_usage_with_hint_at(
+            &runtime,
+            &key,
+            Some(hint.clone()),
+            now + 1,
+            nonce(2),
+        );
+        assert_eq!(claim.is_some(), due, "{case}, elapsed=1");
+        let at = if due {
+            now + 1
+        } else {
+            now + OAUTH_USAGE_TTL.as_millis() as u64 + 1
+        };
+        let claim = claim.unwrap_or_else(|| {
+            claim_provider_account_usage_with_hint_at(
+                &runtime,
+                &key,
+                Some(hint.clone()),
+                at,
+                nonce(2),
+            )
+            .unwrap()
+        });
+        let mut cache = read_credits_cache(&runtime.shared_credits_path());
+        let (entry, _) = cache
+            .logins
+            .remove(&key)
+            .unwrap()
+            .complete_account_usage(
+                claim,
+                AccountUsageProbe::Found {
+                    identity: reading,
+                    snapshot: AccountUsageSnapshot::default(),
+                },
+                at + 1,
+            )
+            .unwrap();
+        assert_eq!(entry.oauth_read_hint, Some(hint.clone()));
+        cache.logins.insert(key.clone(), entry);
+        write_credits_cache(&runtime.shared_credits_path(), &cache);
+        assert_eq!(
+            claim_provider_account_usage_with_hint_at(
+                &runtime,
+                &key,
+                Some(hint.clone()),
+                at + 2,
+                nonce(3),
+            ),
+            None,
+            "{case}, hint recorded again",
+        );
+    }
+}
+
+#[test]
 fn unchanged_published_hint_brakes_settled_reads_with_a_newer_probe_stamp() {
     let hint = identity(Some(7), None, ProviderAccountScope::KindWide);
     let newer = identity(Some(8), None, ProviderAccountScope::KindWide);
@@ -187,16 +295,22 @@ fn unfinished_claim_does_not_absorb_a_published_hint_move() {
             nonce(1),
         )
         .unwrap();
-        complete_provider_account_usage(
-            &runtime,
-            &key,
-            claim,
-            AccountUsageProbe::Found {
-                identity: hint,
-                snapshot: AccountUsageSnapshot::default(),
-            },
-        )
-        .unwrap();
+        let mut cache = read_credits_cache(&runtime.shared_credits_path());
+        let (entry, _) = cache
+            .logins
+            .remove(&key)
+            .unwrap()
+            .complete_account_usage(
+                claim,
+                AccountUsageProbe::Found {
+                    identity: hint,
+                    snapshot: AccountUsageSnapshot::default(),
+                },
+                now,
+            )
+            .unwrap();
+        cache.logins.insert(key.clone(), entry);
+        write_credits_cache(&runtime.shared_credits_path(), &cache);
         let claim = claim_provider_account_usage_with_hint_at(
             &runtime,
             &key,
@@ -1070,7 +1184,7 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
             true,
         ),
         (lagging.clone(), lagging, false),
-        (None, prior_hint.clone(), true),
+        (None, prior_hint.clone(), false),
         (prior_hint, None, true),
     ] {
         let (_dir, runtime) = runtime();

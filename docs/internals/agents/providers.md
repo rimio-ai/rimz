@@ -248,7 +248,7 @@ The producer keeps each metered account current between turns when its spec decl
 | `IDLE_OAUTH_USAGE_TTL` | 3 hours | an [idle account](#idle-accounts), after every outcome |
 | `ACCOUNT_USAGE_CLAIM_TTL` | 90 seconds | the lease on each helper segment |
 
-A published scope or credential stamp that changed since the last read was claimed reopens the claim at once. A reading whose own identity differs from the published account record waits the ordinary cadence while that record is unchanged. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for the process tree, and `0`, `false`, and an empty value read as off.
+With a recorded `oauth_read_hint`, freshness asks whether the published scope or credential stamp changed since the last read was claimed: a change reopens the claim at once, while an unchanged hint waits the cadence even if the reading's own identity differs. An entry with no recorded hint (written or rewritten by a build that predates the field) compares the published record with the reading's own identity instead, so it stays due while the two differ; its next completed read records the hint. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for the process tree, and `0`, `false`, and an empty value read as off.
 
 ### The usage claim
 

@@ -44,6 +44,8 @@ pub(crate) struct ProviderCreditsEntry {
     #[serde(default)]
     pub oauth_read_at_ms: u64,
     /// Published account hint under which the last direct read was claimed.
+    /// When absent (no published hint, an old cache, or an older build's write),
+    /// freshness compares the current hint with the reading's own identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_read_hint: Option<AccountUsageIdentity>,
     /// Last OAuth attempt settled as an auth or entitlement rejection: retried on the long TTL
