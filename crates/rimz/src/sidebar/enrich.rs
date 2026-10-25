@@ -14,10 +14,11 @@ use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::snapshot::{
-    LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, RuntimeReapInputs,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
-    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
-    WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
+    HookDrainerOutage, HookDrainerOutageAgent, LazyAgentPairingDiagnostic, LazyAgentPairingResult,
+    RemoteControlBadge, RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
+    SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState,
+    WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
@@ -638,6 +639,18 @@ fn enrich_core(
         crate::harness::hibernate::project_hibernation(&mut snapshot, state);
     }
     snapshot.parked_workflows = parked_workflows(state);
+    let outages = crate::harness::drainer_outage::read(runtime);
+    snapshot.hook_drainer_outage = outages.first().map(|first| HookDrainerOutage {
+        since: Timestamp::from_millisecond(first.since_ms.min(i64::MAX as u64) as i64)
+            .unwrap_or(snapshot.now),
+        agents: outages
+            .iter()
+            .map(|record| HookDrainerOutageAgent {
+                agent_kind: record.agent_kind.clone(),
+                agent_name: record.agent_name.clone(),
+            })
+            .collect(),
+    });
     snapshot.skipped_settings = crate::workspace::record::read_optional(&state.workspace_record)
         .ok()
         .flatten()

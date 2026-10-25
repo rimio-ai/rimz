@@ -36,6 +36,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         pane_session_name: None,
         presence: None,
         truth_degraded: None,
+        hook_drainer_outage: None,
         now,
         worktree_groups: Vec::new().into(),
         agents: Default::default(),

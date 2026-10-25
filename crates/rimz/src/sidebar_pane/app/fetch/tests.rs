@@ -148,6 +148,25 @@ fn agent_delivery_pushes_the_room_reminder_out_by_an_interval() {
 }
 
 #[test]
+fn hook_drainer_outages_are_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut value = serde_json::to_value(&left).unwrap();
+    value["hook_drainer_outage"] = serde_json::json!({
+        "since": jiff::Timestamp::from_millisecond(100).unwrap(),
+        "agents": [{"agent_kind": "claude", "agent_name": "coder"}]
+    });
+    let right = serde_json::from_value(value.clone()).unwrap();
+    assert!(
+        !same_snapshot_content(&left, &right),
+        "a new outage must reach the renderer as content"
+    );
+    value["hook_drainer_outage"]["agents"][0]["agent_name"] = serde_json::json!("reviewer");
+    let changed = serde_json::from_value(value).unwrap();
+    assert!(!same_snapshot_content(&right, &changed));
+    assert!(!same_snapshot_content(&right, &left));
+}
+
+#[test]
 fn parked_workflows_are_content_not_a_clock_only_change() {
     let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
     let mut value = serde_json::to_value(&left).unwrap();

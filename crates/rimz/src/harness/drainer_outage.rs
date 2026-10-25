@@ -87,10 +87,6 @@ impl Tracker {
     }
 }
 
-#[cfg_attr(
-    not(feature = "testkit"),
-    expect(dead_code, reason = "Sidebar enrichment follows in the next change.")
-)]
 pub(crate) fn read(runtime: &RuntimePaths) -> Vec<OutageRecord> {
     let Ok(entries) = std::fs::read_dir(runtime.hook_drainer_outages_dir()) else {
         return Vec::new();

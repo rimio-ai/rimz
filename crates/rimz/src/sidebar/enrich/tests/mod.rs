@@ -23,6 +23,78 @@ mod labels;
 mod spend;
 
 #[test]
+fn hook_drainer_outages_are_projected_on_producer_and_consumer_folds() {
+    let (_dir, runtime, snapshot) = runtime();
+    let dir = runtime.hook_drainer_outages_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut held = Vec::new();
+    for (pid, body, hold) in [
+        (
+            1,
+            serde_json::json!({
+                "v": 1, "agent_kind": "claude", "agent_name": "coder", "since_ms": 200
+            }),
+            true,
+        ),
+        (
+            2,
+            serde_json::json!({
+                "v": 1, "agent_kind": "codex", "agent_name": null, "since_ms": 100
+            }),
+            true,
+        ),
+        (
+            3,
+            serde_json::json!({
+                "v": 1, "agent_kind": "claude", "agent_name": "dead", "since_ms": 50
+            }),
+            false,
+        ),
+        (4, serde_json::json!({"broken": true}), true),
+        (
+            5,
+            serde_json::json!({
+                "v": 2, "agent_kind": "claude", "agent_name": "future", "since_ms": 25
+            }),
+            true,
+        ),
+    ] {
+        let file = std::fs::File::create(dir.join(pid.to_string())).unwrap();
+        serde_json::to_writer(&file, &body).unwrap();
+        if hold {
+            file.try_lock().unwrap();
+            held.push(file);
+        }
+    }
+    let expected = serde_json::json!({
+        "since": Timestamp::from_millisecond(100).unwrap(),
+        "agents": [
+            {"agent_kind": "codex", "agent_name": null},
+            {"agent_kind": "claude", "agent_name": "coder"}
+        ]
+    });
+    for opts in [cached_opts(), producing_opts()] {
+        let projected = fold(snapshot.clone(), None, &runtime, opts);
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap()["hook_drainer_outage"],
+            expected,
+            "both fold paths must project only held, parseable outage records in start order"
+        );
+    }
+    drop(held);
+    let mut stale = serde_json::to_value(&snapshot).unwrap();
+    stale["hook_drainer_outage"] = expected;
+    let cleared = fold_cached(serde_json::from_value(stale).unwrap(), None, &runtime);
+    assert!(
+        serde_json::to_value(cleared)
+            .unwrap()
+            .get("hook_drainer_outage")
+            .is_none(),
+        "free leases must clear a previously published outage"
+    );
+}
+
+#[test]
 fn parked_workflows_are_projected_without_agents_and_oldest_first() {
     let (_dir, runtime, snapshot) = runtime();
     let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
