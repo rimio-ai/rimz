@@ -145,6 +145,11 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     matches!(definitions(kind).tools, DefinitionTools::Required(_))
 }
 
+/// Whether `kind` runs models named by other providers' vocabularies.
+pub(crate) fn runs_other_providers_models(kind: &str) -> bool {
+    definitions(kind).runs_other_providers_models
+}
+
 pub(crate) fn render_tool_args(
     kind: &str,
     tools: Option<&ToolSet>,

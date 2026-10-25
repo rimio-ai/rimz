@@ -2255,7 +2255,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     let same_kind = original.kind == base.kind;
     original.launch.tier = None;
 
-    // The base supplies the engine (kind, model, effort); the original keeps the role.
+    // The base supplies the engine; the original keeps the role.
     original.kind.clone_from(&base.kind);
     original.layers.retain(|layer| !base.layers.contains(layer));
     original.layers.extend_from_slice(&base.layers);
@@ -2294,10 +2294,13 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         original.append_system_prompt_files = fragments;
     }
 
+    let carry_model = same_kind || crate::agents::runs_other_providers_models(&base.kind);
+    if base.launch.model.is_some() {
+        original.launch.model.clone_from(&base.launch.model);
+    } else if !carry_model && let Some(model) = original.launch.model.take() {
+        original.notices.push(CellNotice::DroppedModel { model });
+    }
     if same_kind {
-        if base.launch.model.is_some() {
-            original.launch.model.clone_from(&base.launch.model);
-        }
         if base.fast.is_some() {
             original.fast = base.fast;
         }
@@ -2305,7 +2308,6 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
             original.args.clone_from(&base.args);
         }
     } else {
-        original.launch.model.clone_from(&base.launch.model);
         original.fast = base.fast;
         original.args.clone_from(&base.args);
     }

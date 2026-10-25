@@ -315,6 +315,209 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
 }
 
 #[test]
+fn explicit_cross_provider_models_route_only_on_multi_provider_engines() {
+    let machine = MachineConfig::default();
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    let mut launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
+    launch.profiles.0.insert(
+        "planner".into(),
+        toml::from_str("agent = 'claude'\nmodel = 'sonnet'").unwrap(),
+    );
+    for (kind, accepted) in [("pi", true), ("codex", false)] {
+        let result = launch.route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("planner"),
+            None,
+            Some("sonnet"),
+            Some(kind),
+            |_, _| None,
+        );
+        assert_eq!(result.is_ok(), accepted, "{kind}: {result:?}");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("choose the same family"));
+        }
+    }
+}
+
+#[test]
+fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_switches() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("pi", ""),
+        ("worker", "agent: pi\ntools: [Bash]"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Worker\n{fields}\n---\nWork."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.agents.teams =
+        toml::from_str("[crew]\nroles = [{role = 'code', profile = 'worker'}]").unwrap();
+    let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    launch.subagent_profiles = launch.profiles.clone();
+    assert!(
+        launch.profiles.0["worker"]
+            .definition_renders
+            .as_ref()
+            .unwrap()
+            .renders
+            .contains_key("claude")
+    );
+    let outcomes = [
+        (ProfileScope::Agents, "worker"),
+        (ProfileScope::Subagents, "worker"),
+        (ProfileScope::Agents, "crew"),
+    ]
+    .map(|(scope, target)| {
+        let mut launch = launch.clone();
+        let consumed = launch
+            .route(
+                &machine.tiers,
+                scope,
+                Some(target),
+                None,
+                Some("sonnet"),
+                None,
+                |_, _| None,
+            )
+            .unwrap();
+        let mut layout = crate::harness::plan::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            Some(target),
+            None,
+        )
+        .unwrap()
+        .layout;
+        crate::harness::plan::finalize_launch_layout(
+            &mut layout,
+            crate::harness::plan::LaunchFinalizeOptions {
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset {
+                    model: Some("sonnet".to_owned()),
+                    ..Default::default()
+                },
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        (
+            consumed,
+            cell.kind.to_string(),
+            cell.launch.model.clone(),
+            cell.launch.tier.is_none(),
+            launch.profiles_for(scope).0["worker"].tier_stamp.is_none(),
+            cell.args
+                .windows(2)
+                .any(|pair| pair == ["--model", "sonnet"]),
+        )
+    });
+    assert_eq!(
+        outcomes,
+        std::array::from_fn(|_| (
+            false,
+            "pi".to_owned(),
+            Some("sonnet".to_owned()),
+            true,
+            true,
+            true
+        ))
+    );
+    let consumed = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("worker"),
+            None,
+            Some("sonnet"),
+            Some("claude"),
+            |_, _| None,
+        )
+        .unwrap();
+    let worker = &launch.profiles.0["worker"];
+    assert_eq!(
+        (consumed, worker.agent.as_str(), worker.model.as_deref()),
+        (true, "claude", Some("sonnet")),
+        "--agent still selects another family's complete render"
+    );
+}
+
+#[test]
+fn pi_model_routing_does_not_require_the_models_native_family_render() {
+    let config = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    std::fs::create_dir(config.path().join("agents")).unwrap();
+    std::fs::write(
+        config.path().join("agents/pi.md"),
+        "---\ndescription: Pi base\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        config.path().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: pi\ntools: ['Agent(unknown)']\n---\n",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        config.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &machine.tiers,
+        machine.harness.auto_compact,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let mut launch = load_with_roots(&machine, project.path(), config.path()).unwrap();
+    assert!(
+        launch.profiles.0["worker"]
+            .definition_renders
+            .as_ref()
+            .unwrap()
+            .exclusions
+            .contains_key("claude")
+    );
+    let results = [None, Some("pi")].map(|family| {
+        launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("worker"),
+                None,
+                Some("sonnet"),
+                family,
+                |_, _| None,
+            )
+            .map_err(|error| error.to_string())
+    });
+    assert_eq!(results, [Ok(false), Ok(false)]);
+    let cell =
+        agents_spec::resolve_profile_rebased("worker", Some("pi"), &launch.profiles).unwrap();
+    assert_eq!(cell.kind, "pi");
+}
+
+#[test]
 fn fast_suffix_routes_the_base_definition() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();

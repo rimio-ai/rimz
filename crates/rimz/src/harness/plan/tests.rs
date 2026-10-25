@@ -169,6 +169,62 @@ fn unsupported_auto_compact_launches_without_the_field_and_warns_once() {
 }
 
 #[test]
+fn cross_kind_model_drops_warn_unless_the_launch_supplies_a_replacement() {
+    for (source, model, target, replacement, tier) in [
+        ("claude", "sonnet", "codex", None, false),
+        ("codex", "astra", "claude", None, false),
+        ("claude", "sonnet", "codex", Some("explicit"), false),
+        ("claude", "sonnet", "codex", Some("tier-model"), true),
+    ] {
+        let profiles: crate::config::ProfilesConfig = toml::from_str(&format!(
+            "[worker]\nagent = '{source}'\nmodel = '{model}'\n"
+        ))
+        .unwrap();
+        let mut layout = crate::harness::spec::resolve_spec_with_agent_override(
+            Some("worker"),
+            &profiles,
+            &profiles,
+            &crate::config::CommandsConfig::default(),
+            &crate::config::TeamsConfig::default(),
+            Some(target),
+        )
+        .unwrap();
+        if tier {
+            let cell = layout.agent_cells_mut().next().unwrap();
+            cell.launch.model = replacement.map(str::to_owned);
+            cell.launch.tier = Some(Box::new(crate::agents::TierStamp {
+                tier: crate::config::tiers::ModelTier::Senior,
+                model: replacement.unwrap().into(),
+                used_tier: None,
+                unbuildable: Vec::new(),
+                skipped: Vec::new(),
+            }));
+        }
+        let preset = crate::agents::LaunchPreset {
+            model: replacement.filter(|_| !tier).map(str::to_owned),
+            ..Default::default()
+        };
+        let warnings = finalize(&mut layout, &preset, &[]).unwrap();
+        if replacement.is_none() {
+            assert_eq!(warnings.len(), 1, "{source} to {target}: {warnings:?}");
+            let warning = warnings[0].to_string();
+            assert!(
+                warning.contains("worker") && warning.contains(model) && warning.contains(target),
+                "{warning}"
+            );
+        } else {
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+        let cell = layout.agent_cells().next().unwrap();
+        assert_ne!(cell.launch.model.as_deref(), Some(model));
+        if let Some(replacement) = replacement {
+            assert_eq!(cell.launch.model.as_deref(), Some(replacement));
+        }
+        assert!(cell.notices.is_empty());
+    }
+}
+
+#[test]
 fn compaction_default_follows_the_engine_but_declared_values_warn() {
     let root = tempfile::tempdir().unwrap();
     for namespace in ["agents", "subagents", "teams"] {

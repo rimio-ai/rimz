@@ -52,7 +52,7 @@ The catalogue merges machine [Markdown definitions](../definitions.md) under `<a
 
 Tiered role listings and `show` rosters display the tier beside the concrete model and mark a fallback. JSON adds `tier` and `tier_fallback` only for tiered roles; `model` remains the resolved provider model.
 
-On a fresh launch, `--model M` runs that exact model for every Markdown role, on M's family's render, without tier routing or a stamp. If that family cannot build a role, the launch refuses with the role, model, family and build error. A conflicting `--agent` family refuses too. Use `--tier` to allow routing, even when a role declares a concrete `model:`.
+On a fresh launch, `--model M` runs that exact model for every Markdown role, normally on M's family's render, without tier routing or a stamp. Pi roles keep Pi and do not require M's native-family render; `--agent pi` also runs the model on Pi. For other engines, if that family cannot build a role, the launch refuses with the role, model, family and build error. A conflicting `--agent` family refuses too. Use `--tier` to allow routing, including across families on a Pi role or when a role declares a concrete `model:`.
 
 ```sh
 rimz teams profiles

@@ -264,12 +264,18 @@ upward-dependencies = ["address"]
 # SharedName shares model and tool names across public spending rows (+1).
 # ToolCounts exposes compact, canonical counts on public spending rows (+1).
 # SkippedPresetField and LaunchSpec::normalize_preset share flag-mapping normalization (+2).
-surface-budget = 1140
+# runs_other_providers_models shares the model-client capability by kind (+1).
+surface-budget = 1141
 
 [[verdict]]
 kind = "item"
 key = "agents::context::WindowAmount"
 reason = "Provider-neutral integer usage and limits cross the adapter, cache, plugin and renderer seams."
+
+[[verdict]]
+kind = "item"
+key = "agents::tools::runs_other_providers_models"
+reason = "Definition loading, launch routing, and engine re-basing read the model-client capability by kind."
 
 [[verdict]]
 kind = "item"

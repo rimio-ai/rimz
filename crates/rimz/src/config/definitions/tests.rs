@@ -1890,6 +1890,56 @@ fn runtime_resolution_aliases_and_defaults() {
 }
 
 #[test]
+fn multi_provider_models_do_not_change_a_pi_definition_engine() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/pi-sonnet.md",
+        "agent: pi\nmodel: sonnet",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/pi-child.md",
+        "agent: pi-sonnet\nmodel: haiku",
+        "",
+    );
+    let loaded = clean(root.path());
+    for (name, model) in [("pi-sonnet", "sonnet"), ("pi-child", "haiku")] {
+        let profile = &loaded.agent_profiles.0[name];
+        assert_eq!(profile.agent, "pi");
+        assert_eq!(profile.model.as_deref(), Some(model));
+    }
+}
+
+#[test]
+fn teams_keep_inherited_and_explicit_multi_provider_models_on_their_engine() {
+    let root = fixture();
+    std::fs::remove_file(root.path().join("agents/claude.md")).unwrap();
+    definition(
+        root.path(),
+        "agents/pi-sonnet.md",
+        "agent: pi\nmodel: sonnet",
+        "",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: pi-sonnet\n    role: lead\n    owns: [Plan]\n  - agent: pi-sonnet\n    role: code\n    model: sonnet\n    tools: []\n    owns: [Implement]\n  - agent: pi-sonnet\n    role: review\n    owns: [Review]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let roles = &loaded.teams.0["probe"].roles;
+    assert_eq!(loaded.agent_profiles.0[&roles[0].profile].agent, "pi");
+    assert_eq!(loaded.agent_profiles.0[&roles[1].profile].agent, "pi");
+    assert_eq!(
+        loaded.agent_profiles.0[&roles[1].profile].model.as_deref(),
+        Some("sonnet")
+    );
+    assert_eq!(loaded.agent_profiles.0[&roles[2].profile].agent, "pi");
+}
+
+#[test]
 fn chains_inherit_launch_fields_but_render_each_own_craft() {
     let root = fixture();
     write(root.path(), "traits/asking.md", "Ask well.");

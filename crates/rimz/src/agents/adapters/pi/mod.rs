@@ -322,6 +322,7 @@ pub(in crate::agents) struct PiAdapter;
 
 const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
+        runs_other_providers_models: true,
         mode: None,
         effort: Some("xhigh"),
         models: &[],

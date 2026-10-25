@@ -313,7 +313,7 @@ To try a profile on a different provider without changing it, add `--agent`:
 rimz agents planner --agent codex --model gpt-5.3-codex
 ```
 
-The launched handle is still `@planner`. The profile or kind you name supplies the engine, and the original keeps the job: its permission mode, budget, skills, and prompt files all carry over. The swap applies to that launch alone and is never written back, so a later restart refuses the provider mismatch and points at a fresh `--agent` launch. Which field wins when both sides set one is in the [launch reference](../reference/cli/agents.md#shared-launch-params).
+The launched handle is still `@planner`. The profile or kind you name supplies the engine, and the original keeps the job: its permission mode, budget, skills, and prompt files all carry over. Pi also keeps the original model when the replacement names none. Other provider changes drop it with a warning, unless the replacement or launch supplies a model. The profile file stays unchanged, but the launch records the `--agent` base and restart replays it. Restart refuses only when the current profile resolves to a different provider and no saved base restores the original kind. Which field wins when both sides set one is in the [launch reference](../reference/cli/agents.md#shared-launch-params).
 
 Where profiles live, how they inherit from each other, and the per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
 
