@@ -382,7 +382,7 @@ jq '.worktree_groups[].rows[] | select(.handle == "coder")' /tmp/snap.json
 
 Two rules for a check whose subject is time:
 
-- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and do not delegate work to provider subagents, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
+- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and do not delegate work to provider subagents, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A native-delegating parent must not be offered RimZ delegation: omit `rimz-subagents` from its explicit skills list, since a kind base already counts as a launchable child. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
 - Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
 
 ### Age a card into a stale line with an expired cache
