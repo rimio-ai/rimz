@@ -29,17 +29,16 @@ pub(crate) fn validate_sheet_geometry(bytes: &[u8]) -> Result<(), FrameErr> {
     validate_dimensions(sheet_dimensions(bytes)?)
 }
 
-pub(crate) fn decode_sheet(bytes: &[u8]) -> Result<Vec<RgbaImage>, FrameErr> {
+pub(crate) fn decode_sheet(bytes: &[u8]) -> Result<impl Iterator<Item = RgbaImage>, FrameErr> {
     let sheet = match sniff(bytes)? {
         SheetFormat::WebP => decode_webp_rgba(bytes)?,
         SheetFormat::Png => decode_png_rgba(bytes)?,
     };
     validate_decoded_sheet(&sheet)?;
-    Ok((0..FRAME_COUNT)
-        .map(|index| slice_frame(&sheet, index))
-        .collect())
+    Ok((0..FRAME_COUNT).map(move |index| slice_frame(&sheet, index)))
 }
 
+/// Decode one sheet into terminal-ready cell grids.
 #[cfg(test)]
 fn prepare_cell_sheet(
     bytes: &[u8],
@@ -47,14 +46,10 @@ fn prepare_cell_sheet(
     aspect: CellAspect,
 ) -> Result<Vec<PetCellGrid>, FrameErr> {
     Ok(decode_sheet(bytes)?
-        .into_iter()
         .map(|frame| super::cellart::render_frame(&frame, size.cols, size.rows, aspect))
         .collect())
 }
 
-/// Decode one sheet into terminal-ready cell grids. The decoded RGBA frames
-/// stay local to this background preparation call and drop before the grids
-/// cross back to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SheetFormat {
     WebP,
@@ -286,7 +281,7 @@ mod tests {
         let bytes = solid_png(SHEET_WIDTH, SHEET_HEIGHT, [9, 8, 7, 6]);
 
         validate_sheet_geometry(&bytes).unwrap();
-        let frames = decode_sheet(&bytes).unwrap();
+        let frames = decode_sheet(&bytes).unwrap().collect::<Vec<_>>();
 
         assert_eq!(frames.len(), FRAME_COUNT);
         assert_eq!(frames[0].width, FRAME_WIDTH);
@@ -308,7 +303,7 @@ mod tests {
             }
         }
         let bytes = encode_png(SHEET_WIDTH, SHEET_HEIGHT, &data);
-        let frames = decode_sheet(&bytes).unwrap();
+        let frames = decode_sheet(&bytes).unwrap().collect::<Vec<_>>();
         let size = super::super::DASHBOARD_CELL_PET;
 
         for aspect in [
