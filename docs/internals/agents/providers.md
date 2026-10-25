@@ -41,7 +41,7 @@ Paid usage keeps missing fields missing: an uncapped `ex` row invents no cap, an
 
 ### Metered and unmetered
 
-Metering decides which balance row a panel paints. A subscription or ChatGPT login is metered: it draws on rate-limit windows, painted as draining bars. An API-key login is unmetered: it has no included windows, so the panel paints one `api` row from trailing-month transcript spend against an optional display ceiling. `metered: None` is unknown, and aggregation infers it ([Producer aggregation](#producer-aggregation)).
+Metering decides which balance row a panel paints. A subscription or ChatGPT login is metered: it draws on rate-limit windows, painted as draining bars. An API-key login, a Claude key helper, or a positively identified Claude Console profile is unmetered: it has no included windows, so the panel paints one `api` row from the history pool's trailing-month transcript spend against an optional display ceiling, with no provider balance. A Claude environment or setup token remains metered ([classification](./adapter_claude.md#account-and-balance)). `metered: None` is unknown, and aggregation infers it ([Producer aggregation](#producer-aggregation)).
 
 ### Account scope
 
@@ -138,7 +138,7 @@ Live windows are partitioned by [birth account key](./model.md#the-rollup) befor
 
 ### Paid and API rows
 
-A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered panel synthesizes `ExtraCredits::Known` from the login's trailing-month transcript spend. Either way, when the provider reported neither a cap nor unlimited credit, the display ceiling from `[accounts.usage_limit_usd]` (a map such as `claude = 50.0`) applies: a capped row drains by the spend and shows remaining dollars, and an uncapped API key paints a full `∞` bar. Reported unlimited credit always paints `∞`, even with a display ceiling. The ceiling is display only, and no provider enforces it.
+A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered panel synthesizes `ExtraCredits::Known` from the history pool's trailing-month transcript spend, so accounts with shared history share that spend. Either way, when the provider reported neither a cap nor unlimited credit, the display ceiling from `[accounts.usage_limit_usd]` (a map such as `claude = 50.0`) applies: a capped row drains by the spend and shows remaining dollars, and an uncapped API-billed login paints a full `∞` bar. Reported unlimited credit always paints `∞`, even with a display ceiling. The ceiling is display only, and no provider enforces it.
 
 A credits entry older than `CREDITS_DISPLAY_MAX_AGE` (24 hours), absent, or scope-mismatched leaves no `ex` row, including when a display ceiling alone is configured. API spend projections are never persisted, since the spending walk and config rebuild them.
 
@@ -358,7 +358,7 @@ Each adapter page maps its native surfaces onto these types, and this table is t
 
 | Provider | Account identity → `AgentAccount` | Balance → `AgentRateLimits` / `ExtraCredits` |
 | --- | --- | --- |
-| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered. Same-login credential metadata refines Max subtiers, and a recognised bound live profile overrides the saved plan | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
+| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered; API keys, key helpers, and positively identified Console profiles are unmetered. Same-login credential metadata refines Max subtiers, and a recognised bound live profile overrides the saved plan | metered: statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets; unmetered: transcript spend only ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
 | Codex | app-server `planType`, or `$CODEX_HOME/auth.json` | app-server windows and credits, then the OAuth usage query with reset credits ([adapter_codex.md](./adapter_codex.md#account-and-balance)) |
 | Antigravity | statusline, or the running `agy` local service → plan, metered | paired status and quota read on one endpoint → hashed kind-wide owner, authoritative 5h and weekly windows. Credits and dollars unknown ([adapter_antigravity.md](./adapter_antigravity.md#account-and-balance)) |
 | Copilot | `$COPILOT_HOME/config.json` non-secret login → metered | internal account query → plan, named monthly `cr` or `cht`, and `prm` scopes, and no paid-usage reading ([adapter_copilot.md](./adapter_copilot.md#account-and-balance)) |

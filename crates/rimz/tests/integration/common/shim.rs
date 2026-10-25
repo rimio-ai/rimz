@@ -20,6 +20,11 @@ pub fn hermetic_providers<'a>(
     command
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
+        .env("ANTHROPIC_CONFIG_DIR", env.home_root.join("anthropic"))
+        .env_remove("ANTHROPIC_PROFILE")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR")
         .env("PATH", provider_bin(env))
         .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
 }

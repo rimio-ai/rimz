@@ -7,9 +7,11 @@
 //! [`AgentDefinition::probe_account`]: crate::agents::AgentDefinition::probe_account
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::agents::account::{AccountProbe, AccountProbeError};
@@ -81,7 +83,7 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     if output.timed_out {
         return AccountProbe::Unavailable(AccountProbeError::TimedOut);
     }
-    let mut probe = exit_outcome(output.status.code(), &output.stdout);
+    let mut probe = exit_outcome(output.status.code(), &output.stdout, login_env);
     if let AccountProbe::Found(account) = &mut probe {
         account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
         if account.plan.as_deref() == Some("max") {
@@ -120,9 +122,13 @@ pub(super) fn profile_fingerprint(email: &str, organization: &str) -> Option<Str
 /// when logged out while still printing `"loggedIn": false`, so a failed exit
 /// is a logout only when its stdout says exactly that; any other failed exit,
 /// an error object included, is `Unavailable`.
-fn exit_outcome(code: Option<i32>, stdout: &[u8]) -> AccountProbe {
+fn exit_outcome(
+    code: Option<i32>,
+    stdout: &[u8],
+    login_env: &BTreeMap<String, String>,
+) -> AccountProbe {
     if code == Some(0) {
-        return parse_claude_auth(stdout);
+        return parse_claude_auth(stdout, login_env);
     }
     match serde_json::from_slice::<ClaudeAuthStatus>(stdout) {
         Ok(status) if status.logged_in == Some(false) => AccountProbe::LoggedOut,
@@ -146,10 +152,11 @@ struct ClaudeAuthStatus {
 }
 
 /// Map a `claude auth status` JSON payload onto a probe outcome. The auth method
-/// determines metering; the subscription tier is an independent display label.
+/// and Console profile evidence determine metering; the subscription tier is
+/// an independent display label.
 /// Unparseable output is `Unavailable` (the CLI misbehaved — retry), not a
 /// confident logout.
-fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
+fn parse_claude_auth(stdout: &[u8], login_env: &BTreeMap<String, String>) -> AccountProbe {
     let Ok(status) = serde_json::from_slice::<ClaudeAuthStatus>(stdout) else {
         return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
@@ -164,8 +171,11 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     if status.logged_in != Some(true) && plan.is_none() && auth_method.is_none() {
         return AccountProbe::LoggedOut;
     }
-    // API-key logins report `apiKey`; a Console sign-in with a stored key reports `api_key` (2.1.286+).
-    let metered = auth_method.map(|method| !matches!(method.as_str(), "apiKey" | "api_key"));
+    let metered = auth_method.map(|method| match method.as_str() {
+        "apiKey" | "api_key" | "api_key_helper" => false,
+        "oauth_token" => !is_console_login(login_env),
+        _ => true,
+    });
     let profile_fingerprint = (status.auth_method.as_deref() == Some("claude.ai"))
         .then(|| profile_fingerprint(status.email.as_deref()?, status.org_id.as_deref()?))
         .flatten();
@@ -177,9 +187,251 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     })
 }
 
+/// Whether an `oauth_token` login is a Claude Console profile. Auth status
+/// reports `oauth_token` for every token source, so the login counts as
+/// Console only when no higher-ranked source (an environment, settings, or FD
+/// token) is configured and the shared Anthropic profile store resolves to a
+/// usable profile. Any missing evidence leaves the login metered.
+fn is_console_login(login_env: &BTreeMap<String, String>) -> bool {
+    const TOKEN_SOURCES: [&str; 3] = [
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    ];
+    if TOKEN_SOURCES
+        .iter()
+        .any(|key| login_env.get(*key).is_some_and(|value| !value.is_empty()))
+    {
+        return false;
+    }
+    let Ok(settings) = super::install::claude_settings_path(login_env)
+        .and_then(|path| super::install::read_existing_json(&path))
+    else {
+        return false;
+    };
+    if settings
+        .get("env")
+        .and_then(Value::as_object)
+        .is_some_and(|env| {
+            TOKEN_SOURCES.iter().any(|key| {
+                env.get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.is_empty())
+            })
+        })
+    {
+        return false;
+    }
+    let env_value = |key: &str| {
+        login_env
+            .get(key)
+            .and_then(|value| non_empty_trimmed(value))
+    };
+    let Some(root) = env_value("ANTHROPIC_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| env_value("XDG_CONFIG_HOME").map(|home| PathBuf::from(home).join("anthropic")))
+        .or_else(|| env_value("HOME").map(|home| PathBuf::from(home).join(".config/anthropic")))
+    else {
+        return false;
+    };
+    let profile = env_value("ANTHROPIC_PROFILE")
+        .or_else(|| {
+            std::fs::read_to_string(root.join("active_config"))
+                .ok()
+                .and_then(|text| non_empty_trimmed(&text))
+        })
+        .unwrap_or_else(|| "default".to_owned());
+    let Ok(bytes) = std::fs::read(root.join("configs").join(format!("{profile}.json"))) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    let Some(auth) = config.get("authentication") else {
+        return false;
+    };
+    match auth.get("type").and_then(Value::as_str) {
+        Some("oidc_federation") => true,
+        Some("user_oauth") => {
+            let credentials = match auth.get("credentials_path") {
+                None | Some(Value::Null) => {
+                    root.join("credentials").join(format!("{profile}.json"))
+                }
+                Some(Value::String(path)) => PathBuf::from(path),
+                _ => return false,
+            };
+            std::fs::metadata(credentials).is_ok_and(|meta| meta.is_file() && meta.len() != 0)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn console_env(home: &std::path::Path) -> BTreeMap<String, String> {
+        let store = home.join(".config/anthropic");
+        std::fs::create_dir_all(store.join("configs")).unwrap();
+        std::fs::create_dir_all(store.join("credentials")).unwrap();
+        std::fs::write(
+            store.join("configs/default.json"),
+            r#"{"authentication":{"type":"user_oauth"}}"#,
+        )
+        .unwrap();
+        std::fs::write(store.join("credentials/default.json"), "synthetic").unwrap();
+        BTreeMap::from([
+            ("HOME".to_owned(), home.to_str().unwrap().to_owned()),
+            (
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                home.to_str().unwrap().to_owned(),
+            ),
+        ])
+    }
+
+    fn metered(method: &str, env: &BTreeMap<String, String>) -> Option<bool> {
+        let body = serde_json::json!({"loggedIn":true,"authMethod":method});
+        let account = found(parse_claude_auth(body.to_string().as_bytes(), env), method);
+        assert_eq!(account.plan, None);
+        assert_eq!(account.profile_fingerprint, None);
+        account.metered
+    }
+
+    #[test]
+    fn oauth_token_requires_an_unblocked_usable_console_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            ("console", false),
+            ("ANTHROPIC_AUTH_TOKEN", true),
+            ("CLAUDE_CODE_OAUTH_TOKEN", true),
+            ("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", true),
+            ("settings-token", true),
+            ("invalid-settings", true),
+            ("missing-store", true),
+            ("unknown-type", true),
+            ("empty-credentials", true),
+            ("oidc-federation", false),
+            ("api-key-env", false),
+            ("subscription", true),
+            ("custom-credentials", false),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(case, _)| {
+                let home = dir.path().join(case);
+                let mut env = console_env(&home);
+                let store = home.join(".config/anthropic");
+                let config = store.join("configs/default.json");
+                let credentials = store.join("credentials/default.json");
+                match *case {
+                    "settings-token" => std::fs::write(
+                        home.join("settings.json"),
+                        r#"{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"synthetic"}}"#,
+                    )
+                    .unwrap(),
+                    "invalid-settings" => {
+                        std::fs::write(home.join("settings.json"), "not json").unwrap();
+                    }
+                    "missing-store" => std::fs::remove_dir_all(&store).unwrap(),
+                    "unknown-type" => {
+                        std::fs::write(&config, r#"{"authentication":{"type":"future"}}"#).unwrap()
+                    }
+                    "empty-credentials" => std::fs::write(&credentials, "").unwrap(),
+                    "oidc-federation" => {
+                        std::fs::write(&config, r#"{"authentication":{"type":"oidc_federation"}}"#)
+                            .unwrap();
+                        std::fs::remove_file(credentials).unwrap();
+                    }
+                    "api-key-env" => {
+                        env.insert("ANTHROPIC_API_KEY".to_owned(), "synthetic".to_owned());
+                    }
+                    "custom-credentials" => {
+                        std::fs::rename(&credentials, home.join("custom-credentials")).unwrap();
+                        std::fs::write(
+                            &config,
+                            serde_json::json!({"authentication":{
+                                "type":"user_oauth",
+                                "credentials_path":home.join("custom-credentials")
+                            }})
+                            .to_string(),
+                        )
+                        .unwrap();
+                    }
+                    "console" | "subscription" => {}
+                    blocker => {
+                        env.insert(blocker.to_owned(), "synthetic".to_owned());
+                    }
+                }
+                let method = if *case == "subscription" {
+                    "claude.ai"
+                } else {
+                    "oauth_token"
+                };
+                (*case, metered(method, &env))
+            })
+            .collect();
+        assert_eq!(actual, cases.map(|(case, expected)| (case, Some(expected))));
+    }
+
+    #[test]
+    fn console_store_root_uses_config_dir_then_xdg_then_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = console_env(dir.path());
+        env.insert("ANTHROPIC_CONFIG_DIR".to_owned(), " ".to_owned());
+        env.insert("XDG_CONFIG_HOME".to_owned(), " ".to_owned());
+        let mut actual = vec![metered("oauth_token", &env)];
+        let xdg = dir.path().join("xdg");
+        env.insert("XDG_CONFIG_HOME".to_owned(), format!(" {} ", xdg.display()));
+        actual.push(metered("oauth_token", &env));
+        std::fs::create_dir_all(&xdg).unwrap();
+        std::fs::rename(dir.path().join(".config/anthropic"), xdg.join("anthropic")).unwrap();
+        actual.push(metered("oauth_token", &env));
+        let config = dir.path().join("explicit");
+        env.insert(
+            "ANTHROPIC_CONFIG_DIR".to_owned(),
+            format!(" {} ", config.display()),
+        );
+        actual.push(metered("oauth_token", &env));
+        std::fs::rename(xdg.join("anthropic"), &config).unwrap();
+        actual.push(metered("oauth_token", &env));
+        assert_eq!(actual, [false, true, false, true, false].map(Some));
+    }
+
+    #[test]
+    fn console_profile_uses_env_then_active_config_then_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = console_env(dir.path());
+        let store = dir.path().join(".config/anthropic");
+        env.insert("ANTHROPIC_PROFILE".to_owned(), " ".to_owned());
+        let mut actual = vec![metered("oauth_token", &env)];
+        std::fs::write(store.join("active_config"), " active\n").unwrap();
+        actual.push(metered("oauth_token", &env));
+        std::fs::rename(
+            store.join("configs/default.json"),
+            store.join("configs/active.json"),
+        )
+        .unwrap();
+        std::fs::rename(
+            store.join("credentials/default.json"),
+            store.join("credentials/active.json"),
+        )
+        .unwrap();
+        actual.push(metered("oauth_token", &env));
+        env.insert("ANTHROPIC_PROFILE".to_owned(), " chosen ".to_owned());
+        actual.push(metered("oauth_token", &env));
+        std::fs::rename(
+            store.join("configs/active.json"),
+            store.join("configs/chosen.json"),
+        )
+        .unwrap();
+        std::fs::rename(
+            store.join("credentials/active.json"),
+            store.join("credentials/chosen.json"),
+        )
+        .unwrap();
+        actual.push(metered("oauth_token", &env));
+        assert_eq!(actual, [false, true, false, true, false].map(Some));
+    }
 
     #[test]
     fn profile_binding_requires_subscription_identity_and_redacts_debug() {
@@ -213,7 +465,12 @@ mod tests {
             }),
         ]
         .iter()
-        .map(|body| found(parse_claude_auth(body.to_string().as_bytes()), "identity"))
+        .map(|body| {
+            found(
+                parse_claude_auth(body.to_string().as_bytes(), &BTreeMap::new()),
+                "identity",
+            )
+        })
         .collect();
         assert_eq!(
             accounts
@@ -271,6 +528,7 @@ mod tests {
 
     #[test]
     fn parses_metered_subscription_unmetered_api_key_and_failure_states() {
+        let env = BTreeMap::new();
         let json = br#"{
             "loggedIn": true,
             "authMethod": "claude.ai",
@@ -278,24 +536,35 @@ mod tests {
             "email": "user@example.com",
             "subscriptionType": "max"
         }"#;
-        let account = found(parse_claude_auth(json), "metered account");
+        let account = found(parse_claude_auth(json, &env), "metered account");
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.metered, Some(true));
 
         let json = br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#;
-        let account = found(parse_claude_auth(json), "metered account without tier");
+        let account = found(
+            parse_claude_auth(json, &env),
+            "metered account without tier",
+        );
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(true));
 
         let json = br#"{ "loggedIn": true, "authMethod": "apiKey" }"#;
-        let account = found(parse_claude_auth(json), "api-key account");
+        let account = found(parse_claude_auth(json, &env), "api-key account");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
 
         let json = br#"{ "loggedIn": true, "authMethod": "api_key" }"#;
         let account = found(
-            parse_claude_auth(json),
+            parse_claude_auth(json, &env),
             "api-key account (2.1.286 spelling)",
+        );
+        assert_eq!(account.plan, None);
+        assert_eq!(account.metered, Some(false));
+
+        let json = br#"{ "loggedIn": true, "authMethod": "api_key_helper" }"#;
+        let account = found(
+            parse_claude_auth(json, &env),
+            "helper-issued api-key account",
         );
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
@@ -305,33 +574,40 @@ mod tests {
             "authMethod": " ",
             "subscriptionType": " "
         }"#;
-        let account = found(parse_claude_auth(json), "login without method or tier");
+        let account = found(
+            parse_claude_auth(json, &env),
+            "login without method or tier",
+        );
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, None);
 
         let json = br#"{ "loggedIn": true, "subscriptionType": " max " }"#;
-        let account = found(parse_claude_auth(json), "tier without method");
+        let account = found(parse_claude_auth(json, &env), "tier without method");
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.metered, None);
 
         let json = br#"{ "loggedIn": false }"#;
-        assert!(matches!(parse_claude_auth(json), AccountProbe::LoggedOut));
+        assert!(matches!(
+            parse_claude_auth(json, &env),
+            AccountProbe::LoggedOut
+        ));
 
         assert!(matches!(
-            parse_claude_auth(b"not json"),
+            parse_claude_auth(b"not json", &env),
             AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
     }
 
     #[test]
     fn a_failed_exit_is_logged_out_only_on_a_confident_logout() {
+        let env = BTreeMap::new();
         let logged_out = br#"{ "loggedIn": false, "authMethod": "none" }"#;
         assert!(matches!(
-            exit_outcome(Some(1), logged_out),
+            exit_outcome(Some(1), logged_out, &env),
             AccountProbe::LoggedOut
         ));
         assert!(matches!(
-            exit_outcome(Some(0), logged_out),
+            exit_outcome(Some(0), logged_out, &env),
             AccountProbe::LoggedOut
         ));
         for stdout in [
@@ -343,7 +619,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    exit_outcome(Some(1), stdout),
+                    exit_outcome(Some(1), stdout, &env),
                     AccountProbe::Unavailable(AccountProbeError::ExitNonZero(Some(1)))
                 ),
                 "{}",
@@ -351,9 +627,12 @@ mod tests {
             );
         }
         let json = br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#;
-        found(exit_outcome(Some(0), json), "a zero exit parses as before");
+        found(
+            exit_outcome(Some(0), json, &env),
+            "a zero exit parses as before",
+        );
         assert!(
-            matches!(exit_outcome(Some(0), b"{}"), AccountProbe::LoggedOut),
+            matches!(exit_outcome(Some(0), b"{}", &env), AccountProbe::LoggedOut),
             "a zero exit parses as before"
         );
     }

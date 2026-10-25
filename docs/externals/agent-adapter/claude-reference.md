@@ -749,12 +749,12 @@ The file lives at `/etc/claude-code/managed-settings.json` on Linux and WSL, `/L
 
 ## Auth surface
 
-`claude auth status` prints the login as JSON by default, or text with `--text`, and exits 0 when logged in and 1 when not ([CLI reference](https://code.claude.com/docs/en/cli-reference)). The docs publish no field list. The fields below are checked against the 2.1.296 Linux package's JSON construction. What RimZ reads from them is [adapter_claude.md → Account and balance](../../internals/agents/adapter_claude.md#account-and-balance).
+`claude auth status` prints the login as JSON by default, or text with `--text`, and exits 0 when logged in and 1 when not ([CLI reference](https://code.claude.com/docs/en/cli-reference)). The docs publish no field list. The field list was checked against the 2.1.296 Linux package's JSON construction; token-source and identity mappings below follow the 2.1.310 bundle. What RimZ reads from them is [adapter_claude.md → Account and balance](../../internals/agents/adapter_claude.md#account-and-balance).
 
 | Field | Meaning |
 | --- | --- |
 | `loggedIn` | whether a login is present |
-| `authMethod` | login type, such as `claude.ai`. A Console sign-in with a stored API key reports `api_key` from 2.1.286 ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21286)) |
+| `authMethod` | `claude.ai` for the legacy subscription credential, `api_key_helper` for `apiKeyHelper`, and `oauth_token` for a profile-store Console login or an environment/FD token. A stored API key reports `api_key` from 2.1.286 ([release notes](https://github.com/anthropics/claude-code/blob/v2.1.296/CHANGELOG.md#21286)); older keys report `apiKey` |
 | `apiProvider` | API provider in use |
 | `subscriptionType` | plan tier, such as `max` or `pro` |
 | `email`, `orgId`, `orgName` | account identity |
@@ -764,7 +764,11 @@ The file lives at `/etc/claude-code/managed-settings.json` on Linux and WSL, `/L
 | `allowedProviders` | present when provider policy defines the allowed set |
 | `apiKeySource` | present when the client identifies an API-key source |
 
-Identity fields depend on the login. A `claude.ai` login includes `email`, `orgId`, `orgName`, and `subscriptionType`, each nullable. A stored Console login can include the three identity fields. A gateway login adds only `email`. Ordinary environment API-key logins omit those identity fields and `subscriptionType`.
+Identity fields depend on the login. A `claude.ai` login includes `email`, `orgId`, `orgName`, and `subscriptionType`, each nullable. An `oauth_token` login, including a Console profile, prints none of those fields. A stored API key can include the three identity fields. A gateway login adds only `email`. Ordinary environment API-key logins omit those identity fields and `subscriptionType`.
+
+In the [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310), the token-source order is `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` (or a launcher-host in-memory token), the FD/CCR token file, `apiKeyHelper`, the shared Anthropic profile store, then the legacy `claude.ai` credential. Auth-status JSON does not distinguish the profile store from the environment/FD sources: all report `oauth_token`.
+
+The profile-store root is trimmed `ANTHROPIC_CONFIG_DIR`, else trimmed `$XDG_CONFIG_HOME/anthropic`, else `$HOME/.config/anthropic`. The profile is trimmed `ANTHROPIC_PROFILE`, else trimmed contents of `<root>/active_config`, else `default`. `<root>/configs/<profile>.json` supplies `authentication.type`: `user_oauth` needs a readable, non-blank credentials file at `authentication.credentials_path`, or `<root>/credentials/<profile>.json` when absent; `oidc_federation` needs no such file. An explicit credentials path is used as given, without root-relative resolution or tilde expansion.
 
 In the [2.1.310 bundle](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.310), auth status prints saved `oauthAccount.emailAddress` and `organizationUuid` as `email` and `orgId`. Sign-in populates those from the profile's `account.email` and `organization.uuid`. The saved `oauthAccount` in `.claude.json` also holds `organizationType`, `organizationRateLimitTier`, and `profileFetchedAt`, Claude Code's own copy of the profile.
 
