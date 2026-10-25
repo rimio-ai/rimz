@@ -755,7 +755,6 @@ fn load_prepared_pet(
     let asset = asset::resolve_and_decode(&source, |bytes| match key.tier {
         PetRenderTier::Cell => Ok(LoadedPetAsset::Cell(
             frames::decode_sheet(bytes)?
-                .into_iter()
                 .map(|frame| {
                     cellart::render_frame(&frame, key.size.cols, key.size.rows, key.aspect)
                 })
@@ -763,7 +762,6 @@ fn load_prepared_pet(
         )),
         PetRenderTier::Pixel => Ok(LoadedPetAsset::Pixel(
             frames::decode_sheet(bytes)?
-                .into_iter()
                 .map(|frame| Arc::from(encode_png(frame.width, frame.height, &frame.data)))
                 .collect(),
         )),

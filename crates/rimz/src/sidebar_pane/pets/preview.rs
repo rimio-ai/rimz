@@ -17,7 +17,9 @@ use crate::sidebar_pane::pixel::RgbaImage;
 const PREVIEW_FETCH_CONCURRENCY: usize = 2;
 
 fn load_frames(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
-    asset::resolve_and_decode(&source, super::frames::decode_sheet)
+    asset::resolve_and_decode(&source, |bytes| {
+        Ok(super::frames::decode_sheet(bytes)?.collect())
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
