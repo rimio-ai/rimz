@@ -806,9 +806,9 @@ pub(crate) trait CountedPayload: DedupPayload {
 }
 
 pub(crate) struct SidechainDedup<P> {
-    by_exact_key: FastHashMap<(String, Option<String>), P>,
-    by_provider_key: FastHashMap<String, P>,
-    msg_has_non_sidechain: FastHashMap<String, bool>,
+    by_exact_key: FastHashMap<(Box<str>, Option<Box<str>>), P>,
+    by_provider_key: FastHashMap<Box<str>, P>,
+    msg_has_non_sidechain: FastHashMap<Box<str>, bool>,
     free: Vec<P>,
 }
 
@@ -863,7 +863,7 @@ impl<P: DedupPayload> SidechainDedup<P> {
             let is_sidechain_replay = payload.entry().is_sidechain
                 && self
                     .msg_has_non_sidechain
-                    .get(msg_id.as_str())
+                    .get(msg_id.as_ref())
                     .copied()
                     .unwrap_or(false);
             if !is_sidechain_replay {

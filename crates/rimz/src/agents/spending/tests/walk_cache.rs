@@ -181,8 +181,8 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     cache_write: 0,
                     cache_read: 0,
                     tool_calls: Default::default(),
-                    message_id: Some("msg-old".to_string()),
-                    request_id: Some("req-old".to_string()),
+                    message_id: Some("msg-old".into()),
+                    request_id: Some("req-old".into()),
                     dedup_key: None,
                     thread_id: None,
                     is_sidechain: false,
@@ -734,9 +734,9 @@ fn spending_walk_persists_cursor_before_aggregate() {
     let cache_path = dir.path().join("spending.json");
     let transcript = write_jsonl(dir.path(), "claude.jsonl", &[]);
     let mut old_a = cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old");
-    old_a.model = Some("claude-opus-4-8".to_owned());
+    old_a.model = Some("claude-opus-4-8".into());
     let mut old_b = cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old");
-    old_b.model = Some("claude-opus-4-8".to_owned());
+    old_b.model = Some("claude-opus-4-8".into());
     let mut cache = read_spending_cache(&cache_path);
     cache.files = HashMap::from([cached_file(&transcript, vec![old_a, old_b])]);
     write_spending_cache(&cache_path, &cache);

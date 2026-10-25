@@ -223,7 +223,7 @@ fn fold_tagged_entries<'a>(
         absorb_entry(
             breakdown
                 .models
-                .entry(selected.entry.model.clone())
+                .entry(selected.entry.model.as_deref().map(str::to_owned))
                 .or_default(),
             selected.entry,
         );
@@ -377,7 +377,7 @@ mod tests {
             output: 3,
             cache_write: 4,
             cache_read: 5,
-            dedup_key: Some(key.to_owned()),
+            dedup_key: Some(key.into()),
             ..CachedEntry::default()
         }
     }
@@ -430,8 +430,8 @@ mod tests {
     #[test]
     fn fold_deduplicates_message_replays_across_sessions() {
         let first = CachedEntry {
-            message_id: Some("message".to_owned()),
-            request_id: Some("request".to_owned()),
+            message_id: Some("message".into()),
+            request_id: Some("request".into()),
             input: 12,
             cost_usd: 0.5,
             ..CachedEntry::default()

@@ -52,9 +52,9 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
     };
     let ts_secs = snapshot.stat.mtime_secs.max(0) as u64;
     let entry = CachedEntry {
-        dedup_key: Some(format!("droid-settings:{session_id}")),
-        thread_id: Some(session_id),
-        model: Some(canonical),
+        dedup_key: Some(format!("droid-settings:{session_id}").into_boxed_str()),
+        thread_id: Some(session_id.into_boxed_str()),
+        model: Some(canonical.as_str().into()),
         ..CachedEntry::new(ts_secs, cost_usd, &split)
     };
     SpendParse {

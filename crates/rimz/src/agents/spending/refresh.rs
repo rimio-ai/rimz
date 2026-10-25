@@ -401,8 +401,8 @@ pub(crate) fn has_healed_unknown(
 
 pub(crate) fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
     let mut deduped = Vec::with_capacity(entries.len());
-    let mut by_exact_key = FastHashMap::<(String, Option<String>), usize>::default();
-    let mut by_provider_key = FastHashMap::<String, usize>::default();
+    let mut by_exact_key = FastHashMap::<(Box<str>, Option<Box<str>>), usize>::default();
+    let mut by_provider_key = FastHashMap::<Box<str>, usize>::default();
     for entry in entries.drain(..) {
         let Some(msg_id) = entry.message_id.clone() else {
             if let Some(key) = entry.dedup_key.clone() {
@@ -509,14 +509,14 @@ mod tests {
             cache_write: 0,
             cache_read: 0,
             tool_calls: Default::default(),
-            message_id: Some(format!("m-{ts_secs}")),
+            message_id: Some(format!("m-{ts_secs}").into_boxed_str()),
             request_id: None,
             dedup_key: None,
             thread_id: None,
             is_sidechain: false,
             has_speed: false,
             fast: false,
-            model: Some("fixture".to_owned()),
+            model: Some("fixture".into()),
             rolled: false,
             timing: None,
         }

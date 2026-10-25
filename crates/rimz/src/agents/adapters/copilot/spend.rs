@@ -302,15 +302,12 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                         })
                         .unwrap_or(0.0);
                     entries.push(CachedEntry {
-                        dedup_key: Some(dedup_key(
-                            &session_id,
-                            id.as_deref(),
-                            timestamp,
-                            &model,
-                            current,
-                        )),
-                        thread_id: Some(session_id.clone()),
-                        model: Some(model),
+                        dedup_key: Some(
+                            dedup_key(&session_id, id.as_deref(), timestamp, &model, current)
+                                .into_boxed_str(),
+                        ),
+                        thread_id: Some(session_id.clone().into_boxed_str()),
+                        model: Some(model.as_str().into()),
                         ..CachedEntry::new(ts_secs, cost_usd, &split)
                     });
                 }

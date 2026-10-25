@@ -113,8 +113,8 @@ fn fold_records(
                 .and_then(Path::parent)
                 .and_then(Path::file_name)
                 .and_then(|name| name.to_str())
-                .map(ToOwned::to_owned),
-            model: Some(model_label),
+                .map(Into::into),
+            model: Some(model_label.as_str().into()),
             ..CachedEntry::new(ts_secs, cost_usd, &split)
         });
     }

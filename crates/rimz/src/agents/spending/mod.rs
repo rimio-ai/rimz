@@ -64,7 +64,7 @@ pub(crate) use aggregate::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
 pub(in crate::agents) use cache::response_timing;
 use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
 pub use cache::{
-    CachedEntry, FileCacheEntry, ResponseTiming, SpendCursor, SpendParse, SpendUpdate,
+    CachedEntry, FileCacheEntry, ResponseTiming, SharedName, SpendCursor, SpendParse, SpendUpdate,
     SpendingDiskCache, read_spending_cache, write_spending_cache,
 };
 #[cfg(test)]

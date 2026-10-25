@@ -147,6 +147,8 @@ During a publishing walk, `WALK_CHECKPOINT_INTERVAL` (1 second) checkpoints curs
 
 The long-lived walker memo keeps only `(file index, entry index)` locations of dedup winners, keyed by cache generation and signature. Aggregation borrows paths and thread ids from the cache, and allocates session strings only for the published live-baseline and session-key outputs. An append, truncate, compaction, or file-set change rebuilds the locations once.
 
+In memory, rows share model names through one process-wide table and hold provider IDs as boxed strings. Before inserting a new name, the table drops names no live handle references; its retained set is bounded by the distinct names live at the last insertion plus the new name. These storage choices leave the on-disk form unchanged.
+
 ### Schema versions
 
 Three version constants gate schema changes:

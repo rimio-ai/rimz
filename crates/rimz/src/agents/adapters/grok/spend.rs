@@ -410,9 +410,9 @@ fn entry(
     let model_key = model.unwrap_or("aggregate");
     let split = token_split(&totals);
     CachedEntry {
-        dedup_key: Some(format!("grok:{session_id}:{prompt_id}:{model_key}")),
-        thread_id: Some(session_id.to_owned()),
-        model: model.map(ToOwned::to_owned),
+        dedup_key: Some(format!("grok:{session_id}:{prompt_id}:{model_key}").into_boxed_str()),
+        thread_id: Some(session_id.into()),
+        model: model.map(Into::into),
         ..CachedEntry::new(ts_secs, cost_usd, &split)
     }
 }

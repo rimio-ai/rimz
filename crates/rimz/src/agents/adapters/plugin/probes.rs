@@ -106,8 +106,8 @@ pub(super) fn spend(
                 entry.cache_read.unwrap_or(0),
             );
             Some(CachedEntry {
-                thread_id: entry.thread_id,
-                model: entry.model,
+                thread_id: entry.thread_id.map(String::into_boxed_str),
+                model: entry.model.as_deref().map(Into::into),
                 ..CachedEntry::new(ts_secs, cost_usd, &split)
             })
         })

@@ -300,7 +300,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
             continue;
         }
         let mut cached = CachedEntry {
-            model: model.cloned(),
+            model: model.map(|model| model.as_str().into()),
             ..CachedEntry::new(ts_secs, cost, &split)
         };
         // Pi's durable session shape records each call once on the assistant

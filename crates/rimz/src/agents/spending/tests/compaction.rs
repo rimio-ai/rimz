@@ -48,26 +48,26 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
     let project_file = dir.path().join("claude.jsonl");
     let other_file = dir.path().join("other.jsonl");
     let mut old_project = cached_entry(NOW_SECS - 40 * 86_400, 1.0, "old-project");
-    old_project.model = Some("claude-opus-4-8".to_owned());
+    old_project.model = Some("claude-opus-4-8".into());
     old_project.timing = Some(ResponseTiming {
         ms: 2_000,
         output: 100,
     });
     let mut old_project_same_bucket = cached_entry(NOW_SECS - 40 * 86_400, 2.0, "old-project");
-    old_project_same_bucket.model = Some("claude-opus-4-8".to_owned());
+    old_project_same_bucket.model = Some("claude-opus-4-8".into());
     old_project_same_bucket.fast = true;
     old_project_same_bucket.timing = Some(ResponseTiming {
         ms: 4_000,
         output: 300,
     });
     let mut old_other = cached_entry(NOW_SECS - 60 * 86_400, 3.0, "old-other");
-    old_other.model = Some("claude-sonnet-4-6".to_owned());
+    old_other.model = Some("claude-sonnet-4-6".into());
     old_other.fast = true;
     let mut recent = cached_entry(NOW_SECS - RAW_RETAIN_SECS + 86_400, 4.0, "recent");
-    recent.model = Some("claude-opus-4-8".to_owned());
+    recent.model = Some("claude-opus-4-8".into());
     let expired_rollup_ts = NOW_SECS - 400 * 86_400;
     let mut expired_rollup = cached_entry(expired_rollup_ts, 9.0, "expired");
-    expired_rollup.model = Some("claude-opus-4-8".to_owned());
+    expired_rollup.model = Some("claude-opus-4-8".into());
     expired_rollup.rolled = true;
     let mut cache = SpendingDiskCache {
         files: HashMap::from([
@@ -188,14 +188,14 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         cache_write: 0,
         cache_read: 0,
         tool_calls: Default::default(),
-        message_id: Some("msg-1".to_owned()),
-        request_id: Some("req-1".to_owned()),
+        message_id: Some("msg-1".into()),
+        request_id: Some("req-1".into()),
         dedup_key: None,
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
         fast: false,
-        model: Some("claude-opus-4-8".to_owned()),
+        model: Some("claude-opus-4-8".into()),
         rolled: false,
         timing: None,
     };
@@ -242,14 +242,14 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         cache_write: 0,
         cache_read: 0,
         tool_calls: Default::default(),
-        message_id: Some("msg-1".to_owned()),
-        request_id: Some("req-1".to_owned()),
+        message_id: Some("msg-1".into()),
+        request_id: Some("req-1".into()),
         dedup_key: None,
         thread_id: None,
         is_sidechain: false,
         has_speed: false,
         fast: false,
-        model: Some("claude-opus-4-8".to_owned()),
+        model: Some("claude-opus-4-8".into()),
         rolled: false,
         timing: None,
     };

@@ -130,7 +130,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
             continue;
         }
         let mut cached = CachedEntry {
-            model: model.map(ToOwned::to_owned),
+            model: model.map(Into::into),
             ..CachedEntry::new(ts_secs, cost, &split)
         };
         for block in blocks.and_then(Value::as_array).into_iter().flatten() {

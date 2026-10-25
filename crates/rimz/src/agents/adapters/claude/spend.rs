@@ -570,11 +570,11 @@ fn usage_entry(
     };
 
     Some(CachedEntry {
-        message_id: meta.message_id,
-        request_id: meta.request_id,
+        message_id: meta.message_id.map(String::into_boxed_str),
+        request_id: meta.request_id.map(String::into_boxed_str),
         is_sidechain: meta.is_sidechain,
         has_speed: usage.speed.is_some(),
-        model: model.map(str::to_owned),
+        model: model.map(Into::into),
         ..CachedEntry::new(meta.ts_secs, cost_usd, &split)
     })
 }
