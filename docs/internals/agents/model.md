@@ -292,6 +292,8 @@ That pending wait also holds a supervised run open at a clean turn end. Agent st
 
 A marker counts only when it is newer than `last_activity`, so any newer hook event clears it. The exception is a `failed` row's turn-error marker, which counts when `turn_started_at` is present and the marker is at or after it. For legacy sidecars, [`effective_turn_error_class`](../../../crates/rimz/src/agents/state.rs) displays a `failed` marker as a spend- or rate-limit park when its label matches that limit; a Console usage-cap label stays `failed`.
 
+A turn-class change must check card and nested-child status and attention (including park demotion), operational status, agent and subagent reports, [doctor's account attribution](../../../crates/rimz/src/cli/doctor/agents.rs), [auto-continue](../../../crates/rimz/src/harness/auto_continue.rs) (limit handling through `TurnErrorClass::is_limit`, plus overload retries), [subagent park notices](../../../crates/rimz/src/harness/park_notice.rs) (`is_limit`), [stall notices](../../../crates/rimz/src/harness/stall_notice.rs) (suppressed by any displayed turn error), [workflow attempts](../../../crates/rimz/src/cli/workflow/host.rs), Codex's [pane-warning recognition](../../../crates/rimz/src/agents/adapters/codex/transcript.rs) (`is_limit`), and the [headless judge's](../../../crates/rimz/src/harness/workflow/script/judge.rs) `limited` outcome.
+
 ### The sidebar ladder
 
 The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs), adds liveness, children, and provider budget windows on top. The first rung whose condition holds decides the displayed status:

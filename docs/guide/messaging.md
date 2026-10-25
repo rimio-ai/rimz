@@ -57,7 +57,7 @@ A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Channels and work
 
 ## Park, steer, interrupt, or schedule
 
-**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too. A turn that stopped on a provider rate limit, spend limit, or overload is `paused`, not failed, so both gates hold the text until the agent resumes.
+**Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too. A turn parked on a provider rate limit, spend limit, or overload is `paused`, not failed, so both gates hold the text until the agent resumes.
 
 ```sh
 rimz message @coder "open a PR summary once tests pass"   # waits for the turn to end, then delivers
@@ -274,7 +274,7 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
-- `SUBAGENT_PAUSED`, queued for a parent once per park when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stops on a provider usage limit. If the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`.
+- `SUBAGENT_PAUSED`, queued for a parent once per park when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) parks on a provider usage limit. If the run ends before delivery, the notice is withdrawn and reads `canceled` in `rimz message show <id>`.
 - `SUBAGENT_STALLED`, queued for a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn or has not started its first turn past the same stall window. It too is withdrawn and reads `canceled` if the run ends before delivery.
 - `MESSAGE_UNDELIVERED`, sent once to an agent sender when its message ends without delivery.
 - `MESSAGE_QUEUED`, sent once to an agent sender when its message stays queued past five minutes with a receiver not working, or twenty minutes with a receiver busy in a turn.

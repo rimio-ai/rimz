@@ -55,7 +55,7 @@ A parked message delivers once all of these hold, checked in this order:
 
 1. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
 2. It is the oldest ready message for that agent, and no earlier prompt to it is still waiting for the agent to pick it up. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
-3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A turn that stopped on a provider limit or overload reads [`paused`](./agents.md), which opens neither gate.
+3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`. A turn parked on a provider limit or overload reads [`paused`](./agents.md), which opens neither gate.
 4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
 5. A live pane can receive the text.
 
