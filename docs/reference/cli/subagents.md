@@ -300,7 +300,7 @@ A [kind base](../definitions.md#kind-bases) (`agents/<kind>.md`) is listed under
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
-At launch, RimZ also gives each non-child agent this same filtered catalog in its appended system prompt, on providers that support one, when its [skills list](../../guide/configuration.md#skills) makes `rimz-subagents` callable. The catalog says delegation is disabled when the profile allows none or no entries are available. A skills list that leaves out `rimz-subagents` gets no catalog paragraph.
+At launch, RimZ also gives each non-child launch except a headless judge this same filtered catalog in its appended system prompt, on providers that support one, when its [skills list](../../guide/configuration.md#skills) makes `rimz-subagents` callable. The catalog says delegation is disabled when the profile allows none or no entries are available. A skills list that leaves out `rimz-subagents` gets no catalog paragraph.
 
 ## Children cannot delegate
 
@@ -308,7 +308,7 @@ A child launched through `rimz subagents` is told to complete its assignment its
 
 - RimZ refuses `rimz agents`, `rimz teams`, and `rimz subagents` launches whose caller is a subagent, before any run, pane, or worktree exists.
 - The instruction goes into the provider's appended system prompt where the adapter supports one (including Qoder), and onto the end of the user prompt otherwise.
-- Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's `multi_agent` feature is turned off, and OpenCode's global `subagent` permission is denied (an agent-specific allow can override it). Other providers get the instruction only.
+- Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's global `subagent` permission is denied (an agent-specific allow can override it). Other providers get the instruction only. The same native switch applies to parents offered RimZ delegation: callable `rimz-subagents` plus an available catalog, even when `tools:` lists `Agent`.
 
 `[agents] max-chain-length` does not apply to subagent launches, since a child cannot extend the chain. It governs successive peer launches through `rimz agents` and `rimz teams`; [`rimz agents molt`](./agents.md#molt) replaces the caller at the same generation instead. Subagents cannot molt.
 

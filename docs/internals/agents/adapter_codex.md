@@ -139,7 +139,7 @@ Rules are applied before the hook config is written, so a rules failure cannot l
 | Profile `auto-compact` | `-c model_auto_compact_token_limit=<tokens>`; under the default `total` scope Codex caps it at 90% of the context window, and `model_auto_compact_token_limit_scope = body_after_prefix` leaves it unclamped ([upstream](../../externals/agent-adapter/codex-reference.md#cli-config-overrides)) |
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
-| Supervised child lockdown | drops every `features.multi_agent` override, then appends `-c features.multi_agent=false` |
+| Native delegation disabled | for a `rimz subagents` child, or a launch with callable `rimz-subagents` and an available catalog, removes earlier `agents.enabled` and `features.multi_agent_v2` config overrides and `--enable multi_agent_v2` (split or equals form), then appends `-c agents.enabled=false -c features.multi_agent_v2=false`; leaves `features.multi_agent` overrides alone |
 | Host skill list | `-c skills.config` entries with `enabled=false` for each unlisted frontmatter name (directory name as fallback), which hides explicit invocation too; CLI skill overrides are replaced and Codex merges the user's file entries ([host mode](../sandbox.md#host-mode)) |
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
@@ -289,7 +289,7 @@ Child hooks never merge into the root's context or spawn the app-server refresh,
 | task | header `agent_path`, with the leading `root` segment removed | hook `agent_type` |
 | role | header `agent_role` | hook `agent_type` |
 
-Descendants stay flat under the root card in creation order, and the relative path shows the nesting. A supervised child that RimZ launches gets the lockdown and reminder args from [Launch](#launch).
+Descendants stay flat under the root card in creation order, and the relative path shows the nesting. A supervised child that RimZ launches gets the native delegation denial and reminder args from [Launch](#launch).
 
 ## Context and transcript
 

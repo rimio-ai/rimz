@@ -97,7 +97,7 @@ A failure partway through aborts the remaining launches and names every child al
 
 The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` entry: when it sets `subagents = [...]`, both the positional profile and any `--agent` re-base must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation.
 
-`subagent_policy::catalog` is the one owner of catalog assembly. Both `rimz subagents profiles` and the parent's launch reminder read it ([below](#parents-learn-their-catalog)). It filters by the literal allowlist and distinguishes a disabled policy (`subagents = []`) from an available catalog that happens to be empty. A caller whose profile sets no `subagents` list, or that resolves to no profile (a user shell included), sees the unfiltered catalog.
+`subagent_policy::catalog` is the one owner of catalog assembly. Both `rimz subagents profiles` and the parent's launch reminder read it ([below](#parents-learn-their-catalog)). It filters by the literal allowlist and returns `Disabled` for `subagents = []` or when no profile or command survives; `Available` is never empty. A caller whose profile sets no `subagents` list, or that resolves to no profile (a user shell included), sees the unfiltered catalog.
 
 ## The child works where its parent works
 
@@ -190,23 +190,25 @@ The launch planner refuses any `rimz agents`, `rimz teams`, or `rimz subagents` 
 
 Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the subagent profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`launcher/resolve.rs`](../../../crates/rimz/src/launcher/resolve.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
 
-Where the provider exposes a verified native restriction, the exec compiler also disables its delegation tool, after profile arguments and configured environment are applied:
+### Native delegation policy
+
+Where the provider exposes a verified native restriction, the exec compiler disables its delegation tool for every child, and for any other launch whose skills make `rimz-subagents` callable and whose catalog is `Available`. No skills list means callable. The predicate lives beside the catalog offer in `crates/rimz/src/harness/launch_reminders.rs::LaunchReminders::disable_native_subagents`; both the argv and environment seams read it after profile inputs are applied:
 
 | Provider | Process restriction |
 | --- | --- |
 | Claude | merges the profile's disallowed tools into one final `--disallowedTools` occurrence that denies `Agent` |
-| Codex | replaces every `features.multi_agent` override with one final false override |
+| Codex | removes earlier `agents.enabled` and `features.multi_agent_v2` config overrides and every split or equals `--enable multi_agent_v2`, then appends `-c agents.enabled=false -c features.multi_agent_v2=false`; `features.multi_agent` is untouched |
 | OpenCode | appends `{"action":"subagent","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT.permissions`, keeping the configured object and earlier rules |
 | Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated tools |
 | Other adapters | prompt-only until a native restriction is verified |
 
 OpenCode applies agent-specific permissions after global permissions, so an `agents.<id>.permissions` allow can override this deny ([adapter_opencode.md](../agents/adapter_opencode.md)). Invalid or non-object config content is replaced with the deny-only permissions object.
 
-The restriction follows the request's `subagent` flag, not the launch generation, so a peer or team member launched with `rimz agents` keeps its normal provider tools.
+The same rule applies on launch, resume, and fork, including peers and team members. An explicit `Agent` in a definition's `tools:` loses to it. A parent without callable `rimz-subagents`, with a disabled catalog, or without a catalog keeps its native delegation tools. Headless judges get no catalog and keep native delegation, since RimZ delegation would either be refused or borrow an ancestor agent's identity. Preflight and managed process compiles carry no catalog; recovery without effective config also keeps native delegation and warns about default reminders.
 
 ### Parents learn their catalog
 
-A non-child launch gets the other side of that body, the subagent catalog its profile allows, when its skills list makes `rimz-subagents` callable ([fleet.md](./fleet.md#launch-reminders)). The exec wrapper builds it through `subagent_policy::catalog` on every fresh launch, resume, fork, restart, and recovery. It points the agent at `Skill(rimz-subagents)` and lists the same filtered profiles as `rimz subagents profiles --json`. A profile with `subagents = []`, no configured entries, or no loaded entries matching its allowlist gets `SubagentCatalog::Disabled`, a disabled body that tells it to work directly. This changes only the reminder: `check_allowed` still permits bare kinds for a caller with no `subagents` list. Only adapters with an append-system-text channel receive it, because an interactive launch has no user prompt to extend safely. If effective config fails to load during crash recovery, the wrapper warns and falls back to default reminders instead of killing the recovered pane: the catalog and team paragraphs drop, and the model line stays ([fleet.md](./fleet.md#launch-reminders)).
+A non-child, non-headless launch gets the other side of that body, the subagent catalog its profile allows, when its skills list makes `rimz-subagents` callable ([fleet.md](./fleet.md#launch-reminders)). The exec wrapper builds it through `subagent_policy::catalog` on every fresh launch, resume, fork, restart, and recovery. It points the agent at `Skill(rimz-subagents)` and lists the same filtered profiles as `rimz subagents profiles --json`. A profile with `subagents = []`, no configured entries, or no loaded entries matching its allowlist gets `SubagentCatalog::Disabled`, a disabled body that tells it to work directly. Catalog presentation does not change admission: `check_allowed` still permits bare kinds for a caller with no `subagents` list. Only adapters with an append-system-text channel receive it, because an interactive launch has no user prompt to extend safely. If effective config fails to load during crash recovery, the wrapper warns and falls back to default reminders instead of killing the recovered pane: the catalog and team paragraphs drop, and the model line stays ([fleet.md](./fleet.md#launch-reminders)).
 
 ## Who counts as a launched child
 

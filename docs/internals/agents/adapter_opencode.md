@@ -8,7 +8,7 @@ RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs:
 
 | File | Owns |
 | --- | --- |
-| `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, the subagent lockdown, and `context_window_for` |
+| `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, native delegation denial, and `context_window_for` |
 | `crates/rimz/src/agents/adapters/opencode/plugin.ts` | The plugin RimZ installs: activation, root and child classification, the event mapping, the gauge, launch reminders, and cleanup |
 | `crates/rimz/src/agents/adapters/opencode/payloads.rs` | `OpencodeHookPayload`, the typed envelope, and its tolerant parse |
 | `crates/rimz/src/agents/adapters/opencode/database.rs` | Database discovery, the logical stat, read-only SQLite access, and credential loading |
@@ -118,7 +118,7 @@ OpenCode never carries this launch text:
 
 Launch reminders arrive through `SystemTextChannel::ExtensionEnv`, which sets `RIMZ_LAUNCH_REMINDERS` ([fleet.md](../harness/fleet.md#launch-reminders) owns the text). The first activation in the process claims the value into a `globalThis` symbol and deletes the variable, so tool children never inherit it. The `context` hook then appends `{type: "text", text}` to the mutable `system` array for root sessions only. The hook checks the session and nothing else: it has no request-kind check.
 
-A subagent launch (`ExecRequest::subagent`) of OpenCode passes its environment through `OpencodeAdapter::lockdown_subagent_env` (`crates/rimz/src/harness/launch.rs::compose_agent_env`). It parses `OPENCODE_CONFIG_CONTENT` as JSONC and appends `{"action":"subagent","resource":"*","effect":"deny"}` to its `permissions` array, keeping the rest of the object and the earlier rules. It writes the result back as strict JSON. Content that is absent, invalid, or not an object becomes an object that holds only that array. An agent-specific `permissions` allow overrides the deny, because OpenCode appends agent rules after global ones and the last match wins ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-native-requests)). `--auto` keeps the deny, because it approves everything except explicit denies. The delegation contract is in [subagents.md](../harness/subagents.md#children-cannot-delegate-again).
+An OpenCode launch covered by the [native delegation policy](../harness/subagents.md#native-delegation-policy) passes its composed environment through `OpencodeAdapter::disable_native_subagent_env` (`crates/rimz/src/harness/launch.rs::compile_agent_process_with_extra_env`). It parses `OPENCODE_CONFIG_CONTENT` as JSONC and appends `{"action":"subagent","resource":"*","effect":"deny"}` to its `permissions` array, keeping the rest of the object and the earlier rules. It writes the result back as strict JSON. Content that is absent, invalid, or not an object becomes an object that holds only that array. An agent-specific `permissions` allow overrides the deny, because OpenCode appends agent rules after global ones and the last match wins ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-native-requests)). `--auto` keeps the deny, because it approves everything except explicit denies.
 
 ## Context gauge
 

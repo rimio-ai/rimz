@@ -6,6 +6,8 @@ The provider's own subagent runs headless inside the parent's process. It has to
 
 `rimz subagents` gives your agents the same move with a full agent on the other end. The parent hands a bounded prompt to a child and keeps working; the child runs in its own pane in your room, on any provider you have configured, under a deadline, with a card nested under its parent in the sidebar. When the work ends, the pane closes, the answer comes back to the parent, and the run record and transcript stay on disk.
 
+RimZ offers one delegation route at a time where the provider supports it: an agent with callable `rimz-subagents` and at least one child it may launch has its native delegation tool switched off. A subagent profile, a [kind base](../reference/definitions.md#kind-bases), and an `[agents.commands]` entry each count as a child. To keep the provider's own route, leave `rimz-subagents` out of the agent's explicit skills list.
+
 Your agents run `rimz subagents`; you mostly do not. Your part is deciding which children exist and which agent may launch which, then watching and stopping them like any other agent in the room. This page covers that part in that order. Every flag the parent uses is in the [`subagents` reference](../reference/cli/subagents.md).
 
 ## What a launch does on your machine
@@ -145,7 +147,7 @@ What remains after a child ends is its run record under `~/.rimz/ws/<workspace-d
 
 ## Children cannot delegate
 
-A child does its assignment itself. RimZ refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch from a child, tells the child so in its prompt, and switches off the provider's own delegation where it has a verified switch: Claude's `Agent` tool is denied, Codex's `multi_agent` feature is off, and OpenCode's delegation permission is denied (an agent-specific allow in your OpenCode config can override it). Other providers get the instruction only.
+A child does its assignment itself. RimZ refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch from a child, tells the child so in its prompt, and switches off the provider's own delegation where it has a verified switch: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's delegation permission is denied (an agent-specific allow in your OpenCode config can override it). Other providers get the instruction only.
 
 That keeps delegation one level deep. A parent's children are the whole family, the sidebar shows them all under one card, and stopping the parent reaches every one. For the same reason `[agents] max-chain-length` does not count subagent launches; it limits agents launching peers, below.
 
