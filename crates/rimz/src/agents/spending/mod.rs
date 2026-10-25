@@ -529,9 +529,10 @@ impl SpendingWalker {
         if self.cache_stamp == stamp {
             return;
         }
+        self.cache = SpendingDiskCache::default();
+        self.memo = None;
         self.cache = read_spending_cache(cache_path);
         self.cache_stamp = stamp;
-        self.memo = None;
         stats.cache_parsed = stamp.is_some();
     }
 
