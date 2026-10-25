@@ -1143,9 +1143,10 @@ fn compile_agent_process_with_extra_env(
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
     }
-    // A launch carries exactly its own team and role, never its caller's.
+    // A launch carries its own model, team, and role, never its caller's.
     let params = &request.identity.params;
     for (key, absent) in [
+        (ENV_AGENT_MODEL, params.model.is_none()),
         (ENV_TEAM, params.team.is_none()),
         (ENV_AGENT_ROLE, params.role.is_none()),
     ] {

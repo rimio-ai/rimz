@@ -596,7 +596,7 @@ Or write the same setting with:
 rimz config set models.codex.sol gpt-6.1-sol
 ```
 
-The pin wins over the account's model catalog and is never automatically followed to a newer model. Remove the `sol` entry from `[models.codex]` to follow the family again. Restart and resume keep the session's recorded model when its profile requests an alias; use a fresh launch to pick up a changed pin.
+The pin wins over the account's model catalog and is never automatically followed to a newer model. Remove the `sol` entry from `[models.codex]` to follow the family again. A RimZ-recorded launch resolves its requested alias again on restart, resume, or fork, so a changed pin applies. Legacy sessions without a launch record may keep their observed model; use `--model` to override it. Pi instead keeps its native session's provider and model on plain resume or fork.
 
 Each `[models.<kind>]` table maps any alias name to a non-empty provider model ID. Other providers work too, for example `[models.claude]` with `opus = "chosen-model-id"`. A custom alias in a Markdown definition needs an explicit `agent:` when RimZ cannot infer the provider from a built-in alias. This table belongs only in machine config; project `.rimz/config.toml` refuses `[models]` and asks you to move it.
 

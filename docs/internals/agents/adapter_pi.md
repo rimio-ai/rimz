@@ -202,6 +202,8 @@ Profile presets render through `PresetMatchers`, pinned in `crates/rimz/src/agen
 
 The full replacement prompt is visible in the process argv, so RimZ refuses a text over 120 KiB before exec (`crates/rimz/src/harness/prompt_compose.rs::TEXT_PROMPT_LIMIT`). A Markdown agent definition that names no effort launches Pi at `xhigh` (`DEFINITIONS`), and a definition's `tools` list is ignored (`DefinitionTools::Ignored`).
 
+A plain resume or fork passes neither `--model` nor its dependent `--provider` flag: Pi restores the session's provider and model instead of resolving the launch's requested name again. The launch reminder makes no model claim and `RIMZ_AGENT_MODEL` stays unset, while the launch record keeps the requested name. An explicit model override still takes precedence.
+
 ### Launch reminders
 
 Launch reminders ride the extension, because Pi's additive flag drops the user's file: any `--append-system-prompt` replaces the discovered `APPEND_SYSTEM.md` instead of adding to it ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#cli-and-environment)). `append_system_text_channel` returns `SystemTextChannel::ExtensionEnv`, and the launch exports the rendered text as `RIMZ_LAUNCH_REMINDERS` (`crates/rimz/src/harness/launch.rs`). It is always exported for Pi, empty when there is no reminder, so a parent's value never reaches a child launch.

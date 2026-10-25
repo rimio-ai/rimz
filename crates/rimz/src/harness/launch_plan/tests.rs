@@ -2710,6 +2710,7 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .filter(|key| {
                     !matches!(*key, "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR")
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
+                        && *key != crate::harness::launch::ENV_AGENT_MODEL
                         && *key != crate::harness::launch::ENV_TEAM
                         && *key != crate::harness::launch::ENV_AGENT_ROLE
                 })
@@ -3018,6 +3019,153 @@ fn prepare(
         room_agents,
         |_, _| Ok(Vec::new()),
     )
+}
+
+#[test]
+fn pi_resume_and_fork_restore_the_session_model_unless_overridden() {
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[models.pi]\nsonnet = 'pinned-model'\n").unwrap();
+    for action in ["resume", "fork"] {
+        for override_model in [false, true] {
+            for recorded in [false, true] {
+                for typed in [false, true] {
+                    let mut request = host_request(
+                        "pi",
+                        action_with_args(
+                            action,
+                            vec![
+                                "--provider".into(),
+                                "anthropic".into(),
+                                "--model".into(),
+                                "sonnet".into(),
+                                "--model=raw-model".into(),
+                                "--thinking".into(),
+                                "high".into(),
+                            ],
+                        ),
+                    );
+                    request.identity.params.model = typed.then(|| "sonnet".into());
+                    request.identity.params.record = recorded.then(|| {
+                        Box::new(crate::agents::LaunchRecord {
+                            model: Some("sonnet".into()),
+                            ..Default::default()
+                        })
+                    });
+                    request.identity.resume_model_override = override_model;
+                    let prepared = prepare(&request, None, &machine, None, &|| Ok(Vec::new()));
+                    let (plan, _) = prepared.outcome.expect("Pi session compiles");
+                    let args = plan.request.action.extra_args();
+                    let matcher = crate::agents::find_definition("pi")
+                        .unwrap()
+                        .spec()
+                        .launch
+                        .preset_arg_matcher(crate::agents::PresetField::Model)
+                        .unwrap();
+                    let models = matcher.occurrences(args);
+                    let providers =
+                        crate::agents::PresetArgMatcher::Flag(vec!["--provider".into()])
+                            .occurrences(args);
+                    assert_eq!(
+                        providers.len(),
+                        usize::from(override_model),
+                        "{action} record={recorded} typed={typed}: {args:?}"
+                    );
+                    if override_model && typed {
+                        assert_eq!(
+                            models
+                                .iter()
+                                .map(|model| model.value.as_str())
+                                .collect::<Vec<_>>(),
+                            ["pinned-model"]
+                        );
+                    } else if override_model {
+                        assert_eq!(
+                            models
+                                .iter()
+                                .map(|model| model.value.as_str())
+                                .collect::<Vec<_>>(),
+                            ["sonnet", "raw-model"]
+                        );
+                    } else {
+                        assert!(
+                            models.is_empty(),
+                            "{action} record={recorded} typed={typed}: {args:?}"
+                        );
+                        assert!(prepared.model_warnings.is_empty());
+                    }
+                    assert!(args.windows(2).any(|pair| pair == ["--thinking", "high"]));
+                    assert_eq!(
+                        plan.request
+                            .identity
+                            .params
+                            .record
+                            .as_deref()
+                            .unwrap()
+                            .model
+                            .as_deref(),
+                        (recorded || typed).then_some("sonnet")
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pi_session_restore_does_not_claim_the_requested_model_in_the_reminder() {
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[models.pi]\nsonnet = 'pinned-model'\n").unwrap();
+    let mut session = crate::testkit::agent_state("pi", "session", jiff::Timestamp::now());
+    session.model = Some("observed-switch".into());
+    for action in ["resume", "fork"] {
+        for override_model in [false, true] {
+            let mut request = host_request("pi", action_with_args(action, Vec::new()));
+            request.identity.params.model = Some("sonnet".into());
+            request.identity.resume_model_override = override_model;
+            let prepared = prepare(&request, None, &machine, None, &|| {
+                Ok(vec![session.clone()])
+            });
+            let (plan, _) = prepared.outcome.unwrap();
+            let reminder = &plan.process().reminder;
+            assert_eq!(
+                reminder.contains("running on"),
+                override_model,
+                "{action} override={override_model}: {reminder}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pi_session_restore_does_not_seed_the_requested_model_as_running() {
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[models.pi]\nsonnet = 'pinned-model'\n").unwrap();
+    let mut session = crate::testkit::agent_state("pi", "session", jiff::Timestamp::now());
+    session.model = Some("observed-switch".into());
+    for action in ["resume", "fork"] {
+        for override_model in [false, true] {
+            let mut request = host_request("pi", action_with_args(action, Vec::new()));
+            request.identity.params.model = Some("sonnet".into());
+            request.identity.resume_model_override = override_model;
+            let prepared = prepare(&request, None, &machine, None, &|| {
+                Ok(vec![session.clone()])
+            });
+            let (plan, _) = prepared.outcome.unwrap();
+            assert_eq!(
+                plan.process()
+                    .env
+                    .get(launch::ENV_AGENT_MODEL)
+                    .map(String::as_str),
+                override_model.then_some("pinned-model"),
+                "{action} override={override_model}"
+            );
+            assert_eq!(
+                plan.process().unset.contains(launch::ENV_AGENT_MODEL),
+                !override_model,
+                "{action} override={override_model}: inherited model must be cleared"
+            );
+        }
+    }
 }
 
 #[test]

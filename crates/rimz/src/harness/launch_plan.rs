@@ -434,11 +434,33 @@ pub(super) fn resolve_model(
         request.identity.params.effort.as_deref(),
         request.identity.params.fast,
     ));
+    let adapter = crate::agents::find_definition(request.kind.as_str())
+        .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
+    let launch = adapter.spec().launch;
+    if launch.restores_session_model
+        && matches!(
+            request.action,
+            launch::ExecAction::Resume { .. } | launch::ExecAction::Fork { .. }
+        )
+        && !request.identity.resume_model_override
+    {
+        if let Some(matcher) = launch.preset_arg_matcher(PresetField::Model) {
+            matcher.remove_occurrences(request.action.extra_args_mut());
+        }
+        crate::agents::PresetArgMatcher::Flag(
+            launch
+                .model_dependent_flags
+                .iter()
+                .map(|flag| (*flag).to_owned())
+                .collect(),
+        )
+        .remove_occurrences(request.action.extra_args_mut());
+        request.identity.params.model = None;
+        return Ok((warnings, movement, refresh_failure));
+    }
     let Some(alias) = request.identity.params.model.as_deref() else {
         return Ok((warnings, movement, refresh_failure));
     };
-    let adapter = crate::agents::find_definition(request.kind.as_str())
-        .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
     let pin = machine.model_alias(&request.kind, alias);
     let is_alias = pin.is_some() || adapter.is_model_alias(alias);
     if !is_alias {
