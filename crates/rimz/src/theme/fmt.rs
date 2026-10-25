@@ -78,8 +78,17 @@ pub fn window_label(window: &RateLimitWindow) -> String {
         return scope.label.clone();
     }
     match window.duration_mins {
-        Some(mins) => duration_label(mins.into()),
+        Some(mins) => window_duration_label(mins),
         None => "usage".to_owned(),
+    }
+}
+
+/// A time-window label: `mo` for 28–31 days, exact duration units otherwise.
+pub fn window_duration_label(mins: u32) -> String {
+    if (40_320..=44_640).contains(&mins) {
+        "mo".to_owned()
+    } else {
+        duration_label(mins.into())
     }
 }
 

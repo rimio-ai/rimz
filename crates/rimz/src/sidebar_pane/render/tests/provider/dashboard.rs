@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn go_shaped_panel_shows_a_month_ceiling_on_the_week() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("opencode", "OpenCode", 1, true, false, None);
+    let emblem = crate::agents::emblem_for("opencode");
+    panel.art = emblem.lines;
+    panel.art_tints = emblem.tints;
+    panel.version = Some("1.0.0".to_owned());
+    panel.plan = Some("Go".to_owned());
+    panel.windows = [(300, 300, 1200), (10_080, 600, 3000), (43_200, 5000, 6000)]
+        .into_iter()
+        .map(|(mins, used, limit)| {
+            let amount = crate::agents::context::WindowAmount { used, limit };
+            RateLimitWindow {
+                duration_mins: Some(mins),
+                used_percentage: Some(amount.used_percentage()),
+                amount: Some(amount),
+                resets_at: Some(fixed_now() + Duration::from_secs(3_600)),
+                ..Default::default()
+            }
+        })
+        .collect();
+    let panels = [panel];
+    let rendered = Dashboard::stacked(&theme, &panels).width(60).text();
+    assert!(rendered.contains("5h") && rendered.contains("7d"));
+    assert_eq!(rendered.matches('╎').count(), 1);
+    assert!(!rendered.contains("mo "));
+    assert_snapshot("provider_go_ceiling", rendered);
+}
+
+#[test]
 fn skipped_settings_notice_is_above_the_footer_and_absent_at_zero() {
     let theme = Theme::fixed(false);
     let mut snapshot = snapshot_with(Vec::new());

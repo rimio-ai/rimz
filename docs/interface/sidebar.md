@@ -151,7 +151,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `▰▰▰▱▱` | budget bar: the filled part is the budget left |
 | `╱` | a model's own sub-cap, as a tick on its parent window's bar |
 | `╎` | a tighter longer window's allowance, measured on this bar's scale |
-| `5h` `7d` `30d` | an included budget window, labeled by its length |
+| `5h` `7d` `mo` | an included budget window, labeled by its length (`mo` covers 28 to 31 days) |
 | `cr`, `bld`, `dep` | a quota the provider or a plugin names |
 | `$` | the organisation spend limit of a Claude apps gateway |
 | `ex` | paid extra usage |
@@ -679,7 +679,7 @@ With `provider_tabs = "auto"` (the default), two providers stack and three or mo
 |------|-------|
 | header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one or while subscription access is lapsed. `⇅ rc` and the reset-credit marker (`↻ N`, or Codex-only `⟳ N` or `‖ N`) sit on the right; a lapse suppresses reset credits too. |
 | stats | `◎` sessions in the [spend window](#the-cockpit), the `◇ ↘ ↗ ◌` tokens with cache creation counted in `↘`, and the provider's spend. A provider with no usage history keeps the row: `◎` counts its sessions active in this room, and the token and dollar slots show `–`. |
-| budget rows | one bar per budget window: label, bar, and reset countdown; while lapsed, one bold alarm row replaces every bar |
+| budget rows | the two shortest time windows (or the sole window), with a label, bar, and reset countdown; a longer spent cap takes the second row, or leads usable extra usage. Named-quota accounts keep every window. While lapsed, one bold alarm row replaces every bar |
 
 Stacked blocks (`provider_tabs = "never"`):
 
@@ -727,13 +727,26 @@ Claude · work v2.1.158                                                         
 | a short window painted spent while a longer one is spent | The longer window gates it: a spent `7d` makes `5h` unusable until the `7d` resets, so `5h` shows red with no countdown whatever its own reading. |
 | a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
 | a full bar and `∞` | No limit applies: an API key without a budget, extra usage with no limit or balance figure, a quota the provider reports as unlimited, or a limit the provider has lifted for now. |
-| an `ex` row | Paid extra usage, shown while an included window is spent and extra usage is available: the longest spent window comes first, then `ex`. The figure is dollars left, never the budget size. With a limit the bar drains; without one a positive balance draws full. Reported unlimited extra usage draws full with `∞`, whether or not a display ceiling is set. There is no `ex` row when the provider reports nothing, extra usage is off, or no dollars are left: the dashboard then shows the included windows (`5h` and `7d`) in its place. Dollar figures on `ex` and `api` floor: cents below $10 (dropping `.00`), grouped whole dollars below $100,000, whole thousands below $1 million, then millions with one decimal. |
+| an `ex` row | Paid extra usage on accounts with only time windows, shown while an included window is spent and extra usage is available: the longest spent window comes first, then `ex`. The figure is dollars left, never the budget size. With a limit the bar drains; without one a positive balance draws full. Reported unlimited extra usage draws full with `∞`, whether or not a display ceiling is set. There is no `ex` row when the provider reports nothing, extra usage is off, or no dollars are left. Without usable extra usage, a longer spent window replaces the second included row (`5h` and `mo` when the month is spent). Dollar figures on `ex` and `api` floor: cents below $10 (dropping `.00`), grouped whole dollars below $100,000, whole thousands below $1 million, then millions with one decimal. |
 | an `api` row | An API key. With a display budget configured, the bar drains against your trailing-month spend and the dollars left sit on the right. Without one, the bar is full and reads `∞`. |
 | `cr`, `bld`, `dep`, and other names | A quota the provider or a plugin names, such as Copilot's AI credits. Named quotas are independent: one spent quota does not mark another spent. A named quota with no reported length shows its reset in a quiet tone. |
 
 The color of the `↻` glyph beside the countdown shows your pace. It is neutral when the current burn rate lasts to the reset, slides through gold and amber to red as spending outruns the window, and cools toward green when spending runs well under pace, once 40% of the window has passed. The stops are `[theme.display.budget_bar.burn_rate]` ([theming: display](../guide/theme.md#display)).
 
 A model's own cap inside a window draws as a `╱` tick on that window's bar instead of a row. The fill and the tick use different scales: the fill is the window's budget left, and the tick's position is the share of the model's cap left, across the full width of the bar. Only exactly 0% reaches the left end and only exactly 100% reaches the right. The tick's color follows the model's share, and it has no label or countdown. In [the whole frame](#the-whole-frame), the `7d` bar has about 65% left while the tick near 42% says the model's weekly cap is closer to spent than the window. A spent or gated bar draws no tick; the model's reading returns with the parent's reset. An unknown reading or an unlimited row has no tick.
+
+A longer allowance can cap a shorter bar before that bar empties. When the provider reports comparable amounts, `╎` marks the tightest longer allowance on the shorter bar's scale: a monthly remainder equal to a third of a week's allowance puts a tick at one third of `7d`. It appears only below what the bar shows left, uses that share's budget color, and has no countdown. Tiny remainders stay off the left edge; if a model tick shares its cell, the ceiling wins. Percentage-only providers keep their existing bars and model ticks.
+
+Here the month's remaining allowance is one third of the week's limit, below the week's 80% remaining but above the short window's remaining allowance. Only `7d` gets the ceiling:
+
+```
+────────────────────────────────────────────────────────────
+OpenCode v1.0.0 · Go
+
+ ▗▛▀▀▀▜▖  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k              $3.50
+▝▜▌ █ ▐▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱ ↻  1h00m
+ ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰╎▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻  1h00m
+```
 
 A block header counts banked Codex reset credits or Claude limit resets with `↻` in the body tone: redeeming is yours to do ([`rimz accounts redeem`](../reference/cli/accounts.md#redeem) for either provider). The marker is absent at zero. Pi and OpenCode accounts using Anthropic show the same banked count. Only Codex forecasts what [auto-redeem](../guide/loops.md#auto-redeem) would do if the longest window ran dry and parked an agent right now: a green `⟳` means armed (a credit would be spent, or no natural reset is known to wait for). A muted `‖` means holding: the fleet would park until the reset. When the reset is nearer than `resume.auto_redeem_min_gain` and the nearest credit outlives it by a day, it stays a hold until then. With Codex auto-redeem off, RimZ still rescues a credit in its last 30 minutes; Claude redemption remains manual only. Within a week of the nearest credit's expiry the time left follows the count, floored to one unit (`· 6d`, `· 14h`, `· 29m`). That time heats from green to red while the marker is `↻`, and deepens from the body tone to green while auto-redeem handles it. The marker holds still in every state. The Nerd Font glyph set draws the three as `󰑐`, `󰁪`, and `󰏤`.
 

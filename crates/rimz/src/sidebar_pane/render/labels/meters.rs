@@ -224,7 +224,7 @@ fn filled_cells(percent: u8, width: usize) -> usize {
     ((percent.min(100) as usize) * width.max(1) + 50) / 100
 }
 
-/// The cell a sub-cap tick occupies on a `width`-cell bar: the ends are reserved
+/// The cell a budget tick occupies on a `width`-cell bar: the ends are reserved
 /// for exactly 0% and exactly 100%, so any partial budget lands on an interior cell.
 fn tick_cell(percent: u8, width: usize) -> usize {
     let last = width.max(1) - 1;
@@ -538,9 +538,10 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
     )]
 }
 
-/// A sub-cap tick positioned and toned on its own remaining-budget axis.
+/// A budget tick positioned and toned by its remaining-budget percentage.
 pub(in crate::sidebar_pane::render) struct ManaTick {
     pub remaining_pct: u8,
+    pub role: GlyphRole,
 }
 
 /// The provider dashboard's draining budget ("mana / stamina") bar:
@@ -554,10 +555,10 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// context-gauge track, so the spent share stays legible on the dashboard. At
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
-/// Ticks use each sub-cap's own 0–100 remaining axis across the full width,
+/// Ticks use their 0–100 remaining axis across the full width,
 /// independently of the parent fill, but never on a fully spent track. The end
 /// cells belong to exactly 0% and exactly 100%; any partial reading sits inside.
-/// Collisions keep the lowest remaining percentage.
+/// Ceilings win cell collisions; otherwise keep the lowest remaining percentage.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
@@ -572,7 +573,13 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
         .filter(|_| remaining_pct > 0)
         .map(|tick| (tick_cell(tick.remaining_pct, width), tick))
         .collect();
-    ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.remaining_pct));
+    ticks.sort_unstable_by_key(|(cell, tick)| {
+        (
+            *cell,
+            tick.role != GlyphRole::MeterManaCeiling,
+            tick.remaining_pct,
+        )
+    });
     ticks.dedup_by_key(|(cell, _)| *cell);
     let fill_style = mana_style(theme, remaining_pct, zones);
     let track_style = if remaining_pct == 0 {
@@ -596,7 +603,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
             ));
         }
         spans.push(Span::styled(
-            theme.glyph(GlyphRole::MeterManaTick).to_owned(),
+            theme.glyph(tick.role).to_owned(),
             mana_style(theme, tick.remaining_pct, zones),
         ));
         next_cell = cell + 1;

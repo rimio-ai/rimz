@@ -259,7 +259,7 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     assert!(capacity.spent_window(now).is_some());
     assert!(ProviderCapacity::read_bound(&runtime, &login_key("qwen"), &other).is_none());
     let reason = provider_budget_gate(&runtime, &login_key("qwen"), &binding, now).unwrap();
-    assert!(reason.contains("Qwen Alibaba International 30d window exhausted"));
+    assert!(reason.contains("Qwen Alibaba International mo window exhausted"));
     assert!(!reason.contains("owner"));
 
     cache.entries.get_mut(&login_key("qwen")).unwrap().scope = ProviderAccountScope::KindWide;

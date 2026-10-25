@@ -2505,6 +2505,11 @@ surface-budget = 39
 
 [[verdict]]
 kind = "item"
+key = "theme::fmt::window_duration_label"
+reason = "Account refusals, loop reasons and both renderers share month-aware budget-window labels without changing ordinary duration formatting."
+
+[[verdict]]
+kind = "item"
 key = "theme::fmt::age_label"
 reason = "CLI reports and the launcher's worktree entry facts share one largest-unit age label."
 
@@ -3239,6 +3244,8 @@ allowed-dependencies = [
     "store",
     "store::run",
     "store::writer",
+    # Budget-window reasons share month labels with the CLI and sidebar.
+    "theme",
     "utils::time",
     "workspace",
 ]

@@ -671,6 +671,7 @@ fn mana_ticks_use_their_own_axis_without_changing_width_or_parent_tone() {
                 &zones,
                 &[ManaTick {
                     remaining_pct: sub_remaining,
+                    role: GlyphRole::MeterManaTick,
                 }],
             );
             assert_eq!(text(&spans), expected);
@@ -704,7 +705,16 @@ fn mana_tick_endpoints_and_live_reading_span_the_full_width() {
         ),
     ] {
         for (remaining_pct, cell) in readings {
-            let spans = mana_bar_spans(&theme, 61, width, &zones, &[ManaTick { remaining_pct }]);
+            let spans = mana_bar_spans(
+                &theme,
+                61,
+                width,
+                &zones,
+                &[ManaTick {
+                    remaining_pct,
+                    role: GlyphRole::MeterManaTick,
+                }],
+            );
             let bar = text(&spans);
             assert_eq!(bar.chars().position(|ch| ch == '╱'), Some(cell));
             assert_eq!(spans.iter().map(Span::width).sum::<usize>(), width);
@@ -721,7 +731,10 @@ fn mana_tick_collisions_keep_the_most_constrained_reading_in_either_order() {
             let mut ticks: Vec<_> = readings
                 .into_iter()
                 .chain([80])
-                .map(|remaining_pct| ManaTick { remaining_pct })
+                .map(|remaining_pct| ManaTick {
+                    remaining_pct,
+                    role: GlyphRole::MeterManaTick,
+                })
                 .collect();
             if reverse {
                 ticks.reverse();
@@ -754,7 +767,16 @@ fn mana_ticks_preserve_combining_glyph_overrides_as_terminal_cells() {
         .expect("combining glyph overrides"),
     );
     let zones = BudgetBarConfig::default();
-    let spans = mana_bar_spans(&theme, 70, 10, &zones, &[ManaTick { remaining_pct: 80 }]);
+    let spans = mana_bar_spans(
+        &theme,
+        70,
+        10,
+        &zones,
+        &[ManaTick {
+            remaining_pct: 80,
+            role: GlyphRole::MeterManaTick,
+        }],
+    );
     assert_eq!(text(&spans), "x́x́x́x́x́x́x́ó|́ó");
     assert_eq!(spans.iter().map(Span::width).sum::<usize>(), 10);
     assert_no_fg(&spans);

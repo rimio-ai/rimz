@@ -3729,7 +3729,7 @@ fn surplus_gate_in(
     {
         return Some(format!(
             "{kind} {} window {} elapsed; fires after {}",
-            window_label(reading.duration_mins),
+            crate::theme::fmt::window_duration_label(reading.duration_mins),
             elapsed_label(reading.elapsed),
             entry.surplus_after.as_deref().unwrap_or_default().trim(),
         ));
@@ -3742,20 +3742,10 @@ fn surplus_gate_in(
     (reading.headroom < threshold).then(|| {
         format!(
             "{kind} {} window surplus {:.1}x below {threshold:.1}x",
-            window_label(reading.duration_mins),
+            crate::theme::fmt::window_duration_label(reading.duration_mins),
             reading.headroom,
         )
     })
-}
-
-fn window_label(duration_mins: u32) -> String {
-    if duration_mins.is_multiple_of(24 * 60) {
-        format!("{}d", duration_mins / (24 * 60))
-    } else if duration_mins.is_multiple_of(60) {
-        format!("{}h", duration_mins / 60)
-    } else {
-        format!("{duration_mins}m")
-    }
 }
 
 fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
