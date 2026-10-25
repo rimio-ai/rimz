@@ -1,6 +1,8 @@
 //! Fold-free parked provider supervision and same-PID image handoff.
 
 use super::*;
+use rimz::harness::drainer_outage::{LeaseRefresh, Tracker, Transition};
+use rimz::harness::hook_drain::HookDrainErr;
 use rimz::harness::parent_watch::WatchdogSeed;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -561,6 +563,10 @@ fn run_loop(
     let fresh_launch = state.fresh_launch;
     let awaiting_reopen = state.awaiting_reopen;
     let launch_identity = state.identity.as_ref();
+    let drainer_name = launch_identity
+        .map(|identity| identity.name.clone())
+        .or_else(|| request.identity.name.clone());
+    let mut drainer_outage = Tracker::new(&runtime, request.kind.clone(), drainer_name.clone());
     let program = state.provider.program.to_string_lossy();
     let (outcome, terminal_grace, startup_deaths) = loop {
         let mut outcome = supervise_child(
@@ -580,6 +586,15 @@ fn run_loop(
             .with_follow_up_message(request.follow_up_message.clone()),
             parent_watchdog.take(),
             &mut drainer_lease,
+            |started, finished, outcome| {
+                if let Some(transition) = drainer_outage.observe(
+                    started,
+                    finished,
+                    outcome.map_err(|error| error.to_string()),
+                ) {
+                    emit_drainer_transition(&diag, &request.kind, drainer_name.clone(), transition);
+                }
+            },
         )
         .context("supervising agent process")?;
         let provider_interrupted = interrupt_signal_flag().swap(false, Ordering::SeqCst);
@@ -789,6 +804,37 @@ fn run_loop(
     drop(drainer_lease);
     drop(bind_guard);
     Ok(state.into_exit(outcome, terminal_grace, startup_deaths, provider_terminal))
+}
+
+fn emit_drainer_transition(
+    diag: &rimz::diag::DiagSink,
+    kind: &rimz::ids::AgentKind,
+    name: Option<String>,
+    transition: Transition,
+) {
+    use rimz::diag::record::DiagEvent;
+
+    let since_ms = transition.since_ms();
+    diag.emit(match transition {
+        Transition::Reconnected { gap_ms, error, .. } => DiagEvent::HookDrainerReconnected {
+            agent_kind: kind.clone(),
+            agent_name: name,
+            since_ms,
+            gap_ms,
+            error,
+        },
+        Transition::Unreachable {
+            error,
+            recovered_after_ms,
+            ..
+        } => DiagEvent::HookDrainerUnreachable {
+            agent_kind: kind.clone(),
+            agent_name: name,
+            since_ms,
+            error,
+            recovered_after_ms,
+        },
+    });
 }
 
 fn record_provider_process_paths(context: &RunPaths, pid: u32) {
@@ -1128,6 +1174,7 @@ fn supervise_child(
     mut monitor_state: RunMonitor,
     parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
     drainer_lease: &mut Option<rimz::harness::hook_drain::DrainerLease>,
+    mut observe_lease: impl FnMut(Instant, Instant, Result<LeaseRefresh, HookDrainErr>),
 ) -> Result<ExecOutcome> {
     #[cfg(unix)]
     let signal_mask = rimz::child_process::CleanupSignalMask::block()?;
@@ -1161,10 +1208,11 @@ fn supervise_child(
             && now >= next_lease_check
         {
             next_lease_check = now + DRAINER_LEASE_POLL;
-            if let Err(error) = lease.refresh() {
-                tracing::warn!(%error, "could not reconnect host hook drainer");
-            }
+            let outcome = lease.refresh();
+            observe_lease(now, Instant::now(), outcome);
         }
+        // Reconnection and runtime publication may block; later decisions need a fresh clock.
+        let now = Instant::now();
         match child.try_wait() {
             Ok(Some(status)) => {
                 if let Some(watch) = &parent_watchdog {

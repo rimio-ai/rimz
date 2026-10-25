@@ -25,6 +25,8 @@ use crate::ids::EventId;
 use crate::store::event_log::LogExtent;
 use crate::store::ingress::{self, HookIngress};
 
+use super::drainer_outage::LeaseRefresh;
+
 const DRAINER_IDLE: Duration = Duration::from_secs(60);
 const SOCKET_WAIT: Duration = Duration::from_millis(200);
 const RETRY: Duration = Duration::from_millis(5);
@@ -388,12 +390,12 @@ impl DrainerLease {
         lease
     }
 
-    pub fn refresh(&mut self) -> Result<(), HookDrainErr> {
+    pub fn refresh(&mut self) -> Result<LeaseRefresh, HookDrainErr> {
         match self.connection.stream.read(&mut [0]) {
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(LeaseRefresh::Healthy),
             _ => {
                 *self = Self::acquire(&self.store, SOCKET_WAIT)?;
-                Ok(())
+                Ok(LeaseRefresh::Reconnected)
             }
         }
     }
