@@ -160,9 +160,9 @@ fn ensure_classed_paths(root: &Path, files: &[PathBuf]) -> Result<()> {
         ("agents/skill_links.rs", "plan.root.join("),
         ("sandbox/mod.rs", "view.root.join("),
     ];
+    let owner = src.join("disk/paths.rs");
     for path in files {
         if !path.starts_with(&src)
-            || path == &src.join("disk/paths.rs")
             || path.starts_with(src.join("testkit"))
             || is_test_source_path(root, path)
         {
@@ -171,6 +171,16 @@ fn ensure_classed_paths(root: &Path, files: &[PathBuf]) -> Result<()> {
         let source = fs::read_to_string(path)?;
         for (line_number, line) in lines_outside_inline_tests(&source) {
             let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            if path == &owner {
+                if compact.contains("self.root.join(") {
+                    bail!(
+                        "{}:{line_number}: room paths must be built under their lifetime class \
+                         directory",
+                        path.display()
+                    );
+                }
+                continue;
+            }
             if non_room_roots.iter().any(|(relative, expression)| {
                 path == &src.join(relative) && compact.contains(expression)
             }) {

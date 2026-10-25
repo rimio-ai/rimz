@@ -311,7 +311,7 @@ fn child_env_resets_reject_bypass_and_allow_owner_tests_and_markdown() {
 }
 
 #[test]
-fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
+fn classed_paths_rejects_caller_bypass_and_unclassed_owner_paths_and_allows_tests() {
     let root = temp_repo_root("classed-paths");
     let source = root.join("crates/rimz/src");
     std::fs::create_dir_all(source.join("disk")).unwrap();
@@ -328,7 +328,23 @@ fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
             .to_string()
             .contains("room paths")
     );
-    ensure_classed_paths(&root, &[owner, tests]).unwrap();
+    ensure_classed_paths(&root, &[owner.clone(), tests]).unwrap();
+
+    std::fs::write(&owner, "self.lane_path(\"file\")\n").unwrap();
+    ensure_classed_paths(&root, std::slice::from_ref(&owner)).unwrap();
+    std::fs::write(
+        &owner,
+        "#[cfg(test)]\nmod tests {\n    fn f() { self.root.join(\"file\"); }\n}\n",
+    )
+    .unwrap();
+    ensure_classed_paths(&root, std::slice::from_ref(&owner)).unwrap();
+    std::fs::write(&owner, "self.root.join(\"file\")\n").unwrap();
+    assert!(
+        ensure_classed_paths(&root, &[owner])
+            .unwrap_err()
+            .to_string()
+            .contains("room paths must be built under their lifetime class directory")
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
