@@ -1034,6 +1034,11 @@ impl RuntimePaths {
         self.lock_path("hook-drainer-spawn.lock")
     }
 
+    /// Runtime leases held by wrappers during hook-drainer outages.
+    pub(crate) fn hook_drainer_outages_dir(&self) -> PathBuf {
+        self.lane_path("hook-drainer-outages")
+    }
+
     /// Room read marks, retained until their rows leave the produced frame.
     pub(crate) fn read_marks_path(&self) -> PathBuf {
         self.read_marks_dir.join("marks.json")

@@ -59,7 +59,7 @@ The file primitives sit one level down, in `disk/`, which imports nothing from t
 | [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs) | `StatePaths` and `RuntimePaths`: the store-owned filenames on this page, the XDG resolution, the layout check, and the private runtime-directory check. |
 | [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, cache-local temp cleanup, and the cache-class read (missing or corrupt reads as default). Every fsync call is in this file ([write classes](#write-classes)). |
 | [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | `WorkspaceLock`, the advisory flock, bounded by `LOCK_TIMEOUT` (30 seconds). The timeout error names `fuser` to find the holder. `SharedAppendLock` is the shared, blocking guard for ingress appends. |
-| [`disk/lease.rs`](../../crates/rimz/src/disk/lease.rs) | Single-flight leases (the loop watch and run locks). Claim, probe, and GC removal each run under the directory's `lease-gate.lock`, held for one attempt and its body write, read, or unlink, so a probe or a sweep never defeats a claim. The gate wait is bounded at five seconds, and a timeout is an error. |
+| [`disk/lease.rs`](../../crates/rimz/src/disk/lease.rs) | Single-flight leases (the loop watch and run locks, and wrapper hook-drainer outage records). Claim, probe, and GC removal each run under the directory's `lease-gate.lock`, held for one attempt and its body write, read, or unlink, so a probe or a sweep never defeats a claim. The gate wait is bounded at five seconds, and a timeout is an error. |
 | [`disk/retention.rs`](../../crates/rimz/src/disk/retention.rs) | The retention figures that state writers and the class sweeps share: archive retention, the rotation threshold, the owned and temp-unit graces, the audit age and size caps, and the transcript bucket width. |
 | [`disk/buckets.rs`](../../crates/rimz/src/disk/buckets.rs) | Date-bucket file names and listing for the append-only `audit/transcript/` and `audit/messages/` logs. |
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
@@ -222,6 +222,7 @@ lanes/{group-roots,diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.jso
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
 lanes/workspace-spending.<prefix>.json        room spend projection
+lanes/hook-drainer-outages/<pid>              wrapper-held hook-drainer outage leases
 ```
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:

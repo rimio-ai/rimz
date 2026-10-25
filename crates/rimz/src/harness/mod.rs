@@ -9,6 +9,7 @@ pub mod board;
 pub mod budget;
 pub mod cache_keepalive;
 pub mod deadline;
+pub mod drainer_outage;
 pub mod fleet;
 pub(crate) mod headless;
 pub mod hibernate;

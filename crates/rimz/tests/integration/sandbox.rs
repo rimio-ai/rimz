@@ -364,6 +364,64 @@ fn drainer_lease_command(env: &Env) -> std::process::Command {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn hook_drainer_outage_lease_is_released_on_recovery_and_drop() {
+    use rimz::harness::drainer_outage::{LeaseRefresh, Tracker, Transition, testkit};
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    let runtime = env.runtime_paths();
+    let mut tracker = Tracker::new(
+        &runtime,
+        AgentKind::new_unchecked("claude"),
+        Some("coder".into()),
+    );
+    let started = Instant::now() - Duration::from_secs(30);
+    let crossed = started + Duration::from_secs(11);
+    assert!(matches!(
+        tracker.observe(started, crossed, Err("refused".into())),
+        Some(Transition::Unreachable {
+            recovered_after_ms: None,
+            ..
+        })
+    ));
+    let records = testkit::read(&runtime);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["agent_name"], "coder");
+    assert_eq!(records[0]["agent_kind"], "claude");
+    let recovered = crossed + Duration::from_secs(1);
+    assert!(matches!(
+        tracker.observe(recovered, recovered, Ok(LeaseRefresh::Reconnected)),
+        Some(Transition::Unreachable {
+            recovered_after_ms: Some(_),
+            ..
+        })
+    ));
+    assert_eq!(testkit::read(&runtime).len(), 1);
+    let released = recovered + Duration::from_secs(3);
+    assert!(
+        tracker
+            .observe(released, released, Ok(LeaseRefresh::Healthy))
+            .is_none()
+    );
+    assert!(testkit::read(&runtime).is_empty());
+    assert!(
+        !runtime
+            .lane_path("hook-drainer-outages")
+            .join(std::process::id().to_string())
+            .exists()
+    );
+    tracker.observe(
+        released,
+        released + Duration::from_secs(11),
+        Err("refused again".into()),
+    );
+    assert_eq!(testkit::read(&runtime).len(), 1);
+    drop(tracker);
+    assert!(testkit::read(&runtime).is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
     let env = Env::new();
     let ready = env.project_root.join("provider-ready");
