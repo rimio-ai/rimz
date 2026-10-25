@@ -2,6 +2,70 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn hook_drainer_gaps_round_trip_and_partition_transitions_not_room_incidents() {
+    let cases = [
+        ("hook_drainer_reconnected", None, DiagSeverity::Info),
+        ("hook_drainer_unreachable", None, DiagSeverity::Warn),
+        ("hook_drainer_unreachable", Some(12_000), DiagSeverity::Warn),
+    ];
+    let results = cases.map(|(kind, recovered, severity)| {
+        let mut wire = serde_json::json!({
+            "kind": kind, "agent_kind": "claude", "agent_name": "coder",
+            "since_ms": 100, "error": "connection refused",
+        });
+        if kind == "hook_drainer_reconnected" {
+            wire["gap_ms"] = 650.into();
+        } else {
+            wire["recovered_after_ms"] = recovered.into();
+        }
+        let Ok(event) = serde_json::from_value::<DiagEvent>(wire.clone()) else {
+            return false;
+        };
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+        assert_eq!(event.severity(), severity);
+        assert_eq!(event.kind_name(), kind);
+        assert_eq!(event.family_key(), kind);
+        assert!(event.summary().contains("coder"));
+        assert!(event.summary().contains("connection refused"));
+        if kind == "hook_drainer_reconnected" {
+            assert!(event.summary().contains("650ms"));
+        } else if recovered.is_some() {
+            assert!(event.summary().contains("12000ms"));
+        }
+        for (field, value) in [
+            ("agent_kind", serde_json::json!("codex")),
+            ("agent_name", serde_json::json!("reviewer")),
+            ("since_ms", serde_json::json!(101)),
+        ] {
+            let mut other = wire.clone();
+            other[field] = value;
+            let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+            assert_ne!(event.identity_key(), other.identity_key(), "{field}");
+            assert_eq!(event.family_key(), other.family_key());
+        }
+        if kind == "hook_drainer_unreachable" {
+            let mut other = wire.clone();
+            other["recovered_after_ms"] = if recovered.is_some() {
+                serde_json::Value::Null
+            } else {
+                12_000.into()
+            };
+            let other = serde_json::from_value::<DiagEvent>(other).unwrap();
+            assert_ne!(event.identity_key(), other.identity_key());
+        }
+        wire["error"] = serde_json::Value::Null;
+        wire["agent_name"] = serde_json::Value::Null;
+        let unnamed = serde_json::from_value::<DiagEvent>(wire).unwrap();
+        assert!(unnamed.summary().contains("claude"));
+        true
+    });
+    assert_eq!(
+        results, [true; 3],
+        "every drainer transition must be recorded"
+    );
+}
+
+#[test]
 fn sidebar_view_repairs_round_trip_and_distinguish_each_effect() {
     for added in [None, Some("tmux:%2")] {
         let mut wire = serde_json::json!({

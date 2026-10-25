@@ -7,6 +7,72 @@ use rimz::diag::record::{
 use rimz::ids::LinkTier;
 
 #[test]
+fn hook_drainer_diagnostics_contain_short_gaps_and_investigate_even_recovered_outages() {
+    let cases = [
+        (
+            "hook_drainer_reconnected",
+            None,
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+        (
+            "hook_drainer_unreachable",
+            None,
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            "hook_drainer_unreachable",
+            Some(12_000),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+    ];
+    let results = cases.map(|(kind, recovered, state, impact)| {
+        let wire = serde_json::json!({
+            "kind": kind, "agent_kind": "claude", "agent_name": "coder",
+            "since_ms": 100, "gap_ms": 650, "error": null,
+            "recovered_after_ms": recovered,
+        });
+        serde_json::from_value::<DiagEvent>(wire)
+            .is_ok_and(|event| classify_diagnostic(&event, event.severity()) == (state, impact))
+    });
+    assert_eq!(results, [true; 3]);
+}
+
+#[test]
+fn hook_drainer_incidents_fold_agents_and_recovery_without_downgrading() {
+    let results = ["hook_drainer_reconnected", "hook_drainer_unreachable"].map(|kind| {
+        let records = [None, Some(12_000)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, recovered)| {
+                let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+                    "kind": kind, "agent_kind": "claude",
+                    "agent_name": if i == 0 { "coder" } else { "reviewer" },
+                    "since_ms": 100 + i, "gap_ms": 650, "error": null,
+                    "recovered_after_ms": recovered,
+                }))
+                .ok()?;
+                Some(diag_record(1000 + i as u64, event))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(records) = records else { return false };
+        let incidents = diagnostic_incidents(records, 12, None, 2000);
+        assert_eq!(incidents.len(), 1);
+        assert_eq!(incidents[0].record_count, 2);
+        let expected = if kind == "hook_drainer_reconnected" {
+            (model::DoctorState::Contained, model::DoctorImpact::Info)
+        } else {
+            (model::DoctorState::Investigate, model::DoctorImpact::Warn)
+        };
+        assert_eq!((incidents[0].state, incidents[0].impact), expected);
+        true
+    });
+    assert_eq!(results, [true; 2], "one reload must fold across agents");
+}
+
+#[test]
 fn scoped_bind_repairs_recover_and_failures_need_investigation() {
     let cases = [
         (
