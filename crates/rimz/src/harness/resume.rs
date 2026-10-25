@@ -328,8 +328,8 @@ pub struct ResumeSkip {
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. A launch with a durable record replays
-/// the record's model, effort, and fast mode verbatim; without one, one-off
-/// `--model` / `--effort` flags typed at the original launch stay out. A
+/// the record's model and effort, and fast mode where supported; without one,
+/// one-off `--model` / `--effort` flags typed at the original launch stay out. A
 /// resume may pass its own `--model`, `--effort`, `--fast` / `--no-fast`, and
 /// `--ask` / `--yolo`; the exec wrapper records the model, effort, and fast
 /// mode it launched with, so a later resume replays them, and `--isolation`
@@ -566,6 +566,21 @@ fn resolve_posture_with_role(
                     reason: err.to_string(),
                 });
             }
+        }
+    }
+    if let Some(adapter) = find_definition(cell.kind.as_str()) {
+        let (preset, _) = adapter
+            .spec()
+            .launch
+            .normalize_preset(crate::agents::LaunchPreset {
+                auto_compact: cell.auto_compact.take(),
+                fast: Some(cell.launch.fast),
+                ..Default::default()
+            });
+        cell.auto_compact = preset.auto_compact;
+        cell.launch.fast = preset.fast.unwrap_or_default();
+        if let Some(record) = &mut cell.launch.record {
+            record.fast = cell.launch.fast;
         }
     }
     if let Err(err) =

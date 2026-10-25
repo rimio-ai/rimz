@@ -479,7 +479,7 @@ pub struct Profile {
     pub effort: Option<String>,
     /// Launch in the provider's fast mode (priority serving). `false` and
     /// unset render nothing, so the provider's own default stands; `true` on a
-    /// provider without a fast switch refuses the launch.
+    /// provider without a fast switch warns and launches without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<bool>,
     #[serde(default)]
@@ -495,13 +495,17 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_compact: Option<super::IdleCompact>,
-    /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
+    /// The agent's native auto-compaction window as a token count; unsupported
+    /// adapters warn and launch without it. Invalid counts still refuse.
     #[serde(
         default,
         rename = "auto-compact",
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_compact: Option<String>,
+    /// Load-injected native window, applied only when the final adapter supports it.
+    #[serde(skip)]
+    pub auto_compact_default: Option<String>,
     /// A file whose contents replace the agent's base system prompt, giving the
     /// profile its own voice. Resolved relative to the config file and
     /// existence-checked when the profile launches.
@@ -727,7 +731,8 @@ pub struct RoleBinding {
     pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
-    /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
+    /// The agent's native auto-compaction window as a token count; unsupported
+    /// adapters warn and launch without it. Invalid counts still refuse.
     #[serde(
         default,
         rename = "auto-compact",

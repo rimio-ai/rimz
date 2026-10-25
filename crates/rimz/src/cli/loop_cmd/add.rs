@@ -669,7 +669,9 @@ fn resolve_add_action(
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
             let resolved = ResolvedSingleAgentLaunch::for_booking(spec, workspace)?;
-            rimz::harness::plan::validate_launch_preset(resolved.kind(), &preset)?;
+            for warning in rimz::harness::plan::validate_launch_preset(resolved.kind(), &preset)? {
+                writeln!(ui::err(), "{warning}")?;
+            }
             AddTaskAction::Spawn {
                 resolved,
                 mode: None,
@@ -717,7 +719,9 @@ fn resolve_resident_action(
         None,
     )?;
     for cell in resolved.layout.agent_cells() {
-        rimz::harness::plan::validate_launch_preset(&cell.kind, preset)?;
+        for warning in rimz::harness::plan::validate_launch_preset(&cell.kind, preset)? {
+            writeln!(ui::err(), "{warning}")?;
+        }
     }
     let team = resolved
         .team_name

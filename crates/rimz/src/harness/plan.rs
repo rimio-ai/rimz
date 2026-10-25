@@ -1000,6 +1000,11 @@ pub fn plan_supervised_launch(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchFinalizeWarning {
+    SkippedField {
+        profile: String,
+        agent: &'static str,
+        field: crate::agents::definition::SkippedPresetField,
+    },
     TierMoved {
         profile: String,
         stamp: crate::agents::TierStamp,
@@ -1024,6 +1029,29 @@ pub enum LaunchFinalizeWarning {
 impl fmt::Display for LaunchFinalizeWarning {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SkippedField {
+                profile,
+                agent,
+                field,
+            } => {
+                use crate::agents::definition::SkippedPresetField;
+                match field {
+                    SkippedPresetField::AutoCompact(value) => write!(
+                        formatter,
+                        "warning: `{profile}` auto-compact {value} is unsupported on {agent}; launching without it"
+                    ),
+                    SkippedPresetField::Fast { alternative } => {
+                        write!(
+                            formatter,
+                            "warning: `{profile}` fast is unsupported on {agent}; launching without it"
+                        )?;
+                        match alternative {
+                            Some(alternative) => write!(formatter, "; {alternative}"),
+                            None => Ok(()),
+                        }
+                    }
+                }
+            }
             Self::TierMoved { profile, stamp } => {
                 let passes = stamp
                     .passes()
@@ -1082,11 +1110,6 @@ pub enum LaunchFinalizeError {
         "{agent} does not support config key `system-prompt-file` / flag `--system-prompt-file`; remove it or put provider-specific flags in `args`"
     )]
     UnsupportedSystemPrompt { agent: &'static str },
-    #[error("{agent} has no fast-mode launch switch; {fix}")]
-    UnsupportedFast {
-        agent: &'static str,
-        fix: &'static str,
-    },
     #[error(
         "{agent} append-system-prompt-files requires a base system-prompt-file; add one to the profile, role, or launch command"
     )]
@@ -1109,28 +1132,35 @@ impl LaunchFinalizeError {
             | Self::PromptFile(_)
             | Self::UnsupportedPresetField { .. }
             | Self::UnsupportedSystemPrompt { .. }
-            | Self::UnsupportedFast { .. }
             | Self::MissingSystemPromptBase { .. }
             | Self::PromptValidation { .. } => &[],
         }
     }
 }
 
-/// Validate a launch preset with the provider's renderer without changing argv.
+/// Validate a launch preset without changing argv, returning skipped-field warnings.
 pub fn validate_launch_preset(
     kind: &str,
     preset: &crate::agents::LaunchPreset,
-) -> std::result::Result<(), LaunchFinalizeError> {
+) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
         LaunchFinalizeError::UnknownAdapter {
             kind: kind.to_owned(),
         }
     })?;
+    let (preset, skipped) = adapter.spec().launch.normalize_preset(preset.clone());
     adapter
         .spec()
-        .render_preset(preset)
-        .map(|_| ())
-        .map_err(unsupported_preset_error)
+        .render_preset(&preset)
+        .map_err(unsupported_preset_error)?;
+    Ok(skipped
+        .into_iter()
+        .map(|field| LaunchFinalizeWarning::SkippedField {
+            profile: kind.to_owned(),
+            agent: adapter.spec().kind,
+            field,
+        })
+        .collect())
 }
 
 /// Apply launch-wide CLI options and provider preset reconciliation to a
@@ -1262,6 +1292,28 @@ pub(super) fn finalize_agent_cell(
         cell.launch.budget = Some(budget.to_string());
     }
     if let Some(adapter) = adapter {
+        let (preset, skipped) =
+            adapter
+                .spec()
+                .launch
+                .normalize_preset(crate::agents::LaunchPreset {
+                    auto_compact: cell.auto_compact.clone(),
+                    fast: Some(cell.launch.fast),
+                    ..Default::default()
+                });
+        cell.auto_compact = preset.auto_compact;
+        cell.launch.fast = preset.fast == Some(true);
+        for field in skipped {
+            warnings.push(LaunchFinalizeWarning::SkippedField {
+                profile: cell
+                    .launch
+                    .profile
+                    .clone()
+                    .unwrap_or_else(|| cell.kind.to_string()),
+                agent: adapter.spec().kind,
+                field,
+            });
+        }
         reconcile_preset_args(cell, adapter, &overridden, warnings)?;
         if cell.launch.model.is_none()
             && let Some(default) = adapter.default_launch_model()
@@ -1298,9 +1350,10 @@ pub(super) fn apply_preset_args(
     preset: &crate::agents::LaunchPreset,
     replaced: &[crate::agents::PresetField],
 ) -> std::result::Result<(), LaunchFinalizeError> {
+    let (preset, _) = adapter.spec().launch.normalize_preset(preset.clone());
     let rendered = adapter
         .spec()
-        .render_preset(preset)
+        .render_preset(&preset)
         .map_err(unsupported_preset_error)?;
     for field in replaced {
         if matches!(
@@ -1471,14 +1524,12 @@ fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::Pres
 
 fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeError {
     match err {
-        err @ crate::agents::PresetErr::UnsupportedValue { .. } => {
+        err @ (crate::agents::PresetErr::UnsupportedValue { .. }
+        | crate::agents::PresetErr::UnsupportedFast { .. }) => {
             LaunchFinalizeError::PresetValue(err)
         }
         crate::agents::PresetErr::UnsupportedField { agent, field } => {
             LaunchFinalizeError::UnsupportedPresetField { agent, field }
-        }
-        crate::agents::PresetErr::UnsupportedFast { agent, fix } => {
-            LaunchFinalizeError::UnsupportedFast { agent, fix }
         }
     }
 }

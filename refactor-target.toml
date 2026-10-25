@@ -263,12 +263,18 @@ upward-dependencies = ["address"]
 # AccountCapability::account_inputs_stamp lets the accounts lane re-probe on adapter input changes (+1).
 # SharedName shares model and tool names across public spending rows (+1).
 # ToolCounts exposes compact, canonical counts on public spending rows (+1).
-surface-budget = 1138
+# SkippedPresetField and LaunchSpec::normalize_preset share flag-mapping normalization (+2).
+surface-budget = 1140
 
 [[verdict]]
 kind = "item"
 key = "agents::context::WindowAmount"
 reason = "Provider-neutral integer usage and limits cross the adapter, cache, plugin and renderer seams."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::SkippedPresetField"
+reason = "Typed skipped flag mappings travel from provider normalization to launch warnings."
 
 [[verdict]]
 kind = "item"

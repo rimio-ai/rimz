@@ -659,6 +659,7 @@ mod tests {
             empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
+            auto_compact_default: None,
             model_tier: None,
             tier_stamp: None,
             isolation: None,

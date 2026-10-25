@@ -229,7 +229,7 @@ Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
+RimZ launches each agent with the provider's own flags. An unsupported typed `model`, `effort`, or system-prompt field fails the launch before any pane opens, naming the field. Unsupported `auto-compact` and `fast` warn and launch without that setting; invalid auto-compact counts still refuse. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for embedded sessions (`--no-daemon`) and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper. Headless loop and workflow judges also check the resolved binary before spawning; an unreadable version passes without a verdict.
 
 OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. Fork and model presets are unsupported. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
@@ -351,12 +351,12 @@ The `fast` profile and role field asks the provider for its fast mode (priority 
 | Claude Code | `"fastMode": true` inside the launch's one `--settings` |
 | Codex | `-c service_tier=fast -c features.fast_mode=true` |
 | Amp | `--fast` |
-| Cursor | refused: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
-| Kimi | refused: use `--model kimi-for-coding-highspeed` |
-| Droid | refused: toggle `/fast` inside the session |
-| Every other built-in and process plugin | refused |
+| Cursor | skipped with a warning: choose a fast model ID with `--model` (for example `claude-opus-5-5-fast`) |
+| Kimi | skipped with a warning: use `--model kimi-for-coding-highspeed` |
+| Droid | skipped with a warning: toggle `/fast` inside the session |
+| Every other built-in and process plugin | skipped with a warning |
 
-A definition that sets `fast: true` on a kind without a switch fails at load with the fix. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
+A definition that sets `fast: true` on a kind without a switch loads normally; each launch warns with the alternative and records fast as off. The same rule applies to role fields, `--fast`, fast cells, and loop tasks. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
 The fast-mode badge follows the provider's live reading: Claude's statusline `fast_mode`, or Codex's latest `thread_settings_applied` service tier. An explicit live off reading clears the badge even after a fast launch. Without a live reading, including Amp, RimZ falls back to the launch record; a launch with fast off cannot rule out the provider's saved default. Droid has no live reading or launch switch, and Cursor's fast models already name their speed.
 
@@ -399,9 +399,9 @@ The `auto-compact` field on a profile or team role sets the agent's native auto-
 | --- | :--: | --- |
 | Claude Code | ✓ | `--autocompact <tokens>`; needs Claude Code 2.1.221 or later, and Claude caps it at the model's context window |
 | Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>`; Codex clamps it to 90% of the model window |
-| Every other agent and process plugins | ✗ | refused at launch |
+| Every other agent and process plugins | ✗ | skipped with a warning at launch |
 
-Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles; bare-kind launches are unchanged. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
+Profiles without an explicit or inherited `auto-compact` use the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default, `272k`, on Claude and Codex. This covers Markdown definitions and trusted project TOML profiles; bare-kind launches are unchanged. A switch to a provider without a window flag silently drops this injected default; a declared value warns instead. `"off"` passes no native window, leaving the provider's own default. The clamps above still apply.
 
 ## The wiring matrix
 

@@ -53,7 +53,7 @@ Follow the project's instructions and report what you verified.
 | `isolation` | `host`, `scoped`, or `sandbox`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
 | `empty-dir` | Boolean opting a solo agent or subagent into its own empty working directory. Inherited through `agent:` chains; `false` clears it. Also accepted in repository TOML `[profiles]` and `[subagents.profiles]`; machine profiles remain Markdown definitions. Team roles refuse it, including through a selected definition or profile, because teams share the worktree. |
 | `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. Relative `+N` / `-N` values are refused. |
-| `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; refused at load on a kind with no fast switch. |
+| `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; a kind with no fast switch warns at launch and runs without it. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
 | `keep-warm` | Prompt-cache [keep-warm](#keep-warm) maximum for a solo seat: `off`, a duration such as `2h`, or a block with `max` only. |
@@ -77,7 +77,7 @@ The nearest definition setting `tier:`, `model:`, or a registered `agent:` kind 
 
 Children inherit `tier` or `model`, `mode`, `isolation`, `empty-dir`, `effort`, `fast`, `auto-compact`, `budget`, `keep-warm`, `idle-compact`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
-Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support uses the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default (`272k` built in, `"off"` passes none); other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, `fast: true`, or `auto-compact` field. Defaults are filled only when supported.
+Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support uses the machine [`[harness] auto_compact`](../guide/configuration.md#native-auto-compaction) default (`272k` built in, `"off"` passes none); other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model` or `effort`. Unsupported `fast: true` and `auto-compact` load normally and warn at launch, which runs without the setting. Invalid auto-compact counts still refuse. Defaults are filled only when supported and silently dropped on a switch to an unsupported kind.
 
 ### Kind bases
 
@@ -101,6 +101,8 @@ Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Pl
 | Codex | Requires `tools`, even if empty. Emits `--strict-config` and the ordered `-c` settings below. Native `Agent(...)` type names do not restrict Codex child types. |
 | Pi | Accepts or omits `tools`; generates no tool arguments. |
 | Other kinds | Omit `tools`; a supplied list is unsupported. |
+
+The injected machine auto-compact window is omitted from `config get`; `rimz agents explain` shows its effective launch value. A profile's declared auto-compact value stays visible in `config get`.
 
 Codex emits these settings in order. Boolean values are unquoted; `web_search` is a quoted string.
 

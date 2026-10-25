@@ -205,6 +205,7 @@ fn profile(agent: &str) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
+        auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,
         agent: agent.to_owned(),
@@ -1138,6 +1139,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
+            auto_compact_default: None,
             model_tier: None,
             tier_stamp: Some(Box::new(crate::agents::TierStamp {
                 tier: crate::config::tiers::ModelTier::Senior,
@@ -1205,13 +1207,14 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
 }
 
 #[test]
-fn auto_compact_rejects_invalid_counts_and_unsupported_adapters() {
+fn auto_compact_rejects_invalid_counts_but_accepts_unsupported_adapters() {
     for (kind, value) in [
         ("claude", "70%"),
         ("codex", "0"),
         ("codex", "lots"),
         ("codex", "18446744073709551615k"),
-        ("pi", "200k"),
+        ("pi", "70%"),
+        ("pi", "99999"),
     ] {
         let profiles = profiles([(
             "compact",
@@ -1227,6 +1230,16 @@ fn auto_compact_rejects_invalid_counts_and_unsupported_adapters() {
             "{kind}: {value}"
         );
     }
+
+    let profiles = profiles([(
+        "compact",
+        Profile {
+            auto_compact: Some("200k".to_owned()),
+            ..profile("pi")
+        },
+    )]);
+    assert!(resolve_profile("compact", &profiles).is_ok());
+    assert!(cell_from_profile("compact", &resolve_profile("compact", &profiles).unwrap()).is_ok());
 
     for value in ["70%", "0", "200", "99999", "1000001", "lots"] {
         let mut binding = role("coder", "codex");
@@ -1672,7 +1685,7 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
 }
 
 #[test]
-fn profile_fast_follows_the_chain_and_refuses_where_unsupported() {
+fn profile_fast_follows_the_chain_and_skips_where_unsupported() {
     let fast = |agent: &str, fast: Option<bool>| Profile {
         fast,
         ..profile(agent)
@@ -1700,10 +1713,9 @@ fn profile_fast_follows_the_chain_and_refuses_where_unsupported() {
             cell.args
         );
     }
-    assert_eq!(
-        profile_cell("quick", &profiles).unwrap_err().to_string(),
-        "invalid profile `quick`: field `fast = true`: agent `cursor` has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast, or remove `fast`"
-    );
+    let quick = profile_cell("quick", &profiles).expect("unsupported fast renders no switch");
+    assert!(quick.launch.fast, "the finalizer clears it and warns");
+    assert!(quick.args.is_empty());
     let role = RoleBinding {
         fast: Some(false),
         ..role("coder", "swift")
@@ -1843,12 +1855,10 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
     assert_eq!(exact.launch.profile.as_deref(), Some("x-fast"));
     assert!(!exact.launch.fast);
 
-    let refused = parse_layout_spec("cursor-fast", &no_profiles(), &no_commands())
-        .expect_err("cursor has no fast switch");
-    assert_eq!(
-        refused.to_string(),
-        "cell `cursor-fast`: cursor has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast"
-    );
+    let cursor = agent_cell("cursor-fast", &no_profiles(), &no_commands());
+    assert_eq!(cursor.kind, "cursor");
+    assert!(cursor.launch.fast, "the finalizer clears it and warns");
+    assert!(cursor.args.is_empty());
     assert!(matches!(
         parse_layout_spec("nosuch-fast", &no_profiles(), &no_commands()),
         Err(LayoutErr::UnknownCell(unknown)) if unknown.word == "nosuch-fast"

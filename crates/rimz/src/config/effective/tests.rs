@@ -665,6 +665,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
+        auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,
         agent: agent.to_owned(),
@@ -826,14 +827,14 @@ fn trusted_repo_profiles_inherit_native_compaction_defaults() {
             assert_eq!(
                 agents_spec::resolve_profile("worker", profiles)
                     .unwrap()
-                    .auto_compact,
+                    .auto_compact_default,
                 window.map(|n| n.to_string())
             );
         }
         assert_eq!(
             agents_spec::resolve_profile("codex", &effective.subagent_profiles)
                 .unwrap()
-                .auto_compact,
+                .auto_compact_default,
             window.map(|n| n.to_string())
         );
         for name in ["parent", "child", "claude", "planner"] {
