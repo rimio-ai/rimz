@@ -446,6 +446,7 @@ pub(super) struct DefinitionSpec {
     pub mode: Option<PermissionMode>,
     pub effort: Option<&'static str>,
     pub models: &'static [DefinitionModel],
+    pub runs_other_providers_models: bool,
     pub prefixes: &'static [&'static str],
     pub tools: DefinitionTools,
 }
@@ -455,6 +456,7 @@ impl DefinitionSpec {
         mode: None,
         effort: None,
         models: &[],
+        runs_other_providers_models: false,
         prefixes: &[],
         tools: DefinitionTools::Unsupported,
     };

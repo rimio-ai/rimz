@@ -557,6 +557,7 @@ fn project_permission_layers(
 
 const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
+        runs_other_providers_models: false,
         mode: None,
         effort: Some("xhigh"),
         models: &[

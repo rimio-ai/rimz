@@ -179,13 +179,13 @@ Cells carry pending model and tool notices as typed values, and only the launch 
 | Field | Result |
 | --- | --- |
 | kind | the base's |
-| model | the base's when it sets one; otherwise the original's on the same kind, and unset on a different kind |
+| model | the base's when it sets one; otherwise the original's on the same kind or Pi, and unset on another kind |
 | effort | the base's when it sets one, otherwise the original's |
 | raw `args` | the original's, with the base filling a gap, on the same kind; the base's on a different kind |
 | mode, budget, `auto-compact`, skills, system-prompt file | the original's, with the base filling a gap |
 | appended system-prompt files | the base's fragments, then the original's |
 
-A different kind takes model and args only from the base because provider-specific values do not carry across providers, and the replacement was explicit.
+A different kind takes raw args only from the base. Pi declares that it runs other providers' models and keeps the original model when the base leaves it unset. Other kinds drop that model with a warning, unless a launch model or tier replaces it; an explicit base model stays quiet.
 
 A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell.
 

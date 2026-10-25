@@ -1474,8 +1474,18 @@ fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
         ("opus", engine("claude", Some("opus[1m]"), Some("high"))),
         ("plain", profile("claude")),
         ("luna", engine("codex", None, Some("xhigh"))),
+        ("pi", engine("pi", None, None)),
+        ("pi-model", engine("pi", Some("replacement"), None)),
     ]);
     for (agent_override, kind, model, effort, chain) in [
+        ("pi", "pi", Some("fable"), "medium", vec!["fixer", "pi"]),
+        (
+            "pi-model",
+            "pi",
+            Some("replacement"),
+            "medium",
+            vec!["fixer", "pi-model", "pi"],
+        ),
         (
             "opus",
             "claude",

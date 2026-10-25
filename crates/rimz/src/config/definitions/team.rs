@@ -293,6 +293,7 @@ impl SeatLoader<'_> {
             .model
             .as_deref()
             .and_then(agents::definition_model_kind)
+            .filter(|_| !agents::runs_other_providers_models(&original.agent))
             .unwrap_or(&original.agent);
         if fm.tier.is_none() && !self.scope.bases.contains(kind) {
             return Err(DefinitionErr::new(

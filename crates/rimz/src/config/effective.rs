@@ -129,8 +129,11 @@ pub struct LaunchAgents {
 
 impl LaunchAgents {
     /// Overlay a fresh launch without changing the memoized machine profiles.
-    /// Explicit tiers walk the table; concrete models select their family's render without routing.
-    /// Returns whether rendered definitions consumed the family request. Finalization applies model overrides only to cells without a routed stamp.
+    /// Explicit tiers walk the table; concrete models select their family's render unless
+    /// the requested engine runs other providers' models, or no engine is requested and the
+    /// target's own kind runs them.
+    /// Returns whether rendered definitions consumed the family request. Finalization applies
+    /// model overrides only to cells without a routed stamp.
     #[expect(
         clippy::too_many_arguments,
         reason = "launch target and CLI routing inputs stay explicit"
@@ -155,13 +158,15 @@ impl LaunchAgents {
         if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
             return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
         }
-        let model_kind = model.and_then(crate::agents::definition_model_kind);
-        if let (Some(model_kind), Some(model), Some(family)) = (model_kind, model, family) {
+        let mut model_kind = model.and_then(crate::agents::definition_model_kind);
+        if let (Some(implied), Some(model), Some(family)) = (model_kind, model, family) {
             let base = agents_spec::resolve_profile(family, self.profiles_for(scope))
                 .map_err(|error| super::tiers::TierError(error.to_string()))?;
-            if base.kind.as_str() != model_kind {
+            if crate::agents::runs_other_providers_models(&base.kind) {
+                model_kind = None;
+            } else if base.kind.as_str() != implied {
                 return Err(super::tiers::TierError(format!(
-                    "--agent {family} runs on {} but --model {model} runs on {model_kind}; choose the same family",
+                    "--agent {family} runs on {} but --model {model} runs on {implied}; choose the same family",
                     base.kind,
                 )));
             }
@@ -236,6 +241,10 @@ impl LaunchAgents {
                     .find(|(scope, target, _)| *scope == profile_scope && target == name);
                 let targeted = target.is_some();
                 if let (Some((_, _, role)), Some(model)) = (target, model) {
+                    let model_kind = model_kind.filter(|_| {
+                        family.is_some()
+                            || !crate::agents::runs_other_providers_models(&profile.agent)
+                    });
                     if let Some(kind) = model_kind
                         && let Some(error) = renders.exclusions.get(kind)
                     {
