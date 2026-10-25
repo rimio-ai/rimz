@@ -159,6 +159,9 @@ fn window(
         duration_mins: Some(duration_mins),
         observed_at: Some(observed_at),
         source: WindowSource::Authoritative,
+        // Week and month follow Go's calendar and billing schedule; only the
+        // five-hour clock starts at first use.
+        fixed_period: duration_mins != 300,
         ..Default::default()
     })
 }
@@ -227,6 +230,7 @@ mod tests {
                     window.resets_at,
                     window.observed_at,
                     window.source,
+                    window.fixed_period,
                 ))
                 .collect::<Vec<_>>(),
             [
@@ -239,7 +243,8 @@ mod tests {
                     }),
                     Some("2026-10-25T11:00:00Z".parse().unwrap()),
                     Some(now()),
-                    WindowSource::Authoritative
+                    WindowSource::Authoritative,
+                    false
                 ),
                 (
                     Some(10_080),
@@ -250,7 +255,8 @@ mod tests {
                     }),
                     Some("2026-10-26T00:00:00Z".parse().unwrap()),
                     Some(now()),
-                    WindowSource::Authoritative
+                    WindowSource::Authoritative,
+                    true
                 ),
                 (
                     Some(43_200),
@@ -261,10 +267,20 @@ mod tests {
                     }),
                     Some("2026-11-25T06:00:00Z".parse().unwrap()),
                     Some(now()),
-                    WindowSource::Authoritative
+                    WindowSource::Authoritative,
+                    true
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn unused_31_day_billing_month_has_already_started() {
+        let mut body = fixture();
+        body["access"]["meters"]["month"]["usedMicroCents"] = json!("0");
+        let snapshot = parse_response(&body.to_string(), now(), now()).unwrap();
+        let month = &snapshot.rate_limits.unwrap().windows[2];
+        assert!(!month.not_started(now()));
     }
 
     #[test]

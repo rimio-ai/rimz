@@ -196,7 +196,7 @@ The heading names the provider and CLI version: the active account's version, el
 | `no limit` | The window is lifted, or the account has no subscription windows. |
 | `–` | Lapsed, logged out, no probe record, or no reading. Paid usage and reset credits also read unknown without a login. |
 
-Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker. The definition is also in `accounts --help` and `accounts list --help`; no pace legend prints beneath the tables. Tables are not clipped to the terminal width.
+Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. A fixed period also reads `–` while its reset lies at or beyond its nominal length, such as the first day of a 31-day billing month. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration or reset time; a sliding window also needs positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker. The definition is also in `accounts --help` and `accounts list --help`; no pace legend prints beneath the tables. Tables are not clipped to the terminal width.
 
 ### Position and footer
 
@@ -302,10 +302,11 @@ Window fields are omitted when unknown:
 | `used_percentage` | Percent used, 0 to 100. |
 | `amount` | Optional `{"used":N,"limit":N}` in the provider's integer units, with a positive limit; present only with known usage. Units agree across an account's unscoped windows. Usage may exceed the limit; its percentage floors and caps at 100. |
 | `resets_at` | RFC 3339 reset time. |
-| `duration_mins` | Window duration, such as `300` (5h) or `10080` (7d). |
+| `duration_mins` | Nominal window duration, such as `300` (5h) or `10080` (7d); also the identity for an unscoped time window. |
 | `observed_at` | Reading timestamp. |
 | `source` | `"authoritative"` for provider API readings; absent for agent-reported readings. |
 | `lifted` | `true` when the provider stopped enforcing this window; absent otherwise. |
+| `fixed_period` | `true` when the clock runs on a fixed schedule regardless of usage; absent otherwise. Its countdown runs even at zero usage. |
 
 `spending.today` is spend since local midnight in the configured `timezone`, or `null` when publication was for another local day. `headline` follows the sidebar setting; sibling `window` names `session`, `24h`, or `today`. `week`, `month`, and `year` cover trailing 7, 30, and 365 days. Each holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when recorded.
 

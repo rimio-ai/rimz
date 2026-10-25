@@ -248,6 +248,63 @@ fn window_not_started_keys_on_reset_distance_above_the_floor() {
 }
 
 #[test]
+fn fixed_period_windows_are_started_at_and_beyond_the_nominal_length() {
+    let now = Timestamp::UNIX_EPOCH;
+    let mut outcomes = Vec::new();
+    for reset_mins in [43_200, 44_640] {
+        for used in [0, 1] {
+            let fixed = RateLimitWindow {
+                used_percentage: Some(used),
+                duration_mins: Some(43_200),
+                resets_at: Some(now + SignedDuration::from_mins(reset_mins)),
+                fixed_period: true,
+                ..Default::default()
+            };
+            let sliding = RateLimitWindow {
+                fixed_period: false,
+                ..fixed.clone()
+            };
+            outcomes.push((
+                fixed.not_started(now),
+                fixed.remaining_percentage(now),
+                fixed.pace(now).map(|reading| reading.elapsed_share),
+                sliding.not_started(now),
+                sliding.pace(now),
+            ));
+        }
+    }
+    assert_eq!(
+        outcomes,
+        [
+            (false, Some(100), Some(0.0), true, None),
+            (false, Some(99), Some(0.0), true, None),
+            (false, Some(100), Some(0.0), true, None),
+            (false, Some(99), Some(0.0), true, None),
+        ]
+    );
+}
+
+#[test]
+fn fixed_period_projection_preserves_the_running_clock() {
+    let now = Timestamp::UNIX_EPOCH;
+    let projected = RateLimitWindow {
+        used_percentage: Some(100),
+        duration_mins: Some(43_200),
+        resets_at: Some(now - SignedDuration::from_secs(1)),
+        fixed_period: true,
+        ..Default::default()
+    }
+    .projected_at(now);
+    assert!(projected.fixed_period);
+    assert!(!projected.not_started(now));
+    assert_eq!(projected.used_percentage, Some(0));
+    assert_eq!(
+        projected.resets_at,
+        Some(now + SignedDuration::from_mins(43_200))
+    );
+}
+
+#[test]
 fn window_remaining_reads_full_before_the_clock_starts() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let reading = |used, resets_in: Option<i64>| RateLimitWindow {

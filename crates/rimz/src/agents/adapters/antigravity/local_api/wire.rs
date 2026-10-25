@@ -276,6 +276,7 @@ pub(in crate::agents::adapters::antigravity) fn parse_rate_limits(
             observed_at: Some(observed_at),
             source: WindowSource::Authoritative,
             lifted: false,
+            fixed_period: false,
         });
     }
     if windows.is_empty() {

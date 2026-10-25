@@ -850,6 +850,14 @@ fn window_cell_reads_what_is_left_and_when_it_resets() {
             Some("31%"),
         ),
         (window(Some(0), Some(5 * 3_600)), Some("100% · ready")),
+        (
+            RateLimitWindow {
+                duration_mins: Some(43_200),
+                fixed_period: true,
+                ..window(Some(0), Some(31 * 86_400))
+            },
+            Some("100% · 31d00h · –"),
+        ),
         (lifted, Some("no limit")),
         (window(None, Some(3_720)), None),
     ] {

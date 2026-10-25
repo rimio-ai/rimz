@@ -207,9 +207,9 @@ Fused account-wide windows for each login feed provider-limit display and [parke
 
 ### Not-started windows
 
-The heuristic assumes sliding windows: the clock starts on the first token, and until then the provider keeps `resets_at` a full window-length ahead. A window has not started when its reset sits about a full window out and its usage is at or below the 1% floor (`FRESH_WINDOW_USAGE_FLOOR`). The floor is 1% because a fresh Codex 5h window is taken to report 1% used, which a zero check would miss. Any usage above the floor means the window has started, and its reset is a real countdown.
+The heuristic assumes sliding windows: the clock starts on the first token, and until then the provider keeps `resets_at` a full window-length ahead. An unmarked window has not started when its reset sits about a full window out and its usage is at or below the 1% floor (`FRESH_WINDOW_USAGE_FLOOR`). The floor is 1% because a fresh Codex 5h window is taken to report 1% used, which a zero check would miss. Any usage above the floor means the window has started, and its reset is a real countdown. A window marked `fixed_period: true` always reads as started: its clock runs independently of usage. OpenCode Go marks its week and month, and Qwen Alibaba marks its billing month. Their durations stay nominal for stable window identity, even when a billing month lasts 31 days. Pace clamps elapsed time at zero while a fixed period's reset lies beyond its nominal length, so the CLI shows `–` until the early-window floor passes.
 
-The dashboard draws a not-started window as a full bar with no `↻` countdown, which reads as ready to start ([interface](../../interface/sidebar.md#the-provider-dashboard)). This is display only.
+The dashboard draws a not-started window as a full bar with no `↻` countdown, which reads as ready to start ([interface](../../interface/sidebar.md#the-provider-dashboard)). The predicate also gates unused-window detection, surplus pacing, and loop `--after-reset` scheduling. Go's scoped readings and Qwen's month stay outside those policy reads.
 
 ### Persistence across idle sessions
 
