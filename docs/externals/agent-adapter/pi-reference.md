@@ -32,7 +32,7 @@ Each `pi.dev/docs/latest/<page>` renders `packages/coding-agent/docs/<page>.md` 
 | Changelog | <https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/CHANGELOG.md> |
 | Structured questionnaire extension | npm [`@juicesharp/rpiv-ask-user-question` 2.13.6](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question/v/2.13.6); [source](https://github.com/juicesharp/rpiv-mono/tree/v2.13.6/packages/rpiv-ask-user-question) |
 | Subagent extension (nicobailon) | [`pi-subagents` v0.77.0](https://github.com/nicobailon/pi-subagents/tree/v0.77.0) |
-| Subagent extension (tintinweb) | [`@tintinweb/pi-subagents` v0.21.0](https://github.com/tintinweb/pi-subagents/tree/v0.21.0) |
+| Subagent extension (tintinweb) | [`@tintinweb/pi-subagents` v0.22.0](https://github.com/tintinweb/pi-subagents/tree/v0.22.0) |
 
 ## Extensions
 
@@ -279,13 +279,17 @@ Esc cancels the dialog, except while a notes editor is open, where it closes the
 | Module state | a fresh module instance per child; `process.env` and `globalThis` are the parent's | the runner's `process.env` and `globalThis`, shared by its children |
 | Environment | the parent's | the parent's `process.env` minus `PI_SUBAGENT_EXTENSION_BINDINGS` and Git routing variables; the runner sets `PI_SUBAGENT_CHILD=1` |
 | Session name | `"<agent>: <task excerpt>"` (at most 80 characters), set through `pi.setSessionName` in the child's `before_agent_start`, so absent at `session_start` | same |
-| Session JSONL | standard Pi files below `<parent session file dir>/<parent basename>/<runId>/run-<n>` | below `<parent session file dir>/<parent basename>/async-<id>` |
+| Session JSONL, fresh child | `<parent session file dir>/<parent stem>/<runId>/run-<n>/session.jsonl` | same, normally `run-0/session.jsonl` |
+
+Attached async chains instead write Pi-generated filenames under `<parent session file dir>/<parent stem>/async-<id>/` ([`resumeAsyncRun`](https://github.com/nicobailon/pi-subagents/blob/v0.77.0/src/runs/foreground/subagent-executor.ts), [`executeAsyncChain`](https://github.com/nicobailon/pi-subagents/blob/v0.77.0/src/runs/background/async-execution.ts)). Context forks use `<parent session file dir>/<parent stem>/forks/` ([`createForkContextResolver`](https://github.com/nicobailon/pi-subagents/blob/v0.77.0/src/shared/fork-context.ts)). New child headers record the launching session's file as `parentSession` when it exists; forked and resumed files retain their headers ([`createDefaultChildSessionFactory`](https://github.com/nicobailon/pi-subagents/blob/v0.77.0/src/runs/shared/child-session.ts)).
 
 The package now declares `@earendil-works/pi-ai >=0.86.1`; the old pinned `pi-server` dependency is gone. Child settings inherit the launching session's project-trust decision (`src/runs/shared/child-launch.ts`, `projectTrusted`; `src/runs/shared/child-session.ts`, `SettingsManager.create`), so declining project trust does not become permission to load project-local extensions in a child.
 
 ### tintinweb `@tintinweb/pi-subagents`
 
-[`@tintinweb/pi-subagents` v0.21.0](https://github.com/tintinweb/pi-subagents/tree/v0.21.0) (2026-10-12) requires Pi 1.1.0 or newer and creates each child in-process through `createAgentSession` (`src/agent-runner.ts`). The resource loader discovers global extensions unless `extensions` is `false`, which sets `noExtensions`; an `isolated` launch forces `extensions` to `false`, and the agent config's value takes precedence over the caller's. The child inherits the parent's project trust; a cross-directory child reports its own cwd as untrusted while retaining the parent project's permitted settings and extensions. The child session is named after the agent config's `name` (or its type), suffixed `#<first 8 characters of the agent id>` when one exists. A child persists its session through `SessionManager.create` when `persistSession` resolves true (nested agents default to in-memory), and otherwise lives in memory.
+[`@tintinweb/pi-subagents` v0.22.0](https://github.com/tintinweb/pi-subagents/tree/v0.22.0) (2026-10-13, tag commit `85a704cb`) requires Pi 1.1.0 or newer and creates each child in-process through `createAgentSession` ([`src/agent-runner.ts`](https://github.com/tintinweb/pi-subagents/blob/v0.22.0/src/agent-runner.ts)). The resource loader discovers global extensions unless `extensions` is `false`, which sets `noExtensions`; an `isolated` launch forces `extensions` to `false`, and the agent config's value takes precedence over the caller's. The child inherits the parent's project trust; a cross-directory child reports its own cwd as untrusted while retaining the parent project's permitted settings and extensions. The child session is named after the agent config's `name` (or its type), suffixed `#<first 8 characters of the agent id>` when one exists.
+
+Top-level children persist by default through `SessionManager.create` (`rememberAgents = true`, since [0.17.0, 2026-08-17](https://github.com/tintinweb/pi-subagents/blob/v0.22.0/CHANGELOG.md#0170---2026-08-17)); nested children default to in-memory. Per-agent `persist_session` frontmatter overrides both ways. The directory precedence is frontmatter `session_dir`, then `PI_CODING_AGENT_SESSION_DIR`, then settings `sessionDir`, then Pi's per-cwd session directory. The header's `parentSession` is the spawner's session file, absent for an in-memory spawner. An `@handle` resume reopens the same file through `SessionManager.open`, preserving its header and history ([`runAgent`](https://github.com/tintinweb/pi-subagents/blob/v0.22.0/src/agent-runner.ts), [`@handle` dispatch](https://github.com/tintinweb/pi-subagents/blob/v0.22.0/src/index.ts)).
 
 ## Session JSONL
 
@@ -296,15 +300,15 @@ Pi writes one session file per conversation ([session-format.md](https://github.
 e.g.   sessions/--home-user-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
 ```
 
-The directory key removes the leading path separator and replaces `/`, `\`, and `:` with `-`, then wraps the result in `--`. The filename stem is the ISO timestamp with `:` and `.` replaced by `-`, then `_`, then the session id (a UUID by default; the SDK and `--session-id` can supply a custom id). `--session-dir` overrides the location, then `PI_CODING_AGENT_SESSION_DIR`, then settings `sessionDir`; `--no-session` writes nothing. The nicobailon subagent extension nests child sessions below the parent's directory ([nicobailon `pi-subagents`](#nicobailon-pi-subagents)).
+The directory key removes the leading path separator and replaces `/`, `\`, and `:` with `-`, then wraps the result in `--`. The filename stem is the ISO timestamp with `:` and `.` replaced by `-`, then `_`, then the session id (a UUID by default; the SDK and `--session-id` can supply a custom id). `--session-dir` overrides the location, then `PI_CODING_AGENT_SESSION_DIR`, then settings `sessionDir`; `--no-session` writes nothing. The nicobailon subagent extension nests child sessions below the parent's directory ([nicobailon `pi-subagents`](#nicobailon-pi-subagents)); tintinweb children normally sit beside the user's sessions ([tintinweb `@tintinweb/pi-subagents`](#tintinweb-tintinwebpi-subagents)).
 
 The first line is the header; every later line is a tree entry with an `id` (usually 8-character hex, with a full-UUID fallback), a `parentId` (`null` on a root entry), and an ISO `timestamp`:
 
 ```jsonc
-{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
+{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<parent session path, when present>"}
 ```
 
-The session format is at version 3 (`CURRENT_SESSION_VERSION`): v1 was linear, v2 added the `id`/`parentId` tree, and v3 renamed the `hookMessage` role to `custom`. Pi migrates older files on load, so a reader outside Pi keys on `version`. `parentSession` is present only for a fork, clone, or `newSession({ parentSession })`.
+The session format is at version 3 (`CURRENT_SESSION_VERSION`): v1 was linear, v2 added the `id`/`parentId` tree, and v3 renamed the `hookMessage` role to `custom`. Pi migrates older files on load, so a reader outside Pi keys on `version`. `parentSession` is present for a fork, clone, or `newSession({ parentSession })`, and both subagent extensions above set it on new children when the spawner has a session file.
 
 **Write order, checked at v1.4.0.** [`SessionManager::_persist`](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/session-manager.ts) creates the file lazily at the first user or assistant message. It opens the path with `openSync(path, "wx")`, then writes each buffered entry separately, header first. A reader can therefore see an empty or partially written file. Later entries normally append; migration rewrites in place, while legacy migration can rename a file. Resuming alone appends no entry.
 
