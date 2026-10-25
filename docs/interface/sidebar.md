@@ -150,6 +150,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 |------|---------|
 | `▰▰▰▱▱` | budget bar: the filled part is the budget left |
 | `╱` | a model's own sub-cap, as a tick on its parent window's bar |
+| `╎` | a tighter longer window's allowance, measured on this bar's scale |
 | `5h` `7d` `30d` | an included budget window, labeled by its length |
 | `cr`, `bld`, `dep` | a quota the provider or a plugin names |
 | `$` | the organisation spend limit of a Claude apps gateway |
