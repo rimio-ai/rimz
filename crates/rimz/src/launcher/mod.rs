@@ -309,6 +309,7 @@ struct PreparedLayout {
     empty_dir: Option<crate::agents::empty_dir::Prepared>,
     placement: Placement,
     resume_scope: Option<ResumeScope>,
+    reported_warnings: Vec<crate::harness::plan::LaunchFinalizeWarning>,
 }
 
 pub fn prepare_layout(
@@ -379,7 +380,8 @@ pub fn prepare_layout(
         tier: None,
         ..args.launch.overrides.clone()
     };
-    let mut print_warning = |warning: &crate::harness::plan::LaunchFinalizeWarning| {
+    let mut reported_warnings = Vec::new();
+    let mut print_warning = |warning: &crate::harness::plan::LaunchFinalizeWarning| -> Result<()> {
         if !fresh_launch
             && matches!(
                 warning,
@@ -388,7 +390,9 @@ pub fn prepare_layout(
         {
             return Ok(());
         }
-        interaction.notice(Notice::LaunchWarning(warning))
+        interaction.notice(Notice::LaunchWarning(warning))?;
+        reported_warnings.push(warning.clone());
+        Ok(())
     };
     let FinalizedLaunch {
         profiles: _,
@@ -638,6 +642,7 @@ pub fn prepare_layout(
             empty_dir,
             placement,
             resume_scope,
+            reported_warnings,
         })),
         leader_run: None,
     })))
@@ -669,6 +674,7 @@ fn settle_layout(
         empty_dir,
         placement,
         resume_scope,
+        reported_warnings,
     } = prepared;
     let ctx = &args.context;
     let workspace = &ctx.workspace;
@@ -703,6 +709,7 @@ fn settle_layout(
             focus,
             checked_folder_trust,
             noticed_hook_trust,
+            reported_warnings,
             interaction,
         )?;
         return Ok(SettledLayout::Handled(LaunchOutcome::Existing));
@@ -909,6 +916,7 @@ fn settle_layout(
                     focus,
                     checked_folder_trust,
                     noticed_hook_trust,
+                    reported_warnings,
                     interaction,
                 )
                 .map(|()| SettledLayout::Handled(LaunchOutcome::Existing));
@@ -1315,6 +1323,7 @@ fn launch_resume_layout(
     focus: LaunchFocus,
     mut checked_folder_trust: HashSet<(crate::ids::LoginKey, PathBuf)>,
     mut noticed_hook_trust: HashSet<crate::ids::LoginKey>,
+    mut reported_warnings: Vec<crate::harness::plan::LaunchFinalizeWarning>,
     interaction: &mut dyn Interaction,
 ) -> Result<()> {
     let ctx = &args.context;
@@ -1391,7 +1400,21 @@ fn launch_resume_layout(
     let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
     let mut overrides = resume_overrides(&args.launch.overrides, machine_config, &unavailable)?;
     overrides.team = team;
-    crate::harness::resume::restore_routed_cells(&mut layout, &plan.seeds, profiles, &overrides)?;
+    for warning in crate::harness::resume::restore_routed_cells(
+        &mut layout,
+        &plan.seeds,
+        profiles,
+        &overrides,
+    )? {
+        if let Some(index) = reported_warnings
+            .iter()
+            .position(|reported| reported == &warning)
+        {
+            reported_warnings.swap_remove(index);
+            continue;
+        }
+        interaction.notice(Notice::LaunchWarning(&warning))?;
+    }
     let cwd = plan
         .cwd
         .clone()

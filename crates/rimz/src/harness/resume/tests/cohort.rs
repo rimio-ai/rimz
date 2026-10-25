@@ -192,6 +192,40 @@ fn fresh_cohort_seeds_retain_the_parked_session_key() {
 }
 
 #[test]
+fn team_restore_forwards_skipped_field_warnings_into_recovery() {
+    let (teams, mut profiles, commands) = team_configs();
+    for profile in profiles.0.values_mut() {
+        profile.agent = "pi".into();
+        profile.fast = Some(true);
+    }
+    let planner = team_agent("pi", "planner", "planner", "/repo/forge", 1);
+    let (tabs, refilled) = plan_team_restore_tabs(
+        &[planner],
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        true,
+        &[],
+        dead,
+    );
+    assert_eq!(tabs.len(), 1);
+    let recovery = RecoveryPlan::new(teams, tabs, DetailedResumePlan::default(), refilled);
+    assert_eq!(recovery.warnings.len(), 2, "{:?}", recovery.warnings);
+    assert!(
+        recovery
+            .warnings
+            .iter()
+            .all(|warning| warning.contains("fast") && warning.contains("pi"))
+    );
+}
+
+#[test]
 fn recorded_team_restore_keeps_role_layers() {
     let (mut teams, profiles, commands) = team_configs();
     let binding = &mut teams.0.get_mut("forge").unwrap().roles[0];

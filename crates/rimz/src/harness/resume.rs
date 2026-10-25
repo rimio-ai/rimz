@@ -667,6 +667,7 @@ pub enum CohortRelaunchState {
 /// One named-team tab selected for restore and awaiting launch materialization.
 #[derive(Clone, Debug)]
 pub(super) struct PlannedTeamTab {
+    pub warnings: Box<[String]>,
     pub label: String,
     pub cwd: PathBuf,
     pub channel: Option<String>,
@@ -829,6 +830,8 @@ impl RecoveryPlan {
         flat: DetailedResumePlan,
         refilled: BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Self {
+        let mut warnings = flat.warnings;
+        warnings.extend(team.iter().flat_map(|tab| tab.warnings.iter().cloned()));
         let mut flat_tabs = flat.tabs;
         disambiguate_flat_labels_from_teams(&team, &mut flat_tabs);
         let mut entries = team
@@ -841,7 +844,7 @@ impl RecoveryPlan {
             entries,
             skipped: flat.skipped,
             skipped_sessions: flat.skipped_sessions,
-            warnings: flat.warnings,
+            warnings,
             agents_to_end: flat.agents_to_end,
             base_resumed: flat.resumed,
             refilled,
@@ -1994,7 +1997,7 @@ fn plan_team_restore_tabs(
             cohort
         };
         // Failed stamped renders fall through to flat recovery, which reports the degradation and keeps the stored provider.
-        if let Err(reason) = restore_routed_cells(
+        let warnings = match restore_routed_cells(
             &mut layout,
             &cohort.seeds,
             profiles,
@@ -2003,9 +2006,15 @@ fn plan_team_restore_tabs(
                 ..Default::default()
             },
         ) {
-            tracing::warn!(%reason, "team restore is falling back to individual sessions");
-            continue;
-        }
+            Ok(warnings) => warnings
+                .into_iter()
+                .map(|warning| warning.to_string())
+                .collect(),
+            Err(reason) => {
+                tracing::warn!(%reason, "team restore is falling back to individual sessions");
+                continue;
+            }
+        };
         let channel = project_root
             .and_then(|project_root| {
                 crate::harness::spec::resolve_room_channel(
@@ -2020,6 +2029,7 @@ fn plan_team_restore_tabs(
         let label = channel_label(channel.as_deref(), &cwd);
         let env = tab_pin_env(workspace_id, project_root, &cwd, channel.as_deref());
         tabs.push(PlannedTeamTab {
+            warnings,
             label,
             cwd,
             channel,
@@ -2339,7 +2349,7 @@ fn plan_resume_candidates_detailed(
                     candidate.identity.kind.clone(),
                     candidate.identity.profile.clone(),
                 );
-                if let Err(reason) = restore_resume_cell(
+                match restore_resume_cell(
                     &mut cell,
                     request,
                     ctx.profiles,
@@ -2347,19 +2357,24 @@ fn plan_resume_candidates_detailed(
                     Some(posture.launch),
                     true,
                 ) {
-                    // The cell replays the record, so `Unresolved` here is
-                    // finalize refusing an override, not the profile.
-                    let reason = match reason {
-                        PostureDegrade::OverrideRejected { reason }
-                        | PostureDegrade::Unresolved { reason, .. } => reason,
-                        reason => reason.to_string(),
-                    };
-                    plan.skip(
-                        &candidate,
-                        label,
-                        ResumeSkipReason::OverrideRejected(reason),
-                    );
-                    continue;
+                    Ok(warnings) => plan
+                        .warnings
+                        .extend(warnings.into_iter().map(|warning| warning.to_string())),
+                    Err(reason) => {
+                        // The cell replays the record, so `Unresolved` here is
+                        // finalize refusing an override, not the profile.
+                        let reason = match reason {
+                            PostureDegrade::OverrideRejected { reason }
+                            | PostureDegrade::Unresolved { reason, .. } => reason,
+                            reason => reason.to_string(),
+                        };
+                        plan.skip(
+                            &candidate,
+                            label,
+                            ResumeSkipReason::OverrideRejected(reason),
+                        );
+                        continue;
+                    }
                 }
                 posture.launch = ResumeLaunchPosture::from(&cell);
             }
@@ -2786,7 +2801,8 @@ pub fn restore_routed_cells(
     seeds: &[CohortSeed],
     profiles: &ProfilesConfig,
     overrides: &ResumeOverrides<'_>,
-) -> Result<(), PostureDegrade> {
+) -> Result<Vec<crate::harness::plan::LaunchFinalizeWarning>, PostureDegrade> {
+    let mut warnings = Vec::new();
     for (cell, seed) in layout.agent_cells_mut().zip(seeds) {
         let (kind, profile) = match seed {
             CohortSeed::Resume(agent) => (agent.kind.clone(), agent.profile.clone()),
@@ -2808,16 +2824,16 @@ pub fn restore_routed_cells(
                 stamped_tier: None,
             },
         };
-        restore_resume_cell(
+        warnings.extend(restore_resume_cell(
             cell,
             request,
             profiles,
             overrides,
             None,
             matches!(seed, CohortSeed::Resume(_)),
-        )?;
+        )?);
     }
-    Ok(())
+    Ok(warnings)
 }
 
 fn restore_resume_cell(
@@ -2827,7 +2843,7 @@ fn restore_resume_cell(
     overrides: &ResumeOverrides<'_>,
     replayed: Option<ResumeLaunchPosture>,
     is_resume: bool,
-) -> Result<(), PostureDegrade> {
+) -> Result<Vec<crate::harness::plan::LaunchFinalizeWarning>, PostureDegrade> {
     let preset = &overrides.preset;
     let kind = request.kind.clone();
     let profile = request.profile;
@@ -2969,6 +2985,7 @@ fn restore_resume_cell(
     cell.resume_model_override =
         preset.model.is_some() || overrides.tier.is_some() || overrides.agent.is_some();
     cell.args = posture.args;
+    cell.notices = posture.notices;
     if is_resume {
         cell.auto_compact = None;
     }
@@ -2986,6 +3003,7 @@ fn restore_resume_cell(
     if preset.model.is_some() {
         cell.launch.tier = None;
     }
+    let mut warnings = Vec::new();
     crate::harness::plan::finalize_agent_cell(
         cell,
         crate::harness::plan::LaunchFinalizeOptions {
@@ -2997,7 +3015,7 @@ fn restore_resume_cell(
             budget: None,
             max_turns: None,
         },
-        &mut Vec::new(),
+        &mut warnings,
     )
     .map_err(|error| PostureDegrade::Unresolved {
         profile: profile
@@ -3005,7 +3023,7 @@ fn restore_resume_cell(
             .unwrap_or_else(|| cell.kind.to_string()),
         reason: error.to_string(),
     })?;
-    Ok(())
+    Ok(warnings)
 }
 
 fn cohort_spec_label(cells: &[CohortCell], team: Option<&str>) -> String {

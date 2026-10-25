@@ -105,6 +105,32 @@ fn recorded_fast_override_saves_both_values() {
 }
 
 #[test]
+fn unsupported_fast_warns_and_resumes_without_stamping_it() {
+    let mut saved = agent("pi", "saved", "/repo", 0);
+    saved.record = Some(Box::new(LaunchRecord::default()));
+    let (plan, _) = single(
+        &saved,
+        &ProfilesConfig::default(),
+        SingleResumeOptions {
+            overrides: ResumeOverrides {
+                preset: LaunchPreset {
+                    fast: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+    assert!(plan.warnings[0].contains("fast"));
+    assert!(plan.warnings[0].contains("pi"));
+    assert!(plan.warnings[0].contains("launching without"));
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert!(!request.identity.params.record.unwrap().fast);
+}
+
+#[test]
 fn recorded_permission_override_replaces_saved_mode_and_provider_args() {
     for (previous, mode) in [
         (PermissionMode::Ask, PermissionMode::Yolo),

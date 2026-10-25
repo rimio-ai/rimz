@@ -236,7 +236,7 @@ mod agent_ref {
         fn new(launch: LaunchParams, live: bool, parent: Option<&str>) -> Self {
             let env = Env::new();
             let cwd = env.project_root.join("checkout");
-            Self::at_cwd(env, cwd, launch, live, parent)
+            Self::at_cwd(env, cwd, launch, live, parent, "claude")
         }
 
         fn at_cwd(
@@ -245,8 +245,9 @@ mod agent_ref {
             launch: LaunchParams,
             live: bool,
             parent: Option<&str>,
+            kind: &str,
         ) -> Self {
-            env.install_agent_hooks("claude");
+            env.install_agent_hooks(kind);
             std::fs::write(
                 env.rimz_home().join("config.toml"),
                 "[agents]\nisolation = 'host'\n",
@@ -256,10 +257,10 @@ mod agent_ref {
                 &env,
                 "agents",
                 "worker",
-                "description: Worker\nagent: claude\nmode: ask\nmodel: sonnet\ntools: []",
+                &format!("description: Worker\nagent: {kind}\nmode: ask\nmodel: sonnet\ntools: []"),
                 "Work.",
             );
-            let shim = write_env_dump_shim(&env, "claude");
+            let shim = write_env_dump_shim(&env, kind);
             let shell = write_fake_login_shell(&env, "resume-shell", &[]);
             std::fs::create_dir_all(&cwd).unwrap();
             let transcript = cwd.join("saved.jsonl");
@@ -278,7 +279,7 @@ mod agent_ref {
                 .append_event(&EventEnvelope::agent_launched(
                     workspace.workspace_id.clone(),
                     &workspace.session_name,
-                    &AgentKind::new_unchecked("claude"),
+                    &AgentKind::new_unchecked(kind),
                     AgentLaunchPayload {
                         system_prompt_digest: None,
                         agent_id: SESSION.into(),
@@ -324,7 +325,7 @@ mod agent_ref {
                 .append_event(&EventEnvelope::agent_lifecycle(
                     workspace.workspace_id.clone(),
                     &workspace.session_name,
-                    "claude",
+                    kind,
                     "SessionEnd",
                     &observation,
                 ))
@@ -911,7 +912,14 @@ mod agent_ref {
                 &env.project_root
             },
         );
-        let fixture = Fixture::at_cwd(env, cwd, LaunchParams::default(), args[0] == "molt", None);
+        let fixture = Fixture::at_cwd(
+            env,
+            cwd,
+            LaunchParams::default(),
+            args[0] == "molt",
+            None,
+            "claude",
+        );
         let mut command = fixture.command_args(args);
         if args[0] == "molt" {
             command
@@ -1415,6 +1423,60 @@ mod agent_ref {
                 assert!(!fixture.trace().contains("action\tnew-pane"));
             }
         }
+    }
+
+    #[test]
+    fn continue_reports_each_skipped_field_and_tool_notice_once() {
+        let env = Env::new();
+        let cwd = env.project_root.join("checkout");
+        let fixture = Fixture::at_cwd(env, cwd, LaunchParams::default(), false, None, "pi");
+        write_definition(
+            &fixture.env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: pi\nmodel: sonnet\ntools: [WebSearch]",
+            "Work.",
+        );
+        let output = fixture
+            .command_args(&["worker", "--continue", "--fast"])
+            .env("ZELLIJ_PANE_ID", "2")
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        for warning in [
+            "warning: `worker` fast is unsupported on pi; launching without it",
+            "warning: profile `worker` drops tools on pi: WebSearch",
+        ] {
+            assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
+        }
+    }
+
+    #[test]
+    fn restart_reports_notices_from_the_current_definition() {
+        let env = Env::new();
+        let cwd = env.project_root.join("checkout");
+        let fixture = Fixture::at_cwd(env, cwd, LaunchParams::default(), true, None, "pi");
+        write_definition(
+            &fixture.env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: pi\nmodel: sonnet\ntools: [WebSearch]",
+            "Work.",
+        );
+        let output = fixture
+            .command_args(&["restart", &format!("@{NAME}")])
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr
+                .matches("warning: profile `worker` drops tools on pi: WebSearch")
+                .count(),
+            1,
+            "{stderr}"
+        );
     }
 
     #[test]

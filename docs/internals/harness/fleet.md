@@ -172,6 +172,8 @@ A subagent's permission mode is capped before finalization. For a subagent with 
 
 Restart, fork, and flat resume stop after step 1 and resolve posture through the seam under [Posture](#posture). Explicit single-session resume applies any launch overrides through the same rules as cohort resume. Isolation alone leaves the replayed record untouched, including rows that carry no record. Cohort resume matches the layout without `--agent` or `--tier`, then restores each member's record and applies overrides before preflight and pane compilation.
 
+Cells carry pending model and tool notices as typed values, and only the launch finalizer turns them into warnings. Resume overrides return the finalizer's warnings to their command's notice sink; team and room recovery collect them alongside flat-session warnings. A plain restart or flat resume that does not finalize the cell emits no new skipped-field warning.
+
 `rebase_onto` takes the engine from the replacement base and the role from the original cell:
 
 | Field | Result |

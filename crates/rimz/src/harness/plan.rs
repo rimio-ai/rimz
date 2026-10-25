@@ -248,6 +248,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
 /// Finalized cell values applied by a resume launch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumeLaunchPosture {
+    pub notices: Vec<crate::harness::spec::CellNotice>,
     pub resume_model_override: bool,
     pub tier: Option<Box<crate::agents::TierStamp>>,
     pub record: Option<Box<crate::agents::LaunchRecord>>,
@@ -269,6 +270,7 @@ pub struct ResumeLaunchPosture {
 impl ResumeLaunchPosture {
     pub(super) fn into_cell(self, kind: AgentKind, profile: Option<String>) -> AgentCell {
         AgentCell {
+            notices: self.notices,
             kind,
             empty_dir: None,
             auto_compact: None,
@@ -318,6 +320,7 @@ impl ResumeLaunchPosture {
 impl From<&AgentCell> for ResumeLaunchPosture {
     fn from(cell: &AgentCell) -> Self {
         Self {
+            notices: cell.notices.clone(),
             resume_model_override: cell.resume_model_override,
             tier: cell.launch.tier.clone(),
             record: cell.launch.record.clone(),
@@ -1000,6 +1003,11 @@ pub fn plan_supervised_launch(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchFinalizeWarning {
+    CellNotice {
+        profile: String,
+        kind: AgentKind,
+        notice: crate::harness::spec::CellNotice,
+    },
     SkippedField {
         profile: String,
         agent: &'static str,
@@ -1026,9 +1034,58 @@ pub enum LaunchFinalizeWarning {
     },
 }
 
+impl LaunchFinalizeWarning {
+    /// Drain cell notices after model overrides have been applied.
+    pub fn take_cell_notices(cell: &mut AgentCell, profile: &str) -> Vec<Self> {
+        let mut warnings = Vec::new();
+        for notice in std::mem::take(&mut cell.notices) {
+            if matches!(
+                &notice,
+                crate::harness::spec::CellNotice::DroppedModel { .. }
+            ) && cell.launch.model.is_some()
+            {
+                continue;
+            }
+            warnings.push(Self::CellNotice {
+                profile: profile.to_owned(),
+                kind: cell.kind.clone(),
+                notice,
+            });
+        }
+        warnings
+    }
+}
+
 impl fmt::Display for LaunchFinalizeWarning {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CellNotice {
+                profile,
+                kind,
+                notice,
+            } => {
+                use crate::harness::spec::CellNotice;
+                match notice {
+                    CellNotice::DroppedModel { model } => write!(
+                        formatter,
+                        "warning: profile `{profile}` drops model `{model}` when switching to {kind}"
+                    ),
+                    CellNotice::DroppedTools { tools } => write!(
+                        formatter,
+                        "warning: profile `{profile}` drops tools on {kind}: {}",
+                        tools.join(", ")
+                    ),
+                    CellNotice::ToolRestrictions { tools } => write!(
+                        formatter,
+                        "warning: profile `{profile}` tool restrictions are not enforced on {kind}: {}",
+                        tools.join(", ")
+                    ),
+                    CellNotice::ToolsNotApplied => write!(
+                        formatter,
+                        "warning: profile `{profile}` tools list is not applied on {kind}"
+                    ),
+                }
+            }
             Self::SkippedField {
                 profile,
                 agent,
@@ -1291,6 +1348,11 @@ pub(super) fn finalize_agent_cell(
     if let Some(budget) = options.budget {
         cell.launch.budget = Some(budget.to_string());
     }
+    let profile = cell
+        .launch
+        .profile
+        .clone()
+        .unwrap_or_else(|| cell.kind.to_string());
     if let Some(adapter) = adapter {
         let (preset, skipped) =
             adapter
@@ -1305,30 +1367,28 @@ pub(super) fn finalize_agent_cell(
         cell.launch.fast = preset.fast == Some(true);
         for field in skipped {
             warnings.push(LaunchFinalizeWarning::SkippedField {
-                profile: cell
-                    .launch
-                    .profile
-                    .clone()
-                    .unwrap_or_else(|| cell.kind.to_string()),
+                profile: profile.clone(),
                 agent: adapter.spec().kind,
                 field,
             });
         }
         reconcile_preset_args(cell, adapter, &overridden, warnings)?;
-        if cell.launch.model.is_none()
-            && let Some(default) = adapter.default_launch_model()
-        {
-            cell.args.extend(
-                adapter
-                    .spec()
-                    .render_preset(&crate::agents::LaunchPreset {
-                        model: Some(default.clone()),
-                        ..Default::default()
-                    })
-                    .map_err(unsupported_preset_error)?,
-            );
-            cell.launch.model = Some(default);
-        }
+    }
+    warnings.extend(LaunchFinalizeWarning::take_cell_notices(cell, &profile));
+    if let Some(adapter) = adapter
+        && cell.launch.model.is_none()
+        && let Some(default) = adapter.default_launch_model()
+    {
+        cell.args.extend(
+            adapter
+                .spec()
+                .render_preset(&crate::agents::LaunchPreset {
+                    model: Some(default.clone()),
+                    ..Default::default()
+                })
+                .map_err(unsupported_preset_error)?,
+        );
+        cell.launch.model = Some(default);
     }
     cell.launch.record = Some(Box::new(crate::agents::LaunchRecord {
         model: cell.launch.model.clone(),

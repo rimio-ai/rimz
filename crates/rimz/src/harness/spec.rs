@@ -92,7 +92,16 @@ pub struct Column {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CellNotice {
+    DroppedModel { model: String },
+    DroppedTools { tools: Vec<String> },
+    ToolRestrictions { tools: Vec<String> },
+    ToolsNotApplied,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentCell {
+    pub notices: Vec<CellNotice>,
     pub empty_dir: Option<bool>,
     pub resume_model_override: bool,
     pub isolation_default: Option<crate::config::Isolation>,
@@ -125,6 +134,7 @@ impl Cell {
     #[cfg(test)]
     pub(super) fn agent(kind: AgentKind) -> Self {
         Self::Agent(AgentCell {
+            notices: Vec::new(),
             empty_dir: None,
             resume_model_override: false,
             kind,
@@ -167,6 +177,7 @@ pub(super) fn agent_pane_name(profile: Option<&str>, kind: &AgentKind) -> String
 /// A profile chain flattened to the concrete adapter kind that can be executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
+    notices: Vec<CellNotice>,
     pub empty_dir: Option<bool>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
@@ -194,6 +205,7 @@ impl ResolvedProfile {
 
     fn bare(kind: &str) -> Self {
         Self {
+            notices: Vec::new(),
             kind: AgentKind::new_unchecked(kind),
             empty_dir: None,
             layers: Vec::new(),
@@ -1631,6 +1643,7 @@ fn agent_cell_from(
     mode: Option<PermissionMode>,
 ) -> AgentCell {
     AgentCell {
+        notices: resolved.notices.clone(),
         resume_model_override: false,
         empty_dir: resolved.empty_dir,
         kind: resolved.kind.clone(),
