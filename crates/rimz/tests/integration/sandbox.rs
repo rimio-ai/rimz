@@ -1081,6 +1081,7 @@ fn ssh_config_plan(env: &Env, source: &Path) -> SandboxPlan {
             kind: "claude",
             home: None,
             manual: ManualSkill::Frontmatter,
+            withheld: None,
             callable: None,
         },
     })
@@ -1704,6 +1705,7 @@ fn sandbox_guarded_entries_follow_protected_identity_binds() {
             kind: "codex",
             home: Some(skills),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: Some(&[]),
         },
     };
@@ -1779,6 +1781,7 @@ fn sandbox_guard_restores_replaced_entries_in_a_running_view() {
             kind: "codex",
             home: None,
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     })
@@ -2040,6 +2043,7 @@ fn sandbox_guard_restores_a_replaced_entry_while_the_view_is_stopped() {
             kind: "codex",
             home: None,
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     })
@@ -2408,6 +2412,7 @@ fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
             kind: "codex",
             home: Some(skills.clone()),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     };
@@ -2493,6 +2498,7 @@ fn scoped_protection_keeps_provider_homes_writable() {
             kind: "codex",
             home: None,
             manual: ManualSkill::Unsupported,
+            withheld: None,
             callable: None,
         },
     };
@@ -2617,6 +2623,7 @@ fn scoped_protects_separate_git_directory() {
             kind: "codex",
             home: None,
             manual: ManualSkill::Unsupported,
+            withheld: None,
             callable: None,
         },
     })
@@ -2655,6 +2662,7 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
+                withheld: None,
                 callable: None,
             },
         )
@@ -2695,6 +2703,7 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
                     kind: "codex",
                     home: Some(root.clone()),
                     manual: ManualSkill::OpenAiPolicy,
+                    withheld: None,
                     callable,
                 },
             );
@@ -2778,6 +2787,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
+            withheld: None,
             callable: Some(&["listed".parse().unwrap()]),
         },
     })
@@ -2862,6 +2872,7 @@ fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
+            withheld: None,
             callable: Some(&[]),
         },
     )
@@ -2906,6 +2917,7 @@ fn sandbox_skills_state_failure_still_refuses() {
                 kind: "claude",
                 home: Some(root),
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: Some(&[]),
             },
         )
@@ -2992,6 +3004,7 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: None,
             },
         )
@@ -3018,6 +3031,97 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
 }
 
 #[test]
+fn scoped_child_skill_view_withholds_only_delegation_without_a_profile_list() {
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    for name in ["commit", "rimz-subagents"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), format!("{name}\n")).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let state = env.store();
+    let runtime_root = tempfile::tempdir().unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(
+        rimz::WorkspaceId::from_project_root(&env.project_root),
+        runtime_root.path(),
+    )
+    .unwrap();
+    let machine = rimz::config::MachineConfig::default();
+    let vars = environment(&env);
+    let mut actual = Vec::new();
+    for child in [false, true] {
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        request.subagent = child;
+        let plan =
+            rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
+                request: &request,
+                cwd: &env.project_root,
+                project_root: &env.project_root,
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: state.paths(),
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                isolation: Isolation::Scoped,
+                bwrap: Some(Path::new("/usr/bin/bwrap")),
+                agents: Ok(&[]),
+                ambient_env: &vars,
+                agent_shell: None,
+                hibernate: false,
+                recorded_system_prompt_digest: None,
+            })
+            .unwrap();
+        rimz::harness::launch_plan::apply(&plan).unwrap();
+        let argv = &plan.process().argv;
+        let mut shown = Vec::new();
+        for name in ["commit", "rimz-subagents"] {
+            let target = root.join(name);
+            let source = argv
+                .windows(3)
+                .find(|args| args[0] == "--ro-bind" && Path::new(&args[2]) == target)
+                .map_or(target.as_path(), |args| Path::new(&args[1]));
+            shown.push(std::fs::read_to_string(source.join("SKILL.md")).unwrap());
+            assert_eq!(
+                std::fs::read_to_string(target.join("SKILL.md")).unwrap(),
+                format!("{name}\n")
+            );
+        }
+        actual.push(shown);
+    }
+    assert_eq!(
+        actual,
+        [
+            vec!["commit\n", "rimz-subagents\n"],
+            vec![
+                "commit\n",
+                "---\ndisable-model-invocation: true\n---\nrimz-subagents\n"
+            ],
+        ]
+    );
+    for (home, manual) in [
+        (None, ManualSkill::Frontmatter),
+        (Some(root), ManualSkill::Unsupported),
+    ] {
+        let plan = skill_prepare(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "unregistered",
+                home,
+                manual,
+                callable: None,
+                withheld: Some("rimz-subagents"),
+            },
+        );
+        assert!(
+            plan.is_ok(),
+            "an unconfigured child keeps native discovery when withholding is unsupported"
+        );
+    }
+}
+
+#[test]
 fn sandbox_empty_skill_list_makes_every_skill_manual() {
     let env = Env::new();
     let root = env.home_root.join(".claude/skills");
@@ -3033,6 +3137,7 @@ fn sandbox_empty_skill_list_makes_every_skill_manual() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
+            withheld: None,
             callable: Some(&[]),
         },
     )
@@ -3085,6 +3190,7 @@ fn sandbox_manual_copies_are_content_addressed() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: Some(&[]),
             },
         )
@@ -3179,6 +3285,7 @@ fn sandbox_codex_manual_writes_openai_policy() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: Some(&["callable".parse().unwrap()]),
         },
     )
@@ -3228,6 +3335,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
                     kind: "amp",
                     home: Some(root.clone()),
                     manual: ManualSkill::Unsupported,
+                    withheld: None,
                     callable: Some(list),
                 },
             )
@@ -3245,6 +3353,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
             kind: "plugin",
             home: None,
             manual: ManualSkill::Unsupported,
+            withheld: None,
             callable: Some(&[]),
         },
     )
@@ -3287,6 +3396,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: Some(&callable),
         },
     };
@@ -3379,6 +3489,7 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
                 kind: "claude",
                 home: Some(root.clone()),
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: Some(&[]),
             },
         )
@@ -3459,6 +3570,7 @@ fn sandbox_skill_aliases_require_matching_invocation_policies() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
+                withheld: None,
                 callable: Some(&callable),
             },
         );
@@ -3516,6 +3628,7 @@ fn sandbox_non_skill_entries_are_never_materialized() {
                 kind: "codex",
                 home: Some(root.clone()),
                 manual: ManualSkill::OpenAiPolicy,
+                withheld: None,
                 callable: Some(&callable),
             },
         )
@@ -3560,6 +3673,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
             kind: "codex",
             home: Some(env.home_root.join(".agents/skills")),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     };
@@ -4713,6 +4827,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     )
@@ -4733,6 +4848,7 @@ fn sandbox_preserves_host_library_link_without_duplicate_bind() {
             kind: "codex",
             home: Some(root.clone()),
             manual: ManualSkill::OpenAiPolicy,
+            withheld: None,
             callable: None,
         },
     )
@@ -4780,6 +4896,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
+            withheld: None,
             callable: Some(&["visible".parse().unwrap()]),
         },
     })

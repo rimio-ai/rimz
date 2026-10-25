@@ -1351,6 +1351,118 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
 }
 
 #[test]
+fn child_host_skill_views_withhold_delegation_without_configuring_a_list() {
+    let project = tempfile::tempdir().unwrap();
+    let library = project.path().join("agents/skills");
+    for name in ["commit", "rimz-subagents"] {
+        std::fs::create_dir_all(library.join(name)).unwrap();
+        std::fs::write(library.join(name).join("SKILL.md"), "skill\n").unwrap();
+    }
+    let login_env = BTreeMap::from([
+        ("HOME".into(), project.path().display().to_string()),
+        (
+            "RIMZ_AGENTS_HOME".into(),
+            project.path().join("agents").display().to_string(),
+        ),
+    ]);
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id, project.path()).unwrap();
+    let reminders = LaunchReminders {
+        settings: Some((runtime.prompt_dir(), login_env)),
+        ..Default::default()
+    };
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for installed in [true, false] {
+        if !installed {
+            std::fs::remove_dir_all(library.join("rimz-subagents")).unwrap();
+        }
+        for kind in ["claude", "codex", "amp"] {
+            for subagent in [false, true] {
+                for listed in [false, true] {
+                    if listed && !installed {
+                        continue;
+                    }
+                    let mut invocation = request(
+                        kind,
+                        ExecAction::Launch {
+                            prompt: None,
+                            extra_args: Vec::new(),
+                        },
+                    );
+                    invocation.subagent = subagent;
+                    invocation.skills = listed.then(|| {
+                        ["commit", "rimz-subagents"]
+                            .map(|name| name.parse().unwrap())
+                            .to_vec()
+                    });
+                    let process = compile_agent_process_with_extra_env(
+                        Some(&runtime),
+                        project.path(),
+                        &invocation,
+                        project.path(),
+                        &BTreeMap::new(),
+                        &reminders,
+                    )
+                    .unwrap();
+                    let hidden = match &process.host_skills {
+                        Some(crate::agents::skills::HostSkillPlan::Applied {
+                            unlisted, ..
+                        }) => {
+                            serde_json::to_value(unlisted).unwrap()
+                                == serde_json::json!(["rimz-subagents"])
+                        }
+                        _ => false,
+                    };
+                    let unenforced = process.host_skills
+                        == Some(crate::agents::skills::HostSkillPlan::Unenforced);
+                    let has_switch = process
+                        .provider_argv
+                        .iter()
+                        .any(|arg| arg == "--settings" || arg.starts_with("skills.config="));
+                    let settings = process
+                        .settings_artifact
+                        .as_ref()
+                        .map(|(_, value, _)| value.clone())
+                        .or_else(|| {
+                            process
+                                .provider_argv
+                                .windows(2)
+                                .find(|args| args[0] == "--settings")
+                                .and_then(|args| {
+                                    serde_json::from_str::<serde_json::Value>(&args[1]).ok()
+                                })
+                        })
+                        .unwrap_or_default();
+                    let delegation_granted = settings["permissions"]["allow"]
+                        .as_array()
+                        .is_some_and(|allow| {
+                            allow.contains(&serde_json::json!("Skill(rimz-subagents)"))
+                        });
+                    let case =
+                        format!("{kind} child={subagent} listed={listed} installed={installed}");
+                    actual.push((
+                        case.clone(),
+                        hidden,
+                        unenforced,
+                        has_switch,
+                        delegation_granted,
+                    ));
+                    expected.push((
+                        case,
+                        kind != "amp" && subagent && installed,
+                        kind == "amp" && listed,
+                        kind != "amp" && (listed || (subagent && installed)),
+                        kind == "claude" && listed && !subagent,
+                    ));
+                }
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn a_launch_carries_only_its_own_team_and_role() {
     let inherited = env(&[(ENV_TEAM, "caller-team"), (ENV_AGENT_ROLE, "caller-role")]);
     for (team, role) in [

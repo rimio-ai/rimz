@@ -811,7 +811,7 @@ fn host_skills_merge_settings_once_and_use_directory_names() {
     let (plan, _) = CLAUDE_DESCRIPTOR
         .host_skills
         .apply(
-            &[],
+            (Some(&[]), None),
             Some(root.path()),
             None,
             (root.path(), root.path()),

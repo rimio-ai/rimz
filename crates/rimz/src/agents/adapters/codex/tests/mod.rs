@@ -267,7 +267,7 @@ fn host_skills_refuse_conflicting_provider_keys() {
         std::fs::write(path.join("SKILL.md"), "---\nname: shared-name\n---\n").unwrap();
     }
     let result = CODEX_DESCRIPTOR.host_skills.apply(
-        &["listed".parse().unwrap()],
+        (Some(&["listed".parse().unwrap()]), None),
         Some(root.path()),
         None,
         (root.path(), root.path()),
