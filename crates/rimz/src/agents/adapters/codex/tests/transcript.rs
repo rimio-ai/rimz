@@ -1408,10 +1408,7 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
     .unwrap();
     let stat = TranscriptStat::from_path(&path).unwrap();
     let legacy = LocalSpendFold {
-        cursor: crate::agents::spending::SpendCursor {
-            offset: stat.len,
-            ..crate::agents::spending::SpendCursor::default()
-        },
+        cursor: crate::agents::spending::SpendCursor::new(stat.len),
         total_usd: 1.0,
         ..LocalSpendFold::default()
     };

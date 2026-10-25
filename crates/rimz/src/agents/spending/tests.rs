@@ -491,11 +491,7 @@ fn session_entries_dedup_exact_keys_and_sidechain_replays_in_file_order() {
 fn an_unreadable_transcript_makes_no_progress() {
     let dir = TempDir::new().unwrap();
     let missing = dir.path().join("gone.jsonl");
-    let resume = SpendCursor {
-        anchor: None,
-        offset: 512,
-        state: Some(serde_json::json!({"cwd": "/work"})),
-    };
+    let resume = SpendCursor::with_state(512, &serde_json::json!({"cwd": "/work"}));
 
     for kind in ["claude", "codex", "pi", "copilot", "kimi", "grok"] {
         let adapter = crate::agents::definition_by_kind(kind).unwrap();
@@ -516,7 +512,7 @@ fn an_unreadable_transcript_makes_no_progress() {
         let adapter = crate::agents::definition_by_kind(kind).unwrap();
         let parsed = adapter.parse_spend(&missing, Some(&resume), &PriceBook::default());
         assert!(
-            parsed.cursor.state.is_some(),
+            parsed.cursor.state().is_some(),
             "{kind} dropped its resume state on an unreadable file"
         );
     }

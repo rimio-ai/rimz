@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 use tracing::warn;
 
 use crate::agents::account::{AccountProbe, AccountProbeError};
@@ -25,7 +26,7 @@ const MAX_STDERR: u64 = 16 * 1024;
 #[derive(Serialize)]
 struct SpendRequest<'a> {
     file: &'a Path,
-    cursor: Option<&'a Value>,
+    cursor: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -74,7 +75,7 @@ pub(super) fn spend(
 ) -> SpendParse {
     let request = SpendRequest {
         file: path,
-        cursor: resume.and_then(|cursor| cursor.state.as_ref()),
+        cursor: resume.and_then(SpendCursor::state),
     };
     let Some(output) = run_json(kind, "spend", plugin_dir, argv, Some(&request)) else {
         return SpendParse::default();
@@ -112,13 +113,13 @@ pub(super) fn spend(
             })
         })
         .collect();
+    let offset = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     SpendParse {
         entries,
         origin: response.origin,
-        cursor: SpendCursor {
-            anchor: None,
-            offset: std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
-            state: response.cursor,
+        cursor: match response.cursor {
+            Some(state) => SpendCursor::with_state(offset, &state),
+            None => SpendCursor::new(offset),
         },
         unknown_models: Default::default(),
         update: SpendUpdate::Extend,
@@ -457,7 +458,43 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].cost_usd, 0.5);
         assert_eq!(parsed.cursor.offset, 4);
-        assert_eq!(parsed.cursor.state, Some(serde_json::json!({ "line": 1 })));
+        assert_eq!(
+            parsed.cursor.state_as::<Option<Value>>(),
+            Some(serde_json::json!({ "line": 1 }))
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spend_probe_preserves_canonical_request_and_canonicalizes_reply() {
+        let dir = TempDir::new().unwrap();
+        let probe = dir.path().join("spend");
+        fs::write(
+            &probe,
+            concat!(
+                "#!/bin/sh\nIFS= read -r request\n",
+                "case \"$request\" in\n",
+                "  *'\"cursor\":{\"a\":1,\"z\":2}'*) ;;\n",
+                "  *) exit 1 ;;\nesac\n",
+                "printf '%s' '{\"cursor\": { \"z\": 2, \"a\": 1 }}'\n",
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+        let transcript = dir.path().join("session.jsonl");
+        fs::write(&transcript, "one\n").unwrap();
+        let resume = SpendCursor::with_state(0, &serde_json::json!({"z":2,"a":1}));
+        let parsed = spend(
+            "testbot",
+            dir.path(),
+            &["./spend".into()],
+            &transcript,
+            Some(&resume),
+        );
+        assert_eq!(
+            serde_json::to_string(&parsed.cursor).unwrap(),
+            r#"{"o":4,"s":{"a":1,"z":2}}"#
+        );
     }
 
     #[test]

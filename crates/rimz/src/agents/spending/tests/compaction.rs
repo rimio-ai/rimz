@@ -304,11 +304,7 @@ fn cache_compaction_evicts_dead_file_records() {
                 discovered_key.clone(),
                 FileCacheEntry {
                     stat: discovered_stat,
-                    cursor: SpendCursor {
-                        anchor: None,
-                        offset: discovered_len,
-                        state: None,
-                    },
+                    cursor: SpendCursor::new(discovered_len),
                     origin_path: None,
                     entries: Vec::new(),
                     unknown_models: BTreeMap::new(),

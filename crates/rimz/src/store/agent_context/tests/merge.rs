@@ -232,11 +232,7 @@ fn stale_provider_observation_updates_latest_locked_record() {
     let local_at = Timestamp::from_second(1_700_000_100).unwrap();
     let mut refresh = full_local_refresh();
     let mut spend_fold = LocalSpendFold::default();
-    spend_fold.cursor = crate::agents::spending::SpendCursor {
-        anchor: None,
-        offset: 42,
-        state: None,
-    };
+    spend_fold.cursor = crate::agents::spending::SpendCursor::new(42);
     spend_fold.total_usd = 0.12;
     refresh.spend_fold = FieldPatch::Set(spend_fold);
     merge_local_context(&runtime, spec("codex"), "sess-1", refresh, local_at).unwrap();
@@ -284,11 +280,10 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
     let observed_at = observed_at();
     let mut prior = codex_record(observed_at);
     let mut spend_fold = LocalSpendFold::default();
-    spend_fold.cursor = crate::agents::spending::SpendCursor {
-        anchor: None,
-        offset: 42,
-        state: None,
-    };
+    spend_fold.cursor = crate::agents::spending::SpendCursor::with_state(
+        42,
+        &serde_json::json!({"pending_tool_calls":{"Read":2},"previous_totals":{"input":100}}),
+    );
     spend_fold.total_usd = 1.25;
     prior.spend_fold = Some(spend_fold);
     write_record(&runtime, &prior).unwrap();

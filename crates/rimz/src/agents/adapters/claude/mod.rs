@@ -1481,9 +1481,12 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
     }
 
     fn spend_pricing_is_current(&self, cursor: &crate::agents::spending::SpendCursor) -> bool {
-        cursor
-            .state_as::<spend::ClaudeSpendState>()
-            .pricing_fingerprint
+        #[derive(Default, serde::Deserialize)]
+        struct PricingFingerprint {
+            pricing_fingerprint: Option<String>,
+        }
+
+        cursor.state_as::<PricingFingerprint>().pricing_fingerprint
             == managed_pricing::fingerprint_current()
     }
 

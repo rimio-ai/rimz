@@ -238,11 +238,7 @@ mod tests {
         )
         .unwrap();
 
-        let resumed = SpendCursor {
-            anchor: None,
-            offset: 999,
-            state: Some("ignored".into()),
-        };
+        let resumed = SpendCursor::with_state(999, &"ignored");
         let second = parse_qwen_spend(&path, Some(&resumed), &PriceBook::fixture());
         assert_eq!(second.update, SpendUpdate::Replace);
         assert_eq!(second.cursor, SpendCursor::default());

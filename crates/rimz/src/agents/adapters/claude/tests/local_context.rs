@@ -145,10 +145,7 @@ fn local_context_fold_without_request_window_replays_once() {
     std::fs::write(&path, format!("{repeated}\n{repeated}\n")).unwrap();
     let stat = crate::agents::TranscriptStat::from_path(&path).unwrap();
     let legacy = LocalSpendFold {
-        cursor: crate::agents::spending::SpendCursor {
-            offset: stat.len,
-            ..crate::agents::spending::SpendCursor::default()
-        },
+        cursor: crate::agents::spending::SpendCursor::new(stat.len),
         input: 999,
         ..LocalSpendFold::default()
     };

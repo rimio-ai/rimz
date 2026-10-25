@@ -80,8 +80,14 @@ fn response_records_time_inputs_to_completion_without_changing_usage_or_cost() {
     }
     assert_eq!(entries, untimed.entries);
     assert_eq!(
-        timed.cursor.state.as_ref().unwrap()["previous_totals"],
-        untimed.cursor.state.as_ref().unwrap()["previous_totals"]
+        timed
+            .cursor
+            .state_as::<Option<serde_json::Value>>()
+            .unwrap()["previous_totals"],
+        untimed
+            .cursor
+            .state_as::<Option<serde_json::Value>>()
+            .unwrap()["previous_totals"]
     );
     assert!(untimed.entries.iter().all(|entry| entry.timing.is_none()));
 }

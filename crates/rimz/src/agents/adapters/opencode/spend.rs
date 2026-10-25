@@ -189,11 +189,7 @@ fn empty_parse(offset: u64) -> SpendParse {
     SpendParse {
         entries: Vec::new(),
         origin: None,
-        cursor: SpendCursor {
-            anchor: None,
-            offset,
-            state: None,
-        },
+        cursor: SpendCursor::new(offset),
         unknown_models: BTreeMap::new(),
         update: SpendUpdate::Extend,
     }
