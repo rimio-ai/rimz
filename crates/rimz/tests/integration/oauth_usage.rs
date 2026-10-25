@@ -1931,6 +1931,160 @@ fn serve_after_failures(
     (format!("http://{addr}"), handle)
 }
 
+#[test]
+fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows() {
+    use rimz::agents::account::{AccountsCache, RateLimitCacheEntry, RateLimitsCache};
+    use rimz::agents::context::{ProviderAccountScope, WindowSource};
+    use rimz::agents::{AgentRateLimits, RateLimitWindow};
+
+    let env = Env::new();
+    let pi_key = rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("pi"));
+    let pi_home = env.home_root.join(".pi/agent");
+    let cwd = pi_home.join("sessions/--home-project--");
+    std::fs::create_dir_all(&cwd).expect("mkdir pi sessions");
+    // Key order puts `anthropic` first, so a probe that misses the new
+    // session's provider records `anthropic`.
+    std::fs::write(
+        pi_home.join("auth.json"),
+        r#"{
+            "anthropic": {"type": "oauth", "access": "a", "refresh": "ra", "expires": 4102444800000},
+            "openai": {"type": "oauth", "access": "o", "refresh": "ro", "expires": 4102444800000},
+            "openai-codex": {"type": "oauth", "access": "c", "refresh": "rc", "expires": 4102444800000, "accountId": "codex-acct"}
+        }"#,
+    )
+    .expect("write pi auth");
+    let old_session =
+        cwd.join("2026-10-25T03-00-00-000Z_00000000-0000-4000-8000-000000000001.jsonl");
+    std::fs::write(
+        &old_session,
+        concat!(
+            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000001"}"#,
+            "\n",
+            r#"{"type":"model_change","provider":"openai","modelId":"gpt-5"}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","provider":"openai","model":"gpt-5"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write old pi session");
+    let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    for path in [&old_session, &cwd] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+    }
+    let bin_dir = env.home_root.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir fake bin");
+    let pi = bin_dir.join("pi");
+    std::fs::write(&pi, "#!/bin/sh\nprintf '%s\\n' '1.4.0'\n").expect("write fake pi");
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).expect("chmod fake pi");
+    let panes = env.write_pane_fixture(&[]);
+    let snapshot = || {
+        let output = env
+            .rimz()
+            .args([
+                "sidebar",
+                "snapshot",
+                "--workspace-id",
+                env.workspace_id.as_str(),
+                "--mux",
+                "tmux",
+                "--session-name",
+                "rimz-test",
+                "--json",
+            ])
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+            .env("PATH", path_with_front(&bin_dir))
+            .bounded_output()
+            .expect("producing sidebar snapshot");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("snapshot json")
+    };
+    let accounts = || -> AccountsCache {
+        serde_json::from_value(read_json(env.runtime_paths().shared_accounts_path()))
+            .expect("accounts cache")
+    };
+
+    snapshot();
+    let mut cache = accounts();
+    let record = cache.logins.get_mut(&pi_key).expect("pi record");
+    let account = record.account.as_ref().expect("pi account");
+    assert_eq!(account.sub_provider.as_deref(), Some("openai"));
+    assert!(account.scope.is_kind_wide(), "{account:?}");
+    assert!(record.inputs_stamp.is_some(), "the probe stores its stamp");
+    // Inside the 10-minute TTL and past the retry floor.
+    record.probed_at_ms -= 60_000;
+    env.publish_accounts(&cache);
+
+    std::fs::write(
+        cwd.join("2026-10-25T04-04-42-704Z_00000000-0000-4000-8000-000000000002.jsonl"),
+        concat!(
+            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000002"}"#,
+            "\n",
+            r#"{"type":"model_change","provider":"openai-codex","modelId":"gpt-5.3-codex"}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"user","content":"hello"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write new pi session");
+    let codex_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let window = |used, duration_mins| RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(48)),
+        duration_mins: Some(duration_mins),
+        observed_at: Some(jiff::Timestamp::now()),
+        source: WindowSource::Authoritative,
+        ..Default::default()
+    };
+    env.publish_rate_limits(&RateLimitsCache {
+        refreshed_at_ms: rimz::utils::time::unix_now_ms(),
+        entries: std::collections::BTreeMap::from([(
+            pi_key.clone(),
+            RateLimitCacheEntry {
+                scope: codex_scope.clone(),
+                limits: AgentRateLimits {
+                    windows: vec![window(15, 300), window(52, 10_080)],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    });
+
+    let snapshot = snapshot();
+    let record = &accounts().logins[&pi_key];
+    let account = record.account.as_ref().expect("pi account");
+    assert_eq!(account.sub_provider.as_deref(), Some("openai-codex"));
+    assert_eq!(account.scope, codex_scope);
+    let panel = snapshot["providers"]
+        .as_array()
+        .and_then(|panels| panels.iter().find(|panel| panel["kind"] == "pi"))
+        .unwrap_or_else(|| panic!("no pi panel: {}", snapshot["providers"]));
+    let windows: Vec<_> = panel["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("pi panel has no windows: {panel}"))
+        .iter()
+        .map(|window| {
+            (
+                window["used_percentage"].as_u64(),
+                window["duration_mins"].as_u64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        vec![(Some(15), Some(300)), (Some(52), Some(10_080))],
+        "{panel}"
+    );
+}
+
 fn read_json(path: std::path::PathBuf) -> Value {
     serde_json::from_slice(&std::fs::read(path).expect("read json")).expect("parse json")
 }
