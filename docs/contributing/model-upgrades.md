@@ -19,7 +19,7 @@ An existing family's new release needs no RimZ change. The exec wrapper resolves
 
 Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and `cargo xtask test 'config::definitions'`, then `cargo xtask docs-links`.
 
-Definitions and tier cells retain the requested alias. With a durable launch record, resume, restart, and fork resolve that requested model through the same pins, catalog, and passthrough path as a fresh launch, ignoring observed `/model` switches. Only legacy sessions without a launch record replay the last observed model for an alias posture, and not when the resume names `--model`, `--tier`, or `--agent`; without an observed model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution.
+Definitions and tier cells retain the requested alias. With a durable launch record, resume, restart, and fork resolve that requested model through the same pins, catalog, and passthrough path as a fresh launch, ignoring observed `/model` switches. Only legacy sessions without a launch record replay the last observed model for an alias posture, and not when the resume names `--model`, `--tier`, or `--agent`; without an observed model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution. Pi instead restores its native session's provider and model on resume or fork without an explicit model override: RimZ emits no model flag and bypasses alias resolution in that case.
 
 ## Model tier bindings
 

@@ -137,6 +137,8 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             before_id: &["pi", "--fork"],
             after_id: &[],
         }),
+        restores_session_model: true,
+        model_dependent_flags: &["--provider"],
         permission: super::LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
         interrupt_key: None,

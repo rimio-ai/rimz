@@ -159,6 +159,8 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             before_id: &["claude", "--resume"],
             after_id: &["--fork-session"],
         }),
+        restores_session_model: false,
+        model_dependent_flags: &[],
         permission: super::LaunchPermissionArgs {
             ask: &["--permission-mode", "default"],
             auto: &["--permission-mode", "auto"],

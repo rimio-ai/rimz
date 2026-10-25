@@ -163,6 +163,9 @@ pub struct LaunchSpec {
     pub resume: Option<SessionCommand>,
     pub picker: Option<&'static [&'static str]>,
     pub fork: Option<SessionCommand>,
+    pub restores_session_model: bool,
+    /// Value flags that require an explicit model.
+    pub model_dependent_flags: &'static [&'static str],
     pub permission: LaunchPermissionArgs,
     pub max_turn_flag: Option<&'static str>,
     pub compact_command: Option<CompactCommand>,
@@ -181,6 +184,8 @@ impl LaunchSpec {
         resume: None,
         picker: None,
         fork: None,
+        restores_session_model: false,
+        model_dependent_flags: &[],
         permission: LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
         compact_command: None,
