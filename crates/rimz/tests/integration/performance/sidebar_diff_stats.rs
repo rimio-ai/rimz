@@ -162,6 +162,7 @@ impl Fixture {
                     (
                         rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
                         rimz::agents::account::ProviderRecord {
+                            inputs_stamp: None,
                             profile: None,
                             probe_error: None,
                             login: None,

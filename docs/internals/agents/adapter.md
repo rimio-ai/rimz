@@ -92,7 +92,7 @@ The table names each trait's central methods. The trait file is the full list.
 | `SessionCapability` | `discover_local_sessions`, `resumed_session_id_from_cmdline`, `local_conversation_present`, daemon evidence, turn-death refinement | no provider-owned session store to read |
 | `TranscriptCapability` | `parse_transcript_messages`, `read_transcript_messages`, streaming pages, source positions | no transcript surface. JSONL adapters inherit the byte-cursor reads |
 | `ContextCapability` | `observe_context`, `local_context_refresh`, `context_refresh_spawn`, `refresh_session_context`, `merge_session_context`, subagent context, local turn pricing | no context source ([context sources](#context-sources)) |
-| `AccountCapability` | `probe_account`, `probe_account_usage`, `has_quota_surface` for a backing sub-provider, `resolve_managed_launch`, realtime usage, reset credits, `remote_control_status` | logged out, no account-usage surface, and no sub-provider quota surface (`false`) |
+| `AccountCapability` | `probe_account`, `account_inputs_stamp` for metadata-driven refresh, `probe_account_usage`, `has_quota_surface` for a backing sub-provider, `resolve_managed_launch`, realtime usage, reset credits, `remote_control_status` | logged out, no inputs stamp (`None`), no account-usage surface, and no sub-provider quota surface (`false`) |
 | `SpendingCapability` | `spending_sources`, `parse_spend`, `transcript_files`, `session_transcript`, `session_spend_transcripts` | no historical spend enters fleet aggregation |
 | `RuntimeControlCapability` | remote-control readiness, preparation, liveness, and reconciliation | remote control is disabled |
 

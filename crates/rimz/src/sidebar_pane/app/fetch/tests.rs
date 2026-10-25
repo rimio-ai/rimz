@@ -1390,6 +1390,7 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
                 (
                     crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind)),
                     crate::agents::account::ProviderRecord {
+                        inputs_stamp: None,
                         profile: None,
                         probe_error: None,
                         login: None,

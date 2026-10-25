@@ -66,6 +66,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         (false, planned(), None, Unavailable, "a failed probe"),
     ] {
         let record = ProviderRecord {
+            inputs_stamp: None,
             profile: None,
             probe_error: None,
             probed_at_ms: 1,
@@ -91,9 +92,23 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
     assert_eq!(legacy.login, None);
     assert_eq!(legacy.probe_error, None);
     assert_eq!(
+        legacy.inputs_stamp, None,
+        "an older build's record has no stamp"
+    );
+    assert_eq!(
         serde_json::to_string(&legacy).unwrap(),
         r#"{"probed_at_ms":1,"ok":true,"account":null}"#,
         "an unrecorded login leaves the bytes an older build reads"
+    );
+    let stamped = ProviderRecord {
+        inputs_stamp: Some(7),
+        ..legacy.clone()
+    };
+    let stamped_json = r#"{"probed_at_ms":1,"ok":true,"inputs_stamp":7,"account":null}"#;
+    assert_eq!(serde_json::to_string(&stamped).unwrap(), stamped_json);
+    assert_eq!(
+        serde_json::from_str::<ProviderRecord>(stamped_json).unwrap(),
+        stamped
     );
     let recorded = ProviderRecord {
         probe_error: None,

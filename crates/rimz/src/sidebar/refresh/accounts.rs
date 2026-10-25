@@ -130,6 +130,8 @@ impl ProbeOutcomeClass {
 #[derive(Debug)]
 struct ProviderProbeResult {
     key: LoginKey,
+    /// The adapter's inputs stamp, read before the probe behind `outcome`.
+    inputs_stamp: Option<u64>,
     outcome: AccountProbe,
     profile: Option<AccountProfileState>,
     outcome_class: ProbeOutcomeClass,
@@ -183,6 +185,7 @@ fn produce_accounts_with(
         &provider_logins(snapshot, logins),
         false,
         Duration::ZERO,
+        |login| adapter_inputs_stamp(logins, login),
         probe,
     );
     accounts_with_context_versions(&cache, &context_versions, logins)
@@ -219,6 +222,7 @@ pub fn query_provider_accounts(
         logins,
         force,
         forced_wait,
+        |login| adapter_inputs_stamp(set, login),
         |snapshot, runtime, due, cache, policy| {
             probe_accounts(snapshot, runtime, logins, set, due, cache, policy)
         },
@@ -231,6 +235,7 @@ fn query_provider_accounts_with(
     logins: &[ProviderLogin],
     force: bool,
     forced_wait: Duration,
+    inputs_stamp: impl Fn(&ProviderLogin) -> Option<u64>,
     probe: impl Fn(
         &SidebarSnapshot,
         &RuntimePaths,
@@ -241,7 +246,12 @@ fn query_provider_accounts_with(
 ) -> AccountsCache {
     let path = runtime.shared_accounts_path();
     let cache = read_accounts_cache(&path);
-    if !force && due_provider_logins(&cache, snapshot, logins, unix_now_ms()).is_empty() {
+    let stamps = if force {
+        BTreeMap::new()
+    } else {
+        current_inputs_stamps(&cache, logins, inputs_stamp)
+    };
+    if !force && due_provider_logins(&cache, snapshot, logins, &stamps, unix_now_ms()).is_empty() {
         return cache;
     }
 
@@ -251,7 +261,7 @@ fn query_provider_accounts_with(
             return None;
         }
         let cache = read_accounts_cache(&path);
-        due_provider_logins(&cache, snapshot, logins, unix_now_ms())
+        due_provider_logins(&cache, snapshot, logins, &stamps, unix_now_ms())
             .is_empty()
             .then_some(cache)
     };
@@ -279,7 +289,7 @@ fn query_provider_accounts_with(
             let due = if force {
                 logins.iter().map(ProviderLogin::key).collect()
             } else {
-                due_provider_logins(&cache, snapshot, logins, unix_now_ms())
+                due_provider_logins(&cache, snapshot, logins, &stamps, unix_now_ms())
             };
             if due.is_empty() {
                 return cache;
@@ -300,7 +310,7 @@ fn query_provider_accounts_with(
             let due = if force {
                 logins.iter().map(ProviderLogin::key).collect()
             } else {
-                due_provider_logins(&cache, snapshot, logins, unix_now_ms())
+                due_provider_logins(&cache, snapshot, logins, &stamps, unix_now_ms())
             };
             let policy = if force {
                 ProfileReadPolicy::Forced
@@ -351,10 +361,37 @@ pub(super) fn cached_account_usage_hint(
     })
 }
 
+/// The current inputs stamp of each login whose record stored one. Only a
+/// stored stamp can differ from the current one, so the other logins' adapters
+/// are not asked.
+fn current_inputs_stamps(
+    cache: &AccountsCache,
+    logins: &[ProviderLogin],
+    inputs_stamp: impl Fn(&ProviderLogin) -> Option<u64>,
+) -> BTreeMap<LoginKey, u64> {
+    logins
+        .iter()
+        .filter(|login| {
+            cache
+                .logins
+                .get(&login.key())
+                .is_some_and(|record| record.inputs_stamp.is_some())
+        })
+        .filter_map(|login| Some((login.key(), inputs_stamp(login)?)))
+        .collect()
+}
+
+fn adapter_inputs_stamp(set: &RoomLoginSet, login: &ProviderLogin) -> Option<u64> {
+    crate::agents::find_definition(login.kind().as_str())?.account_inputs_stamp(&set.env(login))
+}
+
+/// `inputs_stamps` holds the current stamps, read once per query: a
+/// successful record whose stored stamp differs is due behind the retry floor.
 fn due_provider_logins(
     cache: &AccountsCache,
     snapshot: &SidebarSnapshot,
     logins: &[ProviderLogin],
+    inputs_stamps: &BTreeMap<LoginKey, u64>,
     now_ms: u64,
 ) -> BTreeSet<LoginKey> {
     let active_version_kinds = active_version_probe_kinds(snapshot);
@@ -374,10 +411,14 @@ fn due_provider_logins(
             if age_ms > ACCOUNTS_TTL.as_millis() as u64 {
                 return true;
             }
-            age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64
-                && active_version_kinds.contains(kind)
+            let inputs_moved = record
+                .inputs_stamp
+                .zip(inputs_stamps.get(key))
+                .is_some_and(|(stored, current)| stored != *current);
+            let version_missing = active_version_kinds.contains(kind)
                 && !context_versions.contains_key(key)
-                && account_version(record.account.as_ref()).is_none()
+                && account_version(record.account.as_ref()).is_none();
+            age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64 && (inputs_moved || version_missing)
         })
         .collect()
 }
@@ -490,6 +531,7 @@ fn probe_one_account(
     let kind = login.kind().as_str();
     let started = Instant::now();
     let adapter = crate::agents::find_definition(kind)?;
+    let inputs_stamp = adapter.account_inputs_stamp(&login_env);
     let account_started = Instant::now();
     let outcome = adapter.probe_account(&login_env);
     let account_ms = duration_ms(account_started.elapsed());
@@ -522,6 +564,7 @@ fn probe_one_account(
     Some(ProviderProbeResult {
         profile,
         key: login.key(),
+        inputs_stamp,
         outcome,
         outcome_class,
         version,
@@ -570,6 +613,7 @@ fn merge_probe_results(
     for result in results {
         let ProviderProbeResult {
             key,
+            inputs_stamp,
             outcome,
             profile,
             version: probed_version,
@@ -632,6 +676,7 @@ fn merge_probe_results(
         logins.insert(
             key,
             ProviderRecord {
+                inputs_stamp,
                 profile,
                 probe_error,
                 probed_at_ms,
@@ -664,6 +709,7 @@ fn probe_accounts_with(
         Some(ProviderProbeResult {
             profile: None,
             key: key.clone(),
+            inputs_stamp: None,
             outcome,
             outcome_class,
             version,

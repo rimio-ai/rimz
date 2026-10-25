@@ -52,8 +52,14 @@ pub struct AccountsCache {
 pub struct ProviderRecord {
     pub probed_at_ms: u64,
     /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a confident result rides
-    /// `ACCOUNTS_TTL`.
+    /// `ACCOUNTS_TTL`, or the retry floor once its adapter's inputs stamp moves.
     pub ok: bool,
+    /// The adapter's inputs stamp read before the probe that wrote this record.
+    /// Absent for an adapter without one and on a record an older build wrote,
+    /// both of which wait out the TTL. A later change to the stamp's encoding
+    /// costs one probe each time binaries of both encodings alternate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs_stamp: Option<u64>,
     /// Probed account facts. `None` on an `ok` record is a logged-out result,
     /// but a logout can also carry the CLI version, so `login` decides.
     pub account: Option<AgentAccount>,

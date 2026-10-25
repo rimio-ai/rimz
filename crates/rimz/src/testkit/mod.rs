@@ -436,6 +436,7 @@ pub mod fleet {
                             kind,
                         )),
                         ProviderRecord {
+                            inputs_stamp: None,
                             profile: None,
                             probe_error: None,
                             login: None,
