@@ -412,6 +412,10 @@ rz sidebar mark-read '@coder#probe'
 
 After a minute the card shrinks to its stale line, and a minute past the last request its cache expires. Capture with `rz pane capture --ansi <sidebar>` to keep the colours: plain capture drops the SGR runs a tone check compares. Selecting the stale card expands it to show the meter's age clock, and the layout freeze holds that shape for a while after selection moves away, so capture each shape after the frame settles. `rz config set harness.prompt_cache_ttl.claude off` takes the cache clock away for the unknown-lifetime case.
 
+### Check a provider account
+
+A held room's account cache is `$ROOT/home/.rimz/cache/providers/accounts.json`, under the room's `RIMZ_HOME` rather than its runtime root; `jq '.logins'` on it shows each login's `probed_at_ms`, `inputs_stamp`, and `account`. `sandbox room` and `sandbox in` remove every ambient `RIMZ_*` variable from the room's environment, so a switch such as `RIMZ_OAUTH_USAGE_OFFLINE` set in your shell never reaches the room's sidebar host. To keep a Pi usage probe off the network, write fake OAuth entries with `"expires": 1` to `$ROOT/home/.pi/agent/auth.json`: the account probe still selects and scopes the login, while the usage probe refuses the expired token before any fetch and settles as a no-credentials result. Write fake tokens only, never a copy of a real credential file.
+
 ## Land the team's worktree
 
 A fresh room's `probe` worktree is pristine, not finished, so it draws no receipt and no landed chip. To check a folded finished group, give each agent a finished turn, close the board, and merge a commit from the worktree into the trunk. The `--no-ff` merge matters: the branch commit that is not on the trunk's first-parent line is the evidence that the worktree did work. Run this with `$ROOT`, `$BIN` and `<mux>` from the room card:
