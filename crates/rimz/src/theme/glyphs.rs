@@ -65,6 +65,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(MeterManaFilled, "▰", None),
     glyph!(MeterManaTrack, "▱", None),
     glyph!(MeterManaTick, "╱", None),
+    glyph!(MeterManaCeiling, "╎", None),
     glyph!(MeterReset, "↻", Some("\u{f0450}")),
     glyph!(MeterRedeemArmed, "⟳", Some("\u{f006a}")),
     glyph!(MeterRedeemHold, "‖", Some("\u{f03e4}")),
@@ -354,6 +355,33 @@ mod tests {
         assert_eq!(GlyphSet::resolve(&nerd_theme).glyph(role), "n");
     }
 
+    #[test]
+    fn ceiling_tick_resolves_in_both_sets_and_accepts_overrides() {
+        let role = GlyphRole::from_namespaced("meter", "mana_ceiling");
+        let actual: Vec<_> = ["unicode", "nerd_font"]
+            .into_iter()
+            .map(|set| {
+                let mut theme = ThemeConfig {
+                    glyphs: toml::from_str(&format!("set = \"{set}\"\n")).unwrap(),
+                    ..Default::default()
+                };
+                let default = role.map(|role| GlyphSet::resolve(&theme).glyph(role).to_owned());
+                let configured = toml::from_str(&format!(
+                    "set = \"{set}\"\n[{set}.meter]\nmana_ceiling = \"!\"\n"
+                ));
+                let overridden = configured.ok().and_then(|config| {
+                    theme.glyphs = config;
+                    role.map(|role| GlyphSet::resolve(&theme).glyph(role).to_owned())
+                });
+                (default, overridden)
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![(Some("╎".to_owned()), Some("!".to_owned())); 2]
+        );
+    }
+
     /// One walk of the catalog pinning every per-row invariant: the table is
     /// indexed by [`GlyphRole`] discriminant, both presets fit their cell
     /// budget, role names round-trip, and a curated Nerd Font icon is a real
@@ -519,6 +547,7 @@ mod tests {
             GlyphRole::MeterManaFilled,
             GlyphRole::MeterManaTrack,
             GlyphRole::MeterManaTick,
+            GlyphRole::MeterManaCeiling,
             GlyphRole::MeterScrollThumb,
             GlyphRole::MeterScrollTrack,
             GlyphRole::MeterUnlimited,
