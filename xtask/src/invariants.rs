@@ -116,8 +116,7 @@ fn ensure_thin_park_image(root: &Path) -> Result<()> {
         } else {
             None
         };
-        for (index, line) in lines_outside_inline_tests(&source) {
-            let line_number = index + 1;
+        for (line_number, line) in lines_outside_inline_tests(&source) {
             if exempt
                 .as_ref()
                 .is_some_and(|range| range.contains(&line_number))
@@ -1257,7 +1256,7 @@ fn ensure_cli_color_provenance(root: &Path, files: &[PathBuf]) -> Result<()> {
             continue;
         };
         for (idx, line) in cli_color_violation_lines(&text) {
-            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            violations.push(format!("{}:{}: {}", path.display(), idx, line.trim()));
         }
     }
     if violations.is_empty() {
@@ -1301,7 +1300,7 @@ fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result
         };
         for (idx, line) in lines_outside_inline_tests(&text) {
             if line.contains(needle) {
-                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                violations.push(format!("{}:{}: {}", path.display(), idx, line.trim()));
             }
         }
     }
@@ -1316,12 +1315,15 @@ fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result
 
 fn lines_outside_inline_tests(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut in_tests = false;
-    text.lines().enumerate().filter(move |(_, line)| {
-        if line.trim_start().starts_with("mod tests") {
-            in_tests = true;
-        }
-        !in_tests
-    })
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| (index + 1, line))
+        .filter(move |(_, line)| {
+            if line.trim_start().starts_with("mod tests") {
+                in_tests = true;
+            }
+            !in_tests
+        })
 }
 
 /// True when `line` writes `needle` (a `Color::<Variant>` path) as its own

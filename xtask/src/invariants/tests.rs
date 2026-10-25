@@ -338,13 +338,12 @@ fn classed_paths_rejects_caller_bypass_and_unclassed_owner_paths_and_allows_test
     )
     .unwrap();
     ensure_classed_paths(&root, std::slice::from_ref(&owner)).unwrap();
-    std::fs::write(&owner, "self.root.join(\"file\")\n").unwrap();
-    assert!(
-        ensure_classed_paths(&root, &[owner])
-            .unwrap_err()
-            .to_string()
-            .contains("room paths must be built under their lifetime class directory")
-    );
+    std::fs::write(&owner, "// header\nself.root.join(\"file\")\n").unwrap();
+    let message = ensure_classed_paths(&root, &[owner])
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("room paths must be built under their lifetime class directory"));
+    assert!(message.contains("paths.rs:2:"), "{message}");
     std::fs::remove_dir_all(root).unwrap();
 }
 
