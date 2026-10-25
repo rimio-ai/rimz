@@ -458,6 +458,8 @@ pub struct Profile {
     pub skills: Option<Vec<super::SkillName>>,
     #[serde(skip)]
     pub allowed_tools: Option<Vec<super::ToolRule>>,
+    #[serde(skip)]
+    pub tools: Option<crate::agents::ToolSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Specs this profile's agents may launch through `rimz subagents`.

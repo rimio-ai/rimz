@@ -205,6 +205,7 @@ fn profile(agent: &str) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
+        tools: None,
         auto_compact_default: None,
         model_tier: None,
         tier_stamp: None,
@@ -225,6 +226,71 @@ fn profile(agent: &str) -> Profile {
         append_system_prompt_files: Vec::new(),
         skills: None,
         args: None,
+    }
+}
+
+#[test]
+fn pi_native_tools_render_portably_after_an_engine_switch() {
+    let worker = Profile {
+        tools: Some(crate::agents::ToolSet::parse(&["read".into(), "bash".into()]).unwrap()),
+        ..profile("pi")
+    };
+    let profiles = profiles([("worker", worker)]);
+    let layout = resolve_spec_with_agent_override(
+        Some("worker"),
+        &profiles,
+        &profiles,
+        &CommandsConfig::default(),
+        &TeamsConfig::default(),
+        Some("claude"),
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind, "claude");
+    assert_eq!(cell.args, ["--strict-mcp-config", "--tools", "Read,Bash"]);
+}
+
+#[test]
+fn tools_follow_nearest_role_value_with_explicit_empty_and_base_fallback() {
+    let mut parent = profile("claude");
+    parent.tools = Some(crate::agents::ToolSet::parse(&["Read".into()]).unwrap());
+    let child = profile("parent");
+    let empty = Profile {
+        tools: Some(crate::agents::ToolSet::parse(&[]).unwrap()),
+        ..profile("parent")
+    };
+    let base = Profile {
+        tools: Some(crate::agents::ToolSet::parse(&["Bash".into()]).unwrap()),
+        ..profile("pi")
+    };
+    let profiles = profiles([
+        ("parent", parent),
+        ("child", child),
+        ("empty", empty),
+        ("replacement", base),
+        ("bare", profile("claude")),
+    ]);
+    for (spec, target, expected) in [
+        ("child", "replacement", vec!["--tools", "read"]),
+        ("empty", "replacement", vec!["--no-tools"]),
+        ("bare", "replacement", vec!["--tools", "bash"]),
+        ("amp", "replacement", vec!["--tools", "bash"]),
+        ("bare", "pi", vec![]),
+    ] {
+        let layout = resolve_spec_with_agent_override(
+            Some(spec),
+            &profiles,
+            &profiles,
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+            Some(target),
+        )
+        .unwrap();
+        assert_eq!(
+            layout.agent_cells().next().unwrap().args,
+            expected,
+            "{spec} on {target}"
+        );
     }
 }
 
@@ -1139,6 +1205,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
+            tools: None,
             auto_compact_default: None,
             model_tier: None,
             tier_stamp: Some(Box::new(crate::agents::TierStamp {

@@ -89,7 +89,7 @@ Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, ex
 
 ## Tools to provider arguments
 
-Tool entries use Claude-style names. The base before `(` is trimmed and deduplicated in first-seen order; it must begin with an ASCII letter and contain only ASCII letters, digits, or underscores. Parentheses must balance without nesting. Only `Agent(...)` interprets its suffix, as a comma-separated native child-type allowlist. Other suffixes are discarded; this is not a permission-pattern language.
+Tool entries use Claude-style names; the Pi aliases below normalize to those names before deduplication. The base before `(` is trimmed and deduplicated in first-seen order; it must begin with an ASCII letter and contain only ASCII letters, digits, or underscores. Parentheses must balance without nesting. Only `Agent(...)` interprets its suffix, as a comma-separated native child-type allowlist. Other suffixes do not restrict calls; Pi warns when it cannot enforce a suffix on a mapped tool. This is not a permission-pattern language.
 
 Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Plan)", Bash]`.
 
@@ -99,10 +99,26 @@ Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Pl
 | --- | --- |
 | Claude | Requires `tools`, even if empty. Emits `--strict-mcp-config`, then optional `--disallowedTools`, then `--tools` with comma-joined bases. A nonempty `Agent(...)` allowlist denies every unnamed type from `Explore`, `Plan`, `general-purpose`, `statusline-setup`, `fork`, in that order. Unknown native types fail. Bare `Agent` adds no type restriction. |
 | Codex | Requires `tools`, even if empty. Emits `--strict-config` and the ordered `-c` settings below. Native `Agent(...)` type names do not restrict Codex child types. |
-| Pi | Accepts or omits `tools`; generates no tool arguments. |
+| Pi | Optional. Emits `--tools` with the mapped names below, or `--no-tools` for an empty or all-dropped list. An absent list emits no flag. |
+| OMP | Accepts or omits `tools`; ignores the list silently. |
 | Other kinds | Omit `tools`; a supplied list is unsupported. |
 
-The injected machine auto-compact window is omitted from `config get`; `rimz agents explain` shows its effective launch value. A profile's declared auto-compact value stays visible in `config get`.
+The Markdown `tools` list follows the original role through every `--agent` switch, including Claude ↔ Codex, and renders for the final provider. An explicit `[]` wins over the replacement's list. A provider that cannot apply a carried list warns and launches without it; OMP stays silent. Generated tool flags are not part of a profile's `args` in `rimz config get`. The injected machine auto-compact window is also omitted from `config get`; `rimz agents explain` shows its effective launch value. A profile's declared auto-compact value stays visible in `config get`.
+
+Pi maps these names in first-occurrence order and deduplicates the result:
+
+| RimZ name | Pi tool |
+| --- | --- |
+| `Bash` | `bash` |
+| `Read` | `read` |
+| `Edit`, `MultiEdit` | `edit` |
+| `Write` | `write` |
+| `Grep` | `grep` |
+| `Glob` | `find` |
+| `LS` | `ls` |
+| `AskUserQuestion` | `ask_user_question` |
+
+The Pi names in the right column normalize to their RimZ equivalents (`edit` to `Edit`) before rendering for any provider. Pi's `powershell` stays as written. On Pi, other names are dropped with one warning naming them all; a separate warning names only mapped tools whose `(…)` restrictions Pi cannot enforce. A plain `--tools` list keeps MCP tools callable, so this is not a strict allowlist across MCP. `--no-tools` disables built-in and extension tools, including MCP. A supplied list that omits `AskUserQuestion` (or its Pi spelling) removes the rpiv question tool.
 
 Codex emits these settings in order. Boolean values are unquoted; `web_search` is a quoted string.
 

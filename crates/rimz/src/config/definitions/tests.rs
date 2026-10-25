@@ -499,9 +499,10 @@ fn model_tiers_are_identity_migrations() {
         assert!(a.definition_renders.is_some());
         assert!(b.model_tier.is_some());
         assert_eq!(
-            (&a.agent, &a.model, &a.effort, &a.args),
-            (&b.agent, &b.model, &b.effort, &b.args)
+            (&a.agent, &a.model, &a.effort),
+            (&b.agent, &b.model, &b.effort)
         );
+        assert_eq!(tool_args(&loaded, "concrete"), tool_args(&loaded, "tiered"));
     }
 }
 
@@ -920,6 +921,36 @@ fn keep_warm_while_is_refused_on_standalone_definitions_in_both_namespaces() {
 }
 
 #[test]
+fn team_seats_route_pi_question_tool_spellings_only_to_the_leader() {
+    for question in ["ask_user_question", "AskUserQuestion"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!("agent: pi\ntools: [{question}, read]"),
+            "Work.",
+        );
+        team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+        let loaded = clean(root.path());
+        for role in &loaded.teams.0["probe"].roles {
+            assert_eq!(
+                tool_args(&loaded, &role.profile),
+                [
+                    "--tools",
+                    if role.role == "lead" {
+                        "ask_user_question,read"
+                    } else {
+                        "read"
+                    }
+                ],
+                "{question}: {}",
+                role.role
+            );
+        }
+    }
+}
+
+#[test]
 fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
     let root = team_fixture();
     team_definition(
@@ -955,7 +986,9 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
         assert_eq!(profile.subagents.as_ref().unwrap(), &["general"]);
         assert_eq!(texts(profile), ["Craft."]);
         assert_eq!(
-            profile.args.as_ref().unwrap().contains("AskUserQuestion"),
+            tool_args(&loaded, &role.profile)
+                .iter()
+                .any(|arg| arg.contains("AskUserQuestion")),
             role.role == "lead"
         );
         assert_eq!(
@@ -1039,11 +1072,9 @@ fn team_overlays_keep_ancestor_crafts_and_move_the_base() {
         ["replacement", "reflect"]
     );
     assert!(
-        judge
-            .args
-            .as_ref()
-            .unwrap()
-            .contains("tools.experimental_request_user_input.enabled=false")
+        tool_args(&loaded, "rig.judge")
+            .iter()
+            .any(|arg| arg.contains("tools.experimental_request_user_input.enabled=false"))
     );
     assert_eq!(
         loaded.teams.0["rig"].roles[1].flip_compact,
@@ -1774,6 +1805,34 @@ fn texts(profile: &Profile) -> Vec<&str> {
         .collect()
 }
 
+fn tool_args(loaded: &LoadedDefinitions, name: &str) -> Vec<String> {
+    use crate::agents::PresetField;
+
+    let layout = crate::harness::spec::parse_layout_spec(
+        name,
+        &loaded.agent_profiles,
+        &CommandsConfig::default(),
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    let launch = crate::agents::find_definition(&cell.kind)
+        .unwrap()
+        .spec()
+        .launch;
+    let mut args = cell.args.clone();
+    for field in [
+        PresetField::Model,
+        PresetField::Effort,
+        PresetField::AutoCompact,
+    ] {
+        if let Some(matcher) = launch.preset_arg_matcher(field) {
+            matcher.remove_occurrences(&mut args);
+        }
+    }
+    launch.strip_permission_args(&mut args);
+    args
+}
+
 #[test]
 fn missing_trees_and_documentation_are_not_definitions() {
     let root = tempfile::tempdir().unwrap();
@@ -1827,7 +1886,7 @@ fn bases_are_emitted_in_both_namespaces_with_sources() {
             loaded.sources.agent_profiles[kind],
             root.path().join(format!("agents/{kind}.md"))
         );
-        assert!(profile.args.is_none());
+        assert!(tool_args(&loaded, kind).is_empty());
     }
     assert_eq!(source_paths(root.path()).len(), 7);
 }
@@ -1886,6 +1945,34 @@ fn runtime_resolution_aliases_and_defaults() {
         if kind == "claude" {
             assert_eq!(profile.mode, Some(crate::agents::PermissionMode::Auto));
         }
+    }
+}
+
+#[test]
+fn definition_tools_stay_typed_until_the_final_engine_is_known() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "model: sonnet\ntools: [Bash, Read]",
+        "",
+    );
+    let loaded = clean(root.path());
+    let profile = &loaded.agent_profiles.0["worker"];
+    assert!(profile.args.is_none(), "generated tools are not raw args");
+    assert_eq!(profile.tools.as_ref().unwrap().bases(), ["Bash", "Read"]);
+    assert_eq!(
+        tool_args(&loaded, "worker"),
+        ["--strict-mcp-config", "--tools", "Bash,Read"]
+    );
+    for render in profile
+        .definition_renders
+        .as_ref()
+        .unwrap()
+        .renders
+        .values()
+    {
+        assert_eq!(render.tools, profile.tools);
     }
 }
 
@@ -1970,7 +2057,7 @@ fn chains_inherit_launch_fields_but_render_each_own_craft() {
         texts(child),
         ["Parent\n\nAsk well.", "Child\n\nWrite well.\n\n${shell}"]
     );
-    assert_eq!(child.args, loaded.agent_profiles.0["parent"].args);
+    assert_eq!(tool_args(&loaded, "child"), tool_args(&loaded, "parent"));
 }
 
 #[test]
@@ -2694,7 +2781,7 @@ fn yaml_comments_quotes_and_null_tools_are_supported() {
         loaded.agent_profiles.0["probe"].budget.as_deref(),
         Some("3.50")
     );
-    let argv = shlex::split(loaded.agent_profiles.0["probe"].args.as_deref().unwrap()).unwrap();
+    let argv = tool_args(&loaded, "probe");
     assert!(argv.contains(&"features.shell_tool=false".to_owned()));
 }
 

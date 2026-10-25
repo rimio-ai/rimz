@@ -151,10 +151,11 @@ pub use state::{
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
 use tools::ToolErr;
-pub use tools::definition_model_kind;
 pub(crate) use tools::{
-    ToolSet, definition_defaults, render_tool_args, runs_other_providers_models, tools_required,
+    ToolNotice, canonical_tool_name, definition_defaults, render_launch_tool_args,
+    render_tool_args, runs_other_providers_models, tools_required,
 };
+pub use tools::{ToolSet, definition_model_kind};
 use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 use transcript_fs::read_transcript_lines;
 use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};

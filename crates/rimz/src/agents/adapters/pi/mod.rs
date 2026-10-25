@@ -329,8 +329,44 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         effort: Some("xhigh"),
         models: &[],
         prefixes: &[],
-        tools: crate::agents::definition::DefinitionTools::Ignored,
+        tools: crate::agents::definition::DefinitionTools::Optional(render_definition_tools),
     };
+
+fn render_definition_tools(
+    tools: &crate::agents::ToolSet,
+) -> (Vec<String>, Vec<crate::agents::ToolNotice>) {
+    use crate::agents::ToolNotice;
+
+    let mut mapped = Vec::new();
+    let mut dropped = Vec::new();
+    let mut restrictions = tools.restrictions().to_vec();
+    for name in tools.bases() {
+        let Some(tool) = crate::agents::tools::PI_TOOL_NAMES
+            .iter()
+            .find_map(|&(canonical, native)| (name == canonical).then_some(native))
+        else {
+            dropped.push(name.clone());
+            restrictions.retain(|base| base != name);
+            continue;
+        };
+        if !mapped.contains(&tool) {
+            mapped.push(tool);
+        }
+    }
+    let mut notices = Vec::new();
+    if !dropped.is_empty() {
+        notices.push(ToolNotice::Dropped(dropped));
+    }
+    if !restrictions.is_empty() {
+        notices.push(ToolNotice::Restrictions(restrictions));
+    }
+    let argv = if mapped.is_empty() {
+        vec!["--no-tools".to_owned()]
+    } else {
+        vec!["--tools".to_owned(), mapped.join(",")]
+    };
+    (argv, notices)
+}
 
 impl crate::agents::capabilities::CoreCapability for PiAdapter {
     fn spec(&self) -> &'static AgentSpec {

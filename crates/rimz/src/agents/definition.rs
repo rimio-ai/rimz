@@ -444,6 +444,7 @@ pub(super) enum DefinitionTools {
     Unsupported,
     Ignored,
     Required(fn(&super::tools::ToolSet) -> Result<Vec<String>, super::tools::ToolErr>),
+    Optional(fn(&super::tools::ToolSet) -> (Vec<String>, Vec<super::tools::ToolNotice>)),
 }
 
 #[derive(Clone, Copy, Debug)]

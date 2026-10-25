@@ -25,6 +25,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
         definition_renders: None,
+        tools: None,
         model_tier: None,
         tier_stamp: None,
         isolation: None,
@@ -446,14 +447,8 @@ impl Resolver<'_> {
             .map(ToolSet::parse)
             .transpose()
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
-        let argv = agents::render_tool_args(kind, tools.as_ref())
+        agents::render_tool_args(kind, tools.as_ref())
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
-        if !argv.is_empty() {
-            profile.args = Some(
-                shlex::try_join(argv.iter().map(String::as_str))
-                    .map_err(|error| DefinitionErr::new(path, error.to_string()))?,
-            );
-        }
         if fm.idle_compact.is_some() && self.namespace == "subagents" {
             return Err(DefinitionErr::new(
                 path,
@@ -528,6 +523,7 @@ impl Resolver<'_> {
             skill_check,
             self.scope.skills,
         )?;
+        profile.tools = tools;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
         profile.empty_dir = fm.empty_dir;
