@@ -47,16 +47,9 @@ pub(super) fn elapsed_label(seconds: i64) -> String {
     }
 }
 
-/// A budget window's reset countdown, two units scaled to how much time is left:
-/// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
-/// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the
-/// result in a six-cell slot, so five- and six-cell countdowns share one right
-/// edge. A passed reset reads `0h00m`; the enrich layer's reset-to-max
-/// projection rolls every displayed window forward the moment its reset passes,
-/// so a rendered countdown is live.
 /// A budget window's compact bar label. Provider-defined named quotas use their
 /// explicit label, clipped on cell boundaries to the fixed three-cell slot;
-/// temporal windows retain the existing rounded hour/day label.
+/// month-length windows read `mo`, and other durations round to hours or days.
 pub(super) fn window_label(window: &RateLimitWindow) -> String {
     if let Some(scope) = &window.scope {
         return clip(&scope.label, 3);
@@ -64,6 +57,9 @@ pub(super) fn window_label(window: &RateLimitWindow) -> String {
     let Some(mins) = window.duration_mins else {
         return String::new();
     };
+    if (40_320..=44_640).contains(&mins) {
+        return crate::theme::fmt::window_duration_label(mins);
+    }
     if mins < 24 * 60 {
         format!("{}h", (mins + 30) / 60)
     } else {
@@ -167,7 +163,7 @@ mod tests {
         };
         assert_eq!(window_label(&window(Some(5 * 60))), "5h");
         assert_eq!(window_label(&window(Some(7 * 24 * 60))), "7d");
-        assert_eq!(window_label(&window(Some(43_800))), "30d");
+        assert_eq!(window_label(&window(Some(43_800))), "mo");
         assert_eq!(window_label(&window(None)), "");
         assert_eq!(
             window_label(&RateLimitWindow {
@@ -179,6 +175,36 @@ mod tests {
             }),
             "bld"
         );
+    }
+
+    #[test]
+    fn month_window_boundaries_agree_with_cli_without_changing_other_durations() {
+        let labels: Vec<_> = [40_319, 40_320, 43_200, 43_800, 44_640, 44_641]
+            .into_iter()
+            .map(|mins| {
+                let window = RateLimitWindow {
+                    duration_mins: Some(mins),
+                    ..Default::default()
+                };
+                (
+                    window_label(&window),
+                    crate::theme::fmt::window_label(&window),
+                )
+            })
+            .collect();
+        let expected: Vec<_> = [
+            ("28d", "40319m"),
+            ("mo", "mo"),
+            ("mo", "mo"),
+            ("mo", "mo"),
+            ("mo", "mo"),
+            ("31d", "44641m"),
+        ]
+        .into_iter()
+        .map(|(sidebar, cli)| (sidebar.to_owned(), cli.to_owned()))
+        .collect();
+        assert_eq!(labels, expected);
+        assert_eq!(crate::theme::fmt::duration_label(43_800), "730h");
     }
 
     #[test]

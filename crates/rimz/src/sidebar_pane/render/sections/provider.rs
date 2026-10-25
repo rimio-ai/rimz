@@ -50,9 +50,9 @@ const PROVIDER_NORMAL_MIN_WIDTH: usize = 40;
 /// pet rides beside the dashboard.
 const PET_COLUMN_GAP: usize = 1;
 
-/// The provider bar's label slot (`5h` / `7d` / `30d` / `ex` / `api`) and value
+/// The provider bar's label slot (`5h` / `7d` / `mo` / `ex` / `api`) and value
 /// column, shared by every provider bar so they align front and back. The label
-/// fits three cells (`30d`); the value holds `↻ ` plus a six-cell reset countdown
+/// fits three cells (`api`); the value holds `↻ ` plus a six-cell reset countdown
 /// slot (`↻  4h50m` / `↻ 20h20m`), an unknown slot, or a compact paid-usage
 /// value.
 const PROVIDER_LABEL_WIDTH: usize = 3;
@@ -416,7 +416,7 @@ fn spend_token_spans(
 /// account set into the rule, the active one a brand-filled bold chip — over
 /// the active provider's block alone, so the budgets read one account at a time;
 /// the header then drops the name the rail carries and sits beside the emblem's
-/// first row. A metered account drains one "mana" bar per included budget window and
+/// first row. A metered account drains "mana" bars for its selected budget windows and
 /// may swap in an `ex` paid-usage row when an included cap is spent; an
 /// unmetered API-key account shows one `api` budget row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
@@ -1167,8 +1167,9 @@ fn provider_token_detail(
     }
 }
 
-/// The provider's budget bars within `region`: a metered account drains one
-/// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
+/// The provider's budget bars within `region`: a metered account drains "mana"
+/// bars for the two shortest windows, or every named quota. A spent longer cap
+/// replaces the second row, or leads usable extra credit;
 /// a metered account whose windows have not arrived yet shows one unknown-track
 /// row per definition-declared placeholder, or one anonymous fallback row when
 /// the shape is unknown; an unmetered account shows one `api` budget row, full
@@ -1229,7 +1230,7 @@ fn provider_bar_rows(
                 window,
                 &sub_caps,
                 region,
-                longer_window_spent(panel, window),
+                longer_window_limit(panel, window, now),
                 zones,
                 now,
             ),
@@ -1302,8 +1303,7 @@ fn select_provider_bars<'a>(
     let Some(&first) = windows.first() else {
         return Vec::new();
     };
-    let last = windows.last().copied().unwrap_or(first);
-    let first_and_last = || provider_window_pair(first, last);
+    let second = windows.get(1).copied().unwrap_or(first);
 
     if let Some(longest_spent) = windows
         .iter()
@@ -1318,7 +1318,7 @@ fn select_provider_bars<'a>(
             return provider_window_pair(first, longest_spent);
         }
     }
-    first_and_last()
+    provider_window_pair(first, second)
 }
 
 fn provider_window_pair<'a>(
@@ -1332,27 +1332,62 @@ fn provider_window_pair<'a>(
     }
 }
 
-/// Whether a window with a strictly longer duration is spent — a higher-level cap
-/// being exhausted gates this shorter window (its budget is unusable until the
-/// longer one resets), so the renderer paints the shorter row exhausted too (e.g.
-/// a spent 7-day cap gating the 5-hour bar).
-fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -> bool {
+#[derive(Clone, Copy)]
+enum LongerWindowLimit {
+    None,
+    Spent,
+    Ceiling(u8),
+}
+
+fn longer_window_limit(
+    panel: &SidebarProviderPanel,
+    window: &RateLimitWindow,
+    now: Timestamp,
+) -> LongerWindowLimit {
     if window.scope.is_some() {
-        return false;
+        return LongerWindowLimit::None;
     }
     let Some(mins) = window.duration_mins.filter(|mins| *mins > 0) else {
-        return false;
+        return LongerWindowLimit::None;
     };
-    panel.windows.iter().any(|other| {
+    let ceiling_axis = window
+        .amount
+        .zip(window.remaining_percentage(now))
+        .filter(|_| !window.lifted);
+    let mut ceiling_remaining: Option<u64> = None;
+    for other in panel.windows.iter().filter(|other| {
         other.scope.is_none()
             && other
                 .duration_mins
                 .is_some_and(|other_mins| other_mins > mins)
-            && other.used_percentage.is_some_and(|used| used >= 100)
-    })
+    }) {
+        if other.is_spent() {
+            return LongerWindowLimit::Spent;
+        }
+        let Some((short, shown_remaining)) = ceiling_axis else {
+            continue;
+        };
+        let Some(long) = other
+            .amount
+            .filter(|_| !other.lifted && other.used_percentage.is_some())
+        else {
+            continue;
+        };
+        let remaining = long.limit.saturating_sub(long.used);
+        if u128::from(remaining) * 100 < u128::from(shown_remaining) * u128::from(short.limit) {
+            ceiling_remaining =
+                Some(ceiling_remaining.map_or(remaining, |prior| prior.min(remaining)));
+        }
+    }
+    match (ceiling_remaining, ceiling_axis) {
+        (Some(remaining), Some((short, _))) => LongerWindowLimit::Ceiling(
+            (u128::from(remaining) * 100 / u128::from(short.limit)).max(1) as u8,
+        ),
+        _ => LongerWindowLimit::None,
+    }
 }
 
-/// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
+/// One metered budget bar row: the window's label (`5h`/`7d`/`mo`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
 /// the value column. The reset marker is toned by burn pace when the window
 /// carries enough timing data, cooling toward green only once the early-window
@@ -1377,10 +1412,11 @@ fn metered_bar_row(
     window: &RateLimitWindow,
     sub_caps: &[&RateLimitWindow],
     region: usize,
-    force_exhausted: bool,
+    longer: LongerWindowLimit,
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Span<'static>> {
+    let force_exhausted = matches!(longer, LongerWindowLimit::Spent);
     let label = window_label(window);
     if !force_exhausted && window.lifted {
         let bar_width = provider_bar_width(region);
@@ -1406,15 +1442,22 @@ fn metered_bar_row(
     } else {
         window.resets_at.map(|at| reset_countdown(at, now))
     };
-    let ticks: Vec<_> = sub_caps
+    let mut ticks: Vec<_> = sub_caps
         .iter()
         .filter(|sub| sub.sub_cap_of(window))
         .filter_map(|sub| {
             Some(ManaTick {
                 remaining_pct: 100u8.saturating_sub(sub.used_percentage?),
+                role: GlyphRole::MeterManaTick,
             })
         })
         .collect();
+    if let LongerWindowLimit::Ceiling(remaining_pct) = longer {
+        ticks.push(ManaTick {
+            remaining_pct,
+            role: GlyphRole::MeterManaCeiling,
+        });
+    }
     let bar_width = provider_bar_width(region);
     let reset_marker_style = if reset.is_none() {
         theme.body()

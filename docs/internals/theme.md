@@ -207,12 +207,13 @@ Two kinds of sidebar color stay off the component layer. Amount-driven tones com
 
 ## Shared value formats
 
-[`fmt.rs`](../../crates/rimz/src/theme/fmt.rs) holds renderer-independent value formats, so one number prints the same way in `rimz stats` and on a sidebar card:
+[`fmt.rs`](../../crates/rimz/src/theme/fmt.rs) holds shared value formats, including budget-window labels and the quantities used by `rimz stats` and sidebar cards:
 
 | function | output |
 | --- | --- |
 | `reset_countdown` | two-unit reset countdown: `5h00m`, `1d01h` |
-| `window_label`, `duration_label` | rate-limit window labels: the scope label if any, else `5h`, `7d`, `90m`, or `usage` when the window has no duration |
+| `window_label`, `window_duration_label` | budget-window labels: `window_label` uses a scope label, delegates known durations, or returns `usage`; `window_duration_label` uses `mo` for 28 to 31 days and exact duration units otherwise |
+| `duration_label` | exact duration units for non-window uses: `5h`, `30d`, `730h`, `90m` |
 | `active_duration` | agent-time for attribution and stats: `45s`, `41m`, `6h12m`, `1d03h` |
 | `run_duration` | a run or stage duration: one unit below an hour, `reset_countdown`'s two units above |
 | `expiry_label` | a reset-credit expiry floored to one unit: `3d`, `5h`, `40m` |

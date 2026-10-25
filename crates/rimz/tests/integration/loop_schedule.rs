@@ -7705,7 +7705,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     assert_eq!(skip.result, LoopRunResult::BudgetSkipped);
     let reason = skip.error.as_deref().expect("skip reason");
     assert!(
-        reason.contains("Qwen Alibaba International 30d window exhausted"),
+        reason.contains("Qwen Alibaba International mo window exhausted"),
         "{reason}"
     );
     assert!(!reason.contains("sentinel-loop-secret"), "{reason}");

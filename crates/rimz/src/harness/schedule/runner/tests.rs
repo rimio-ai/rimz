@@ -1120,6 +1120,30 @@ fn surplus_gate_covers_every_branch() {
 }
 
 #[test]
+fn month_surplus_reasons_use_the_window_label() {
+    let reasons: Vec<_> = [(None, Some("3d")), (Some("1.5x"), None)]
+        .into_iter()
+        .map(|(surplus, after)| {
+            surplus_gate_in(
+                &surplus_entry(surplus, after),
+                "qwen",
+                Some(WindowSurplus {
+                    duration_mins: 43_200,
+                    ..reading(2, 0.9)
+                }),
+            )
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            Some("qwen mo window 2d elapsed; fires after 3d".to_owned()),
+            Some("qwen mo window surplus 0.9x below 1.5x".to_owned())
+        ]
+    );
+}
+
+#[test]
 fn run_lock_probes_never_defeat_a_starting_run() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("task.lock");

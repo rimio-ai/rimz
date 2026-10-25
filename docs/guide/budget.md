@@ -119,7 +119,7 @@ Dollar caps guard your wallet against spend you never meant to authorize. Backgr
 
 The surplus gate is that glance, computed. Before a gated fire, RimZ reads the provider's longest pacing window and divides the share of budget remaining by the share of time remaining. `1.0x` means the current pace lands exactly on the reset; anything above it is budget the rest of the window does not need. Three days into a 7-day window with 40% used, 60% of the budget remains against 57% of the time, and headroom reads `1.05x`: sustainable, but no real slack. With only 20% used, the same clock reads `1.4x`, and a task gated at `--surplus 1.4x` or below fires.
 
-The pacing window is the weekly bar on today's Claude and Codex plans. For a managed Qwen launch it is the exact account's longest Alibaba window up to seven days, so the `30d` window never sets the pace, though an exhausted one still blocks the launch the way any spent quota window does.
+The pacing window is the weekly bar on today's Claude and Codex plans. For a managed Qwen launch it is the exact account's longest Alibaba window up to seven days, so the monthly (`mo`) window never sets the pace, though an exhausted one still blocks the launch the way any spent quota window does.
 
 An elapsed floor runs ahead of the ratio: `--surplus-after 3d` keeps a task quiet until that much of the window has passed, and used alone it still requires `1.0x` once the floor clears.
 

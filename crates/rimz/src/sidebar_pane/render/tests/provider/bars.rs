@@ -2,6 +2,214 @@ use super::*;
 use crate::sidebar_pane::render::labels::mana_style;
 use crate::sidebar_pane::render::layout::text_width;
 
+fn amount_window(mins: u32, used: u64, limit: u64) -> RateLimitWindow {
+    serde_json::from_value(serde_json::json!({
+        "duration_mins": mins,
+        "used_percentage": crate::agents::context::WindowAmount { used, limit }.used_percentage(),
+        "amount": {"used": used, "limit": limit},
+        "resets_at": fixed_now() + Duration::from_secs(3_600)
+    }))
+    .unwrap()
+}
+
+fn budget_track(row: &Line<'_>) -> String {
+    row.to_string()
+        .chars()
+        .filter(|ch| matches!(ch, '▰' | '▱' | '╱' | '╎'))
+        .collect()
+}
+
+#[test]
+fn ceiling_ticks_compare_amounts_against_the_shown_remainder() {
+    let theme = Theme::fixed(false);
+    let short = amount_window(300, 20, 100);
+    let long = amount_window(10_080, 150, 200);
+    let mut cases = vec![(short.clone(), vec![long.clone()], Some(50))];
+    cases.push((short.clone(), vec![amount_window(10_080, 120, 200)], None));
+    cases.push((short.clone(), vec![amount_window(10_080, 119, 200)], None));
+    cases.push((
+        short.clone(),
+        vec![long.clone(), amount_window(43_200, 290, 300)],
+        Some(10),
+    ));
+    cases.push((
+        amount_window(300, 20, 1000),
+        vec![amount_window(10_080, 999, 1000)],
+        Some(1),
+    ));
+    let mut not_started = amount_window(300, 1, 100);
+    not_started.resets_at = Some(fixed_now() + Duration::from_secs(300 * 60));
+    cases.push((not_started, vec![amount_window(10_080, 1, 100)], Some(99)));
+    for target in ["short", "long"] {
+        for field in ["amount", "used_percentage", "lifted"] {
+            let mut short = serde_json::to_value(&short).unwrap();
+            let mut long = serde_json::to_value(&long).unwrap();
+            let value = if target == "short" {
+                &mut short
+            } else {
+                &mut long
+            };
+            if field == "lifted" {
+                value[field] = true.into();
+            } else {
+                value.as_object_mut().unwrap().remove(field);
+            }
+            cases.push((
+                serde_json::from_value(short).unwrap(),
+                vec![serde_json::from_value(long).unwrap()],
+                None,
+            ));
+        }
+    }
+    cases.push((short.clone(), vec![amount_window(10_080, 200, 200)], None));
+    cases.push((amount_window(300, 100, 100), vec![long.clone()], None));
+    let mut scoped = long.clone();
+    scoped.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "model".to_owned(),
+        label: "m".to_owned(),
+    });
+    cases.push((short.clone(), vec![scoped], None));
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(_, _, expected)| expected.map(|pct| mana_style(&theme, pct, &Default::default())))
+        .collect();
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(short, mut longer, _)| {
+            let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+            panel.windows = vec![short];
+            panel.windows.append(&mut longer);
+            let rows = metered_bar_rows(&theme, &panel);
+            let ticks: Vec<_> = rows[0]
+                .spans
+                .iter()
+                .filter(|span| span.content == "╎")
+                .collect();
+            assert!(ticks.len() <= 1);
+            ticks.first().map(|tick| tick.style)
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+    panel.windows = vec![
+        amount_window(300, 20, 1000),
+        amount_window(10_080, 999, 1000),
+    ];
+    assert_eq!(
+        budget_track(&metered_bar_rows(&theme, &panel)[0])
+            .chars()
+            .position(|ch| ch == '╎'),
+        Some(1)
+    );
+}
+
+#[test]
+fn amount_windows_use_the_two_shortest_rows_until_the_month_is_spent() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+    panel.windows = vec![
+        amount_window(300, 20, 100),
+        amount_window(10_080, 150, 200),
+        amount_window(43_200, 290, 300),
+    ];
+    let normal = metered_bar_rows(&theme, &panel);
+    let labels: Vec<_> = normal
+        .iter()
+        .map(|row| row.spans[0].content.trim())
+        .collect();
+    assert_eq!(labels, ["5h", "7d"]);
+    assert_eq!(budget_track(&normal[0]).matches('╎').count(), 1);
+    assert_eq!(budget_track(&normal[1]).matches('╎').count(), 1);
+    let mut percentage_only = panel.clone();
+    percentage_only.windows = panel
+        .windows
+        .iter()
+        .map(|window| {
+            let mut wire = serde_json::to_value(window).unwrap();
+            wire.as_object_mut().unwrap().remove("amount");
+            serde_json::from_value(wire).unwrap()
+        })
+        .collect();
+    assert!(
+        metered_bar_rows(&theme, &percentage_only)
+            .iter()
+            .all(|row| !row.to_string().contains('╎'))
+    );
+    panel.windows[2] = amount_window(43_200, 300, 300);
+    let spent = metered_bar_rows(&theme, &panel);
+    assert_eq!(spent[1].spans[0].content.trim(), "mo");
+    assert_eq!(
+        bar_row_facts(&spent[0]),
+        (
+            mana_style(&theme, 0, &Default::default()).fg,
+            mana_style(&theme, 0, &Default::default()).fg,
+            false
+        )
+    );
+    assert!(bar_row_facts(&spent[1]).2);
+    assert!(
+        spent
+            .iter()
+            .all(|row| !budget_track(row).contains(['▰', '╎', '╱']))
+    );
+}
+
+#[test]
+fn ceilings_use_absolute_remainders_and_wide_integer_comparisons() {
+    let theme = Theme::fixed(false);
+    let cases = [
+        vec![
+            amount_window(300, 20, 100),
+            amount_window(10_080, 150, 200),
+            amount_window(43_200, 940, 1000),
+        ],
+        vec![
+            amount_window(300, 0, u64::MAX),
+            amount_window(10_080, u64::MAX - 1, u64::MAX),
+        ],
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|windows| {
+            let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+            panel.windows = windows;
+            let track = budget_track(&metered_bar_rows(&theme, &panel)[0]);
+            assert!(track.matches('╎').count() <= 1);
+            track.chars().position(|ch| ch == '╎')
+        })
+        .collect();
+    assert_eq!(actual, [Some(9), Some(1)]);
+}
+
+#[test]
+fn a_ceiling_wins_a_cell_collision_with_a_tighter_model_sub_cap() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("qwen", "Qwen", 1, true, false, None);
+    let short = amount_window(300, 20, 100);
+    let mut sub = short.clone();
+    sub.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "model".to_owned(),
+        label: "m".to_owned(),
+    });
+    sub.used_percentage = Some(91);
+    panel.windows = vec![short, amount_window(10_080, 190, 200), sub];
+    let rows = metered_bar_rows(&theme, &panel);
+    let track = budget_track(&rows[0]);
+    assert_eq!(
+        (track.matches('╎').count(), track.matches('╱').count()),
+        (1, 0)
+    );
+    assert_eq!(
+        rows[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "╎")
+            .unwrap()
+            .style,
+        mana_style(&theme, 10, &Default::default())
+    );
+}
+
 #[test]
 fn gateway_spend_limit_draws_last_in_exhausted_tone() {
     let theme = Theme::fixed(false);
@@ -1242,7 +1450,7 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
         .content
         .trim()
         .to_owned();
-    assert_eq!(label, "30d", "the ~30-day window is labeled 30d");
+    assert_eq!(label, "mo", "the month-length window is labeled mo");
     let (_, _, has_reset) = bar_row_facts(&rows[0]);
     assert!(has_reset, "the bar carries its reset countdown");
 

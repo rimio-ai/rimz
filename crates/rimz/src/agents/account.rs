@@ -535,22 +535,12 @@ pub fn provider_budget_gate(
     let used_percentage = window.used_percentage.unwrap_or(100);
     let window_label = window
         .duration_mins
-        .map(window_duration_label)
+        .map(crate::theme::fmt::window_duration_label)
         .unwrap_or_else(|| "quota".to_owned());
     Some(format!(
         "{} {window_label} window exhausted ({used_percentage}% used); resets at {reset}",
         binding.display_label(key.kind.as_str()),
     ))
-}
-
-fn window_duration_label(mins: u32) -> String {
-    if mins.is_multiple_of(24 * 60) {
-        format!("{}d", mins / (24 * 60))
-    } else if mins.is_multiple_of(60) {
-        format!("{}h", mins / 60)
-    } else {
-        format!("{mins}m")
-    }
 }
 
 /// A subscription window length that loop triggers name: `5h` or `7d`.

@@ -78,4 +78,4 @@ While a room or account cap has no headroom, automation does not launch:
 | A scheduled loop fire | Recorded as `budget skipped`, with no strike. |
 | An interactive launch | Allowed. |
 
-A fresh managed Qwen launch on an Alibaba account meets the same refusals when that account's `5h`, `7d`, or `30d` quota window is exhausted. That limit is the provider's quota, and neither command changes it; the loop side is in the [loop reference](./loop.md).
+A fresh managed Qwen launch on an Alibaba account meets the same refusals when that account's `5h`, `7d`, or `mo` quota window is exhausted. That limit is the provider's quota, and neither command changes it; the loop side is in the [loop reference](./loop.md).
