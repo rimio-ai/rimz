@@ -71,7 +71,7 @@ Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it co
 
 ## What is on disk
 
-Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. State survives reboot, and runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. The figures below come from `disk/retention.rs`.
+Room files have one lifetime class per directory, and only `disk/paths.rs` constructs their paths. Each path is built under its class directory, never straight off a room root, and `cargo xtask invariants` rejects a `self.root.join(` there outside tests. State survives reboot, and runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. The figures below come from `disk/retention.rs`.
 
 | Class directory | Tier | Reclamation rule |
 | --- | --- | --- |
