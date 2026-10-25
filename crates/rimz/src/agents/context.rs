@@ -1015,6 +1015,30 @@ pub(crate) enum RateLimitWindowKey {
     Scope(String),
 }
 
+/// Integer usage in the provider's units, shared across an account's unscoped windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowAmount {
+    pub used: u64,
+    #[serde(deserialize_with = "deserialize_window_limit")]
+    pub limit: u64,
+}
+
+impl WindowAmount {
+    /// Floor the used share; only reaching the cap exhausts the window.
+    pub fn used_percentage(self) -> u8 {
+        if self.used >= self.limit {
+            return 100;
+        }
+        (u128::from(self.used) * 100 / u128::from(self.limit)) as u8
+    }
+}
+
+fn deserialize_window_limit<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
+    std::num::NonZeroU64::deserialize(deserializer).map(std::num::NonZeroU64::get)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitWindow {
     /// Optional provider-defined identity for named quotas and model sub-caps. A scope id is stable across readings; its label is display-only.
@@ -1022,6 +1046,9 @@ pub struct RateLimitWindow {
     pub scope: Option<RateLimitWindowScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used_percentage: Option<u8>,
+    /// Known integer usage and cap, absent when the usage reading is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<WindowAmount>,
     /// Reset instant, parsed to a typed timestamp on ingest so renderers format
     /// a countdown rather than re-parsing a raw value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1161,6 +1188,7 @@ impl RateLimitWindow {
             (Some(resets_at), Some(mins)) if self.scope.is_none() && resets_at <= now => Self {
                 scope: self.scope,
                 used_percentage: Some(0),
+                amount: self.amount.map(|amount| WindowAmount { used: 0, ..amount }),
                 resets_at: now
                     .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
                     .ok(),

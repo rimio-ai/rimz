@@ -25,6 +25,22 @@ fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
 }
 
 #[test]
+fn unknown_idle_readings_clear_amounts_with_the_percentage() {
+    let window: RateLimitWindow = serde_json::from_value(serde_json::json!({
+        "used_percentage": 42, "amount": {"used":42,"limit":100}, "duration_mins":300
+    }))
+    .unwrap();
+    let unknown = unknown_idle_window(window);
+    assert_eq!(unknown.used_percentage, None);
+    assert!(
+        serde_json::to_value(unknown)
+            .unwrap()
+            .get("amount")
+            .is_none()
+    );
+}
+
+#[test]
 fn early_reset_detection_excludes_jitter_and_nonrunning_or_nonaccount_windows() {
     let now = fuse_now();
     let reset = now + SignedDuration::from_secs(3_600);

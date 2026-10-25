@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn window_amount_wire_and_refill_preserve_the_limit() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let window: RateLimitWindow = serde_json::from_value(serde_json::json!({
+        "used_percentage": 42,
+        "amount": {"used": 42, "limit": 100},
+        "duration_mins": 300,
+        "resets_at": now
+    }))
+    .unwrap();
+    let wire = serde_json::to_value(&window).unwrap();
+    let projected = serde_json::to_value(window.projected_at(now)).unwrap();
+    assert_eq!(
+        (wire["amount"].clone(), projected["amount"].clone()),
+        (
+            serde_json::json!({"used": 42, "limit": 100}),
+            serde_json::json!({"used": 0, "limit": 100})
+        )
+    );
+    let legacy: RateLimitWindow = serde_json::from_value(serde_json::json!({
+        "used_percentage": 42, "duration_mins": 300
+    }))
+    .unwrap();
+    assert!(
+        serde_json::to_value(legacy)
+            .unwrap()
+            .get("amount")
+            .is_none()
+    );
+}
+
+#[test]
+fn window_amount_rejects_zero_limits() {
+    assert!(
+        serde_json::from_value::<RateLimitWindow>(serde_json::json!({
+            "used_percentage": 42, "amount": {"used": 0, "limit": 0}
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn window_amount_percentage_floors_until_the_cap_without_overflow() {
+    let actual: Vec<_> = [
+        (0, 100),
+        (1, 3),
+        (995, 1000),
+        (1000, 1000),
+        (1001, 1000),
+        (u64::MAX - 1, u64::MAX),
+        (u64::MAX, u64::MAX),
+    ]
+    .into_iter()
+    .map(|(used, limit)| WindowAmount { used, limit }.used_percentage())
+    .collect();
+    assert_eq!(actual, [0, 33, 99, 100, 100, 99, 100]);
+}
+
+#[test]
 fn field_patch_keeps_sets_and_clears_optional_values() {
     let mut value = Some("prior".to_owned());
     FieldPatch::Keep.apply(&mut value);

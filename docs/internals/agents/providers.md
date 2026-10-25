@@ -30,7 +30,7 @@ Five account-scoped facts feed a panel. Account identity and included balance ri
 | Fact | Type | Carries |
 | --- | --- | --- |
 | Account identity | [`AgentAccount`](../../../crates/rimz/src/agents/context.rs) | the non-secret `account_id`, the raw `plan` tier (`max`, `team`, `pro`), `metered`, the typed account scope, an optional `sub_provider` id, the probed version, and the credential file's mtime |
-| Included balance | [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) | ordered [`RateLimitWindow`](../../../crates/rimz/src/agents/context.rs)s, each with `used_percentage`, a typed `resets_at`, `observed_at`, a `source`, and either a `duration_mins` or a provider scope (stable id plus compact label) |
+| Included balance | [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) | ordered [`RateLimitWindow`](../../../crates/rimz/src/agents/context.rs)s, each with `used_percentage`, an optional integer `amount` (`used`, `limit`), a typed `resets_at`, `observed_at`, a `source`, and either a `duration_mins` or a provider scope (stable id plus compact label) |
 | Paid usage | [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) | used USD, remaining USD, a limit, or a disabled state, each optional |
 | Reset credits | [`ResetCredits`](../../../crates/rimz/src/agents/credits.rs) | Codex and Claude: the banked count, every known valid expiry, and the earliest expiry. Claude's claimability is separate from its banked count ([source and mapping](./adapter_claude.md#oauth-usage-probe)) |
 | Entitlement | [`Entitlement`](../../../crates/rimz/src/agents/credits.rs) | `Ok`, or `Lapsed` with the first-seen Unix-millisecond timestamp, independent of login credentials |
@@ -157,7 +157,7 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 | Cache | Keyed by | Holds |
 | --- | --- | --- |
 | `accounts.json` | `logins` | resolved `AgentAccount` per login, the probe's `login` outcome (`logged_in` or `logged_out`, absent after a failed probe), and optional profile attempt and answer state |
-| `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker, and optional `reset_spotted_at_ms`, schema gated by `RATE_LIMITS_CACHE_VERSION` (6) |
+| `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker, and optional `reset_spotted_at_ms`, schema gated by `RATE_LIMITS_CACHE_VERSION` (6); optional additive fields such as `lifted` or `amount` keep the version, while a change of meaning bumps it |
 | `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, entitlement with its first-seen time, the usage owner identity, the last direct read's published account hint, and the direct-query claim |
 
 An `accounts.json` record's `login` field says whether the account is logged in. The account alone cannot: a logout probed while the kind has a live agent keeps the CLI version, the same bytes as a login the provider reports no facts about. `ProviderStatus::from_record` is the one reader. A record without the field is inferred from `ok` and the account, and its version-only shape reads as unavailable. Launch gates treat it as unknown until the next probe, and [the accounts command](#the-accounts-command) re-probes it on the spot for Claude and Codex.

@@ -270,6 +270,7 @@ pub(in crate::agents::adapters::antigravity) fn parse_rate_limits(
         windows.push(RateLimitWindow {
             scope: None,
             used_percentage,
+            amount: None,
             resets_at,
             duration_mins: Some(period.duration_mins()),
             observed_at: Some(observed_at),

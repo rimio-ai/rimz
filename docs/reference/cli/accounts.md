@@ -300,6 +300,7 @@ Window fields are omitted when unknown:
 | --- | --- |
 | `scope` | `{"id":…,"label":…}` for a named quota or model sub-cap; absent for a plain time window. |
 | `used_percentage` | Percent used, 0 to 100. |
+| `amount` | Optional `{"used":N,"limit":N}` in the provider's integer units, with a positive limit; present only with known usage. Units agree across an account's unscoped windows. Usage may exceed the limit; its percentage floors and caps at 100. |
 | `resets_at` | RFC 3339 reset time. |
 | `duration_mins` | Window duration, such as `300` (5h) or `10080` (7d). |
 | `observed_at` | Reading timestamp. |
