@@ -862,6 +862,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 source: path.clone(),
                 target: path,
             });
+            let (listed, withheld) = request.launch_skills();
             let plan = sandbox::plan(&sandbox::SandboxInputs {
                 env: &env,
                 cwd: inputs.cwd,
@@ -884,7 +885,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     kind: request.kind.as_str(),
                     home: adapter.skills_home(&env),
                     manual: adapter.manual_skill(),
-                    callable: request.skills.as_deref(),
+                    withheld,
+                    callable: listed.as_deref(),
                 },
             })?;
             process.pin_env(plan.pins.clone());

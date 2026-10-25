@@ -148,7 +148,7 @@ pub(crate) fn enumerate(
 impl HostSkills {
     pub(crate) fn apply(
         self,
-        listed: &[SkillName],
+        (listed, withheld): (Option<&[SkillName]>, Option<&str>),
         root: Option<&Path>,
         library: Option<&Path>,
         paths: (&Path, &Path),
@@ -164,7 +164,7 @@ impl HostSkills {
             return Ok((HostSkillPlan::Unenforced, None));
         };
         let skills = enumerate(root, library, |_| true)?;
-        for name in listed {
+        for name in listed.into_iter().flatten() {
             if !skills.contains_key(name.as_str()) {
                 return Err(SkillErr::UnknownSkill {
                     name: name.clone(),
@@ -181,7 +181,9 @@ impl HostSkills {
         let mut unlisted = Vec::new();
         for (name, skill) in skills {
             let provider_key = key(&skill)?;
-            let (keys, other_policy) = if listed.iter().any(|listed| listed.as_str() == name) {
+            let (keys, other_policy) = if crate::config::skill_is_callable(listed, &name)
+                && withheld != Some(name.as_str())
+            {
                 (&mut callable, &unlisted)
             } else {
                 (&mut unlisted, &callable)
@@ -191,7 +193,11 @@ impl HostSkills {
             }
             keys.push(provider_key);
         }
-        let artifact = render(&unlisted, paths.0, paths.1, args)?;
+        let artifact = if listed.is_none() && unlisted.is_empty() {
+            None
+        } else {
+            render(&unlisted, paths.0, paths.1, args)?
+        };
         Ok((
             HostSkillPlan::Applied {
                 flag,

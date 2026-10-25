@@ -115,6 +115,7 @@ pub struct SkillInputs<'a> {
     pub home: Option<PathBuf>,
     pub manual: ManualSkill,
     pub callable: Option<&'a [SkillName]>,
+    pub withheld: Option<&'a str>,
 }
 
 pub struct SandboxInputs<'a> {
@@ -726,6 +727,7 @@ mod tests {
                 kind: "claude",
                 home: None,
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: None,
             },
         })
@@ -752,6 +754,7 @@ mod tests {
                 kind: "claude",
                 home: None,
                 manual: ManualSkill::Frontmatter,
+                withheld: None,
                 callable: None,
             },
         })

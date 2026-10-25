@@ -632,6 +632,20 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
+    pub(super) fn launch_skills(
+        &self,
+    ) -> (Option<Vec<crate::config::SkillName>>, Option<&'static str>) {
+        let withheld = self.subagent.then_some("rimz-subagents");
+        let listed = self.skills.as_ref().map(|skills| {
+            skills
+                .iter()
+                .filter(|skill| Some(skill.as_str()) != withheld)
+                .cloned()
+                .collect()
+        });
+        (listed, withheld)
+    }
+
     pub fn fresh(
         cell: &AgentCell,
         identity: ExecIdentity,
@@ -1011,21 +1025,40 @@ fn compile_agent_process_with_extra_env(
         )?;
     }
     let skill_env = login_env;
-    let (host_skills, mut settings_artifact) =
-        if let (Some(runtime), Some(listed)) = (host_runtime, &request.skills) {
-            let artifact_dir = runtime.prompt_dir();
-            let (plan, artifact) = adapter.spec().host_skills.apply(
-                listed,
-                adapter.skills_home(&skill_env).as_deref(),
-                crate::disk::paths::skills_library_in(&skill_env).as_deref(),
-                (cwd, &artifact_dir),
-                action.extra_args_mut(),
-            )?;
-            (Some(plan), artifact)
-        } else {
-            (None, None)
-        };
-    if let (Some(listed), Some((artifact_dir, _))) = (&request.skills, &reminders.settings) {
+    let (listed, withheld) = request.launch_skills();
+    let (host_skills, mut settings_artifact) = if let Some(runtime) = host_runtime
+        && (listed.is_some()
+            || (withheld.is_some()
+                && matches!(
+                    adapter.spec().host_skills,
+                    crate::agents::skills::HostSkills::Switch { .. }
+                ))) {
+        let artifact_dir = runtime.prompt_dir();
+        let mut args = action.extra_args().to_vec();
+        match adapter.spec().host_skills.apply(
+            (listed.as_deref(), withheld),
+            adapter.skills_home(&skill_env).as_deref(),
+            crate::disk::paths::skills_library_in(&skill_env).as_deref(),
+            (cwd, &artifact_dir),
+            &mut args,
+        ) {
+            Ok((plan, artifact)) => {
+                *action.extra_args_mut() = args;
+                (Some(plan), artifact)
+            }
+            Err(error) if listed.is_none() => {
+                tracing::debug!(
+                    %error,
+                    "keeping native skill discovery because the optional host view is unavailable"
+                );
+                (None, None)
+            }
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        (None, None)
+    };
+    if let (Some(listed), Some((artifact_dir, _))) = (&listed, &reminders.settings) {
         adapter.allow_listed_skill_args(
             listed,
             (cwd, artifact_dir),

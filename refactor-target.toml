@@ -3085,7 +3085,8 @@ allowed-dependencies = [
 # Argument rejection uses the existing action accessor (+1).
 # `validate_agent_shell` and its error serve room start and config set (+2).
 # `CompiledAgentProcess::login_shell_argv` rewraps version-gated args after launch resolution (+1).
-surface-budget = 47
+# `ExecRequest::launch_skills` shares child selection across host and scoped views (+1).
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
