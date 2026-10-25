@@ -423,6 +423,26 @@ fn signal_during_evaluation_rechecks_the_result_without_backoff() {
             .unwrap(),
     );
     let id = receipt.lines().next().unwrap();
+    let advance_status = env.runtime_root.join("wake-advance.status");
+    let real_rimz = env.rimz_bin();
+    let wrapper = crate::common::write_path_shim(
+        &env.home_root.join("wake-bin"),
+        "rimz",
+        &format!(
+            r#"if [ "$#" -ne 5 ] || [ "$3" != workflow ] || [ "$4" != advance ] || [ "$5" != {id} ]; then
+    exec {rimz} "$@"
+fi
+{rimz} "$@"
+advance_rc=$?
+printf '%s\n' "$advance_rc" > {advance_status}.tmp
+mv {advance_status}.tmp {advance_status}
+exit "$advance_rc""#,
+            id = shlex::try_quote(id).unwrap(),
+            rimz = shlex::try_quote(real_rimz.to_str().unwrap()).unwrap(),
+            advance_status = shlex::try_quote(advance_status.to_str().unwrap()).unwrap(),
+        ),
+    );
+    let mut first_host = None;
     for evaluation in 1..=2 {
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut gate = loop {
@@ -435,18 +455,54 @@ fn signal_during_evaluation_rechecks_the_result_without_backoff() {
             );
             std::thread::sleep(Duration::from_millis(10));
         };
+        let host = show(&env, id)["record"]["attempt"]["host"]["pid"]
+            .as_u64()
+            .unwrap();
         if evaluation == 1 {
-            success(command(&env, &["events", "emit", "review.ready"]));
-            until(&env, id, |v| !events(v, "wake").is_empty());
+            first_host = Some(host);
+            success(
+                env.rimz()
+                    .args(["events", "emit", "review.ready"])
+                    .env("RIMZ_BIN", &wrapper)
+                    .output()
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let advance_rc = loop {
+                if let Ok(code) = fs::read_to_string(&advance_status) {
+                    break code;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "wake-spawned advance did not exit"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(advance_rc.trim(), "0", "wake-spawned advance must succeed");
+        } else {
+            assert_eq!(
+                Some(host),
+                first_host,
+                "the woken host must re-evaluate inline"
+            );
         }
         gate.write_all(&[1]).unwrap();
     }
     let value = settled(&env, id, "done");
+    let journal = value["journal"].as_array().unwrap();
     assert_eq!(
         fs::read(Path::new(value["dir"].as_str().unwrap()).join("count")).unwrap(),
-        b"xx"
+        b"xx",
+        "{journal:#?}"
     );
-    assert_eq!(events(&value, "evaluation").len(), 2);
+    assert_eq!(events(&value, "evaluation").len(), 2, "{journal:#?}");
+    assert!(
+        journal
+            .iter()
+            .take_while(|row| row["event"] != "evaluation")
+            .any(|row| row["event"] == "wake" && row["signal"] == "review.ready"),
+        "review.ready wake must precede the first evaluation: {journal:#?}"
+    );
 }
 
 #[test]
