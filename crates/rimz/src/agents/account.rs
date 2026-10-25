@@ -249,10 +249,12 @@ impl ManagedLaunchState {
 }
 
 /// Cache identity of the credentials behind one provider usage probe.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageIdentity {
     pub scope: ProviderAccountScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,
 }
 

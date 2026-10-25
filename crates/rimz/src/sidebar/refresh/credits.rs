@@ -28,6 +28,7 @@ use crate::utils::time::unix_now_ms;
 impl ProviderCreditsEntry {
     pub(super) fn invalidate_oauth_read(&mut self) {
         self.oauth_read_at_ms = 0;
+        self.oauth_read_hint = None;
         self.auth_settled = false;
         self.direct_query_claim = None;
     }
@@ -72,6 +73,7 @@ impl ProviderCreditsEntry {
             entitlement,
             observed_at_ms: now_ms,
             oauth_read_at_ms: now_ms,
+            oauth_read_hint: claim.hint.clone(),
             auth_settled,
             credentials_stamp: identity.credentials_stamp,
             account_key: identity.account_key.clone(),
@@ -128,10 +130,9 @@ fn normalize_probe(
         AccountUsageProbe::Failed(identity) => (identity, None, false, true),
         AccountUsageProbe::Unsupported => (claim_identity.clone(), None, false, true),
     };
-    // Delegated providers can fail before selecting the sub-provider encoded
-    // by the account preflight. Keep that requested identity for both a
-    // transient failure and a settled no-credentials result so the completed
-    // attempt satisfies the same cache key the next producer fold asks for.
+    // A delegated probe can fail before selecting its sub-provider. Preserve
+    // the claimed identity so display carryover and panel scope filtering
+    // still describe the account the probe was asked to read.
     if failed || auth_settled {
         if identity.scope == ProviderAccountScope::KindWide
             && claim_identity.scope != ProviderAccountScope::KindWide
@@ -238,6 +239,7 @@ pub(super) fn merge_provider_realtime_usage(
             // leave the entry unread, so the next claim re-reads them.
             if prior.credentials_stamp == entry.credentials_stamp {
                 entry.oauth_read_at_ms = prior.oauth_read_at_ms;
+                entry.oauth_read_hint = prior.oauth_read_hint.clone();
                 entry.auth_settled = prior.auth_settled;
             }
         }
@@ -269,9 +271,7 @@ fn claim_provider_account_usage_with_hint_at(
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, |entry| {
-        cache_derived_claim_identity(entry, cached_hint)
-    })
+    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, cached_hint)
 }
 
 /// Claim one due direct read of an idle account: the ordinary claim, held to
@@ -297,7 +297,7 @@ fn claim_idle_account_usage_at(
         now_ms,
         nonce,
         IDLE_OAUTH_USAGE_TTL,
-        |entry| cache_derived_claim_identity(entry, cached_hint),
+        cached_hint,
     )
 }
 
@@ -309,7 +309,7 @@ fn claim_provider_account_usage_at(
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, |_| identity)
+    claim_provider_account_usage_with_hint_at(runtime, key, Some(identity), now_ms, nonce)
 }
 
 fn claim_provider_account_usage_locked(
@@ -318,7 +318,7 @@ fn claim_provider_account_usage_locked(
     now_ms: u64,
     nonce: Uuid,
     floor: Duration,
-    identity: impl FnOnce(&ProviderCreditsEntry) -> AccountUsageIdentity,
+    cached_hint: Option<AccountUsageIdentity>,
 ) -> Option<Uuid> {
     let path = runtime.shared_credits_path();
     let _guard = crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
@@ -326,19 +326,20 @@ fn claim_provider_account_usage_locked(
         .flatten()?;
     let mut cache = read_credits_cache(&path);
     let entry = cache.logins.entry(key.to_owned()).or_default();
-    let identity = identity(entry);
     let inside_floor = entry.oauth_read_at_ms != 0
         && now_ms.saturating_sub(entry.oauth_read_at_ms) < floor.as_millis() as u64;
     if entry.direct_query_claim.as_ref().is_some_and(|claim| {
         now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
     }) || inside_floor
-        || oauth_read_is_fresh(entry, now_ms, &identity)
+        || oauth_read_is_fresh(entry, now_ms, cached_hint.as_ref())
     {
         return None;
     }
+    let identity = cache_derived_claim_identity(entry, cached_hint.clone());
     entry.direct_query_claim = Some(DirectQueryClaim {
         nonce,
         claimed_at_ms: now_ms,
+        hint: cached_hint,
         requested_scope: identity.scope,
         credentials_stamp: identity.credentials_stamp,
         preflight_account_key: identity.account_key,
@@ -496,40 +497,17 @@ pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &LoginKey) {
 fn oauth_read_is_fresh(
     entry: &ProviderCreditsEntry,
     now_ms: u64,
-    identity: &AccountUsageIdentity,
+    cached_hint: Option<&AccountUsageIdentity>,
 ) -> bool {
-    if entry.oauth_read_at_ms == 0 {
-        return false;
-    }
-    if entry.scope != identity.scope
-        || claim_account_key_changed(entry, identity)
-        || identity
-            .credentials_stamp
-            .is_some_and(|stamp| entry.credentials_stamp != Some(stamp))
-    {
+    if entry.oauth_read_at_ms == 0 || entry.oauth_read_hint.as_ref() != cached_hint {
         return false;
     }
     let ttl = if entry.auth_settled {
-        if entry.credentials_stamp != identity.credentials_stamp {
-            return false;
-        }
         OAUTH_USAGE_SETTLED_TTL
     } else {
         OAUTH_USAGE_TTL
     };
     now_ms.saturating_sub(entry.oauth_read_at_ms) <= ttl.as_millis() as u64
-}
-
-fn claim_account_key_changed(
-    entry: &ProviderCreditsEntry,
-    identity: &AccountUsageIdentity,
-) -> bool {
-    match identity.account_key.as_deref() {
-        Some(current) => entry.account_key.as_deref() != Some(current),
-        // Stamped cache hints omit owner. An explicit unstamped identity can
-        // still prove Some -> None symmetrically in pure claim tests.
-        None => identity.credentials_stamp.is_none() && entry.account_key.is_some(),
-    }
 }
 
 /// The cached reset credits of each idle account, for auto-redeem's expiry
