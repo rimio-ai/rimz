@@ -286,13 +286,15 @@ A profile `skills` list decides which user skills the model may invoke on its ow
 
 `skills = ["merge", "review"]` lists bare skill names, and listed skills stay model-callable. In the scoped view, unlisted skills that RimZ can prepare stay visible but become user-invoked only, and `skills = []` makes every available skill user-invoked only. On the host, the provider switch decides ([host mode](#host-mode)).
 
-An omitted list inherits the parent profile's, and a child's list replaces its parent's instead of extending it. Once a profile in the chain configures a list, no descendant can return to unconfigured behaviour. When no profile in the chain configures one, invocation behaviour is native.
+An omitted list inherits the parent profile's, and a child's list replaces its parent's instead of extending it. Once a profile in the chain configures a list, no descendant can return to unconfigured behaviour. When no profile in the chain configures one, invocation behaviour is native, except that a launched subagent withholds `rimz-subagents` wherever skill restrictions are supported ([child policy](./harness/subagents.md#children-cannot-delegate-again)).
 
 Listing a skill never lifts a native user-only marker. In the scoped view, listed skills are bound with their host metadata unparsed, so an author's own invocation restrictions still apply.
 
 ### Host mode
 
 Claude uses one `--settings` value with `skillOverrides[<directory name>] = "user-invocable-only"` for unlisted skills, so explicit `/skill` invocation stays available. Codex uses `-c skills.config=[{name="<frontmatter name>",enabled=false},…]`, falling back to the directory name when the frontmatter has no name, and hides unlisted skills completely, explicit `$skill` invocation included. Other providers and plugins warn that the list is unenforced, then run unrestricted. The warning appears before the provider starts, in `explain`, and in `validate` for host definitions.
+
+`crates/rimz/src/harness/launch.rs::ExecRequest::launch_skills` derives the launch selection without changing the profile's stored list. A child's explicit list drops `rimz-subagents`; a child with no list keeps `None` and carries a one-name exclusion into `crates/rimz/src/agents/skills.rs::HostSkills::apply` and the scoped `SkillInputs`. The same selection feeds listed-skill permission grants, so a child's profile list does not add a grant for that skill. Routine permission grants do not lift its invocation restriction. An unconfigured host child emits a switch only when the excluded skill is installed. Without a provider switch it emits no unenforced-list warning, and an unavailable optional host view keeps native discovery with a debug diagnostic. Only the profile's own list makes enforcement required.
 
 `crates/rimz/src/agents/skills.rs::enumerate` reads the launch environment's provider skill root and the RimZ library. The provider wins a directory-name collision, and broken symlinks are skipped. Definition loading and validation share this enumeration and the native marker check only where the list is enforced: scoped-resolved definitions of any kind, and host definitions with `HostSkills::Switch`. Resolution uses the inherited definition isolation default before machine policy. Host definitions without a switch skip both skill lookup and marker checks, and callers already inside a scoped view skip definition checks altogether.
 
@@ -302,7 +304,7 @@ Claude keeps the last user `--settings` value, parsing inline JSON or a JSONC fi
 
 Codex replaces CLI `-c` or `--config` overrides for `skills.config`. Entries from `[[skills.config]]` in the user's `config.toml` stay in effect, merged by Codex.
 
-Directory names that a profile list cannot name, such as `odd name`, are still enumerated and always unlisted. Claude uses the raw directory name for their switch keys, and Codex still prefers the frontmatter name.
+When a profile list is configured, directory names it cannot name, such as `odd name`, are still enumerated and always unlisted. Claude uses the raw directory name for their switch keys, and Codex still prefers the frontmatter name.
 
 Neither provider has a wildcard, so skills installed after launch stay callable until restart. Project-chain skills, Codex's `$CODEX_HOME/skills`, and other native roots outside the two enumerated roots keep native behaviour. Host skill files are never rewritten.
 
@@ -343,7 +345,7 @@ The view preserves the provider root's shape:
 
 Unlisted skills are rewritten once per canonical directory. A provider-root entry binds its rewritten copy directly. A skill reached through a preserved symlink instead gets one read-only shadow of the copy at its canonical path, which can lie outside the declared skill root. Aliases that resolve to the same skill directory must be all listed or all unlisted. A mix refuses the launch with `ConflictingSkillAliases`, naming both and the fix.
 
-A view exists only when it changes something. With no library entries to merge and no copies to make, there is no tmpfs and no snapshot of the host directory. An unconfigured list never rewrites skills, and RimZ never rewrites or removes host skill files or symlinks.
+A view exists only when it changes something. With no library entries to merge and no copies to make, there is no tmpfs and no snapshot of the host directory. Without a configured list, only a launched child's `rimz-subagents` exclusion can require a user-only rewrite; all other skills keep native invocation. No root, an unsupported marker, or an unavailable optional view keeps native discovery without a new refusal. RimZ never rewrites or removes host skill files or symlinks.
 
 ### The user-only rewrite
 

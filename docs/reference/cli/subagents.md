@@ -308,7 +308,8 @@ A child launched through `rimz subagents` is told to complete its assignment its
 
 - RimZ refuses `rimz agents`, `rimz teams`, and `rimz subagents` launches whose caller is a subagent, before any run, pane, or worktree exists.
 - The instruction goes into the provider's appended system prompt where the adapter supports one (including Qoder), and onto the end of the user prompt otherwise.
-- Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's built-in subagent tool is removed. Other providers get the instruction only. The same native switch applies to parents offered RimZ delegation: callable `rimz-subagents` plus an available catalog, even when `tools:` lists `Agent`.
+- The child's skill view withholds model invocation of `rimz-subagents` where skill restrictions are supported, whether or not the profile configures a list. Other skills keep the profile's policy ([skill views](../../internals/sandbox.md#profile-skill-views)).
+- Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's native agents are disabled, and OpenCode's built-in subagent tool is removed. Other providers keep their native tools. The same native switch applies to parents offered RimZ delegation: callable `rimz-subagents` plus an available catalog, even when `tools:` lists `Agent`.
 
 `[agents] max-chain-length` does not apply to subagent launches, since a child cannot extend the chain. It governs successive peer launches through `rimz agents` and `rimz teams`; [`rimz agents molt`](./agents.md#molt) replaces the caller at the same generation instead. Subagents cannot molt.
 

@@ -184,11 +184,13 @@ Ancestry failures are `LaunchAncestryError`, written for a reader that is itself
 
 ## Children cannot delegate again
 
-Three independent layers keep a child from launching work of its own. Each covers a gap the others leave.
+Four independent layers keep a child from launching work of its own. Each covers a gap the others leave.
 
 The launch planner refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch whose durable caller is a launched child (`SubagentCaller` above). That blocks another RimZ process.
 
 Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the subagent profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`launcher/resolve.rs`](../../../crates/rimz/src/launcher/resolve.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
+
+The child's skill view also withholds model invocation of `rimz-subagents`, even when its profile lists the skill or has no list. Host Claude and Codex use their provider switches; a supported scoped view rewrites only that skill when no list is configured. Other skills retain the profile's policy. The profile's own list still decides refusals and unenforced-list warnings, so the exclusion introduces neither for an unconfigured child ([skill views](../sandbox.md#profile-skill-views)).
 
 ### Native delegation policy
 
@@ -199,8 +201,8 @@ Where the provider exposes a verified native restriction, the exec compiler disa
 | Claude | merges the profile's disallowed tools into one final `--disallowedTools` occurrence that denies `Agent` |
 | Codex | removes earlier `agents.enabled` and `features.multi_agent_v2` config overrides and every split or equals `--enable multi_agent_v2`, then appends `-c agents.enabled=false -c features.multi_agent_v2=false`; `features.multi_agent` is untouched |
 | OpenCode | appends `"-opencode.tool.subagent"` last in `OPENCODE_CONFIG_CONTENT.plugins`, keeping every other key and leaving permissions untouched |
-| Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated tools |
-| Other adapters | prompt-only until a native restriction is verified |
+| Pi | no built-in subagents; third-party extensions stay installed because disabling them all would remove unrelated tools |
+| Other adapters | no native-tool restriction until one is verified |
 
 OpenCode removes the built-in tool, so neither an agent-specific permission allow nor `--auto` restores it. The base object is composed launch env over inherited login env. Malformed content is replaced with the selector-only object and produces one launch warning with the problem and fix ([adapter_opencode.md](../agents/adapter_opencode.md)).
 
