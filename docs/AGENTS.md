@@ -50,6 +50,7 @@ Two figures RimZ prints in more than one place, each correct where it appears. N
 - `sh` blocks are copy-runnable, checked against the clap definition that parses them.
 - In a recipe spread over several `sh` blocks, every file argument names the path an earlier block created (`"$ROOT/tmp/replay/..."`), never a bare filename that depends on the reader's directory.
 - A fact from a subagent's summary is not grounded. Use a subagent to find the function; read the function before writing the sentence.
+- A phrase that restates a code condition (which pane takes a path, when a branch fires) is checked against the condition's source line before commit, every `&&` and `||` kept: a gloss that turns an AND into an OR reads as true and is wrong for the case it drops.
 - A moved or reworded heading breaks inbound anchors silently. After changing one, grep the repo for the old anchor and run `cargo xtask docs-links`, which validates file targets and `#anchors` together. `cargo xtask lint` does not cover Markdown.
 - A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/` and `internals/`, and the root [documentation map](../AGENTS.md#documentation-map). A page inside a subsystem folder (an `internals/agents/` adapter page) is listed in its tree's README, not in the root map, which names only the folder.
 - A page that gains a new kind of content updates its summary line everywhere that links to it (`rg '<page>.md'`), the documentation map included.
