@@ -198,11 +198,11 @@ Where the provider exposes a verified native restriction, the exec compiler disa
 | --- | --- |
 | Claude | merges the profile's disallowed tools into one final `--disallowedTools` occurrence that denies `Agent` |
 | Codex | removes earlier `agents.enabled` and `features.multi_agent_v2` config overrides and every split or equals `--enable multi_agent_v2`, then appends `-c agents.enabled=false -c features.multi_agent_v2=false`; `features.multi_agent` is untouched |
-| OpenCode | appends `{"action":"subagent","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT.permissions`, keeping the configured object and earlier rules |
+| OpenCode | appends `"-opencode.tool.subagent"` last in `OPENCODE_CONFIG_CONTENT.plugins`, keeping every other key and leaving permissions untouched |
 | Pi | prompt-only: Pi has no built-in subagents, and disabling all third-party extensions would remove unrelated tools |
 | Other adapters | prompt-only until a native restriction is verified |
 
-OpenCode applies agent-specific permissions after global permissions, so an `agents.<id>.permissions` allow can override this deny ([adapter_opencode.md](../agents/adapter_opencode.md)). Invalid or non-object config content is replaced with the deny-only permissions object.
+OpenCode removes the built-in tool, so neither an agent-specific permission allow nor `--auto` restores it. The base object is composed launch env over inherited login env. Malformed content is replaced with the selector-only object and produces one launch warning with the problem and fix ([adapter_opencode.md](../agents/adapter_opencode.md)).
 
 The same rule applies on launch, resume, and fork, including peers and team members. An explicit `Agent` in a definition's `tools:` loses to it. A parent without callable `rimz-subagents`, with a disabled catalog, or without a catalog keeps its native delegation tools. Headless judges get no catalog and keep native delegation, since RimZ delegation would either be refused or borrow an ancestor agent's identity. Preflight and managed process compiles carry no catalog; recovery without effective config also keeps native delegation and warns about default reminders.
 
