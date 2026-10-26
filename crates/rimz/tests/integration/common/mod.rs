@@ -59,6 +59,59 @@ pub use zellij::ZellijNamespace;
 
 pub(crate) const ENV_PROBE_TIMEOUT_MS_ENV: &str = "RIMZ_TEST_ENV_PROBE_TIMEOUT_MS";
 
+#[expect(
+    clippy::print_stdout,
+    reason = "live memory measurements are test output"
+)]
+pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib: u64) {
+    let rollup = std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup"))
+        .expect("wrapper smaps_rollup");
+    let field = |key: &str| -> u64 {
+        rollup
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix(key)
+                    .and_then(|value| value.split_whitespace().next())
+                    .and_then(|value| value.parse().ok())
+            })
+            .expect("smaps_rollup field")
+    };
+    let private_kib = field("Pss_Anon:");
+    let huge_kib = field("AnonHugePages:");
+    let outside_huge_kib = private_kib.saturating_sub(huge_kib);
+    let enabled =
+        std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled").unwrap_or_default();
+    let mode = enabled
+        .split_whitespace()
+        .find_map(|mode| mode.strip_prefix('[')?.strip_suffix(']'))
+        .unwrap_or("unavailable");
+    println!(
+        "{label}: {private_kib} KiB Pss_Anon; {} KiB Pss; {outside_huge_kib} KiB outside huge \
+         pages; AnonHugePages {huge_kib} KiB; THP {mode}",
+        field("Pss:")
+    );
+    let huge_budget_mib = 16;
+    if outside_huge_kib > budget_mib * 1024 || huge_kib > huge_budget_mib * 1024 {
+        println!(
+            "{label} mappings (load {}):\n{}",
+            std::fs::read_to_string("/proc/loadavg")
+                .unwrap_or_default()
+                .trim(),
+            std::fs::read_to_string(format!("/proc/{wrapper}/smaps")).expect("wrapper mappings")
+        );
+    }
+    assert!(
+        outside_huge_kib <= budget_mib * 1024,
+        "{label} {outside_huge_kib} KiB outside huge pages exceeds {budget_mib} MiB; \
+         private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
+    );
+    assert!(
+        huge_kib <= huge_budget_mib * 1024,
+        "{label} AnonHugePages {huge_kib} KiB exceeds {huge_budget_mib} MiB; \
+         private {private_kib} KiB; outside huge pages {outside_huge_kib} KiB; THP {mode}"
+    );
+}
+
 pub(crate) fn append_frame(
     env: &Env,
     frame: rimz::store::ingress::HookIngress,

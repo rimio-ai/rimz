@@ -297,38 +297,12 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
             !duties.exists(),
             "quiet park must spawn no store-owning duty"
         );
-        let rollup =
-            std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup")).expect("wrapper PSS");
-        let field = |key: &str| -> u64 {
-            rollup
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix(key)
-                        .and_then(|value| value.split_whitespace().next())
-                        .and_then(|value| value.parse().ok())
-                })
-                .expect("smaps_rollup field")
+        let label = if subagent {
+            "parked wrapper watchdog"
+        } else {
+            "parked wrapper plain"
         };
-        let pss_kib = field("Pss:");
-        let anonymous_kib = field("Pss_Anon:");
-        println!(
-            "parked wrapper {}: {anonymous_kib} KiB Pss_Anon; {pss_kib} KiB Pss",
-            if subagent { "watchdog" } else { "plain" }
-        );
-        if anonymous_kib > budget_mib * 1024 {
-            println!(
-                "wrapper mappings:\n{}",
-                std::fs::read_to_string(format!("/proc/{wrapper}/smaps"))
-                    .expect("wrapper mappings")
-            );
-        }
-        assert!(
-            anonymous_kib <= budget_mib * 1024,
-            "parked wrapper {anonymous_kib} KiB private memory exceeds {budget_mib} MiB; load {}",
-            std::fs::read_to_string("/proc/loadavg")
-                .unwrap_or_default()
-                .trim()
-        );
+        crate::common::assert_wrapper_memory_budget(label, wrapper, budget_mib);
     }
 }
 
