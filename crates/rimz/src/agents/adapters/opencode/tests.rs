@@ -193,19 +193,19 @@ fn malformed_prompt_and_delegation_config_warns_once_and_keeps_both_edits() {
             r#"{"plugins":false}"#,
             "plugins",
             "an array",
-            "has a plugins value that is not an array",
+            "sets plugins to a value that is not an array",
         ),
         (
             r#"{"agents":[]}"#,
             "agents",
             "an object",
-            "has a agents value that is not an object",
+            "sets agents to a value that is not an object",
         ),
         (
             r#"{"agents":{"build":null}}"#,
             "agents.build",
             "an object",
-            "has a agents.build value that is not an object",
+            "sets agents.build to a value that is not an object",
         ),
     ] {
         let inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), raw.into())]);
@@ -394,11 +394,11 @@ fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
         ("42", "not a JSON object"),
         ("true", "not a JSON object"),
         (r#""config""#, "not a JSON object"),
-        (r#"{"tabs":"off"}"#, "tabs value that is not an object"),
-        (r#"{"tabs":null}"#, "tabs value that is not an object"),
-        (r#"{"tabs":[]}"#, "tabs value that is not an object"),
-        (r#"{"tabs":42}"#, "tabs value that is not an object"),
-        (r#"{"tabs":false}"#, "tabs value that is not an object"),
+        (r#"{"tabs":"off"}"#, "tabs to a value that is not an object"),
+        (r#"{"tabs":null}"#, "tabs to a value that is not an object"),
+        (r#"{"tabs":[]}"#, "tabs to a value that is not an object"),
+        (r#"{"tabs":42}"#, "tabs to a value that is not an object"),
+        (r#"{"tabs":false}"#, "tabs to a value that is not an object"),
     ] {
         let inherited = BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into())]);
         let mut env = BTreeMap::new();
