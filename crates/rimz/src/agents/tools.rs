@@ -185,17 +185,13 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     matches!(definitions(kind).tools, DefinitionTools::Required(_))
 }
 
-/// Whether a definition's `skills:` list goes unreached for want of a `Skill` tool: always on a
-/// kind that requires tools, and on one with optional tools once a list is supplied.
-pub(crate) fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
-    if tools.is_some_and(|tools| tools.has("Skill")) {
-        return false;
-    }
-    match definitions(kind).tools {
-        DefinitionTools::Required(_) => true,
-        DefinitionTools::Optional(_) => tools.is_some(),
-        _ => false,
-    }
+/// Whether a supplied tools list applies to this kind and excludes `Skill`.
+pub fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
+    tools.is_some_and(|tools| !tools.has("Skill"))
+        && matches!(
+            definitions(kind).tools,
+            DefinitionTools::Required(_) | DefinitionTools::Optional(_)
+        )
 }
 
 /// Whether `kind` runs models named by other providers' vocabularies.
@@ -237,6 +233,32 @@ mod tests {
 
     fn tools(entries: &[&str]) -> ToolSet {
         ToolSet::parse(&entries.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn skills_require_a_supplied_applied_tools_list_without_skill() {
+        let without_skill = tools(&["Read", "Bash"]);
+        let with_skill = tools(&["Skill", "Read"]);
+        let actual: Vec<_> = ["claude", "codex", "pi", "opencode", "omp"]
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind,
+                    [None, Some(&without_skill), Some(&with_skill)]
+                        .map(|tools| skills_lack_skill_tool(kind, tools)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                ("claude", [false, true, false]),
+                ("codex", [false, true, false]),
+                ("pi", [false, true, false]),
+                ("opencode", [false, false, false]),
+                ("omp", [false, false, false]),
+            ]
+        );
     }
 
     #[test]

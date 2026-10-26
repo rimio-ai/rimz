@@ -269,7 +269,13 @@ upward-dependencies = ["address"]
 # canonical_tool_name shares portable tool spelling with team-seat filtering (+1).
 # LaunchCapability::finalize_launch_env applies final managed-launch env overrides (+1).
 # skills_lack_skill_tool shares the per-kind Skill requirement with definition loading (+1).
+# skills_lack_skill_tool is public for launch inspection and definition validation; no surface raise.
 surface-budget = 1146
+
+[[verdict]]
+kind = "item"
+key = "agents::tools::skills_lack_skill_tool"
+reason = "Definition loading, launch compilation, and CLI validation share the applied tools-list rule."
 
 [[verdict]]
 kind = "item"
