@@ -222,7 +222,7 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 | `recent_subagent_secs` | `900` | how long, in seconds, a finished subagent stays in a card's recent list before it moves behind `+K older`. `0` moves every finished child there at once, though a card with nothing newer to show lists them directly |
 | `max_recent_subagents` | `5` | how many finished subagents the recent list holds, newest first. Running children are never capped |
 | `provider_tabs` | `auto` | how the dashboard picks between stacked provider blocks and a tab rail: `auto` tabs at three providers or more, `always` at more than one, `never` not at all |
-| `provider_list` | unset | which providers appear and in what order. Unset ranks them by usage: running first, then recently used, then recently logged in. A list is a strict allowlist unless it contains `"all"`, which expands the rest in usage order at that position |
+| `provider_list` | unset | which providers appear and in what order. Unset ranks them by usage: running first, then recently used, then recently logged in. A list is a strict allowlist unless it contains `"all"`, which expands the rest in usage order at that position. [`rimz accounts`](../reference/cli/accounts.md#list) also lists the named providers first, but shows every provider and ignores `"all"` |
 | `max_provider_blocks` | `3` | how many blocks a stacked dashboard shows before eliding the rest. A tab rail and an explicit `provider_list` both ignore it |
 
 ```toml
