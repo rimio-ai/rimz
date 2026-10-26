@@ -21,7 +21,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::{AutoCompact, MessageStatus};
 use rimz::store::run::{RunRecord, RunStatus};
 
-use crate::common::{Env, ScrubSessionEnvExt, canonical};
+use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_list.rs"]
 mod list_tests;
 #[path = "loop_overlap.rs"]
@@ -5445,19 +5445,7 @@ fn loop_history_filters_workspace_and_keeps_legacy_records() {
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
-        let age = stderr
-            .split_once(", last ")
-            .unwrap()
-            .1
-            .split_once(": `")
-            .unwrap()
-            .0;
-        assert_eq!(
-            stderr,
-            format!(
-                "error: no loop task named `history`; see `rimz loop list`\n  2 retained runs, last {age}: `rimz loop logs history`\n"
-            )
-        );
+        assert_eq!(stderr, retained_runs_refusal(&stderr, "history", 2));
     }
 }
 
@@ -10146,18 +10134,9 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
         1,
         "{stderr}"
     );
-    let age = stderr
-        .split_once(", last ")
-        .unwrap()
-        .1
-        .split_once(": `")
-        .unwrap()
-        .0;
     assert_eq!(
-        stderr.split_once("error: ").unwrap().1,
-        format!(
-            "no loop task named `probe`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs probe`\n"
-        )
+        &stderr[stderr.find("error: ").unwrap()..],
+        retained_runs_refusal(&stderr, "probe", 1)
     );
     let (_stdout, error) = loop_fail(&env, &["loop", "logs", "ghost"]);
     assert!(
