@@ -501,7 +501,7 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
     };
 
     // A shape from a different version reads as absent.
-    write_rollup_cache(&paths, &ghost_cache(36, 0)).unwrap();
+    write_rollup_cache(&paths, &ghost_cache(40, 0)).unwrap();
     assert_cold("version mismatch");
 
     // An extent past the live log is a rotation this cache predates.

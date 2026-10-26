@@ -16,6 +16,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
         session_preview: None,
         model_id: Some("claude-opus-4-8".to_owned()),
         model_display_name: None,
+        sub_provider: None,
         effort: None,
         fast: None,
         thinking_enabled: None,

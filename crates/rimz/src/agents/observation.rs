@@ -617,6 +617,7 @@ pub(crate) fn payload_total_tokens(payload: &Value, fallback: Option<u64>) -> Op
 pub(crate) fn payload_has_context_observation(payload: &Value) -> bool {
     [
         "model",
+        "provider",
         "effort",
         "rate_limits",
         "total_cost_usd",
@@ -693,6 +694,7 @@ mod tests {
         ));
         for key in [
             "model",
+            "provider",
             "effort",
             "rate_limits",
             "total_cost_usd",

@@ -59,7 +59,7 @@ fn same_size_replacement_is_visible_with_the_same_mtime() {
 #[test]
 fn rejects_both_older_and_newer_versions() {
     let (_dir, paths, mut cache) = fixture();
-    for version in [40, ROLLUP_CACHE_VERSION + 1] {
+    for version in [41, ROLLUP_CACHE_VERSION + 1] {
         cache.version = version;
         write_rollup_cache(&paths, &cache).unwrap();
         assert_eq!(generations(&paths), [0; 2], "version {version}");

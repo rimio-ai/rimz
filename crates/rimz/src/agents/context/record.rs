@@ -201,6 +201,11 @@ impl AgentContextRecord {
         merge_optional!(model_id);
         merge_optional!(effort);
         merge_optional!(fast);
+        if context.sub_provider.is_some() && context.sub_provider != self.context.sub_provider {
+            self.context.rate_limits = None;
+            self.rate_limits_observed_at = None;
+        }
+        merge_optional!(sub_provider);
         if let Some(rate_limits) = context.rate_limits
             && self.context.rate_limits.as_ref() != Some(&rate_limits)
         {

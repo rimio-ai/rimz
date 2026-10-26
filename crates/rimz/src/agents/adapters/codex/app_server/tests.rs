@@ -971,6 +971,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
         session_preview: Some("Create a TUI".to_owned()),
         model_id: Some("gpt-5".to_owned()),
         model_display_name: Some("GPT-5".to_owned()),
+        sub_provider: None,
         effort: Some("high".to_owned()),
         fast: None,
         thinking_enabled: None,

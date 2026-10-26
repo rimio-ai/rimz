@@ -58,6 +58,8 @@ pub(super) struct PiHookPayload {
     pub model: Option<String>,
     /// Every envelope with a model: whether priority would be requested now.
     pub fast: Option<bool>,
+    /// Every event after the provider is known: the backing credential key.
+    pub provider: Option<String>,
     /// Every event: pi's thinking level (`off` | `minimal` | … | `max`),
     /// the closest pi has to Claude's effort.
     pub effort: Option<String>,

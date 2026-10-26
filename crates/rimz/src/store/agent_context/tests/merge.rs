@@ -569,6 +569,54 @@ fn observed_context_merge_preserves_fields_cost_coverage_and_monotonicity() {
 }
 
 #[test]
+fn observed_provider_switch_clears_windows_unless_the_same_observation_replaces_them() {
+    for (provider, carries_windows) in [
+        (Some("anthropic"), false),
+        (Some("anthropic"), true),
+        (Some("openai-codex"), false),
+        (None, false),
+    ] {
+        let (_dir, runtime) = runtime();
+        let mut prior = observed_context();
+        prior.sub_provider = Some("openai-codex".to_owned());
+        let windows = prior.rate_limits.clone();
+        merge_observed(&runtime, "pi", "sess-1", prior).unwrap();
+        let next_at = Timestamp::from_second(1_700_000_100).unwrap();
+        let changed_provider = provider == Some("anthropic");
+        let next = AgentContext {
+            sub_provider: provider.map(str::to_owned),
+            rate_limits: carries_windows.then(|| windows.clone()).flatten(),
+            ..AgentContext::new("pi", next_at)
+        };
+        assert_eq!(
+            merge_observed(&runtime, "pi", "sess-1", next).unwrap(),
+            changed_provider,
+        );
+        let merged = read_one(&runtime, "pi", "sess-1").unwrap();
+        let clears_windows = changed_provider && !carries_windows;
+        assert_eq!(
+            merged.context.rate_limits,
+            if clears_windows { None } else { windows },
+            "provider {provider:?}, carries windows {carries_windows}",
+        );
+        assert_eq!(
+            merged.context.sub_provider.as_deref(),
+            provider.or(Some("openai-codex")),
+        );
+        assert_eq!(
+            merged.rate_limits_observed_at,
+            if clears_windows {
+                None
+            } else if changed_provider {
+                Some(next_at)
+            } else {
+                Some(observed_at())
+            },
+        );
+    }
+}
+
+#[test]
 fn observed_fast_reading_merges_enabled_disabled_and_unknown() {
     let (_dir, runtime) = runtime();
     for fast in [Some(true), Some(false), None] {
@@ -964,6 +1012,7 @@ fn observed_context() -> AgentContext {
         session_preview: None,
         model_id: Some("gpt-5.5".to_owned()),
         model_display_name: Some("Fixture 5.5".to_owned()),
+        sub_provider: None,
         effort: Some("high".to_owned()),
         fast: None,
         thinking_enabled: None,

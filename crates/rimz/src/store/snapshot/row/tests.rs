@@ -613,6 +613,7 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         session_preview: None,
         model_id: None,
         model_display_name: None,
+        sub_provider: None,
         effort: None,
         fast: None,
         thinking_enabled: None,

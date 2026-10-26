@@ -112,7 +112,10 @@ fn extension_source_wires_every_catalog_event() {
         ),
         ("RIMZ_AGENT_PID", "PID attribution for the owning agent"),
         ("RIMZ_BIN", "the resolved rimz binary the extension spawns"),
-        ("PI_VERSION", "the upstream version stamped on the wire"),
+        (
+            "PI_VERSION",
+            "the upstream version that gates settlement support",
+        ),
         (
             "has_ui: ctx?.hasUI === true",
             "the headless gate `decode_hook` reads to suppress an ask",
