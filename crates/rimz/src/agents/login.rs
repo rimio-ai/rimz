@@ -269,10 +269,11 @@ impl ProviderLogin {
     }
 
     /// Refuses a named account whose home the exported provider variable
-    /// (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) already names: select named accounts
-    /// through RimZ instead of exporting their homes globally. The catalog
-    /// cannot check this at load, since a room pane on this account exports its
-    /// home by design; `rimz accounts add` and `rimz doctor` ask instead.
+    /// (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`) already names:
+    /// select named accounts through RimZ instead of exporting their homes
+    /// globally. The catalog cannot check this at load, since a room pane on
+    /// this account exports its home by design; `rimz accounts add` and
+    /// `rimz doctor` ask instead.
     pub fn check_exported_home(
         &self,
         ambient: &BTreeMap<String, String>,

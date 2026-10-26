@@ -313,6 +313,8 @@ Historical tool statistics count the `toolCall` blocks inside the assistant entr
 
 `rimz coverage --wiring` prints the declared concern grid ([adapter.md](./adapter.md#declared-coverage)). The gaps below have a reason worth recording.
 
+- Shared accounts read the same sessions through the `sessions/` link, so the newest session drives backing-provider selection for every shared account. Another account's session can change the displayed provider, and a new session moves all their inputs stamps. Pi sessions do not record which account wrote them.
+- An exported `PI_CODING_AGENT_SESSION_DIR` overrides every account's session root regardless of history mode. Spend discovery deduplicates identical paths with named logins first, so those sessions can be attributed to a standalone pool instead of the default pool. Pi's `settings.json` can also set `sessionDir`, but RimZ does not read that setting for spend discovery.
 - Pi has no native tool-permission policy or questionnaire. A permission-gate extension's dialog raises a generic question wait on Pi 0.84.4 and later, with no permission kind and no `rimz answer` support.
 - Subagents stay partial: nicobailon foreground children stay invisible until the user lists the extension path for them, and a reused child row keeps its first verdict.
 - Launch reminders and fast each need an extension that implements them: `pi --no-extensions` runs without either, and an older extension can lack one or both. Fast also needs Pi 0.57.0 or newer; missing or stale extensions never refuse a launch, and `rimz start` offers to refresh a changed managed extension.

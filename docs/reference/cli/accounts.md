@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` compares provider accounts, plans, usage left, and launch health; it is the same as `rimz accounts list` and exits 0. `show` expands account details. The other subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` compares provider accounts, plans, usage left, and launch health; it is the same as `rimz accounts list` and exits 0. `show` expands account details. The other subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, Codex with `CODEX_HOME`, and Pi with `PI_CODING_AGENT_DIR`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use` and `use --reset`, which require running inside one. Bare `use` pins only the current room's account for that provider, leaving running agents and machine and project configuration unchanged. `--reset` removes that pin. An unpinned provider follows the trusted project's selection, then the machine's, then `default`, live on each launch ([Accounts at start](./getting-started.md#accounts)). `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A machine selection reaches new rooms and existing rooms following that default, not pinned providers. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -19,7 +19,7 @@ rimz accounts remove claude work                     # forget the entry; the hom
 
 ## Kinds, names, and homes
 
-Named accounts exist for `claude` and `codex` only. `add`, `use`, and `remove` refuse kinds without named accounts with `<kind> has no named accounts; accounts are supported for claude, codex`; `list` and `show` report every known kind. `use --global <kind> default` can also clear a hand-set selection for any kind.
+Named accounts exist for `claude`, `codex`, and `pi` only. `add`, `use`, and `remove` refuse kinds without named accounts with `<kind> has no named accounts; accounts are supported for claude, codex, pi`; `list` and `show` report every known kind. `use --global <kind> default` can also clear a hand-set selection for any kind.
 
 An account name is 1 to 32 characters of `a-z`, `0-9`, `_`, and `-`, starting with a letter or digit. `default` is reserved for the provider's own home.
 
@@ -35,7 +35,7 @@ Every named account has a home directory, and RimZ checks each home when it read
 | --- | --- |
 | Default location | Without `home`, the account lives at `~/.rimz/accounts/<KIND>/<NAME>` (under `$RIMZ_HOME` when it is set). |
 | Absolute path | `home` in `config.toml` must be absolute or start with `~`. `add --home` resolves a relative path against the current directory before writing it. |
-| Not the provider's own home | `~/.claude` for Claude, `~/.codex` for Codex. That directory is already the `default` account. |
+| Not the provider's own home | `~/.claude` for Claude, `~/.codex` for Codex, `~/.pi/agent` for Pi. That directory is already the `default` account. |
 | One account per home | Two accounts of the same kind cannot share a home. |
 | No `,` and no trailing `projects` | Provider home lists split on commas, and Claude reads a directory named `projects` as its transcript folder. |
 
@@ -49,7 +49,7 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone] [-
 
 | Argument or flag | Effect |
 | --- | --- |
-| `KIND` | `claude` or `codex`. |
+| `KIND` | `claude`, `codex`, or `pi`. |
 | `NAME` | The account name a room selects with `--account <KIND>@<NAME>`. |
 | `--home <PATH>` | The account's provider home, such as an existing `~/.claude-work`. Without it, the home is the default location above. |
 | `--label <TEXT>` | Sets the display label; `--label ''` removes the field. On a rerun, changes only this field (and `history` when `--history` is also given); without the flag, leaves it alone. An invalid label is refused before any config write or home creation. |
@@ -59,18 +59,19 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone] [-
 
 1. For a new account, writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given, `history` only when `--history` is given, and `label` only when a non-empty `--label` is given. For an existing account, checks any `--history` or `--label` edit against the current `config.toml` without writing it. If that check fails, the home and `config.toml` stay unchanged.
 2. Creates the home directory.
-3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. On an existing account, writes any checked `--history` and `--label` updates after the links reach the requested mode, rereading `config.toml` for the edit. A refused rerun leaves `config.toml` unchanged.
-4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex), updating the shared file in the provider's own home too.
+3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `PI_CODING_AGENT_DIR`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, links removed from unshared names, and any moves to `.rimz-aside`. On an existing account, writes any checked `--history` and `--label` updates after the links reach the requested mode, rereading `config.toml` for the edit. A refused rerun leaves `config.toml` unchanged.
+4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex) or Pi's `extensions/` directory link, updating the provider's own home too.
 5. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` commands for a running room and new rooms.
 
 Links are relative when the account home's real location is under the real ambient `HOME` and the provider home's configured path is under the configured `HOME`. They climb from the account home's real location, then follow the provider home's configured path below `HOME`, even if that provider home is a symlink. Otherwise links are absolute, including when `HOME` is unset, empty, or cannot be resolved. This keeps links under home portable across dotfile sync and a moved home.
 
-A `standalone` account links the settings entries; a `shared` account links those and every other top-level entry of either home that is not unshared. A name is unshared when it is private or transient. It is private when it equals a listed name or extends it with a `.` suffix (`auth.json.bak`); `.rimz-aside` is private for both providers. It is transient, for every provider, when `.lock` or `.tmp` appears past the start of the name and either ends it or is followed by `.`: `.sqlite-maintenance.lock`, `.oauth_refresh.lock.owner`, and `session_index.jsonl.tmp` are transient, while `.tmp`, `tmp`, `thread-writer-locks`, and `.lockfile` are not and stay shared. A `shared` account always links the provider's history directories, Claude's `projects/` and Codex's `sessions/` and `archived_sessions/`, creating them in the provider's own home when neither home holds one yet.
+A `standalone` account links the settings entries; a `shared` account links those and every other top-level entry of either home that is not unshared. A name is unshared when it is private or transient. It is private when it equals a listed name or extends it with a `.` suffix (`auth.json.bak`); `.rimz-aside` is private for every provider. It is transient, for every provider, when `.lock` or `.tmp` appears past the start of the name and either ends it or is followed by `.`: `.sqlite-maintenance.lock`, `.oauth_refresh.lock.owner`, and `session_index.jsonl.tmp` are transient, while `.tmp`, `tmp`, `thread-writer-locks`, and `.lockfile` are not and stay shared. A `shared` account always links the provider's history directories, Claude's `projects/`, Codex's `sessions/` and `archived_sessions/`, and Pi's `sessions/`, creating them in the provider's own home when neither home holds one yet.
 
 | Provider | Settings files | Settings directories | Private names |
 | --- | --- | --- | --- |
 | Codex | `config.toml`, `AGENTS.md` | `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json` |
 | Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json` |
+| Pi | `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `trust.json`, `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` | `extensions/`, `skills/`, `prompts/`, `themes/`, `npm/`, `git/` | `auth.json`, `models-store.json`, `mcp-auth.json`, `oauth.json`, `mcp.log`, `crashes.json`, `pi-debug.log`, `pi-tui-debug.log`, `pi-tui-crash.log` |
 
 Each entry takes one of five paths, and nothing but a link is ever removed:
 
@@ -116,7 +117,7 @@ Rerunning `add` leaves the config entry alone unless `--history` or `--label` up
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
-| The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` before adding or updating accounts, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
+| The shell exports `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `PI_CODING_AGENT_DIR` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` before adding or updating accounts, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
 
 The daemon check runs once no agent is counted, and refuses while the daemon runs under the account's home, whether or not it has a session open.
 
@@ -254,7 +255,7 @@ Listing and `show` probe every catalog login and run due usage reads for logged-
 
 | Reading | Plain run | With `--refresh` |
 | --- | --- | --- |
-| Login, plan, account id, version | Probe after 10 minutes; a failed probe retries after 10 seconds and retains its last good facts. A new Pi session or Pi login change follows within seconds, behind a 10-second floor from the previous probe. A switch inside a running session, a resume, and concurrent Pi sessions on different providers still take up to 10 minutes. For kinds supporting named accounts (Claude and Codex), stored logged-out or ambiguous legacy records are probed again on every run. | Probe every catalog login, regardless of the selected kind or name. |
+| Login, plan, account id, version | Probe after 10 minutes; a failed probe retries after 10 seconds and retains its last good facts. A new Pi session or Pi login change follows within seconds, behind a 10-second floor from the previous probe. A switch inside a running session, a resume, and concurrent Pi sessions on different providers still take up to 10 minutes. For kinds supporting named accounts (Claude, Codex, and Pi), stored logged-out or ambiguous legacy records are probed again on every run. | Probe every catalog login, regardless of the selected kind or name. |
 | Claude live plan | Read at the next account probe for a never-read or changed account, a changed auth-status plan, a new machine-wide cockpit session, an early usage reset, or a profile answer older than 24 hours. Attempts are at least 10 minutes apart. After a sign-in whose auth-status plan differs from the answer's saved-plan basis, auth status shows until a new read answers. A failed read keeps the last answer without changing login state or usage. | Read for every probed Claude subscription login with a known identity, except offline or behind an account producer that outlives the wait bound. |
 | Windows, paid usage, reset credits | Read for logged-in accounts after 5 minutes, or 1 hour after missing/rejected credentials or subscription access. Providers without a usage API show agent-reported windows. | Read now for logged-in accounts of the selected kinds. Successful usage clears a recorded lapse. |
 | Spend | Last published `provider-spending.json`. | Same; this command does not compute spend. |
@@ -269,7 +270,7 @@ Every key below is present, with `null` when unknown, except `problem`, `probe_e
 
 | Field | Meaning |
 | --- | --- |
-| `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only Claude and Codex. |
+| `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only Claude, Codex, and Pi. |
 | `home`, `history` | Absolute home; `shared` or `standalone` history (`null` for default or undeclared accounts). |
 | `label` | Valid display label, or `null` for default, undeclared accounts, or unset or invalid labels. Always present. |
 | `machine_default` | Whether this is the machine's selection, or `default` when none is set. |
@@ -327,7 +328,7 @@ rimz accounts redeem <KIND> [NAME] [--dry-run] [--yes]
 | `--dry-run` | Read and print the preview, then exit 0 without prompting, stamping, or spending. |
 | `--yes` | Spend without prompting. Required for a non-terminal stdin unless `--dry-run` is set. |
 
-Other kinds refuse with `<kind> has no named accounts; accounts are supported for claude, codex`, exit 1.
+Pi refuses with `reset-credit request failed: pi does not support reset-credit redemption`, exit 1. Kinds without named accounts refuse with `<kind> has no named accounts; accounts are supported for claude, codex, pi`, exit 1.
 
 The preview on stdout names the resolved login, banked credits and soonest expiry (countdown and wall clock), then each unscoped 5h and 7d window's used percentage and reset countdown, or `∞` for a window the provider is not enforcing, which gets no redemption line. Codex refills now and restarts each reset a full window from now. A free reset closer than `resume.auto_redeem_min_gain` produces a warning about giving it up, not a refusal. Codex's final line is auto-redeem's forecast (`off`, `armed`, or `holding`) if the longest window ran dry now, not a verdict on a live agent. Claude refills now while its reset stays at the displayed time, with no forecast: automatic Claude redemption is not supported. A Claude `hold` row explains why banked credits cannot be spent now; a cooldown deadline uses the same local wall-clock format as the reset rows.
 

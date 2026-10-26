@@ -753,7 +753,18 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
             &env,
             &["add", kind, "work", "--home", home.to_str().unwrap()],
         ));
-        let before = succeeded(&accounts(&env, &["list", "--json"]));
+        let listed = || {
+            let mut rows: Value =
+                serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+            for row in rows.as_array_mut().unwrap() {
+                if row["kind"] == "pi" {
+                    assert!(row["probed_at"].is_string());
+                    row["probed_at"] = json!("<probe time>");
+                }
+            }
+            rows
+        };
+        let before = listed();
         let alias = env.home_root.join("alias");
         std::os::unix::fs::symlink(&home, &alias).unwrap();
         for exported in [&home, &alias] {
@@ -779,7 +790,7 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
                     "{error}"
                 );
                 assert!(!proposed.exists());
-                assert_eq!(succeeded(&accounts(&env, &["list", "--json"])), before);
+                assert_eq!(listed(), before);
                 assert!(!home.join(".rimz-aside").exists());
             }
         }
@@ -794,6 +805,121 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
                 .unwrap(),
         );
     }
+}
+
+#[test]
+fn pi_accounts_share_extensions_and_history_but_keep_logins_private() {
+    let env = Env::new();
+    let native = env.home_root.join(".pi/agent");
+    std::fs::create_dir_all(&native).unwrap();
+    let private = [
+        "auth.json",
+        "models-store.json",
+        "mcp-auth.json",
+        "oauth.json",
+        "oauth.json.migrated",
+        "mcp.log",
+        "mcp.log.1",
+        "crashes.json",
+        "pi-debug.log",
+        "pi-tui-debug.log",
+        "pi-tui-crash.log",
+        "auth.json.lock",
+        "settings.json.tmp.123",
+    ];
+    for name in private {
+        std::fs::write(native.join(name), "{}").unwrap();
+    }
+    let added = succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env_remove("RIMZ_PI_EXTENSION")
+            .args(["accounts", "add", "pi", "work"])
+            .output()
+            .unwrap(),
+    );
+    let home = env.rimz_home().join("accounts/pi/work");
+    for name in ["extensions", "sessions"] {
+        assert!(home.join(name).is_symlink(), "{name}: {added}");
+        assert!(native.join(name).is_dir(), "{name}: {added}");
+        assert_eq!(
+            home.join(name).canonicalize().unwrap(),
+            native.join(name).canonicalize().unwrap(),
+        );
+    }
+    assert!(native.join("extensions/rimz.ts").is_file(), "{added}");
+    for name in private {
+        assert!(!home.join(name).exists(), "{name} must stay private");
+        assert_eq!(std::fs::read_to_string(native.join(name)).unwrap(), "{}");
+    }
+    assert!(
+        added.contains(&format!("linked to {}:", native.display())),
+        "{added}"
+    );
+    let extension = home.join("extensions/rimz.ts");
+    let printed_extension = format!(
+        "~/{}",
+        extension.strip_prefix(&env.home_root).unwrap().display()
+    );
+    assert!(added.contains(&printed_extension), "{added}");
+    assert!(
+        added.contains(&format!(
+            "log in once   PI_CODING_AGENT_DIR={} pi",
+            home.display()
+        )),
+        "{added}"
+    );
+    let selected = succeeded(&accounts(&env, &["use", "--global", "pi", "work"]));
+    assert!(selected.contains("pi@work"), "{selected}");
+    succeeded(&accounts(&env, &["remove", "pi", "work"]));
+    let config = std::fs::read_to_string(env.rimz_home().join("config.toml")).unwrap();
+    assert!(!config.contains("[accounts.pi.work]"), "{config}");
+    assert!(home.join("extensions/rimz.ts").is_file());
+}
+
+#[test]
+fn pi_standalone_accounts_link_settings_and_packages_not_sessions_or_caches() {
+    let env = Env::new();
+    let native = env.home_root.join(".pi/agent");
+    std::fs::create_dir_all(&native).unwrap();
+    let files = [
+        "settings.json",
+        "models.json",
+        "mcp.json",
+        "keybindings.json",
+        "trust.json",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "SYSTEM.md",
+        "APPEND_SYSTEM.md",
+    ];
+    for name in files {
+        std::fs::write(native.join(name), "{}").unwrap();
+    }
+    for name in ["sessions", "bin", "tmp"] {
+        std::fs::create_dir(native.join(name)).unwrap();
+    }
+    let added = succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env_remove("RIMZ_PI_EXTENSION")
+            .args(["accounts", "add", "pi", "solo", "--history", "standalone"])
+            .output()
+            .unwrap(),
+    );
+    let home = env.rimz_home().join("accounts/pi/solo");
+    for name in files
+        .into_iter()
+        .chain(["extensions", "skills", "prompts", "themes", "npm", "git"])
+    {
+        assert!(home.join(name).is_symlink(), "{name}: {added}");
+        assert_eq!(
+            home.join(name).canonicalize().unwrap(),
+            native.join(name).canonicalize().unwrap(),
+        );
+    }
+    for name in ["sessions", "bin", "tmp"] {
+        assert!(!home.join(name).exists(), "{name} is not shared: {added}");
+    }
+    assert!(native.join("extensions/rimz.ts").is_file(), "{added}");
 }
 
 #[test]

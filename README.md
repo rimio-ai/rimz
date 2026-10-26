@@ -86,7 +86,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 - Start on your MacBook or a server, close the laptop, and reattach from anywhere over SSH or in a browser tab; the link heals itself every time you reconnect.
 - When an agent stops to ask, the question reaches you in the official Claude and ChatGPT mobile apps exactly as if you were driving the CLI by hand. Your answer lands in the same terminal session, and RimZ is never between you and the official apps.
-- A room runs its Claude or Codex agents under a second provider account with its own login and limits. Sessions, spend, and budget are shared with the provider's own account, so you can move a conversation onto the second account when the first runs out; a standalone account keeps all of it apart.
+- A room runs its Claude, Codex, or Pi agents under a second provider account with its own login and limits. Sessions, spend, and budget are shared with the provider's own account, so you can move a conversation onto the second account when the first runs out; a standalone account keeps all of it apart.
 - On Linux, scoped isolation gives each agent pane a bubblewrap mount view: the room's own `/tmp` and a curated skill set. It is a mount view and does not contain the agent.
 
 ## Get started

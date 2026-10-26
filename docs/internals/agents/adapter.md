@@ -96,7 +96,7 @@ The table names each trait's central methods. The trait file is the full list.
 | `SpendingCapability` | `spending_sources`, `parse_spend`, `transcript_files`, `session_transcript`, `session_spend_transcripts` | no historical spend enters fleet aggregation |
 | `RuntimeControlCapability` | remote-control readiness, preparation, liveness, and reconciliation | remote control is disabled |
 
-`LaunchCapability::config_home` resolves a login's provider home from the env keys the adapter lists in `config_home_env_keys`. Any adapter can resolve a home this way, but only the kinds `AccountsConfig::named` lists (Claude and Codex) can be configured as named accounts ([providers.md](./providers.md)).
+`LaunchCapability::config_home` resolves a login's provider home from the env keys the adapter lists in `config_home_env_keys`. Any adapter can resolve a home this way, but only the kinds `AccountsConfig::named` lists (Claude, Codex, and Pi) can be configured as named accounts ([providers.md](./providers.md)).
 
 `LaunchCapability::skills_home` is the root for host-mode skill links. `agents::skill_links` plans and applies them, and uninstall resolves the same root for every native and declared login. A link is RimZ's when its target, resolved against the root and normalized lexically without canonicalizing, lies under the RimZ skill library. Every other entry is the user's and stays.
 

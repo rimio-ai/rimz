@@ -2513,8 +2513,8 @@ fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
         "unknown codex account `ghost`; configured: default, gone, work; run `rimz accounts add codex ghost`"
     );
     assert_eq!(
-        gate("pi", "work", &no_record).unwrap_err(),
-        "pi has no named accounts; only `default` is available; remove `account = \"work\"` from the task"
+        gate("grok", "work", &no_record).unwrap_err(),
+        "grok has no named accounts; only `default` is available; remove `account = \"work\"` from the task"
     );
     let gone = gate("codex", "gone", &no_record).unwrap_err();
     assert!(
@@ -2664,10 +2664,10 @@ fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
     };
     let unknown =
         "unknown codex account `ghost`; configured: default; run `rimz accounts add codex ghost`";
-    let unsupported = "pi has no named accounts; only `default` is available; remove `account = \"ghost\"` from the task";
+    let unsupported = "grok has no named accounts; only `default` is available; remove `account = \"ghost\"` from the task";
     for (name, pinned, error, skip) in [
         ("unknown", true, unresolved("codex"), Some(unknown)),
-        ("unsupported", true, unresolved("pi"), Some(unsupported)),
+        ("unsupported", true, unresolved("grok"), Some(unsupported)),
         ("other", true, anyhow::anyhow!("pane refused"), None),
         ("unpinned", false, unresolved("codex"), None),
     ] {

@@ -415,6 +415,90 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {
+    fn shared_home_entries(&self) -> &'static [SharedHomeEntry] {
+        use crate::agents::capabilities::SharedHomeKind::{Dir, File};
+        &[
+            SharedHomeEntry {
+                name: "settings.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "models.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "mcp.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "keybindings.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "trust.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "AGENTS.md",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "CLAUDE.md",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "SYSTEM.md",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "APPEND_SYSTEM.md",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "extensions",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "skills",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "prompts",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "themes",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "npm",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "git",
+                kind: Dir,
+            },
+        ]
+    }
+
+    fn private_home_entries(&self) -> &'static [&'static str] {
+        &[
+            "auth.json",
+            "models-store.json",
+            "mcp-auth.json",
+            "oauth.json",
+            "mcp.log",
+            "crashes.json",
+            "pi-debug.log",
+            "pi-tui-debug.log",
+            "pi-tui-crash.log",
+        ]
+    }
+
+    fn history_home_entries(&self) -> &'static [&'static str] {
+        &["sessions"]
+    }
+
     // Not `--append-system-prompt`: it replaces the user's discovered APPEND_SYSTEM.md.
     fn append_system_text_channel(&self) -> Option<crate::agents::capabilities::SystemTextChannel> {
         Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
