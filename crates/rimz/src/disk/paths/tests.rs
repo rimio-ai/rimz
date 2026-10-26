@@ -180,11 +180,11 @@ fn path_io_errors_name_the_path_that_failed() {
 }
 
 #[test]
-fn handleless_skills_are_outside_writable_tmp() {
+fn skills_are_outside_writable_tmp() {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-    assert!(!paths.agent_skills_dir(None).starts_with(&paths.tmp_dir));
-    assert!(paths.agent_skills_dir(None).starts_with(&paths.cache_dir));
+    assert!(!paths.skills_dir.starts_with(&paths.tmp_dir));
+    assert!(paths.skills_dir.starts_with(&paths.cache_dir));
 }
 #[test]
 fn runtime_cleanup_does_not_race_canonical_path_writers() {
@@ -808,14 +808,7 @@ fn state_paths_resolve_under_the_home() {
     assert_eq!(paths.messages_dir, paths.root.join("records/messages"));
     assert_eq!(paths.transcript_dir, paths.root.join("audit/transcript"));
     assert_eq!(paths.runs_dir, paths.root.join("owned/runs"));
-    assert_eq!(
-        paths.agent_skills_dir(Some("otter")),
-        paths.root.join("owned/agents/otter/skills")
-    );
-    assert_eq!(
-        paths.agent_skills_dir(None),
-        paths.root.join("cache/skills")
-    );
+    assert_eq!(paths.skills_dir, paths.root.join("cache/skills"));
     for path in paths.all_paths() {
         let relative = path.strip_prefix(&paths.root).unwrap();
         assert!(

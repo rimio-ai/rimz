@@ -132,10 +132,9 @@ cache/doctor-cleared.json                     cleared-incident watermark
 cache/auto-gc.json                            daily sweep stamp
 cache/{publish,log-sync,dead-reap}.stamp      off-lock tail debounce
 cache/auto-rotate.stamp                       rotation debounce
-cache/skills/<sha256>/                        handleless rewritten skills
+cache/skills/<sha256>/                        immutable rewritten skills, shared by the room
 cache/ssh-config/<sha256>/                    shared system SSH Include-graph snapshots
 owned/agents/<handle>/scratch/                per-handle scratch
-owned/agents/<handle>/skills/<sha256>/        immutable rewritten skills
 owned/runs/<run_id>.json                      supervised-run records
 owned/workflows/<run-id>/                     workflow record, sealed spec, journal and work directory
 tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
@@ -524,7 +523,7 @@ For a layout-2 room, soft or hard, `rimz reset`:
 - Removes `records/idle-stop.json`. A soft reset leaves its agents resumable, and a surviving request would stop the resumed session.
 - Stops the hook drainer and removes ingress and its cursor ([Hook ingress](#hook-ingress)).
 - Stages carryover on a soft reset, and rotates the log.
-- Clears `cache/`, handleless skill copies included, and the runtime `sock/`, `live/`, and `lanes/`.
+- Clears `cache/`, skill copies included, and the runtime `sock/`, `live/`, and `lanes/`.
 
 Every directory a reset removes is detached first, so a late writer cannot refill the tree being deleted. Each runtime directory is renamed before its recursive deletion. Each state directory is renamed under the workspace lock to the sibling `<dir>.reset` before it is counted and deleted. An entry written to the canonical path after the detach survives the reset, and the next reset of that directory removes, uncounted, any `<dir>.reset` an interrupted reset left behind. The `.reset` suffix is reserved: hard reset treats any `owned/` child directory ending in `.reset` as debris and removes it in place, uncounted, instead of detaching it again.
 

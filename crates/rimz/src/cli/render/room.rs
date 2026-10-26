@@ -102,7 +102,7 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     }
     writeln!(
         stderr,
-        "Room tmp and handled skill copies: {}; handleless copies: cleared.",
+        "Room tmp: {}; skill copies: cleared.",
         if records.hard { "cleared" } else { "kept" }
     )?;
     match &records.rotation {

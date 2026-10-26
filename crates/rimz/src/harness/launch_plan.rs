@@ -893,9 +893,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 checkout: checkout.as_deref(),
                 read_only: judge_read_only(&request, inputs.cwd, checkout.as_deref())?,
                 tmp_dir: &unit,
-                skills_dir: &inputs
-                    .state
-                    .agent_skills_dir(request.identity.name.as_deref()),
+                skills_dir: &inputs.state.skills_dir,
                 ssh_config_file: Path::new("/etc/ssh/ssh_config"),
                 ssh_config_copies_dir: &inputs.state.ssh_config_copies_dir,
                 provider_home,
