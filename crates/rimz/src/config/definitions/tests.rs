@@ -2246,10 +2246,207 @@ fn names_and_kind_bases_are_validated() {
 }
 
 #[test]
+fn non_prompt_kind_bases_are_refused_before_their_contents() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["amp", "opencode"] {
+        for contents in [
+            "---\ndescription: Foundation.\n---\nBase.",
+            "---\ndescription: Foundation.\n---\n",
+            "---\ndescription: [\n---\nBase.",
+            "not frontmatter",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let base = root.path().join(format!("agents/{kind}.md"));
+            write(root.path(), &format!("agents/{kind}.md"), contents);
+            let loaded = load_checked(root.path());
+            actual.push((
+                loaded.errors,
+                loaded.failed.get(kind).cloned(),
+                loaded.agent_profiles.0.contains_key(kind),
+                loaded.subagent_profiles.0.contains_key(kind),
+            ));
+            expected.push((
+                vec![DefinitionErr::new(
+                    &base,
+                    format!(
+                        "{kind} takes no system prompt, so this kind base can never reach a launch; delete {}",
+                        base.display()
+                    ),
+                )],
+                Some(BTreeSet::from([base])),
+                false,
+                false,
+            ));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn failed_kind_bases_refuse_dependents_in_both_namespaces() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["amp", "opencode", "claude"] {
+        for contents in [
+            "---\ndescription: Base\n---\n",
+            "---\ndescription: [\n---\nBase.",
+        ] {
+            for namespace in ["agents", "subagents"] {
+                for body in ["", "Craft."] {
+                    let root = tempfile::tempdir().unwrap();
+                    let base = root.path().join(format!("agents/{kind}.md"));
+                    let path = root.path().join(format!("{namespace}/worker.md"));
+                    write(root.path(), &format!("agents/{kind}.md"), contents);
+                    definition(
+                        root.path(),
+                        &format!("{namespace}/worker.md"),
+                        &format!(
+                            "agent: {kind}{}",
+                            if kind == "claude" { "\ntools: []" } else { "" }
+                        ),
+                        body,
+                    );
+                    let loaded = load_checked(root.path());
+                    actual.push(loaded.errors.into_iter().find(|error| error.path == path));
+                    let reason = if kind == "claude" {
+                        format!(
+                            "runs on {kind}, whose kind base {} failed to load; fix that file",
+                            base.display()
+                        )
+                    } else {
+                        format!(
+                            "runs on {kind}, which takes no system prompt; its kind base {} failed to load — delete that file",
+                            base.display()
+                        )
+                    };
+                    expected.push(Some(DefinitionErr::new(&path, reason).with_cause(
+                        DefinitionCause::DependsOnFailed {
+                            name: kind.to_owned(),
+                        },
+                    )));
+                }
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn failed_non_base_kind_names_do_not_poison_bodyless_definitions() {
+    let mut actual = Vec::new();
+    for failed in ["agents/pretender.md", "subagents/opencode.md"] {
+        let root = tempfile::tempdir().unwrap();
+        definition(root.path(), failed, "name: opencode", "");
+        definition(root.path(), "agents/worker.md", "agent: opencode", "");
+        let loaded = load_checked(root.path());
+        actual.push((
+            loaded.failed.contains_key("opencode"),
+            loaded.agent_profiles.0.contains_key("worker"),
+        ));
+    }
+    assert_eq!(actual, [(true, true), (true, true)]);
+}
+
+#[test]
+fn tier_families_name_a_failed_base_rather_than_asking_to_create_it() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "agents/claude.md",
+        "---\ndescription: Base\n---\n",
+    );
+    write(
+        root.path(),
+        "agents/codex.md",
+        "---\ndescription: Base\n---\nBase.",
+    );
+    let loaded = load_checked(root.path());
+    let renders = loaded.agent_profiles.0["codex"].definition_renders.as_ref();
+    assert_eq!(
+        renders.unwrap().exclusions["claude"],
+        format!(
+            "whose kind base {} failed to load; fix that file",
+            root.path().join("agents/claude.md").display()
+        )
+    );
+}
+
+#[test]
+fn crafts_on_non_prompt_kinds_refuse_the_body_not_a_missing_base() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for namespace in ["agents", "subagents"] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(format!("{namespace}/worker.md"));
+        definition(
+            root.path(),
+            &format!("{namespace}/worker.md"),
+            "agent: opencode",
+            "Craft.",
+        );
+        definition(
+            root.path(),
+            &format!("{namespace}/child.md"),
+            "agent: worker",
+            "",
+        );
+        let loaded = load_checked(root.path());
+        actual.push(loaded.errors.into_iter().find(|error| error.path == path));
+        expected.push(Some(DefinitionErr::new(
+            &path,
+            "runs on opencode, which takes no system prompt, so its craft body cannot be delivered; remove the body or run this definition on a kind that takes a system prompt",
+        )));
+        assert!(!loaded.agent_profiles.0.contains_key("child"));
+        assert!(!loaded.subagent_profiles.0.contains_key("child"));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn non_prompt_team_seats_refuse_the_pipeline_but_keep_the_definition() {
+    let root = fixture();
+    definition(root.path(), "agents/worker.md", "agent: opencode", "");
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = load_checked(root.path());
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.teams.0.is_empty());
+    let expected = ["lead", "judge"].map(|role| {
+        let message = format!(
+            "team 'probe' role '{role}' runs on opencode, which takes no system prompt; every \
+             seat carries the team's pipeline in its system prompt — select a definition on a \
+             kind that takes a system prompt"
+        );
+        DefinitionErr::new(&root.path().join("teams/probe.md"), message)
+    });
+    assert_eq!(loaded.errors, expected);
+}
+
+#[test]
+fn team_tier_overlay_can_move_a_bodyless_non_prompt_definition_to_a_prompt_kind() {
+    let root = fixture();
+    definition(root.path(), "agents/worker.md", "agent: opencode", "");
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n    tier: senior\n    tools: [Bash]\n  - agent: worker\n    role: judge\n    owns: [Review]\n    tier: senior\n    tools: [Bash]",
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    assert!(loaded.teams.0.contains_key("probe"));
+    for role in ["lead", "judge"] {
+        assert_eq!(
+            loaded.agent_profiles.0[&format!("probe.{role}")].agent,
+            "claude"
+        );
+    }
+}
+
+#[test]
 fn prompt_taking_kinds_require_their_base_body_or_not() {
     let root = tempfile::tempdir().unwrap();
     assert!(clean(root.path()).errors.is_empty());
-    // amp takes no system prompt, so only a craft would need its base.
+    // amp takes no system prompt, so a bodyless definition needs no base.
     definition(root.path(), "agents/runner.md", "agent: amp", "");
     assert!(clean(root.path()).agent_profiles.0.contains_key("runner"));
     std::fs::remove_file(root.path().join("agents/runner.md")).unwrap();

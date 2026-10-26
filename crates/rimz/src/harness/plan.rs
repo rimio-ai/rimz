@@ -608,6 +608,7 @@ fn resolve_single_agent_spec(
         }
         Err(err) => return Err(err.into()),
     };
+    block_failed_kind_bases(launch, &launch.profiles, &layout, Some(spec), None)?;
     let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
     if cell_count != 1 {
         bail!("loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell");
@@ -639,6 +640,29 @@ fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
         crate::harness::spec::LayoutErr::UnknownCell(unknown) => Some(&unknown.word),
         _ => None,
     }
+}
+
+fn block_failed_kind_bases(
+    launch: &crate::config::effective::LaunchAgents,
+    profiles: &crate::config::ProfilesConfig,
+    layout: &LayoutSpec,
+    spec: Option<&str>,
+    agent_override: Option<&str>,
+) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
+    launch.block_failed_reference(
+        spec.filter(|name| {
+            let name = name.trim();
+            crate::agents::find_definition(name).is_some() && !profiles.0.contains_key(name)
+        }),
+        agent_override.filter(|name| !launch.profiles.0.contains_key(name.trim())),
+    )?;
+    for cell in layout
+        .agent_cells()
+        .filter(|cell| cell.launch.profile.is_none())
+    {
+        launch.block_failed_reference(Some(cell.kind.as_str()), None)?;
+    }
+    Ok(())
 }
 
 /// Resolve effective profiles/teams without applying runtime launch options.
@@ -685,6 +709,7 @@ pub fn resolve_launch(
         }
         Err(err) => return Err(err.into()),
     };
+    block_failed_kind_bases(launch, profiles, &layout, spec, agent_override)?;
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);

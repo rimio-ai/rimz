@@ -160,7 +160,7 @@ pub enum DefinitionCause {
         skill: super::SkillName,
         roots: Vec<PathBuf>,
     },
-    /// A parent, allowed subagent, or team role's agent failed to load.
+    /// A parent, kind base, allowed subagent, or team role's agent failed to load.
     DependsOnFailed { name: String },
     /// The message describes a failure that has no more specific grouping.
     Invalid,
@@ -174,6 +174,15 @@ fn missing_kind_base(home: &Path, kind: &str) -> String {
     format!(
         "whose kind base is missing — create {} with a nonempty body, the system prompt every \
          {kind} definition starts from",
+        home.join("agents").join(format!("{kind}.md")).display()
+    )
+}
+
+/// The tail of every refusal for a definition whose kind base exists but failed to load,
+/// so the user fixes that file rather than creating it again.
+fn failed_kind_base(home: &Path, kind: &str) -> String {
+    format!(
+        "whose kind base {} failed to load; fix that file",
         home.join("agents").join(format!("{kind}.md")).display()
     )
 }
@@ -281,6 +290,7 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
 struct LoadScope<'a> {
     home: &'a Path,
     bases: &'a BTreeSet<String>,
+    failed_bases: &'a BTreeSet<PathBuf>,
     skills: &'a SkillCatalog<'a>,
     tiers: &'a super::tiers::TierConfig,
     native_auto_compact: Option<u64>,
@@ -307,6 +317,7 @@ pub fn load(
     let mut agents = Namespace::default();
     let mut subagents = Namespace::default();
     let mut bases = BTreeSet::new();
+    let mut failed_bases = BTreeSet::new();
     let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
     for (namespace, tree) in [("agents", &mut agents), ("subagents", &mut subagents)] {
         let paths = match files(agents_home, namespace) {
@@ -323,11 +334,24 @@ pub fn load(
                 .to_string_lossy()
                 .into_owned();
             let mut name = stem.clone();
+            let kind_base = crate::agents::find_definition(&stem).filter(|_| namespace == "agents");
             let result = (|| {
+                if let Some(definition) = kind_base
+                    && !definition.spec().launch.takes_system_prompt()
+                {
+                    return Err(DefinitionErr::new(
+                        &path,
+                        format!(
+                            "{stem} takes no system prompt, so this kind base can never reach a \
+                             launch; delete {}",
+                            path.display()
+                        ),
+                    ));
+                }
                 let text = std::fs::read_to_string(&path)
                     .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
                 let (yaml, body) = frontmatter::split(&path, &text)?;
-                if namespace == "agents" && crate::agents::find_definition(&stem).is_some() {
+                if kind_base.is_some() {
                     let fm: BaseFrontmatter = frontmatter::parse(&path, yaml)?;
                     let description = frontmatter::description(&path, fm.description.as_deref())?;
                     if body.trim().is_empty() {
@@ -402,6 +426,9 @@ pub fn load(
                 Ok(())
             })();
             if let Err(error) = result {
+                if kind_base.is_some() {
+                    failed_bases.insert(path.clone());
+                }
                 loaded.failed.entry(name.clone()).or_default().insert(path);
                 tree.failed.insert(name);
                 loaded.errors.push(error);
@@ -418,6 +445,8 @@ pub fn load(
     for kind in families {
         if let Some(profile) = loaded.agent_profiles.0.get(kind) {
             renders.insert(kind.to_owned(), profile.clone());
+        } else if failed_bases.contains(&agents_home.join("agents").join(format!("{kind}.md"))) {
+            exclusions.insert(kind.to_owned(), failed_kind_base(agents_home, kind));
         } else {
             exclusions.insert(kind.to_owned(), missing_kind_base(agents_home, kind));
         }
@@ -445,6 +474,7 @@ pub fn load(
     let scope = LoadScope {
         home: agents_home,
         bases: &bases,
+        failed_bases: &failed_bases,
         skills: &catalog,
         tiers,
         native_auto_compact,

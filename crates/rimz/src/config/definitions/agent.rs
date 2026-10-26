@@ -390,6 +390,28 @@ impl Resolver<'_> {
         let definition = &self.tree.definitions[name];
         let path = &definition.path;
         let kind = profile.agent.as_str();
+        let takes_system_prompt = agents::find_definition(kind)
+            .is_some_and(|definition| definition.spec().launch.takes_system_prompt());
+        let base = self.scope.home.join("agents").join(format!("{kind}.md"));
+        if self.scope.failed_bases.contains(&base) {
+            let message = if takes_system_prompt {
+                format!(
+                    "runs on {kind}, {}",
+                    super::failed_kind_base(self.scope.home, kind)
+                )
+            } else {
+                format!(
+                    "runs on {kind}, which takes no system prompt; its kind base {} failed to \
+                     load — delete that file",
+                    base.display()
+                )
+            };
+            return Err(DefinitionErr::new(path, message).with_cause(
+                DefinitionCause::DependsOnFailed {
+                    name: kind.to_owned(),
+                },
+            ));
+        }
         profile.allowed_tools = fm
             .allowed_tools
             .as_ref()
@@ -576,18 +598,18 @@ impl Resolver<'_> {
                 text: craft,
             });
         }
-        let replaces_system_prompt = agents::find_definition(kind).is_some_and(|definition| {
-            definition
-                .spec()
-                .launch
-                .preset_arg_matcher(PresetField::SystemPromptFile)
-                .is_some()
-        });
-        // A kind that takes a system prompt always runs on its base; any other kind
-        // needs one only to carry a craft, which its launch then refuses.
-        if (replaces_system_prompt || !profile.append_system_prompt_files.is_empty())
-            && !self.scope.bases.contains(kind)
-        {
+        if !takes_system_prompt && !profile.append_system_prompt_files.is_empty() {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "runs on {kind}, which takes no system prompt, so its craft body cannot be \
+                     delivered; remove the body or run this definition on a kind that takes a \
+                     system prompt"
+                ),
+            ));
+        }
+        // Prompt-taking kinds need their base even when the definition adds no craft.
+        if takes_system_prompt && !self.scope.bases.contains(kind) {
             return Err(DefinitionErr::new(
                 path,
                 format!(

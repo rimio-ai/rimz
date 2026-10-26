@@ -270,7 +270,8 @@ upward-dependencies = ["address"]
 # LaunchCapability::finalize_launch_env applies final managed-launch env overrides (+1).
 # skills_lack_skill_tool shares the per-kind Skill requirement with definition loading (+1).
 # skills_lack_skill_tool is public for launch inspection and definition validation; no surface raise.
-surface-budget = 1146
+# LaunchSpec::takes_system_prompt shares prompt support with validation and launch (+1).
+surface-budget = 1147
 
 [[verdict]]
 kind = "item"

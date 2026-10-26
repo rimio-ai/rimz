@@ -1477,6 +1477,71 @@ fn failed_definitions_refuse_only_the_requested_launch() {
 }
 
 #[test]
+fn failed_kind_bases_refuse_bare_cells_overrides_and_loop_resolution() {
+    use crate::config::effective::ProfileScope;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    std::fs::write(root.path().join("agents/amp.md"), "invalid frontmatter").unwrap();
+    let mut machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    for (name, kind) in [("good", "codex"), ("legacy", "amp")] {
+        machine.agents.profiles.0.insert(
+            name.to_owned(),
+            configured_profile(kind, None, None, None, None, None),
+        );
+    }
+    let launch = effective_launch(&machine, root.path());
+    let mut actual = Vec::new();
+    for scope in [ProfileScope::Agents, ProfileScope::Subagents] {
+        for (spec, agent_override) in [
+            (Some("amp"), None),
+            (Some("amp,term"), None),
+            (Some("amp-ask"), None),
+            (None, Some("amp")),
+            (Some("codex"), Some("amp")),
+        ] {
+            actual.push(
+                super::resolve_launch(
+                    &launch,
+                    scope,
+                    &machine.agents.commands,
+                    spec,
+                    agent_override,
+                )
+                .err()
+                .map(|error| error.to_string()),
+            );
+        }
+    }
+    actual.push(
+        super::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some("good"),
+            Some("amp"),
+        )
+        .err()
+        .map(|error| error.to_string()),
+    );
+    actual.push(
+        resolve_single_agent_spec("amp", &launch, &machine.agents.commands)
+            .err()
+            .map(|error| error.to_string()),
+    );
+    assert_eq!(actual, vec![machine.definition_failure_for("amp"); 12],);
+    super::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        Some("legacy"),
+        None,
+    )
+    .expect("implicit TOML kind chains keep their existing behavior");
+}
+
+#[test]
 fn agent_launch_precondition_surfaces_definition_error() {
     let root = tempfile::tempdir().unwrap();
     let mut config = MachineConfig::default();

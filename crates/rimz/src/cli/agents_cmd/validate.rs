@@ -455,14 +455,14 @@ mod tests {
         std::fs::create_dir(root.path().join("agents")).unwrap();
         for (name, fields) in [
             ("claude", ""),
-            ("amp", ""),
             ("warm", "agent: claude\nkeep-warm: 2h\ntools: []\n"),
             ("unknown", "agent: amp\nkeep-warm: 2h\n"),
             ("cold", "agent: claude\nkeep-warm: off\ntools: []\n"),
         ] {
+            let body = if name == "unknown" { "" } else { "Base." };
             std::fs::write(
                 root.path().join(format!("agents/{name}.md")),
-                format!("---\ndescription: Test\n{fields}---\nBase."),
+                format!("---\ndescription: Test\n{fields}---\n{body}"),
             )
             .unwrap();
         }
