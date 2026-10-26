@@ -122,6 +122,16 @@ An OpenCode launch covered by the [native delegation policy](../harness/subagent
 
 Absent content becomes `{"plugins":["-opencode.tool.subagent"]}` without a warning. Invalid JSONC, a non-object root, or non-array `plugins` gets that same fallback plus one `crates/rimz/src/harness/launch_plan.rs::LaunchPlanWarning::LaunchEnv`, carried from the process compiler to the launch plan. The warning names `OPENCODE_CONFIG_CONTENT` and the problem, says the launch ignored the configured value, and gives both fixes: set a JSON object whose `plugins` is an array, or unset it. The exec wrapper prints and records it with the other launch warnings.
 
+Every managed OpenCode launch also calls `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter::finalize_launch_env` from the same process compiler, regardless of the native delegation policy. Its base `OPENCODE_CLI_CONFIG_CONTENT` is composed launch env over inherited login env, not a value set only by shell startup files. The step writes strict JSON with `tabs.mode = "off"` into the final launch env without changing `OPENCODE_CONFIG_CONTENT`:
+
+| Effective CLI config content | Final CLI config content | Warning |
+| --- | --- | --- |
+| Unset or exactly `""` | `{"tabs":{"mode":"off"}}` | None |
+| JSONC object with absent or object-valued `tabs` | Same object with `tabs.mode = "off"`; every other key survives, including sibling tab settings and legacy `tabs.enabled` | None |
+| Invalid JSONC (including whitespace-only), non-object root, or non-object `tabs` | `{"tabs":{"mode":"off"}}` | One `LaunchPlanWarning::LaunchEnv`, naming the variable and problem, saying this launch ignored the configured value, and giving the fix: set a JSON object whose `tabs` is an object, or unset it |
+
+This hides the native session tab strip from OpenCode 2.0.13 onward; 2.0.0 through 2.0.12 keep their tabs, and the minimum supported version remains 2.0.0. Manual OpenCode launches, including from a room shell, are unchanged. RimZ validates only the root and `tabs` container shapes, not OpenCode's versioned settings schema: another invalid setting such as `{"theme":42}` or `{"tabs":{"scope":42}}` makes OpenCode drop the whole inline value, including RimZ's mode, and fall back to `cli.json`. The [upstream CLI config reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment) owns parsing, precedence, version support, and legacy-tab normalization.
+
 ## Context gauge
 
 The plugin's gauge is a per-session record of the model, its window, and the latest token split, stamped onto every envelope. `session.step.started` stores the step's model and agent under its `assistantMessageID`. `session.step.ended` or `failed` removes that pair and reads the step's tokens:

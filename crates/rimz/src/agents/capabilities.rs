@@ -652,6 +652,17 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    /// Apply final environment overrides on every managed launch, reading the
+    /// effective login environment and warning when configured content is ignored.
+    /// The default leaves the environment unchanged.
+    fn finalize_launch_env(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _env: &mut BTreeMap<String, String>,
+    ) -> Option<String> {
+        None
+    }
+
     /// Environment a newly-born room exports for direct agent launches. The
     /// mux layer carries this opaque map; provider policy stays in adapters.
     fn room_env(&self, _runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {

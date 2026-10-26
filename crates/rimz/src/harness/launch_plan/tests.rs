@@ -1573,6 +1573,72 @@ fn malformed_opencode_delegation_config_surfaces_as_a_launch_warning() {
 }
 
 #[test]
+fn malformed_opencode_cli_config_warns_on_every_launch_after_delegation_config() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut actual = Vec::new();
+    for subagent in [false, true] {
+        let mut request =
+            ExecRequest::bare_launch(AgentKind::new_unchecked("opencode"), Vec::new());
+        request.subagent = subagent;
+        let mut ambient_env =
+            BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), "not JSON".into())]);
+        if subagent {
+            ambient_env.insert("OPENCODE_CONFIG_CONTENT".into(), "not JSON".into());
+        }
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Host,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient_env,
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        actual.push(
+            plan.warnings
+                .iter()
+                .filter(|warning| !matches!(warning, LaunchPlanWarning::DefaultReminders))
+                .map(|warning| {
+                    (
+                        matches!(warning, LaunchPlanWarning::LaunchEnv(_)),
+                        warning
+                            .to_string()
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            vec![(true, "OPENCODE_CLI_CONFIG_CONTENT".to_owned())],
+            vec![
+                (true, "OPENCODE_CONFIG_CONTENT".to_owned()),
+                (true, "OPENCODE_CLI_CONFIG_CONTENT".to_owned()),
+            ],
+        ]
+    );
+}
+
+#[test]
 fn resolves_team_for_launch_context_from_effective_config() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");
