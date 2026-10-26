@@ -126,7 +126,13 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
         }),
-        presets: super::PresetMatchers::EMPTY,
+        presets: super::PresetMatchers {
+            system_prompt_file: Some(super::StaticPresetMatcher::EnvConfigMember {
+                var: "OPENCODE_CONFIG_CONTENT",
+                member: "agents.build.system",
+            }),
+            ..super::PresetMatchers::EMPTY
+        },
         ..super::LaunchSpec::EMPTY
     },
 };
@@ -382,20 +388,49 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
     }
 
-    fn disable_native_subagent_env(
+    fn finalize_launch_env(
         &self,
-        login_env: &std::collections::BTreeMap<String, String>,
-        env: &mut std::collections::BTreeMap<String, String>,
-    ) -> Option<String> {
-        const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
-        const SELECTOR: &str = "-opencode.tool.subagent";
-        let (mut config, warning) = parse_inline_config(
-            CONFIG_ENV,
-            login_env.get(CONFIG_ENV).map(String::as_str),
-            "plugins",
-            "an array",
-            Value::is_array,
-        );
+        login_env: &BTreeMap<String, String>,
+        env: &mut BTreeMap<String, String>,
+        disable_native_subagents: bool,
+        system_prompt_file: Option<&Path>,
+    ) -> Vec<String> {
+        let mut warnings =
+            edit_core_config(login_env, env, disable_native_subagents, system_prompt_file);
+        warnings.extend(hide_tabs(login_env, env));
+        warnings
+    }
+}
+
+/// Writes `OPENCODE_CONFIG_CONTENT` when this launch switches native delegation off or
+/// delivers a system prompt, keeping every inherited key. Otherwise the inherited value,
+/// valid or not, passes through untouched.
+fn edit_core_config(
+    login_env: &BTreeMap<String, String>,
+    env: &mut BTreeMap<String, String>,
+    disable_native_subagents: bool,
+    system_prompt_file: Option<&Path>,
+) -> Vec<String> {
+    const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+    const SELECTOR: &str = "-opencode.tool.subagent";
+    if !disable_native_subagents && system_prompt_file.is_none() {
+        return Vec::new();
+    }
+    let mut members: Vec<InlineConfigMember> = Vec::new();
+    if disable_native_subagents {
+        members.push(("/plugins", "an array", Value::is_array));
+    }
+    if system_prompt_file.is_some() {
+        members.push(("/agents", "an object", Value::is_object));
+        members.push(("/agents/build", "an object", Value::is_object));
+    }
+    let (mut config, warning) = parse_inline_config(
+        CONFIG_ENV,
+        login_env.get(CONFIG_ENV).map(String::as_str),
+        &members,
+    );
+    let mut warnings = Vec::from_iter(warning);
+    if disable_native_subagents {
         let mut plugins = match config.remove("plugins") {
             Some(Value::Array(plugins)) => plugins,
             _ => Vec::new(),
@@ -404,51 +439,72 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
             plugins.push(Value::String(SELECTOR.to_owned()));
         }
         config.insert("plugins".to_owned(), Value::Array(plugins));
-        env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
-        warning
     }
-
-    fn finalize_launch_env(
-        &self,
-        login_env: &BTreeMap<String, String>,
-        env: &mut BTreeMap<String, String>,
-    ) -> Option<String> {
-        const CONFIG_ENV: &str = "OPENCODE_CLI_CONFIG_CONTENT";
-        // OpenCode reads this variable only when it is non-empty, unlike
-        // OPENCODE_CONFIG_CONTENT, so `""` is absent here rather than malformed.
-        let raw = login_env
-            .get(CONFIG_ENV)
-            .map(String::as_str)
-            .filter(|raw| !raw.is_empty());
-        let (mut config, warning) =
-            parse_inline_config(CONFIG_ENV, raw, "tabs", "an object", Value::is_object);
-        let mut tabs = match config.remove("tabs") {
-            Some(Value::Object(tabs)) => tabs,
-            _ => serde_json::Map::new(),
-        };
-        tabs.insert("mode".to_owned(), Value::String("off".to_owned()));
-        config.insert("tabs".to_owned(), Value::Object(tabs));
-        env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
-        warning
+    let mut config = Value::Object(config);
+    if let Some(path) = system_prompt_file {
+        if config.pointer("/agents/build/system").is_some() {
+            warnings.push(
+                "OPENCODE_CONFIG_CONTENT set agents.build.system; RimZ's composed system prompt \
+                 replaced it for this launch; move that prompt into agents/opencode.md or a \
+                 profile's system-prompt-file, or remove it from the variable"
+                    .to_owned(),
+            );
+        }
+        // parse_inline_config admitted agents and agents.build only as objects or absent,
+        // so indexing creates the missing levels and cannot hit a non-object.
+        config["agents"]["build"]["system"] = Value::String(format!("{{file:{}}}", path.display()));
     }
+    env.insert(CONFIG_ENV.to_owned(), config.to_string());
+    warnings
 }
 
-/// Parses the inline config `name` carries, whose `member` must be `shape` when present.
-/// Content that fails is replaced by an empty object, with a warning that says so.
+/// Switches OpenCode's tab bar off, keeping every other key of its CLI config.
+fn hide_tabs(
+    login_env: &BTreeMap<String, String>,
+    env: &mut BTreeMap<String, String>,
+) -> Option<String> {
+    const CONFIG_ENV: &str = "OPENCODE_CLI_CONFIG_CONTENT";
+    // OpenCode reads this variable only when it is non-empty, unlike
+    // OPENCODE_CONFIG_CONTENT, so `""` is absent here rather than malformed.
+    let raw = login_env
+        .get(CONFIG_ENV)
+        .map(String::as_str)
+        .filter(|raw| !raw.is_empty());
+    let (mut config, warning) =
+        parse_inline_config(CONFIG_ENV, raw, &[("/tabs", "an object", Value::is_object)]);
+    let mut tabs = match config.remove("tabs") {
+        Some(Value::Object(tabs)) => tabs,
+        _ => serde_json::Map::new(),
+    };
+    tabs.insert("mode".to_owned(), Value::String("off".to_owned()));
+    config.insert("tabs".to_owned(), Value::Object(tabs));
+    env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
+    warning
+}
+
+type InlineConfigMember = (&'static str, &'static str, fn(&Value) -> bool);
+
+/// Parses inline config against the nonempty list of member pointers this launch edits.
+/// Content that fails is replaced by an empty object, with a warning naming the first
+/// member that failed, or the first member listed when the content itself is malformed.
 fn parse_inline_config(
     name: &str,
     raw: Option<&str>,
-    member: &str,
-    shape: &str,
-    valid: fn(&Value) -> bool,
+    members: &[InlineConfigMember],
 ) -> (serde_json::Map<String, Value>, Option<String>) {
     let Some(raw) = raw else {
         return (serde_json::Map::new(), None);
     };
-    let problem = match crate::agents::jsonc::from_slice::<Value>(raw.as_bytes()) {
-        Ok(Value::Object(config)) if config.get(member).is_none_or(valid) => {
-            return (config, None);
-        }
+    let parsed = crate::agents::jsonc::from_slice::<Value>(raw.as_bytes());
+    let invalid = parsed.as_ref().ok().and_then(|config| {
+        members
+            .iter()
+            .find(|(pointer, _, valid)| config.pointer(pointer).is_some_and(|value| !valid(value)))
+    });
+    let (pointer, shape, _) = invalid.unwrap_or(&members[0]);
+    let member = pointer.trim_start_matches('/').replace('/', ".");
+    let problem = match parsed {
+        Ok(Value::Object(config)) if invalid.is_none() => return (config, None),
         Ok(Value::Object(_)) => format!("has a {member} value that is not {shape}"),
         Ok(_) => "is not a JSON object".to_owned(),
         Err(_) => "is not valid JSONC".to_owned(),

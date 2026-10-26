@@ -42,6 +42,7 @@ pub(super) struct LaunchReminders {
     pub lsp_configured: bool,
     pub lsp_servers: Vec<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
+    pub system_prompt_file: Option<PathBuf>,
     pub team: Option<TeamReminder>,
 }
 
@@ -71,6 +72,7 @@ impl Default for LaunchReminders {
             lsp_configured: false,
             lsp_servers: Vec::new(),
             subagent_catalog: None,
+            system_prompt_file: None,
             team: None,
         }
     }

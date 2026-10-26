@@ -666,27 +666,18 @@ pub trait LaunchCapability: CoreCapability {
         Vec::new()
     }
 
-    /// Disable provider-native delegation through launch environment for
-    /// children and launches offered RimZ delegation. Reads the effective login
-    /// environment and writes the final overrides, returning a warning if configured
-    /// content was ignored. The default leaves the environment unchanged.
-    fn disable_native_subagent_env(
-        &self,
-        _login_env: &BTreeMap<String, String>,
-        _env: &mut BTreeMap<String, String>,
-    ) -> Option<String> {
-        None
-    }
-
     /// Apply final environment overrides on every managed launch, reading the
-    /// effective login environment and warning when configured content is ignored.
-    /// The default leaves the environment unchanged.
+    /// effective login environment after composition. The delegation decision
+    /// and optional env-config prompt artifact share one edit of provider config.
+    /// Returns warnings in order; the default leaves the environment unchanged.
     fn finalize_launch_env(
         &self,
         _login_env: &BTreeMap<String, String>,
         _env: &mut BTreeMap<String, String>,
-    ) -> Option<String> {
-        None
+        _disable_native_subagents: bool,
+        _system_prompt_file: Option<&Path>,
+    ) -> Vec<String> {
+        Vec::new()
     }
 
     /// Environment a newly-born room exports for direct agent launches. The

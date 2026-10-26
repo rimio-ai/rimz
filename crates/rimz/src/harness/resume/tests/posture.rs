@@ -762,6 +762,40 @@ fn a_profile_prompt_fragment_that_vanished_degrades_instead_of_refusing() {
 }
 
 #[test]
+fn opencode_resume_replays_the_profile_system_prompt_without_degrading() {
+    let prompt = tempfile::NamedTempFile::new().unwrap();
+    let profiles = profiles(
+        "planner",
+        Profile {
+            system_prompt_file: Some(prompt.path().to_path_buf().into()),
+            ..profile("opencode")
+        },
+    );
+    let agent = AgentState {
+        profile: Some("planner".into()),
+        ..agent("opencode", "ses_123", "/code/qe", 1)
+    };
+    let plan = plan_profiled(agent, &profiles);
+    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(
+        request
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
+        Some(prompt.path())
+    );
+    assert_eq!(
+        request.action,
+        crate::harness::launch::ExecAction::Resume {
+            session_id: "ses_123".into(),
+            extra_args: Vec::new(),
+        }
+    );
+}
+
+#[test]
 fn unsupported_prompt_replacement_is_reported_as_a_resume_skip() {
     let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
     let profiles = profiles(

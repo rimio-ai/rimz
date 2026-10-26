@@ -321,7 +321,7 @@ impl PresetField {
     }
 }
 
-/// How a launch-preset field appears in the agent's own CLI argv.
+/// How a launch-preset field reaches the agent's arguments or environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PresetArgMatcher {
     /// A single-use named flag: `--model VALUE` or `--model=VALUE`.
@@ -330,6 +330,8 @@ pub enum PresetArgMatcher {
     TextFlag(Vec<String>),
     /// An environment variable whose value is a replacement file path.
     EnvPathVar(String),
+    /// A config member carried in an environment variable, edited by the launch-env hook.
+    EnvConfigMember { var: String, member: String },
     /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
     ConfigKey { flags: Vec<String>, key: String },
 }
@@ -343,8 +345,7 @@ pub(crate) struct PresetArgOccurrence {
 impl PresetArgMatcher {
     /// Remove every occurrence of this typed setting from provider argv.
     ///
-    /// The exec wrapper uses this at the final provider boundary so recovery
-    /// paths cannot reintroduce a raw value that planning already reconciled.
+    /// Environment-only settings leave argv unchanged.
     pub fn remove_occurrences(&self, argv: &mut Vec<String>) {
         for occurrence in self.occurrences(argv).iter().rev() {
             argv.drain(occurrence.argv_range.clone());
@@ -392,7 +393,7 @@ impl PresetArgMatcher {
                             })
                     }
                 }),
-                Self::EnvPathVar(_) => None,
+                Self::EnvPathVar(_) | Self::EnvConfigMember { .. } => None,
             };
             if let Some(occurrence) = occurrence {
                 index = occurrence.argv_range.end;
@@ -411,6 +412,7 @@ impl PresetArgMatcher {
                 .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
             Self::ConfigKey { key, .. } => format!("{key} {value}"),
             Self::EnvPathVar(key) => format!("{key}={value}"),
+            Self::EnvConfigMember { var, member } => format!("{var} {member}={value}"),
         }
     }
 }

@@ -44,6 +44,7 @@ impl SystemPromptSources {
 pub struct MaterializedSystemPrompt {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub(super) hook_path: Option<PathBuf>,
 }
 
 pub struct SystemPromptPlan {
@@ -79,6 +80,13 @@ pub enum PromptComposeErr {
         size: usize,
         limit: usize,
     },
+    #[error(
+        "{agent} system prompt artifact `{}` cannot be carried by a {{file:}} reference: \
+         its path must be UTF-8 and contain no `{{`, `}}`, `\"`, `\\`, or control characters; \
+         set XDG_RUNTIME_DIR to a directory whose path has none of them",
+        path.display()
+    )]
+    InvalidFileReference { agent: &'static str, path: PathBuf },
     #[error(transparent)]
     Write(#[from] crate::disk::atomic::AtomicErr),
 }
@@ -112,6 +120,7 @@ pub(super) fn plan_system_prompt(
 
     let composed = read_composed(sources, agent)?;
     let artifact = (sources.composes()
+        || matches!(matcher, PresetArgMatcher::EnvConfigMember { .. })
         || sources
             .system_prompt_file
             .as_ref()
@@ -178,7 +187,23 @@ fn render(
         PresetArgMatcher::EnvPathVar(key) => Ok(MaterializedSystemPrompt {
             args: Vec::new(),
             env: [(key, path_value)].into_iter().collect(),
+            ..Default::default()
         }),
+        PresetArgMatcher::EnvConfigMember { .. } => {
+            if path.to_str().is_none_or(|path| {
+                path.chars()
+                    .any(|ch| matches!(ch, '{' | '}' | '"' | '\\') || ch.is_control())
+            }) {
+                return Err(PromptComposeErr::InvalidFileReference {
+                    agent,
+                    path: path.to_path_buf(),
+                });
+            }
+            Ok(MaterializedSystemPrompt {
+                hook_path: Some(path.to_path_buf()),
+                ..Default::default()
+            })
+        }
         PresetArgMatcher::TextFlag(flags) => {
             ensure_text_prompt_size(agent, contents)?;
             Ok(with_args(render_flag(flags, contents.to_owned(), agent)?))
@@ -201,6 +226,7 @@ fn with_args(args: Vec<String>) -> MaterializedSystemPrompt {
     MaterializedSystemPrompt {
         args,
         env: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -432,6 +458,99 @@ mod tests {
                 .expect("pi prompt")
                 .args,
             ["--system-prompt".to_owned(), "base\n\nfirst\n".to_owned()]
+        );
+        let opencode =
+            plan_system_prompt(&AgentKind::new_unchecked("opencode"), &sources, &runtime);
+        assert!(
+            opencode.is_ok(),
+            "OpenCode composes fragments: {:?}",
+            opencode.err()
+        );
+        let opencode = opencode.unwrap();
+        assert_eq!(opencode.artifact.as_ref(), Some(artifact));
+        assert_eq!(opencode.composed, claude.composed);
+        assert!(opencode.materialized.args.is_empty());
+        assert!(opencode.materialized.env.is_empty());
+        assert_eq!(opencode.materialized.hook_path.as_ref(), Some(artifact));
+    }
+
+    #[test]
+    fn env_config_prompt_freezes_a_lone_file_in_an_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt = dir.path().join("user}prompt.md");
+        std::fs::write(&prompt, "keep {env:HOME} and {file:literal}\n").unwrap();
+        let sources = SystemPromptSources {
+            system_prompt_file: Some(prompt.clone().into()),
+            ..Default::default()
+        };
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        let plan = plan_system_prompt(&AgentKind::new_unchecked("opencode"), &sources, &runtime);
+        assert!(plan.is_ok(), "OpenCode takes a file base: {:?}", plan.err());
+        let plan = plan.unwrap();
+        let artifact = plan.artifact.as_ref().expect("a lone file is copied");
+        assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
+        assert_ne!(artifact, &prompt);
+        assert_eq!(plan.materialized.hook_path.as_ref(), Some(artifact));
+        assert!(plan.materialized.args.is_empty());
+        assert!(plan.materialized.env.is_empty());
+        apply_system_prompt(&plan).unwrap();
+        std::fs::write(&prompt, "changed").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(artifact).unwrap(),
+            "keep {env:HOME} and {file:literal}\n"
+        );
+    }
+
+    #[test]
+    fn env_config_prompt_refuses_unrepresentable_artifact_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources = SystemPromptSources {
+            system_prompt_file: Some(PromptSource::Text {
+                origin: dir.path().join("base.md"),
+                text: "base".into(),
+            }),
+            ..Default::default()
+        };
+        let roots: Vec<PathBuf> = [
+            "open{brace",
+            "brace}",
+            "quote\"",
+            "back\\slash",
+            "control\n",
+        ]
+        .map(|name| dir.path().join(name))
+        .into();
+        #[cfg(unix)]
+        let roots = {
+            use std::os::unix::ffi::OsStringExt as _;
+            let mut roots = roots;
+            roots.push(
+                dir.path()
+                    .join(std::ffi::OsString::from_vec(b"non-utf8-\xff".to_vec())),
+            );
+            roots
+        };
+        let mut actual = Vec::new();
+        for root in &roots {
+            let runtime =
+                RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), root).unwrap();
+            let artifact = prompt_artifact_path(&runtime, "sys", "base");
+            let result =
+                plan_system_prompt(&AgentKind::new_unchecked("opencode"), &sources, &runtime)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+            let expected = format!(
+                "opencode system prompt artifact `{}` cannot be carried by a {{file:}} reference: \
+                 its path must be UTF-8 and contain no `{{`, `}}`, `\"`, `\\`, or control \
+                 characters; set XDG_RUNTIME_DIR to a directory whose path has none of them",
+                artifact.display(),
+            );
+            actual.push((result, Err(expected)));
+        }
+        assert!(
+            actual.iter().all(|(result, expected)| result == expected),
+            "{actual:?}"
         );
     }
 
