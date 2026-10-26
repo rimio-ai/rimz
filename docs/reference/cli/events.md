@@ -76,7 +76,7 @@ A lifecycle line is one transition of one agent or provider-native subagent:
 | `parent_agent_id` | Session id of the root agent, on a subagent's line; omitted for a root agent. |
 | `signal` | The lifecycle signal the agent reported, tagged by its `signal` field, with that signal's own fields. The signals are listed in [the agent model](../../internals/agents/model.md#the-state-machine). |
 | `prior_status` | Status before this transition; omitted when the follower has no earlier state for the agent, including when the agent has fallen outside the 256 most recently ended agents. At the live edge that state comes from the workspace's current rollup; under `--replay` it builds up from the replayed records, so an agent's first replayed line has none. |
-| `status` | Status after the transition, as the lifecycle records it (for example `running`, `waiting`, `success`). |
+| `status` | Status after the transition, as the lifecycle records it (for example `running`, `waiting`, `success`). A reaper's end over a `running` or `waiting` row reads `idle`, matching the card. |
 | `phase` | Turn phase after the transition: `idle`, `reasoning`, `acting`, or `parked`. |
 | `transition` | How the state machine classified the signal: `{"kind":"normal"}`, `{"kind":"reconciled","from":"…","reason":"…"}`, or `{"kind":"ignored","reason":"…"}`. |
 | `compaction_closed` | `true` when this signal closed an open context compaction. |

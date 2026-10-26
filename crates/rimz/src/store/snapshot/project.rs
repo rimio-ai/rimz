@@ -857,16 +857,11 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.observation.ask_queue.as_ref(),
         state_snapshot,
     );
-    // A reaper's end stamp is a liveness guess, not a failed-turn verdict.
-    // Resting at Idle lets later activity recover a session that raced the reap.
     if ended_at.is_some()
-        && matches!(
+        && crate::store::session_death::reaped_end_rests_at_idle(
             input.event_name,
-            Some("ReapedSuperseded" | "ReapedDead" | "ReapedStale" | "WorktreeRemoved")
+            input.prior.map(|prior| prior.status),
         )
-        && input.prior.is_some_and(|prior| {
-            matches!(prior.status, AgentStatus::Running | AgentStatus::Waiting)
-        })
     {
         state.status = AgentStatus::Idle;
     }

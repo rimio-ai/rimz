@@ -27,7 +27,7 @@ Store folds the agent model, so `store` imports `agents` and nothing under `agen
 - A card name stays owned by its row, ended or live, until that row leaves the fold ([`snapshot/project/identity.rs`](./snapshot/project/identity.rs)). A same-kind registration under an owned name adopts the owner's row instead of registering beside it when the owner is provisional or has no pane.
 - A test that needs distinct same-name cards sets `parent_agent_id` and `launch.launch_depth` on each observation, or adoption folds them into one row.
 - A decision about attention (bucket counts, the pane jump, a projection that overrides a row's status) reads `SidebarRow::attention_status`, not `status()`: a current child's `?` lifts its parent only there.
-- [`follow.rs`](./follow.rs) is the read-only lifecycle event-log follower.
+- [`follow.rs`](./follow.rs) is the read-only lifecycle event-log follower. It folds lifecycle records apart from the rollup, so a rule that changes how a record folds is one function both call: `AgentState::snapshot_transition` for state snapshots and `session_death::reaped_end_rests_at_idle` for reaper ends.
 - The rollup catch-up, rebuild, carryover staging and lifecycle-follow seeds under [`snapshot/`](./snapshot/mod.rs) are this module's own read choreography and stay inside it; the snapshot's crate-wide surface is the view model the renderer decodes, beside the pane classifiers and lazy-pairing helpers the sidebar's producer reads.
 - [`disk/single_flight.rs`](../disk/single_flight.rs) stays the lock-and-poll election alone and imports no store-writer module. The sidebar depends on it, and the read-only grep matches files under `src/sidebar/` rather than this one, so the boundary holds only where a change here holds it.
 
