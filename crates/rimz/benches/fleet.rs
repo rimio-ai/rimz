@@ -1,9 +1,13 @@
 use divan::Bencher;
 use divan::counter::BytesCount;
-use std::alloc::{GlobalAlloc, Layout, System};
+#[cfg(not(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc))))]
+use std::alloc::System as InnerAllocator;
+use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::io::Write as _;
 use tempfile::TempDir;
+#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+use tikv_jemallocator::Jemalloc as InnerAllocator;
 
 #[global_allocator]
 static ALLOC: divan::AllocProfiler<CountingAllocator> =
@@ -22,14 +26,14 @@ fn record_allocation(bytes: usize) {
     });
 }
 
-// Benchmark-only instrumentation: forward each allocation unchanged to System.
+// Benchmark-only instrumentation: forward each allocation unchanged to the inner allocator.
 #[expect(
     unsafe_code,
     reason = "GlobalAlloc requires unsafe delegation; only the fleet bench links this wrapper"
 )]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { System.alloc(layout) };
+        let ptr = unsafe { InnerAllocator.alloc(layout) };
         if !ptr.is_null() {
             record_allocation(layout.size());
         }
@@ -37,7 +41,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { System.alloc_zeroed(layout) };
+        let ptr = unsafe { InnerAllocator.alloc_zeroed(layout) };
         if !ptr.is_null() {
             record_allocation(layout.size());
         }
@@ -45,11 +49,11 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) };
+        unsafe { InnerAllocator.dealloc(ptr, layout) };
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let ptr = unsafe { System.realloc(ptr, layout, size) };
+        let ptr = unsafe { InnerAllocator.realloc(ptr, layout, size) };
         if !ptr.is_null() {
             record_allocation(size);
         }

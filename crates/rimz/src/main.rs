@@ -15,11 +15,27 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
+// Linux glibc only: jemalloc does not build for Apple targets under zig, and
+// musl keeps its own allocator, which was never measured against jemalloc. A
+// heap-profiling build passes `--cfg rimz_system_malloc` to keep glibc malloc.
+#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// SAFETY: jemalloc expects malloc_conf to point to a static NUL-terminated C string.
+// An array reference is a thin pointer; a byte slice would have the wrong ABI.
+#[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
+#[expect(
+    unsafe_code,
+    reason = "jemalloc reads its configuration through this exported symbol"
+)]
+#[unsafe(export_name = "malloc_conf")]
+static ALLOCATOR_CONFIG: &[u8; 17] = b"dirty_decay_ms:0\0";
+
 const DEFAULT_LOG_FILTER: &str = "warn";
 const RENDERED_PANE_LOG_FILTER: &str = "off";
 
 fn main() -> std::process::ExitCode {
-    cap_malloc_arenas();
     #[cfg(target_os = "linux")]
     if let Some(code) = rimz::sandbox::run_bind_helper() {
         return code;
@@ -55,37 +71,6 @@ fn main() -> std::process::ExitCode {
             cli::report(&error);
             std::process::ExitCode::from(error_exit_code(&error))
         }
-    }
-}
-
-fn cap_malloc_arenas() {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    {
-        let arenas = malloc_arena_cap(std::env::args_os().skip(1));
-        #[expect(unsafe_code, reason = "cap glibc arenas before starting any threads")]
-        // SAFETY: mallopt takes two integer arguments; no threads exist yet.
-        unsafe {
-            libc::mallopt(libc::M_ARENA_MAX, arenas);
-        }
-    }
-}
-
-/// Two arenas bound per-thread resident memory in short-lived commands and
-/// helpers. The sidebar host is long-lived and runs over a hundred threads,
-/// where two arenas serialize malloc on their locks, so it gets more. The
-/// host is recognized by the exact argv prefix that `host_args` in
-/// `sidebar_pane/supervise/host_link.rs` emits; anything else, including a
-/// global flag before `sidebar`, keeps two.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn malloc_arena_cap(mut args: impl Iterator<Item = std::ffi::OsString>) -> libc::c_int {
-    const DEFAULT_ARENAS: libc::c_int = 2;
-    const SIDEBAR_HOST_ARENAS: libc::c_int = 16;
-    let is_sidebar_host = args.next().is_some_and(|arg| arg == "sidebar")
-        && args.next().is_some_and(|arg| arg == "host");
-    if is_sidebar_host {
-        SIDEBAR_HOST_ARENAS
-    } else {
-        DEFAULT_ARENAS
     }
 }
 
@@ -170,41 +155,5 @@ mod tests {
         assert_eq!(filter(&["stats", "--json"]), "warn");
         assert_eq!(filter(&["sidebar", "--refresh-ms", "500"]), "warn");
         assert_eq!(filter(&["sidebar", "snapshot", "serve"]), "warn");
-    }
-
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    #[test]
-    fn only_the_sidebar_host_argv_lifts_the_arena_cap() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
-
-        let arenas = |args: &[&str]| malloc_arena_cap(args.iter().map(OsString::from));
-        // The exact argv `host_args` emits.
-        let host = [
-            "sidebar",
-            "host",
-            "--mux",
-            "zellij",
-            "--workspace-id",
-            "ws-1",
-            "--session-name",
-            "s",
-        ];
-        assert_eq!(arenas(&host), 16);
-        for args in [
-            &["sidebar", "serve"][..],
-            &["sidebar", "snapshot"],
-            &["sidebar"],
-            &[],
-            &["hook", "claude", "stop"],
-            &["--zellij", "sidebar", "host"],
-            &["host", "sidebar"],
-        ] {
-            assert_eq!(arenas(args), 2, "{args:?}");
-        }
-        let non_utf8 = [OsString::from("sidebar"), OsString::from_vec(vec![0xff])];
-        assert_eq!(malloc_arena_cap(non_utf8.into_iter()), 2);
-        let non_utf8_first = [OsString::from_vec(vec![0xff]), OsString::from("host")];
-        assert_eq!(malloc_arena_cap(non_utf8_first.into_iter()), 2);
     }
 }
