@@ -1,6 +1,6 @@
 # Model upgrades
 
-What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's. Pi's fast-capable list needs an explicit entry. Pricing follows on its own, with two narrow exceptions.
+What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's. Pi's per-route fast lists need an explicit entry. Pricing follows on its own, with two narrow exceptions.
 
 ## Claude: fable, opus, sonnet, haiku
 
@@ -23,7 +23,7 @@ Definitions and tier cells retain the requested alias. With a durable launch rec
 
 ## Pi: fast-capable models
 
-Add an exact id to `FAST_MODELS` in [`agents/adapters/pi/extension.ts`](../../crates/rimz/src/agents/adapters/pi/extension.ts) only with evidence: a Codex catalog `service_tiers` entry whose `id` is `priority`, or a published OpenAI Fast price. The list admits only the two OpenAI Responses routes; a catalog entry does not itself verify acceptance on the OpenAI API, as the `gpt-6-sol` comment records. Keep the Node test's admitted-id cases in `crates/rimz/tests/integration/examples/pi_extension.rs::run_extension_harness` in sync, and run `cargo xtask test -E 'binary(integration) & test(/^examples::pi_extension::/)'`. Existing installations need the refreshed extension; `rimz start` offers it when the managed copy differs.
+`FAST_ROUTES` in [`agents/adapters/pi/extension.ts`](../../crates/rimz/src/agents/adapters/pi/extension.ts) keeps one exact-id list per OpenAI Responses route, and an id joins a route's list only with that route's evidence. The `openai-codex` list takes an id whose Codex catalog `service_tiers` entry has `id` `priority`. The `openai` list takes an id with a published OpenAI Fast price. One kind of evidence does not admit an id to the other route: Codex advertises `gpt-6-sol` with priority, but OpenAI publishes no Fast price for it, so it is on `openai-codex` alone. Keep the Node test's per-route id lists in `crates/rimz/tests/integration/examples/pi_extension.rs::run_extension_harness` in sync, and run `cargo xtask test -E 'binary(integration) & test(/^examples::pi_extension::/)'`. Existing installations need the refreshed extension; `rimz start` offers it when the managed copy differs.
 
 ## Model tier bindings
 

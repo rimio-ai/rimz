@@ -31,29 +31,46 @@ const versionAtLeast = (version, floor) => {
 };
 const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
 const hasBeforeProviderRequest = versionAtLeast(PI_VERSION, [0, 57, 0]);
-// Exact model ids a fast launch requests priority serving for; the evidence
-// an addition needs is in docs/contributing/model-upgrades.md. Codex
-// advertises priority for gpt-6-sol, but its acceptance on OpenAI's API
-// remains unverified: no OpenAI Fast price is published for it.
-const FAST_MODELS = new Set([
-  "gpt-6.1-sol",
-  "gpt-6-astra",
-  "gpt-6-sol",
-  "gpt-6-luna",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.4",
-  "gpt-5.5",
-  "gpt-5.3-codex",
+// The routes a fast launch requests priority serving on, by provider, each
+// with the exact model ids its own evidence covers; the evidence an addition
+// needs is in docs/contributing/model-upgrades.md. openai-codex lists the
+// Codex catalog's priority ids; openai lists the ids with an OpenAI Fast
+// price, so gpt-6-sol, which Codex advertises but OpenAI publishes no Fast
+// price for, is on openai-codex alone.
+const FAST_ROUTES = new Map([
+  ["openai-codex", {
+    api: "openai-codex-responses",
+    models: new Set([
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]),
+  }],
+  ["openai", {
+    api: "openai-responses",
+    models: new Set([
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+      "gpt-5.5",
+      "gpt-5.3-codex",
+    ]),
+  }],
 ]);
 const requestsFast = (ctx) => {
   const model = ctx?.model;
+  const route = FAST_ROUTES.get(model?.provider);
   return (
-    hasBeforeProviderRequest && process.env.RIMZ_LAUNCH_FAST === "1" && FAST_MODELS.has(model?.id) && (
-      (model.provider === "openai" && model.api === "openai-responses") ||
-      (model.provider === "openai-codex" && model.api === "openai-codex-responses")
-    )
+    hasBeforeProviderRequest && process.env.RIMZ_LAUNCH_FAST === "1" &&
+    route !== undefined && route.api === model.api && route.models.has(model.id)
   );
 };
 const PARENT_SESSION_ENV = "RIMZ_PI_PARENT_SESSION";
