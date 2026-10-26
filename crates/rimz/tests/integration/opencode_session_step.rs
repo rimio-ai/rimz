@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+#[path = "opencode_session_wrapper.rs"]
+mod wrapper;
+
 const CATALOG: &str =
     r#"{"location":{},"data":[{"providerID":"opencode-go","id":"deepseek-v4.1-flash"}]}"#;
 

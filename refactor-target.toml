@@ -3176,7 +3176,8 @@ allowed-dependencies = [
 # `CompiledAgentProcess::login_shell_argv` rewraps version-gated args after launch resolution (+1).
 # `ExecRequest::launch_skills` shares child selection across host and scoped views (+1).
 # ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
-surface-budget = 49
+# CompiledAgentProcess::rebuild_argv preserves session steps across every argv rebuild (+1).
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"

@@ -2,6 +2,9 @@ use super::*;
 use crate::harness::launch::{ExecAction, ExecIdentity, ProviderAccountState};
 use crate::ids::AgentKind;
 
+#[path = "session_step_tests.rs"]
+mod session_step;
+
 fn compile_prompt_request(
     project: &Path,
     request: &ExecRequest,

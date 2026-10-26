@@ -838,7 +838,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         if !args.is_empty() {
             request.action.extra_args_mut().extend(args.iter().cloned());
             process.provider_argv.extend(args);
-            process.argv = process.login_shell_argv(&process.provider_argv);
+            process.rebuild_argv();
         }
     }
     let process = &*process;
