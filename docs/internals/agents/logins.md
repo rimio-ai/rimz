@@ -8,7 +8,7 @@ A login never changes a process-wide variable. It is an override on an ambient e
 
 | Term | Means | Code |
 | --- | --- | --- |
-| login key | `<kind>@<name>`, as in `claude@work` or `codex@default`. Every probe, claim, cache entry, and stamp on these pages is keyed by it | `LoginKey` |
+| login key | `<kind>@<name>`, as in `claude@work` or `codex@default`. Every account probe, account record, and stamp on these pages is keyed by it. A usage reading's claim, lease, and cache entry are keyed by the login plus the credential's scope ([the shared caches](./providers.md#the-shared-caches)) | `LoginKey` |
 | `default` | the provider's own home, as the provider resolves it. It carries no path | `ProviderLogin::default_for` |
 | named account | a declared `[accounts.<kind>.<name>]` home, selected through the kind's one home variable | `ProviderLogin::named` |
 | history mode | `shared` (the default): the account keeps its credentials and links everything else to the provider's own home. `standalone`: it links settings alone and keeps its own sessions | `crates/rimz/src/config/accounts.rs::AccountHistory` |

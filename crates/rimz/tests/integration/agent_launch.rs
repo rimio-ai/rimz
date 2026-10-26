@@ -2077,7 +2077,7 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
         env.runtime_paths().ensure_dirs().unwrap();
         env.publish_rate_limits(&rimz::agents::account::RateLimitsCache {
             entries: [(
-                rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
                 rimz::agents::account::RateLimitCacheEntry {
                     limits: rimz::agents::AgentRateLimits {
                         windows: vec![rimz::agents::RateLimitWindow {
@@ -8143,7 +8143,8 @@ fn agent_launched_tier_routing_uses_exhausted_room_default() {
         &runtime.shared_rate_limits_path(),
         &rimz::agents::account::RateLimitsCache {
             entries: [(
-                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude"))
+                    .into(),
                 rimz::agents::account::RateLimitCacheEntry {
                     limits: rimz::agents::AgentRateLimits {
                         windows: vec![rimz::agents::RateLimitWindow {

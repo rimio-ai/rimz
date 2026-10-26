@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agents::AccountUsageIdentity;
+use crate::agents::account::AccountUsageKey;
 use crate::agents::context::{AgentRateLimits, ProviderAccountScope};
 use crate::ids::LoginKey;
 
@@ -24,11 +25,60 @@ use crate::ids::LoginKey;
 /// balance as current.
 pub(crate) const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Shared provider extra-credits cache, keyed by provider login.
+/// Shared provider extra-credits cache, keyed by login and account scope.
+/// Unversioned: grows only by additive, defaulted fields because older builds rewrite it whole.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct CreditsCache {
     pub refreshed_at_ms: u64,
     pub logins: BTreeMap<LoginKey, ProviderCreditsEntry>,
+    #[serde(
+        default,
+        deserialize_with = "AccountUsageKey::deserialize_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub scoped: BTreeMap<AccountUsageKey, ProviderCreditsEntry>,
+}
+
+impl CreditsCache {
+    /// A kind-wide key reads `logins` whatever the entry's scope, so a caller
+    /// can find a sub-provider entry an older build wrote there; a sub-provider
+    /// key prefers `scoped`, then a `logins` entry recorded under that scope.
+    pub(crate) fn get(&self, key: &AccountUsageKey) -> Option<&ProviderCreditsEntry> {
+        if key.scope.is_kind_wide() {
+            return self.logins.get(&key.login);
+        }
+        self.scoped.get(key).or_else(|| {
+            self.logins
+                .get(&key.login)
+                .filter(|entry| entry.scope == key.scope)
+        })
+    }
+
+    /// The entry a write goes to. Sub-provider scopes live only in `scoped`; a
+    /// sub-provider entry an older build left in `logins` moves there first when
+    /// the write is kind-wide or to that entry's own scope.
+    pub(crate) fn entry_mut(&mut self, key: &AccountUsageKey) -> &mut ProviderCreditsEntry {
+        if self.logins.get(&key.login).is_some_and(|entry| {
+            !entry.scope.is_kind_wide() && (key.scope.is_kind_wide() || entry.scope == key.scope)
+        }) && let Some(legacy) = self.logins.remove(&key.login)
+        {
+            self.scoped
+                .entry(AccountUsageKey::new(
+                    key.login.clone(),
+                    legacy.scope.clone(),
+                ))
+                .or_insert(legacy);
+        }
+        if key.scope.is_kind_wide() {
+            return self.logins.entry(key.login.clone()).or_default();
+        }
+        self.scoped
+            .entry(key.clone())
+            .or_insert_with(|| ProviderCreditsEntry {
+                scope: key.scope.clone(),
+                ..Default::default()
+            })
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]

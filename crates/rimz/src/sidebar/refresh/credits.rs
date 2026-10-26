@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::RuntimePaths;
 use crate::agents::RoomLoginSet;
+use crate::agents::account::AccountUsageKey;
 #[cfg(test)]
 use crate::agents::credits::CREDITS_DISPLAY_MAX_AGE;
 pub(super) use crate::agents::credits::{
@@ -226,11 +227,8 @@ pub(super) fn merge_provider_realtime_usage(
         return;
     };
     let mut cache = read_credits_cache(&path);
-    if let Some(prior) = cache
-        .logins
-        .get(key)
-        .filter(|prior| prior.scope == entry.scope)
-    {
+    let key = AccountUsageKey::new(key.clone(), entry.scope.clone());
+    if let Some(prior) = cache.get(&key).filter(|prior| prior.scope == entry.scope) {
         entry.direct_query_claim = prior.direct_query_claim.clone();
         if prior.account_key == entry.account_key {
             entry.entitlement = prior.entitlement;
@@ -245,7 +243,7 @@ pub(super) fn merge_provider_realtime_usage(
         }
     }
     cache.refreshed_at_ms = unix_now_ms();
-    cache.logins.insert(key.to_owned(), entry);
+    *cache.entry_mut(&key) = entry;
     write_credits_cache(&path, &cache);
 }
 
@@ -325,17 +323,37 @@ fn claim_provider_account_usage_locked(
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
-    let entry = cache.logins.entry(key.to_owned()).or_default();
+    let mut usage_key = AccountUsageKey::new(
+        key.clone(),
+        cached_hint
+            .as_ref()
+            .map(|hint| hint.scope.clone())
+            .unwrap_or_default(),
+    );
+    let entry = cache
+        .get(&usage_key)
+        .filter(|entry| {
+            cached_hint
+                .as_ref()
+                .is_none_or(|hint| entry.scope == hint.scope)
+        })
+        .cloned()
+        .unwrap_or_else(|| ProviderCreditsEntry {
+            scope: usage_key.scope.clone(),
+            ..Default::default()
+        });
     let inside_floor = entry.oauth_read_at_ms != 0
         && now_ms.saturating_sub(entry.oauth_read_at_ms) < floor.as_millis() as u64;
     if entry.direct_query_claim.as_ref().is_some_and(|claim| {
         now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
     }) || inside_floor
-        || oauth_read_is_fresh(entry, now_ms, cached_hint.as_ref())
+        || oauth_read_is_fresh(&entry, now_ms, cached_hint.as_ref())
     {
         return None;
     }
-    let identity = cache_derived_claim_identity(entry, cached_hint.clone());
+    let identity = cache_derived_claim_identity(&entry, cached_hint.clone());
+    usage_key.scope = identity.scope.clone();
+    let entry = cache.entry_mut(&usage_key);
     entry.direct_query_claim = Some(DirectQueryClaim {
         nonce,
         claimed_at_ms: now_ms,
@@ -373,11 +391,37 @@ pub(super) fn account_usage_claim_matches(
     key: &LoginKey,
     nonce: Uuid,
 ) -> bool {
-    read_credits_cache(&runtime.shared_credits_path())
-        .logins
-        .get(key)
-        .and_then(|entry| entry.direct_query_claim.as_ref())
-        .is_some_and(|claim| claim.nonce == nonce)
+    claimed_usage_key(
+        &read_credits_cache(&runtime.shared_credits_path()),
+        key,
+        nonce,
+    )
+    .is_some()
+}
+
+fn claimed_usage_key(
+    cache: &CreditsCache,
+    login: &LoginKey,
+    nonce: Uuid,
+) -> Option<AccountUsageKey> {
+    let matches = |entry: &ProviderCreditsEntry| {
+        entry
+            .direct_query_claim
+            .as_ref()
+            .is_some_and(|claim| claim.nonce == nonce)
+    };
+    cache
+        .scoped
+        .iter()
+        .find(|(key, entry)| key.login == *login && matches(entry))
+        .map(|(key, _)| key.clone())
+        .or_else(|| {
+            cache
+                .logins
+                .get(login)
+                .filter(|entry| matches(entry))
+                .map(|entry| AccountUsageKey::new(login.clone(), entry.scope.clone()))
+        })
 }
 
 /// Renew the matching live direct-query lease immediately before direct
@@ -405,10 +449,13 @@ fn renew_provider_account_usage_claim_at(
         return false;
     };
     let mut cache = read_credits_cache(&path);
+    let Some(key) = claimed_usage_key(&cache, key, nonce) else {
+        return false;
+    };
     let Some(claim) = cache
-        .logins
-        .get_mut(key)
-        .and_then(|entry| entry.direct_query_claim.as_mut())
+        .entry_mut(&key)
+        .direct_query_claim
+        .as_mut()
         .filter(|claim| claim.nonce == nonce)
     else {
         return false;
@@ -433,9 +480,10 @@ pub(super) fn cancel_provider_account_usage_claim(
         return false;
     };
     let mut cache = read_credits_cache(&path);
-    let Some(entry) = cache.logins.get_mut(key) else {
+    let Some(key) = claimed_usage_key(&cache, key, nonce) else {
         return false;
     };
+    let entry = cache.entry_mut(&key);
     if entry.direct_query_claim.as_ref().map(|claim| claim.nonce) != Some(nonce) {
         return false;
     }
@@ -457,10 +505,46 @@ pub(super) fn complete_provider_account_usage(
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
-    let prior = cache.logins.get(key).cloned()?;
-    let (entry, completion) = prior.complete_account_usage(nonce, probe, now_ms)?;
+    let key = claimed_usage_key(&cache, key, nonce)?;
+    let prior = cache.get(&key).cloned()?;
+    let (mut entry, mut completion) =
+        prior
+            .clone()
+            .complete_account_usage(nonce, probe.clone(), now_ms)?;
     cache.refreshed_at_ms = now_ms;
-    cache.logins.insert(key.to_owned(), entry);
+    let reading_key = AccountUsageKey::new(key.login.clone(), entry.scope.clone());
+    if reading_key != key {
+        // A scope switch during the read publishes under the returned identity, but
+        // the claimed scope still needs its attempt floor while its hint lags.
+        let mut reading_prior =
+            cache
+                .get(&reading_key)
+                .cloned()
+                .unwrap_or_else(|| ProviderCreditsEntry {
+                    scope: reading_key.scope.clone(),
+                    ..Default::default()
+                });
+        let reading_claim = reading_prior.direct_query_claim.take();
+        reading_prior.direct_query_claim =
+            prior
+                .direct_query_claim
+                .clone()
+                .map(|claim| DirectQueryClaim {
+                    requested_scope: reading_key.scope.clone(),
+                    credentials_stamp: reading_prior.credentials_stamp,
+                    preflight_account_key: reading_prior.account_key.clone(),
+                    ..claim
+                });
+        (entry, completion) = reading_prior.complete_account_usage(nonce, probe, now_ms)?;
+        entry.direct_query_claim = reading_claim;
+        let mut attempted = prior;
+        attempted.oauth_read_at_ms = entry.oauth_read_at_ms;
+        attempted.oauth_read_hint = entry.oauth_read_hint.clone();
+        attempted.auth_settled = entry.auth_settled;
+        attempted.direct_query_claim = None;
+        *cache.entry_mut(&key) = attempted;
+    }
+    *cache.entry_mut(&reading_key) = entry;
     write_credits_cache(&path, &cache);
     Some(completion)
 }
@@ -476,7 +560,7 @@ fn account_usage_credit_fields(
     (plan, extra_credits, reset_credits)
 }
 
-pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &LoginKey) {
+pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &AccountUsageKey) {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
         crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
@@ -486,10 +570,10 @@ pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &LoginKey) {
         return;
     };
     let mut cache = read_credits_cache(&path);
-    let Some(entry) = cache.logins.get_mut(key) else {
+    if cache.get(key).is_none() {
         return;
-    };
-    entry.invalidate_oauth_read();
+    }
+    cache.entry_mut(key).invalidate_oauth_read();
     cache.refreshed_at_ms = unix_now_ms();
     write_credits_cache(&path, &cache);
 }
@@ -542,7 +626,9 @@ fn idle_reset_credits_with(
         .into_iter()
         .filter_map(|login| {
             let key = login.key();
-            let entry = cache.logins.get(&key)?;
+            let entry = cache
+                .get(&key.clone().into())
+                .filter(|entry| entry.scope.is_kind_wide())?;
             let credits = entry.reset_credits.clone()?;
             entry_is_displayable(entry, now_ms).then_some((key, credits))
         })
@@ -574,7 +660,7 @@ fn apply_credits_cache_with(
         let entry = in_use
             .contains(&panel.login_key())
             .then(|| panel.login_key())
-            .and_then(|key| cache.logins.get(&key))
+            .and_then(|key| cache.get(&AccountUsageKey::new(key, panel.account_scope.clone())))
             .filter(|entry| panel.metered && entry.scope == panel.account_scope);
         panel.entitlement = entry.map_or(Entitlement::Ok, |entry| entry.entitlement);
         if matches!(panel.entitlement, Entitlement::Lapsed { .. }) {

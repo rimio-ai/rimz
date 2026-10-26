@@ -44,7 +44,7 @@ impl ContextObservation {
 /// Most agents authenticate one provider per agent kind. Multi-provider agents
 /// use `SubProvider` so a provider or region switch cannot reuse another
 /// account's usage reading.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProviderAccountScope {
     #[default]

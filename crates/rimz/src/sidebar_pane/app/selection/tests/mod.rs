@@ -293,6 +293,7 @@ fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
     crate::store::snapshot::SidebarProviderPanel {
         account: Default::default(),
         kind: kind.to_owned(),
+        sub_provider: None,
         account_scope: Default::default(),
         entitlement: Default::default(),
         account_key: None,

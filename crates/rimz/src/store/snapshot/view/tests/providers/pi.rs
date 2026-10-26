@@ -66,6 +66,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         .find(|panel| panel.kind == "pi")
         .expect("pi panel present");
     assert!(pi_panel.metered);
+    assert_eq!(pi_panel.sub_provider.as_deref(), Some("openai"));
     assert_eq!(pi_panel.version.as_deref(), Some("0.78.0"));
     assert_eq!(pi_panel.windows, vec![pi_reading]);
 

@@ -919,7 +919,8 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         let cache = rimz::agents::account::RateLimitsCache {
             entries: std::collections::BTreeMap::from([(
-                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex"))
+                    .into(),
                 rimz::agents::account::RateLimitCacheEntry {
                     limits: rimz::agents::AgentRateLimits {
                         windows: vec![rimz::agents::RateLimitWindow {

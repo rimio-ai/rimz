@@ -8,7 +8,7 @@ use crate::RuntimePaths;
 #[cfg(test)]
 use crate::agents::ProviderAccountScope;
 use crate::agents::account::{
-    PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
+    AccountUsageKey, PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
 };
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow, RoomLoginSet};
@@ -158,7 +158,7 @@ fn reset_spotted(
     })
 }
 
-/// Seed one login's account-scoped windows into the cache out-of-band, so a
+/// Seed one credential's windows into the cache out-of-band, so a
 /// logged-in-but-idle provider's budget bars paint from the first frame instead
 /// of staying blank until a live session reports. Read-modify-write over the
 /// existing cache; other logins are preserved untouched.
@@ -187,7 +187,8 @@ pub(super) fn merge_account_rate_limits(
     // supersedes older best-effort truth outright, even within the same epoch.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
-    let prior_entry = cache.entries.get(key);
+    let key = AccountUsageKey::new(key.clone(), identity.scope.clone());
+    let prior_entry = cache.entries.get(&key);
     let reset_spotted_at_ms = if reset_spotted(prior_entry, &windows, observed_at) {
         Some(cache.refreshed_at_ms)
     } else {
@@ -206,7 +207,7 @@ pub(super) fn merge_account_rate_limits(
     // Authoritative reads are complete snapshots: live-only keys prune omitted windows.
     let (truth, pending) = index.fuse(index.live.keys().cloned(), observed_at, true);
     cache.entries.insert(
-        key.clone(),
+        key,
         RateLimitCacheEntry {
             reset_spotted_at_ms,
             scope: identity.scope,
@@ -222,10 +223,10 @@ pub(super) fn merge_account_rate_limits(
     write_rate_limits_cache(&path, &cache);
 }
 
-/// Drop one login's account-scoped windows after the local OAuth account key
+/// Drop one credential's windows after the local OAuth account key
 /// changes. The detached writer waits for normal producer contention; a real
-/// lock acquisition failure or absent login is a no-op.
-pub(super) fn drop_login_rate_limits(runtime: &RuntimePaths, key: &LoginKey) {
+/// lock acquisition failure or absent entry is a no-op.
+pub(super) fn drop_account_rate_limits(runtime: &RuntimePaths, key: &AccountUsageKey) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) = acquire_rate_limits_cache_lock(
         &runtime.shared_rate_limits_lock(),
@@ -306,8 +307,7 @@ pub(in crate::sidebar) fn apply_cached_rate_limits(
 }
 
 /// Fuse live account windows into the shared cache and project producer panels.
-/// Only this room's login entries are rebuilt from current panels, so a
-/// logged-out kind drops out and other accounts' entries survive.
+/// An in-use login without a panel drops out; other logins and scopes survive.
 pub(super) fn refresh_rate_limits(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -404,7 +404,7 @@ fn project_rate_limits(
     logins: &RoomLoginSet,
     producer: bool,
     trace: Option<&Path>,
-) -> (Option<RateLimitsCache>, Vec<LoginKey>) {
+) -> (Option<RateLimitsCache>, Vec<AccountUsageKey>) {
     // The snapshot's single projection clock, so the idle-window reset
     // projection agrees with the dashboard windows resolved on the same frame.
     let now = snapshot.now;
@@ -413,7 +413,13 @@ fn project_rate_limits(
         ..cached.clone()
     };
     let in_use = logins.keys_in_use();
-    next.entries.retain(|key, _| !in_use.contains(key));
+    next.entries.retain(|key, _| {
+        !in_use.contains(&key.login)
+            || snapshot
+                .providers
+                .iter()
+                .any(|panel| panel.login_key() == key.login)
+    });
     let mut refresh_logins = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
@@ -422,14 +428,18 @@ fn project_rate_limits(
             .into_iter()
             .map(|login| login.key())
             .find(|key| *key == panel.login_key());
+        let usage_key = login_key.map(|key| AccountUsageKey::new(key, panel.account_scope.clone()));
         if !panel.metered {
             panel.windows.clear();
+            if let Some(key) = &usage_key {
+                next.entries.remove(key);
+            }
             continue;
         }
         // Complete authoritative omissions against matching persisted truth
         // before indexing the live reading, then fuse each stable duration or
         // named-quota identity independently.
-        let cached_entry = login_key.as_ref().and_then(|key| cached.entries.get(key));
+        let cached_entry = usage_key.as_ref().and_then(|key| cached.entries.get(key));
         let prior_entry = cached_entry.filter(|entry| entry.scope == panel.account_scope);
         let foreign_account = matches!(
             (
@@ -479,7 +489,7 @@ fn project_rate_limits(
         crate::store::snapshot::sort_windows(&mut display);
         panel.windows = display;
 
-        let Some(login_key) = login_key.filter(|_| producer) else {
+        let Some(usage_key) = usage_key.filter(|_| producer) else {
             continue;
         };
         // Verify a newly suspected refill without forcing another read
@@ -488,7 +498,7 @@ fn project_rate_limits(
             .iter()
             .any(|refill| !index.pending.contains_key(&refill.key()))
         {
-            refresh_logins.insert(login_key.clone());
+            refresh_logins.insert(usage_key.clone());
         }
         if !cache_unknown
             && truth.iter().any(|(key, window)| {
@@ -498,7 +508,7 @@ fn project_rate_limits(
                     .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
             })
         {
-            refresh_logins.insert(login_key.clone());
+            refresh_logins.insert(usage_key.clone());
         }
 
         // A dashboard with no usable value is a refresh trigger, not only a paint
@@ -518,7 +528,7 @@ fn project_rate_limits(
             _ if !display_unknown => None,
             Some(since) => Some(since),
             None => {
-                refresh_logins.insert(login_key.clone());
+                refresh_logins.insert(usage_key.clone());
                 Some(unix_now_ms())
             }
         };
@@ -545,7 +555,7 @@ fn project_rate_limits(
             pending,
             unknown_since_ms,
         };
-        next.entries.insert(login_key, entry);
+        next.entries.insert(usage_key, entry);
     }
 
     (

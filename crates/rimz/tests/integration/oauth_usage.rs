@@ -10,6 +10,7 @@ use crate::common::{CommandTimeoutExt, Env, path_with_front};
 
 fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        sub_provider: None,
         workspace_id: env.workspace_id.clone(),
         login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
         claim_id: claim_id.parse().expect("valid usage claim id"),
@@ -79,7 +80,7 @@ fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
         String::from_utf8_lossy(&output.stderr)
     );
     let credits = read_json(credits_path);
-    let entry = &credits["logins"]["opencode@default"];
+    let entry = &credits["scoped"]["opencode@default/opencode/oauth"];
     assert_eq!(
         entry["ok"], true,
         "Go status must publish a successful reading"
@@ -87,7 +88,7 @@ fn opencode_go_refresh_publishes_console_scoped_amounts_and_plan() {
     assert_eq!(entry["plan"], "go");
     assert_eq!(entry["scope"], scope);
     let limits = read_json(env.runtime_paths().shared_rate_limits_path());
-    let limit_entry = &limits["entries"]["opencode@default"];
+    let limit_entry = &limits["entries"]["opencode@default/opencode/oauth"];
     assert_eq!(limit_entry["scope"], scope);
     assert_eq!(limit_entry["account_key"], entry["account_key"]);
     let windows = limit_entry["limits"]["windows"].as_array().unwrap();
@@ -2164,7 +2165,7 @@ fn new_pi_session_on_another_provider_moves_the_account_record_and_panel_windows
     env.publish_rate_limits(&RateLimitsCache {
         refreshed_at_ms: rimz::utils::time::unix_now_ms(),
         entries: std::collections::BTreeMap::from([(
-            pi_key.clone(),
+            rimz::agents::account::AccountUsageKey::new(pi_key.clone(), codex_scope.clone()),
             RateLimitCacheEntry {
                 scope: codex_scope.clone(),
                 limits: AgentRateLimits {

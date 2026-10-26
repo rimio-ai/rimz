@@ -352,9 +352,16 @@ pub(in crate::sidebar) fn cached_accounts_for_snapshot(
 pub(super) fn cached_account_usage_hint(
     runtime: &RuntimePaths,
     key: &LoginKey,
+    sub_provider: Option<&str>,
 ) -> Option<crate::agents::AccountUsageIdentity> {
     let cache = read_accounts_cache(&runtime.shared_accounts_path());
     let account = cache.logins.get(key)?.account.as_ref()?;
+    let account = match sub_provider {
+        Some(provider) if account.sub_provider.as_deref() != Some(provider) => {
+            account.credentials.get(provider)?
+        }
+        _ => account,
+    };
     Some(crate::agents::AccountUsageIdentity {
         scope: account.scope.clone(),
         credentials_stamp: account.credentials_updated_at_ms,
@@ -474,7 +481,7 @@ fn probe_accounts(
         let trigger_ms = session_start_ms.max(
             rate_limits
                 .entries
-                .get(&key)
+                .get(&key.clone().into())
                 .and_then(|entry| entry.reset_spotted_at_ms)
                 .unwrap_or(0),
         );

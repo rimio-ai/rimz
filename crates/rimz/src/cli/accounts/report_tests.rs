@@ -221,6 +221,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
     SidebarProviderPanel {
         account: Default::default(),
         kind: kind.to_owned(),
+        sub_provider: None,
         account_scope: ProviderAccountScope::KindWide,
         entitlement: Default::default(),
         account_key: None,

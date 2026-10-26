@@ -287,7 +287,7 @@ impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache.
     pub fn read(runtime: &RuntimePaths, key: &LoginKey) -> Option<Self> {
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = cache.entries.get(key)?;
+        let entry = cache.entries.get(&key.clone().into())?;
         entry.scope.is_kind_wide().then(|| Self {
             windows: entry.limits.windows.clone(),
             pacing_max_mins: None,
@@ -303,7 +303,9 @@ impl ProviderCapacity {
         binding: &ProviderAccountBinding,
     ) -> Option<Self> {
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = cache.entries.get(key)?;
+        let entry = cache
+            .entries
+            .get(&AccountUsageKey::new(key.clone(), binding.scope.clone()))?;
         entry_matches_binding(entry, binding).then(|| Self {
             windows: entry
                 .bound_limits
@@ -324,10 +326,14 @@ impl ProviderCapacity {
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .into_iter()
-            .filter(|(key, entry)| entry.scope.is_kind_wide() && in_use.contains(key))
+            .filter(|(key, entry)| {
+                key.scope.is_kind_wide()
+                    && entry.scope.is_kind_wide()
+                    && in_use.contains(&key.login)
+            })
             .map(|(key, entry)| {
                 (
-                    key,
+                    key.login,
                     Self {
                         windows: entry.limits.windows,
                         pacing_max_mins: None,
@@ -602,14 +608,102 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 }
 
 /// Producer-published per-provider rate-limit windows.
-const RATE_LIMITS_CACHE_VERSION: u32 = 6;
+const RATE_LIMITS_CACHE_VERSION: u32 = 7;
+
+/// One credential's usage under a login; kind-wide keys keep the login's text.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct AccountUsageKey {
+    pub login: LoginKey,
+    pub scope: ProviderAccountScope,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid usage key `{0}`; expected `<kind>@<name>[/<provider>/<variant>]`")]
+pub struct InvalidAccountUsageKey(String);
+
+impl AccountUsageKey {
+    pub fn new(login: LoginKey, scope: ProviderAccountScope) -> Self {
+        Self { login, scope }
+    }
+
+    pub(super) fn deserialize_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<Self, V>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        V: Deserialize<'de>,
+    {
+        let entries = BTreeMap::<String, V>::deserialize(deserializer)?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|(key, value)| Some((key.parse().ok()?, value)))
+            .collect())
+    }
+}
+
+impl From<LoginKey> for AccountUsageKey {
+    fn from(login: LoginKey) -> Self {
+        Self::new(login, ProviderAccountScope::KindWide)
+    }
+}
+
+impl std::str::FromStr for AccountUsageKey {
+    type Err = InvalidAccountUsageKey;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let mut parts = value.split('/');
+        let invalid = || InvalidAccountUsageKey(value.to_owned());
+        let login = parts
+            .next()
+            .ok_or_else(invalid)?
+            .parse()
+            .map_err(|_| invalid())?;
+        let scope = match (parts.next(), parts.next(), parts.next()) {
+            (None, None, None) => ProviderAccountScope::KindWide,
+            (Some(provider), Some(variant), None)
+                if !provider.is_empty() && !variant.is_empty() =>
+            {
+                ProviderAccountScope::sub_provider(provider, variant)
+            }
+            _ => return Err(invalid()),
+        };
+        Ok(Self::new(login, scope))
+    }
+}
+
+impl TryFrom<String> for AccountUsageKey {
+    type Error = InvalidAccountUsageKey;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<AccountUsageKey> for String {
+    fn from(value: AccountUsageKey) -> Self {
+        value.to_string()
+    }
+}
+
+impl std::fmt::Display for AccountUsageKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.login)?;
+        if let ProviderAccountScope::SubProvider { provider, variant } = &self.scope {
+            write!(f, "/{provider}/{variant}")?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
     pub version: u32,
     pub refreshed_at_ms: u64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub entries: BTreeMap<LoginKey, RateLimitCacheEntry>,
+    #[serde(
+        default,
+        deserialize_with = "AccountUsageKey::deserialize_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub entries: BTreeMap<AccountUsageKey, RateLimitCacheEntry>,
 }
 
 impl Default for RateLimitsCache {
@@ -640,7 +734,7 @@ pub struct RateLimitCacheEntry {
     pub bound_limits: Option<AgentRateLimits>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<PendingRefill>,
-    /// When this kind's display first went unknown, marking the open episode so
+    /// When this credential's display first went unknown, marking the open episode so
     /// the authoritative refresh it forces runs once rather than every frame.
     /// Cleared the moment a usable window paints again, re-arming the next
     /// episode. Absent in caches written before the marker existed.
@@ -698,21 +792,32 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
 pub fn cached_usage_read_at(runtime: &RuntimePaths, key: &LoginKey) -> Option<Timestamp> {
     read_rate_limits_cache(&runtime.shared_rate_limits_path())
         .entries
-        .get(key)
-        .and_then(|entry| {
+        .into_iter()
+        .filter(|(usage_key, _)| usage_key.login == *key)
+        .flat_map(|(_, entry)| {
             entry
                 .limits
                 .windows
-                .iter()
+                .into_iter()
                 .filter_map(|window| window.observed_at)
-                .max()
         })
+        .max()
         .or_else(|| {
-            crate::agents::credits::read_credits_cache(&runtime.shared_credits_path())
+            let cache = crate::agents::credits::read_credits_cache(&runtime.shared_credits_path());
+            cache
                 .logins
                 .get(key)
-                .and_then(|entry| i64::try_from(entry.observed_at_ms).ok())
-                .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+                .into_iter()
+                .chain(
+                    cache
+                        .scoped
+                        .iter()
+                        .filter(|(usage_key, _)| usage_key.login == *key)
+                        .map(|(_, entry)| entry),
+                )
+                .filter_map(|entry| i64::try_from(entry.observed_at_ms).ok())
+                .filter_map(|ms| Timestamp::from_millisecond(ms).ok())
+                .max()
         })
 }
 

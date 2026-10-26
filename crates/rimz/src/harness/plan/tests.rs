@@ -578,7 +578,7 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             &runtime.shared_rate_limits_path(),
             &crate::agents::account::RateLimitsCache {
                 entries: [(
-                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)).into(),
                     crate::agents::account::RateLimitCacheEntry {
                         limits: crate::agents::AgentRateLimits {
                             windows: vec![crate::agents::RateLimitWindow {
@@ -658,7 +658,7 @@ fn launch_availability_follows_the_spend_ladder() {
             &runtime.shared_rate_limits_path(),
             &crate::agents::account::RateLimitsCache {
                 entries: [(
-                    key.clone(),
+                    key.clone().into(),
                     crate::agents::account::RateLimitCacheEntry {
                         limits: crate::agents::AgentRateLimits { windows },
                         ..Default::default()
@@ -760,7 +760,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             &runtime.shared_rate_limits_path(),
             &RateLimitsCache {
                 entries: [(
-                    spent.clone(),
+                    spent.clone().into(),
                     RateLimitCacheEntry {
                         limits: crate::agents::AgentRateLimits {
                             windows: vec![crate::agents::RateLimitWindow {

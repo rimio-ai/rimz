@@ -355,8 +355,13 @@ impl<'a> WindowReadings<'a> {
         let capacities = read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .into_iter()
-            .filter(|(_, entry)| entry.scope.is_kind_wide())
-            .map(|(key, entry)| (key, ProviderCapacity::from_windows(entry.limits.windows)))
+            .filter(|(key, entry)| key.scope.is_kind_wide() && entry.scope.is_kind_wide())
+            .map(|(key, entry)| {
+                (
+                    key.login,
+                    ProviderCapacity::from_windows(entry.limits.windows),
+                )
+            })
             .collect();
         (RoomLoginSet::for_runtime(runtime), capacities)
     }

@@ -572,7 +572,8 @@ mod agent_ref {
                     .env
                     .publish_rate_limits(&rimz::agents::RateLimitsCache {
                         entries: [(
-                            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"))
+                                .into(),
                             rimz::agents::RateLimitCacheEntry {
                                 limits: rimz::agents::AgentRateLimits {
                                     windows: vec![rimz::agents::RateLimitWindow {

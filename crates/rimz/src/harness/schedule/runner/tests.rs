@@ -2201,7 +2201,7 @@ fn publish_windows_for(
         &runtime.shared_rate_limits_path(),
         &crate::agents::RateLimitsCache {
             entries: std::collections::BTreeMap::from([(
-                key,
+                key.into(),
                 crate::agents::RateLimitCacheEntry {
                     limits: crate::agents::AgentRateLimits { windows },
                     ..Default::default()

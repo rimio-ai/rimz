@@ -142,7 +142,7 @@ fn cache_evidence_excludes_display_only_limits_stale_scoped_and_lapsed_entries()
     let capacity = facts(100, None).capacity.unwrap();
     let mut rates = crate::agents::account::RateLimitsCache::default();
     rates.entries.insert(
-        key.clone(),
+        key.clone().into(),
         crate::agents::account::RateLimitCacheEntry {
             limits: crate::agents::AgentRateLimits {
                 windows: capacity.windows,

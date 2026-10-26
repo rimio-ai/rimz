@@ -146,6 +146,8 @@ pub struct SidebarProviderPanel {
     pub kind: String,
     #[serde(default, skip_serializing_if = "crate::ids::LoginName::is_default")]
     pub account: crate::ids::LoginName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_provider: Option<String>,
     /// Account cache identity selected by the adapter for this panel.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub account_scope: ProviderAccountScope,
