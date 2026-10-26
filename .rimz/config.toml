@@ -2,7 +2,7 @@
 # The coordinator is read-only at the project root. Each batch gets its own fresh deps-repair-* worktree
 # and one spot team; the fire ends after launch, and later fires stop finished lanes or idle on active ones.
 [tasks.dependabot-repair]
-check = "uv run --no-project --script loops/dependabot/dependabot.py run"
+check = "uv run --no-project --script loops/dependabot/dependabot.py run --quiet-period 1"
 timeout = "15m"
 every = "1h"
 max-strikes = 3
