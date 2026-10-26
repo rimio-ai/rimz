@@ -208,7 +208,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
                 if let Some(push) = target.take_push() {
                     assert_eq!(push.anchor.pane_id, a, "B must never reach a landing");
                     landings.set(landings.get() + 1);
-                    push.finish_painted(PushVerdict::Painted, clicked);
+                    push.finish_painted(PushVerdict::Painted, clicked, Instant::now());
                 }
                 ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
             },
@@ -302,7 +302,7 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
     target
         .take_push()
         .expect("a full ordinary inbox cannot lose the priority slot")
-        .finish(PushVerdict::NotDestination);
+        .finish(PushVerdict::NotDestination, Instant::now());
     let report = ack.recv_timeout(PAINT_WAIT).expect("priority push receipt");
     assert_eq!(report.verdict, Some(PushVerdict::NotDestination));
     assert!(
@@ -390,9 +390,10 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
             }
             painted_tx.send(()).unwrap();
             match outcome {
-                "painted" | "superseded" => {
-                    push.finish(crate::diag::focus_trace::PushVerdict::Painted)
-                }
+                "painted" | "superseded" => push.finish(
+                    crate::diag::focus_trace::PushVerdict::Painted,
+                    Instant::now(),
+                ),
                 "capped" => {
                     dispatched_rx.recv_timeout(SETTLE).unwrap();
                     drop(push);
@@ -713,7 +714,7 @@ fn dispatch_records_click_lead_and_the_landing_paint_instead_of_receipt_time() {
                         assert_eq!(rx.try_recv().unwrap(), Wakeup::Tick);
                         let mut push = rig.plane.take_focus_push(&destination.instance_id).unwrap();
                         push.peer.received_ms = Some(30);
-                        push.finish_painted(verdict, painted);
+                        push.finish_painted(verdict, painted, Instant::now());
                         ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
                     },
                 );
@@ -815,8 +816,8 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
     let destination_thread = std::thread::spawn(move || {
         assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
         let mut push = target.take_push().unwrap();
-        push.peer.received_ms = Some(push.elapsed_ms());
-        push.finish(PushVerdict::Painted);
+        push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
+        push.finish(PushVerdict::Painted, Instant::now());
     });
     let anchor = rig.anchor();
     let clicked = Instant::now();
@@ -843,7 +844,7 @@ fn dispatch_records_a_displaced_paint_after_the_jump() {
     let destination_thread = std::thread::spawn(move || {
         assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
         let push = target.take_push().unwrap();
-        push.finish(PushVerdict::Displaced);
+        push.finish(PushVerdict::Displaced, Instant::now());
     });
     let anchor = rig.anchor();
     let clicked = Instant::now();
@@ -902,9 +903,9 @@ fn dispatch_collects_reports_sent_after_the_budget_but_before_the_horizon() {
     let destination_thread = std::thread::spawn(move || {
         assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
         let mut push = target.take_push().unwrap();
-        push.peer.received_ms = Some(push.elapsed_ms());
+        push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
         go_rx.recv().unwrap();
-        push.finish(PushVerdict::Expired);
+        push.finish(PushVerdict::Expired, Instant::now());
     });
     let anchor = rig.anchor();
     let clicked = Instant::now();
@@ -944,12 +945,12 @@ fn dispatch_keeps_timely_buffered_reports_after_a_slow_jump() {
         let destination_thread = std::thread::spawn(move || {
             assert_eq!(rx.recv().unwrap(), Wakeup::Tick);
             let mut push = target.take_push().unwrap();
-            push.peer.received_ms = Some(push.elapsed_ms());
+            push.peer.received_ms = Some(push.elapsed_ms(Instant::now()));
             go_rx.recv().unwrap();
             if !within_horizon {
                 std::thread::sleep(REPORT_HORIZON);
             }
-            push.finish(PushVerdict::Expired);
+            push.finish(PushVerdict::Expired, Instant::now());
             done_tx.send(()).unwrap();
         });
         let anchor = rig.anchor();
@@ -1054,7 +1055,9 @@ fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
             |timeout| {
                 assert_eq!(timeout, Duration::from_millis(500).saturating_sub(fit_time));
                 if painted {
-                    push.take().unwrap().finish(PushVerdict::Painted);
+                    push.take()
+                        .unwrap()
+                        .finish(PushVerdict::Painted, Instant::now());
                     Ok(ack.try_recv().unwrap())
                 } else {
                     Err(RecvTimeoutError::Timeout)

@@ -103,7 +103,7 @@ impl JumpHost {
             Self::cancel(previous);
         }
         for (_, push) in state.pushes.drain() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, Instant::now());
         }
         state.active = Some(ActiveJump {
             stamp: stamp.clone(),
@@ -150,7 +150,7 @@ impl JumpHost {
         };
         Self::cancel(active);
         for (_, push) in state.pushes.drain() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, Instant::now());
         }
         drop(state);
         self.wake_peers(subscribers);
@@ -167,7 +167,7 @@ impl JumpHost {
             Self::cancel(active);
         }
         for (_, push) in state.pushes.drain() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, Instant::now());
         }
         drop(state);
         self.wake_peers(subscribers);
@@ -211,14 +211,14 @@ impl JumpHost {
     pub(super) fn offer(&self, push: FocusPush) {
         let mut state = self.lock();
         if !push.is_current() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, Instant::now());
             return;
         }
         if let Some(previous) = state
             .pushes
             .insert(push.peer.instance_id.as_str().to_owned(), push)
         {
-            previous.finish(PushVerdict::Superseded);
+            previous.finish(PushVerdict::Superseded, Instant::now());
         }
     }
 

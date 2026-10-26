@@ -1311,7 +1311,10 @@ esac
             assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
             assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
             std::fs::write(dir.join("pushed"), b"").unwrap();
-            push.finish(crate::diag::focus_trace::PushVerdict::Painted);
+            push.finish(
+                crate::diag::focus_trace::PushVerdict::Painted,
+                Instant::now(),
+            );
         }
         eventually("the click is dispatched", || {
             load(&room.runtime).is_some_and(|anchor| anchor.state == FocusIntentState::Applied)

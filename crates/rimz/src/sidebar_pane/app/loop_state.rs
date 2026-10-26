@@ -922,14 +922,14 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
         let arrived = self.pane.clock.now();
-        push.peer.received_ms = Some(push.elapsed_ms());
+        push.peer.received_ms = Some(push.elapsed_ms(arrived));
         self.retire_superseded_push();
         if !push.is_current() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, self.pane.clock.now());
             return Ok(());
         }
         if self.known_non_owner(&push.anchor.pane_id) {
-            push.finish(PushVerdict::NotDestination);
+            push.finish(PushVerdict::NotDestination, self.pane.clock.now());
             return Ok(());
         }
         // A jump to this pane's tab is viewing evidence: the landing paints a view, never scratch.
@@ -950,40 +950,40 @@ impl LoopState {
         }) != Some(push.anchor.nonce)
         {
             self.prepare_action();
-            push.peer.snapshot_ms = Some(push.elapsed_ms());
+            push.peer.snapshot_ms = Some(push.elapsed_ms(self.pane.clock.now()));
             if !push.is_current() {
-                push.finish(PushVerdict::Superseded);
+                push.finish(PushVerdict::Superseded, self.pane.clock.now());
                 return Ok(());
             }
             self.fold_focus_intent(push.anchor.clone());
-            push.peer.folded_ms = Some(push.elapsed_ms());
+            push.peer.folded_ms = Some(push.elapsed_ms(self.pane.clock.now()));
         }
         if push.anchor.session_name != self.pane.config.room.session_name
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
-            push.finish(PushVerdict::NotDestination);
+            push.finish(PushVerdict::NotDestination, self.pane.clock.now());
             return Ok(());
         }
         if self.pane.should_exit {
             if let Some(pending) = self.pane.pending_focus_push.take() {
-                pending.finish(PushVerdict::Exiting);
+                pending.finish(PushVerdict::Exiting, self.pane.clock.now());
             }
-            push.finish(PushVerdict::Exiting);
+            push.finish(PushVerdict::Exiting, self.pane.clock.now());
             return Ok(());
         }
         if self.focus_push_size_matches(&push, terminal) {
             self.pane.paint_hold.release();
         }
         if !push.is_current() {
-            push.finish(PushVerdict::Superseded);
+            push.finish(PushVerdict::Superseded, self.pane.clock.now());
             return Ok(());
         }
         if let Some(verdict) = self.painted_focus_verdict(&push.anchor, Some(&push)) {
-            push.finish_painted(verdict, self.pane.painted_at);
+            push.finish_painted(verdict, self.pane.painted_at, self.pane.clock.now());
             return Ok(());
         }
         if let Some(pending) = self.pane.pending_focus_push.replace(push) {
-            pending.finish(PushVerdict::Superseded);
+            pending.finish(PushVerdict::Superseded, self.pane.clock.now());
         }
         self.paint_frame_if_due(terminal, true)
     }
@@ -1010,7 +1010,7 @@ impl LoopState {
             .is_some_and(|push| !push.is_current())
         {
             if let Some(push) = self.pane.pending_focus_push.take() {
-                push.finish(PushVerdict::Superseded);
+                push.finish(PushVerdict::Superseded, self.pane.clock.now());
             }
             return true;
         }
@@ -1930,7 +1930,7 @@ impl LoopState {
                     PushVerdict::Expired
                 };
                 if let Some(push) = self.pane.pending_focus_push.take() {
-                    push.finish(verdict);
+                    push.finish(verdict, self.pane.clock.now());
                 }
             }
         }
@@ -2086,7 +2086,7 @@ impl LoopState {
             result.and(output)?;
             self.pane.painted_at = self.pane.clock.now();
             for (push, verdict) in self.pane.paint_reports.drain(..) {
-                push.finish_painted(verdict, self.pane.painted_at);
+                push.finish_painted(verdict, self.pane.painted_at, self.pane.clock.now());
             }
             return Ok(());
         }
