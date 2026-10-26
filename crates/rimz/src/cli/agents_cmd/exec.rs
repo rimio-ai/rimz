@@ -994,20 +994,30 @@ fn exit_hint(
 ) -> String {
     let kind = request.kind.as_str();
     let relaunch = relaunch_command(request);
-    if startup_failure {
+    let resume = || {
+        if request.identity.params.team.is_some() && request.identity.params.role.is_some() {
+            format!("{relaunch} --continue")
+        } else {
+            // Resumability requires an ended provider session id.
+            let name = ended_name
+                .or(request.identity.name.as_deref())
+                .or(session_id.map(AgentSessionId::as_str))
+                .expect("a resumable session has a provider session id");
+            format!("rimz agents resume @{name}")
+        }
+    };
+    if status.code() == Some(rimz::agents::capabilities::SESSION_STEP_REFUSED) {
+        // Only a resume's model switch is refused with its conversation intact.
+        let rerun = if resumable {
+            format!("resume with `{}` and a corrected model", resume())
+        } else {
+            format!("relaunch with `{relaunch}`")
+        };
+        format!("rimz: agent `{kind}` launch was refused; see the reason above; {rerun}\r\n")
+    } else if startup_failure {
         format!("rimz: agent `{kind}` failed to start ({status}); relaunch with `{relaunch}`\r\n")
     } else if resumable {
-        let resume =
-            if request.identity.params.team.is_some() && request.identity.params.role.is_some() {
-                format!("{relaunch} --continue")
-            } else {
-                // Resumability requires an ended provider session id.
-                let name = ended_name
-                    .or(request.identity.name.as_deref())
-                    .or(session_id.map(AgentSessionId::as_str))
-                    .expect("a resumable session has a provider session id");
-                format!("rimz agents resume @{name}")
-            };
+        let resume = resume();
         format!("rimz: agent `{kind}` exited ({status}); resume with `{resume}`\r\n")
     } else {
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")

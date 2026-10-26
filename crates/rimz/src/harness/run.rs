@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jiff::Timestamp;
 use serde::Serialize;
 
+use crate::agents::capabilities::SESSION_STEP_REFUSED;
 use crate::agents::lifecycle::TerminalDisposition;
 use crate::agents::{
     AgentDefinition, AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase,
@@ -533,6 +534,7 @@ pub struct ProviderExit {
     /// A fresh launch, not a picker, resume, or fork.
     pub fresh_launch: bool,
     pub success: bool,
+    pub exit_code: Option<i32>,
     /// The wrapper ended the provider itself, or the launching parent ended.
     pub abrupt: bool,
     /// A stop or interrupt signal reached the wrapper.
@@ -574,8 +576,11 @@ pub enum StartupRelaunch {
 /// launch, and never at `cap` 0. A `Pending` run is evidence at any startup
 /// time: a prompt was handed over and never observed. Neither source proves
 /// the provider did nothing: one that acts before its first hook and then
-/// exits nonzero may repeat that work.
+/// exits nonzero may repeat that work. Configuration refusals (exit 78) never relaunch.
 pub fn startup_relaunch(exit: ProviderExit, evidence: StartupEvidence, cap: u8) -> StartupRelaunch {
+    if exit.exit_code == Some(SESSION_STEP_REFUSED) {
+        return StartupRelaunch::No;
+    }
     let unopened = match evidence {
         StartupEvidence::Run(status) => status == RunStatus::Pending,
         StartupEvidence::Card { provisional } => {
@@ -595,8 +600,13 @@ pub fn startup_relaunch(exit: ProviderExit, evidence: StartupEvidence, cap: u8) 
 
 /// Whether a provider exit warrants startup diagnostics, including pickers, resumes, and forks:
 /// an unsuccessful exit within the window that neither the wrapper nor a signal to it caused.
+/// Configuration refusals (exit 78) are not provider startup failures.
 pub fn provider_startup_exit(exit: ProviderExit) -> bool {
-    !exit.success && !exit.abrupt && !exit.signaled && exit.startup <= CARD_EVIDENCE_WINDOW
+    exit.exit_code != Some(SESSION_STEP_REFUSED)
+        && !exit.success
+        && !exit.abrupt
+        && !exit.signaled
+        && exit.startup <= CARD_EVIDENCE_WINDOW
 }
 
 pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {

@@ -1015,6 +1015,35 @@ mod pane_exec {
                 "rimz: agent `codex` failed to start ({failed}); relaunch with `rimz agents forge.coder`\r\n"
             )
         );
+
+        // A refused fresh launch left no conversation; a refused model switch
+        // left the resumed one intact, so its hint resumes it.
+        let refused = exit_status(rimz::agents::capabilities::SESSION_STEP_REFUSED);
+        let mut solo = bare_exec_args();
+        solo.identity.name = Some("plain-fig".into());
+        for startup_failure in [false, true] {
+            for (request, resumable, rerun) in [
+                (&request, false, "relaunch with `rimz agents forge.coder`"),
+                (
+                    &request,
+                    true,
+                    "resume with `rimz agents forge.coder --continue` and a corrected model",
+                ),
+                (&solo, false, "relaunch with `rimz agents codex`"),
+                (
+                    &solo,
+                    true,
+                    "resume with `rimz agents resume @plain-fig` and a corrected model",
+                ),
+            ] {
+                assert_eq!(
+                    exit_hint(request, &refused, startup_failure, resumable, None, None),
+                    format!(
+                        "rimz: agent `codex` launch was refused; see the reason above; {rerun}\r\n"
+                    )
+                );
+            }
+        }
     }
 
     #[test]

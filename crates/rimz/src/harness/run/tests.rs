@@ -2473,12 +2473,17 @@ fn provider_startup_exit_reports_only_unprovoked_failures_within_the_window() {
     let exit = ProviderExit {
         fresh_launch: false,
         success: false,
+        exit_code: Some(1),
         abrupt: false,
         signaled: false,
         relaunches: 3,
         startup: Duration::from_millis(1),
     };
     assert!(provider_startup_exit(exit));
+    assert!(!provider_startup_exit(ProviderExit {
+        exit_code: Some(crate::agents::capabilities::SESSION_STEP_REFUSED),
+        ..exit
+    }));
     assert!(!provider_startup_exit(ProviderExit {
         abrupt: true,
         ..exit
@@ -2493,6 +2498,7 @@ fn provider_startup_exit_reports_only_unprovoked_failures_within_the_window() {
     }));
     assert!(!provider_startup_exit(ProviderExit {
         success: true,
+        exit_code: Some(0),
         ..exit
     }));
     assert!(!provider_startup_exit(ProviderExit {
@@ -2507,6 +2513,7 @@ fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
     let died = ProviderExit {
         fresh_launch: true,
         success: false,
+        exit_code: Some(1),
         abrupt: false,
         signaled: false,
         relaunches: 0,
@@ -2546,6 +2553,14 @@ fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
     for evidence in [pending, provisional] {
         for (why, exit, cap) in [
             (
+                "a configuration refusal",
+                ProviderExit {
+                    exit_code: Some(crate::agents::capabilities::SESSION_STEP_REFUSED),
+                    ..died
+                },
+                3,
+            ),
+            (
                 "a resume or fork",
                 ProviderExit {
                     fresh_launch: false,
@@ -2557,6 +2572,7 @@ fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
                 "exit status 0",
                 ProviderExit {
                     success: true,
+                    exit_code: Some(0),
                     ..died
                 },
                 3,
@@ -2590,6 +2606,7 @@ fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
     let opened = ProviderExit {
         relaunches: 3,
         success: true,
+        exit_code: Some(0),
         ..died
     };
     assert_eq!(
