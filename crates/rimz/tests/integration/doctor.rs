@@ -1464,8 +1464,9 @@ fn doctor_temp_units_reports_paused_eviction_and_the_resume_fix() {
     assert_eq!(
         (
             units["eviction_paused"].as_bool(),
-            text.lines().any(|line| line.contains("eviction")
-                && line.contains("pressure eviction is paused by gc.auto = false")),
+            text.lines()
+                .any(|line| line.trim_start().starts_with("eviction:")
+                    && line.contains("pressure eviction is paused by gc.auto = false")),
             text.contains("rimz config set gc.auto true"),
             text.contains("rimz gc --tmp-floor"),
             text.contains("rimz gc --all"),
