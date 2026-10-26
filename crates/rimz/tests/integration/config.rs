@@ -339,7 +339,7 @@ fn agents_explain_names_definition_prompt_on_kind_override() {
         &env,
         "agents",
         "reviewer",
-        "description: Reviewer\nagent: minimax",
+        "description: Reviewer\nagent: claude\ntools: [Read]",
         "Craft.",
     );
     env.rimz()
@@ -350,11 +350,12 @@ fn agents_explain_names_definition_prompt_on_kind_override() {
             contains("amp takes no system prompt")
                 .and(contains(
                     env.rimz_home()
-                        .join("agents/minimax.md")
+                        .join("agents/claude.md")
                         .display()
                         .to_string(),
                 ))
                 .and(contains("launch on a kind that takes a system prompt"))
+                .and(contains("does not support profile field `effort`").not())
                 .and(contains("system-prompt-file").not()),
         );
 }

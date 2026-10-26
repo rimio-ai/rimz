@@ -3287,6 +3287,60 @@ fn explain_uses_the_room_account_before_a_launch_batch_exists() {
 }
 
 #[test]
+fn explain_kind_override_uses_only_the_final_kinds_defaults() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    for kind in ["qwen", "opencode"] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "reviewer",
+            "description: Reviewer\nagent: claude\ntools: [Read]",
+            "Review the code.",
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", "reviewer", "--agent", kind, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["kind"], kind);
+        assert!(report["effort"].is_null(), "{report}");
+        assert!(report["mode"].is_null(), "{report}");
+        let argv = report["provider_argv"].as_array().unwrap();
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg == "--approval-mode" || arg == "--effort"),
+            "{report}"
+        );
+
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "reviewer",
+            "description: Reviewer\nagent: claude\ntools: [Read]\neffort: high",
+            "Review the code.",
+        );
+        env.rimz()
+            .args(["agents", "explain", "reviewer", "--agent", kind, "--json"])
+            .assert()
+            .code(1)
+            .stderr(contains(format!(
+                "invalid profile `reviewer`: agent `{kind}` does not support profile field `effort`; remove it or put provider-specific flags in `args`"
+            )));
+    }
+}
+
+#[test]
 fn explain_skill_callability_follows_the_applied_tools_list() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));

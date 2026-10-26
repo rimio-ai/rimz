@@ -2870,7 +2870,7 @@ fn restore_resume_cell(
         ResumeLaunchPosture {
             mode: base
                 .as_ref()
-                .and_then(|base| base.launch.mode)
+                .and_then(|base| base.written_mode())
                 .or(request.stamped_mode)
                 .or(rebased.launch.mode),
             record: Some(Box::new(crate::agents::LaunchRecord {

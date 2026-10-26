@@ -205,6 +205,7 @@ fn profile(agent: &str) -> Profile {
         empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
+        kind_defaults: false,
         tools: None,
         auto_compact_default: None,
         model_tier: None,
@@ -1271,6 +1272,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
+            kind_defaults: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,
@@ -1587,6 +1589,292 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
                 && valid.contains("claude")
                 && valid.contains("codex")
     ));
+}
+
+#[test]
+fn kind_defaults_follow_the_final_kind_and_model() {
+    use PermissionMode::{Auto, Plan, Yolo};
+
+    let profiles = profiles([
+        (
+            "markdown",
+            Profile {
+                kind_defaults: true,
+                ..profile("claude")
+            },
+        ),
+        ("inherited", profile("markdown")),
+        (
+            "qwen-job",
+            Profile {
+                kind_defaults: true,
+                ..profile("qwen")
+            },
+        ),
+        ("toml", profile("claude")),
+        (
+            "codex-base",
+            Profile {
+                kind_defaults: true,
+                ..profile("codex")
+            },
+        ),
+        (
+            "fable-base",
+            Profile {
+                model: Some("fable".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "written",
+            Profile {
+                kind_defaults: true,
+                mode: Some(Plan),
+                effort: Some("high".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "written-base",
+            Profile {
+                kind_defaults: true,
+                mode: Some(Yolo),
+                effort: Some("low".into()),
+                ..profile("codex")
+            },
+        ),
+    ]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (source, target, kind, model, mode, effort) in [
+        ("markdown", None, "claude", None, Some(Auto), Some("xhigh")),
+        ("markdown", Some("opencode"), "opencode", None, None, None),
+        ("markdown", Some("qwen"), "qwen", None, None, None),
+        (
+            "inherited",
+            Some("codex"),
+            "codex",
+            None,
+            None,
+            Some("xhigh"),
+        ),
+        ("markdown", Some("pi"), "pi", None, None, Some("xhigh")),
+        (
+            "qwen-job",
+            Some("claude"),
+            "claude",
+            None,
+            Some(Auto),
+            Some("xhigh"),
+        ),
+        ("toml", Some("codex"), "codex", None, None, None),
+        (
+            "toml",
+            Some("codex-base"),
+            "codex",
+            None,
+            None,
+            Some("xhigh"),
+        ),
+        (
+            "qwen",
+            Some("codex-base"),
+            "codex",
+            None,
+            None,
+            Some("xhigh"),
+        ),
+        (
+            "written",
+            Some("codex-base"),
+            "codex",
+            None,
+            Some(Plan),
+            Some("high"),
+        ),
+        (
+            "written",
+            Some("written-base"),
+            "codex",
+            None,
+            Some(Plan),
+            Some("low"),
+        ),
+        (
+            "markdown",
+            Some("fable-base"),
+            "claude",
+            Some("fable"),
+            Some(Auto),
+            Some("high"),
+        ),
+    ] {
+        let result = resolve_spec_with_agent_override(
+            Some(source),
+            &profiles,
+            &profiles,
+            &no_commands(),
+            &TeamsConfig::default(),
+            target,
+        )
+        .map(|layout| {
+            let cell = agent_at(&layout, 0, 0);
+            (
+                cell.kind.to_string(),
+                cell.launch.model.clone(),
+                cell.launch.mode,
+                cell.launch.effort.clone(),
+            )
+        })
+        .map_err(|error| error.to_string());
+        actual.push((source, target, result));
+        expected.push((
+            source,
+            target,
+            Ok((
+                kind.to_owned(),
+                model.map(str::to_owned),
+                mode,
+                effort.map(str::to_owned),
+            )),
+        ));
+    }
+    let refusal = resolve_spec_with_agent_override(
+        Some("written"),
+        &profiles,
+        &profiles,
+        &no_commands(),
+        &TeamsConfig::default(),
+        Some("qwen"),
+    )
+    .map(|_| ("qwen".into(), None, None, None))
+    .map_err(|error| error.to_string());
+    actual.push(("written", Some("qwen"), refusal));
+    let reason = concat!(
+        "invalid profile `written`: agent `qwen` does not support profile field `effort`; ",
+        "remove it or put provider-specific flags in `args`",
+    );
+    expected.push(("written", Some("qwen"), Err(reason.into())));
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn role_values_survive_defaults_in_both_rebase_orders() {
+    use PermissionMode::{Auto, Plan};
+
+    let profiles = profiles([
+        (
+            "worker",
+            Profile {
+                kind_defaults: true,
+                ..profile("claude")
+            },
+        ),
+        (
+            "fable",
+            Profile {
+                model: Some("fable".into()),
+                ..profile("claude")
+            },
+        ),
+    ]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (target, model, mode, effort, final_mode, final_effort) in [
+        ("codex", None, None, None, None, Some("xhigh")),
+        ("opencode", None, None, None, None, None),
+        (
+            "codex",
+            None,
+            Some(Plan),
+            Some("high"),
+            Some(Plan),
+            Some("high"),
+        ),
+        ("qwen", None, Some(Auto), None, Some(Auto), None),
+        (
+            "fable",
+            None,
+            None,
+            Some("xhigh"),
+            Some(Auto),
+            Some("xhigh"),
+        ),
+        (
+            "claude",
+            Some("fable"),
+            None,
+            None,
+            Some(Auto),
+            Some("high"),
+        ),
+    ] {
+        let binding = RoleBinding {
+            model: model.map(str::to_owned),
+            mode,
+            effort: effort.map(str::to_owned),
+            ..role("coder", "worker")
+        };
+        let base = resolve_agent_override(Some(target), &profiles).unwrap();
+        let configured = team(vec![binding.clone()]);
+        let prepared = prepare_team("forge", &configured, &profiles, base.as_ref())
+            .map(|team| {
+                let launch = &team.roles[0].resolved.launch;
+                (launch.mode, launch.effort.clone())
+            })
+            .map_err(|error| error.to_string());
+        let replayed =
+            profile_cell_with_base_override("worker", &profiles, base.as_ref(), Some(&binding))
+                .map(|cell| (cell.launch.mode, cell.launch.effort))
+                .map_err(|error| error.to_string());
+        actual.push((prepared, replayed));
+        let launch = Ok((final_mode, final_effort.map(str::to_owned)));
+        expected.push((launch.clone(), launch));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn virtual_cells_render_only_their_own_permission_posture_with_kind_defaults() {
+    let profiles = profiles([(
+        "claude",
+        Profile {
+            kind_defaults: true,
+            ..profile("claude")
+        },
+    )]);
+    let mut actual = Vec::new();
+    for word in [
+        "claude-yolo",
+        "claude-yolo-fast",
+        "claude-ask",
+        "claude-ask-fast",
+    ] {
+        let Cell::Agent(cell) = parse_cell(word, &profiles, &no_commands(), None).unwrap() else {
+            panic!("expected an agent cell");
+        };
+        actual.push((
+            cell.launch.effort,
+            cell.args
+                .iter()
+                .filter(|arg| arg.as_str() == "--dangerously-skip-permissions")
+                .count(),
+            cell.args
+                .windows(2)
+                .filter(|args| args[0] == "--permission-mode" && args[1] == "auto")
+                .count(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        [
+            (Some("xhigh".into()), 1, 0),
+            (Some("xhigh".into()), 1, 0),
+            (Some("xhigh".into()), 0, 0),
+            (Some("xhigh".into()), 0, 0)
+        ]
+    );
 }
 
 #[test]

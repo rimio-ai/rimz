@@ -704,7 +704,8 @@ upward-dependencies = [
 # ConfigEditor::check_named_account_update shares account-rerun edit preflight with the CLI (+1).
 # skill_is_callable shares profile skill callability with launch reminders and validation (+1).
 # AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
-surface-budget = 218
+# Profile::effective_effort preserves listing defaults without baking launch values (+1).
+surface-budget = 219
 
 [[verdict]]
 kind = "item"

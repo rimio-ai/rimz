@@ -522,7 +522,7 @@ impl LoadedDefinitions {
             model: profile.model.clone(),
             tier: profile.model_tier.as_ref().map(|tier| tier.tier),
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
-            effort: profile.effort.clone(),
+            effort: profile.effective_effort(),
             fast: profile.fast == Some(true),
             source: source.to_owned(),
             team: None,

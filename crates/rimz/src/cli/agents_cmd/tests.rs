@@ -281,6 +281,7 @@ fn planner_profiles() -> ProfilesConfig {
         Profile {
             empty_dir: None,
             definition_renders: None,
+            kind_defaults: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,
@@ -498,6 +499,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             empty_dir: None,
             definition_renders: None,
+            kind_defaults: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,
@@ -527,6 +529,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             empty_dir: None,
             definition_renders: None,
+            kind_defaults: false,
             tools: None,
             auto_compact_default: None,
             model_tier: None,
@@ -1871,6 +1874,7 @@ mod launch_options {
             rimz::config::Profile {
                 empty_dir: None,
                 definition_renders: None,
+                kind_defaults: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,

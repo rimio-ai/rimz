@@ -180,10 +180,13 @@ Cells carry pending model and tool notices as typed values, and only the launch 
 | --- | --- |
 | kind | the base's |
 | model | the base's when it sets one; otherwise the original's on the same kind or Pi, and unset on another kind |
-| effort | the base's when it sets one, otherwise the original's |
+| effort | the base's written value when present, otherwise the original's written value |
 | raw `args` | the original's, with the base filling a gap, on the same kind; the base's on a different kind |
-| mode, budget, `auto-compact`, tools, allowed-tools, skills, system-prompt file | the original's, with the base filling a gap |
+| mode | the original's written value, with the base's written value filling a gap |
+| budget, `auto-compact`, tools, allowed-tools, skills, system-prompt file | the original's, with the base filling a gap |
 | appended system-prompt files | the base's fragments, then the original's |
+
+For a Markdown chain on either side, unset mode and effort take the final kind's defaults for the final model. `crates/rimz/src/harness/spec.rs::ResolvedProfile` tracks filled defaults separately from written values, strips them before a re-base, and fills them again after merging the model.
 
 A different kind takes raw args only from the base. Pi and OpenCode declare that they run other providers' models and keep the original model when the base leaves it unset. Other kinds drop that model with a warning, unless a launch model or tier replaces it; an explicit base model stays quiet.
 
@@ -606,7 +609,7 @@ A resumed pane comes back as the same kind of agent it was. It runs `rimz agents
 
 Team restore and cohort resume rebuild every member through `resume::restore_routed_cells` before preflight and pane compilation, keeping team prompt and cohort identity. A record replays even without a tier stamp; a row with no record falls back to the stamped tier or current profile. A recorded team member keeps its role binding's prompt files and `args`, and `agents restart` keeps them too through `resume::resolve_member_posture`, which finds the member's role in its recorded team. Profile matching admits a single-profile or roleless-team member carrying a record or a tier stamp even when its provider differs from the current load choice; named team roles match by role.
 
-Permission mode on resume follows one precedence. An explicit `--ask` or `--yolo` wins. Otherwise a recorded session replays its saved mode over any profile- or role-declared one, and `--agent` keeps the saved mode unless the new base declares one. A row with no record uses the declared mode, else the launch event's recorded mode.
+Permission mode on resume follows one precedence. An explicit `--ask` or `--yolo` wins. Otherwise a recorded session replays its saved mode over any profile- or role-declared one, and `--agent` keeps the saved mode unless the new base explicitly declares one. A row with no record uses the declared mode, else the launch event's recorded mode.
 
 Degradation is deliberately asymmetric. A profile that is gone or now names a different provider degrades to a bare resume with a warning, because rebirth runs unattended and a recovery must never refuse. Interactive `restart` and `fork` escalate the same provider switch to the user instead, since changing providers under a running agent is a decision for the user. They also refuse a recorded profile whose Markdown definition failed to load, before posture resolution (`crates/rimz/src/config/effective.rs::LaunchAgents::block_failed_reference`).
 
