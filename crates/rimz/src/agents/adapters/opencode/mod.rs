@@ -505,7 +505,7 @@ fn parse_inline_config(
     let member = pointer.trim_start_matches('/').replace('/', ".");
     let problem = match parsed {
         Ok(Value::Object(config)) if invalid.is_none() => return (config, None),
-        Ok(Value::Object(_)) => format!("has a {member} value that is not {shape}"),
+        Ok(Value::Object(_)) => format!("sets {member} to a value that is not {shape}"),
         Ok(_) => "is not a JSON object".to_owned(),
         Err(_) => "is not valid JSONC".to_owned(),
     };
