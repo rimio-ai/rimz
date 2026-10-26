@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use rimz::agents::capabilities::SystemTextChannel;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
-use rimz::config::{Isolation, SkillName, effective::LaunchAgents};
+use rimz::config::{Isolation, ProfilesConfig, SkillName};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
@@ -54,7 +54,10 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
-    let (request, cwd, action_note, system_prompt_digest) = if args.target.starts_with('@') {
+    let (request, cwd, action_note, system_prompt_digest, profiles) = if args
+        .target
+        .starts_with('@')
+    {
         let store = store.as_ref().with_context(|| {
             cli::no_room(format_args!("at {}", workspace.project_root.display()))
         })?;
@@ -69,6 +72,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             &args.target,
             &channel.address_context(),
         )?;
+        let profiles =
+            effective.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
         let posture = rimz::harness::resume::resolve_posture(
             rimz::harness::resume::PostureRequest {
                 record: agent.record.as_deref(),
@@ -77,7 +82,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
                 stamped_mode: agent.mode,
                 stamped_tier: agent.tier.as_deref(),
             },
-            &effective.profiles,
+            profiles,
         );
         if let Some(reason) = &posture.degraded {
             warnings.push(format!("{reason}; showing bare {} posture", agent.kind));
@@ -103,6 +108,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             cwd,
             note.map(str::to_owned),
             agent.system_prompt_digest.clone(),
+            profiles,
         )
     } else {
         let finalized = launch_resolve::resolve_finalized_layout(
@@ -206,7 +212,13 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             false,
         );
-        (request, workspace.worktree_root.clone(), None, None)
+        (
+            request,
+            workspace.worktree_root.clone(),
+            None,
+            None,
+            &effective.profiles,
+        )
     };
     let adapter = rimz::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", request.kind))?;
@@ -248,7 +260,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let report = ExplainReport::new(
         &args,
         &plan,
-        &effective,
+        profiles,
         bwrap.as_deref(),
         warnings,
         action_note,
@@ -379,7 +391,7 @@ impl<'a> ExplainReport<'a> {
     fn new(
         args: &'a ExplainArgs,
         plan: &'a LaunchPlan,
-        effective: &LaunchAgents,
+        profiles: &ProfilesConfig,
         bwrap: Option<&'a Path>,
         mut warnings: Vec<String>,
         action_note: Option<String>,
@@ -390,7 +402,7 @@ impl<'a> ExplainReport<'a> {
         let routed_profile = params
             .profile
             .as_ref()
-            .and_then(|name| effective.profiles.0.get(name))
+            .and_then(|name| profiles.0.get(name))
             .filter(|profile| {
                 profile.definition_renders.as_ref().is_some_and(|renders| {
                     args.overrides
@@ -409,7 +421,7 @@ impl<'a> ExplainReport<'a> {
                 name,
                 rimz::harness::plan::normalized_preset_value(args.overrides.agent.as_deref())
                     .as_deref(),
-                &effective.profiles,
+                profiles,
             )
             .map(rimz::harness::spec::ResolvedProfile::into_chain)
             .unwrap_or_default(),

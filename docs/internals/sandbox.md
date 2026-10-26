@@ -189,7 +189,7 @@ Every agent gets one temp unit, `~/.rimz/ws/<workspace-dir>/tmp/<handle>/`, crea
 
 ### Who owns a unit
 
-A child launched with `parent_agent_id` uses its parent's unit at every level. `launch_plan::compile` resolves the owner once from the parent's row (`address::launch_row`), so a restarted child, which keeps `parent_agent_id` and drops `subagent`, keeps the unit too. When the parent row no longer resolves, the child falls back to its own unit and the launch warns. Its reminder still reads `You share it with your caller`, since a child launches no subagents. `launch_plan::agent_temp_unit` is the same resolution for `rimz agents show`. Peers never share a unit.
+A child launched with `parent_agent_id` uses its parent's unit at every level. `launch_plan::compile` resolves the owner once from the parent's row (`address::launch_row`), so a restarted child keeps the unit through its recorded parent lineage. When the parent row no longer resolves, the child falls back to its own unit and the launch warns. Its reminder still reads `You share it with your caller`, since a child launches no subagents. `launch_plan::agent_temp_unit` is the same resolution for `rimz agents show`. Peers never share a unit.
 
 The room's `shared/` (`StatePaths.room_shared_dir`) is the one directory every agent in the room reaches, and `$RIMZ_SHARED` names it at its host path at every level. RimZ's result files live in the state `out/` class and print as host paths.
 

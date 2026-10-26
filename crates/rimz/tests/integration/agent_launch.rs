@@ -3888,6 +3888,96 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
 
 #[cfg(unix)]
 #[test]
+fn explain_child_replays_its_subagent_profile_and_child_treatment() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let provider_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(provider_home.join("projects")).unwrap();
+    let skill = provider_home.join("skills/rimz-wait");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: rimz-wait\ndescription: Wait for a command\n---\nWait.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "researcher",
+        "description: Research\nagent: claude\nskills: [rimz-wait]\ntools: [Read, Skill]",
+        "Research the assigned task.",
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: AgentSessionId::from("missing-conversation"),
+                launch_id: Some(AgentSessionId::from("launch_explain_child")),
+                agent_name: "child".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("researcher".to_owned()),
+                    parent_agent_id: Some("parent".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let output = env
+        .rimz()
+        .env("CLAUDE_CONFIG_DIR", &provider_home)
+        .args(["agents", "explain", "@child", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let reminder = report["prompt"]["reminder"].as_str().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        (
+            stderr.contains("showing bare"),
+            report["profile"]["chain"].clone(),
+            report["skills"]["callable"].clone(),
+            reminder.contains("You are a subagent"),
+            reminder.contains("- `researcher`: Research"),
+            reminder.contains("### Team"),
+        ),
+        (
+            false,
+            serde_json::json!(["researcher", "claude"]),
+            serde_json::json!(["rimz-wait"]),
+            true,
+            false,
+            false,
+        ),
+        "{stderr}\n{reminder}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn explain_from_a_subagent_reports_the_refusal_and_prints_the_plan() {
     let env = Env::new();
     env.record(&env.project_root);

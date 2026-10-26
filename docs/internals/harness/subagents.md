@@ -54,7 +54,7 @@ The pass-through fields are `--prompt-file`, `--model`, `--tier`, `--agent` (a r
 
 A launch prints the minted petname and returns. Its stderr receipt, shared with `rimz agents -p --bg` through `supervised::output::write_background_receipt`, names the fleet report, the agent-visible response path, and the `wait` command that blocks instead. `--wait` leaves the background run unchanged and passes the petname to the shared `agents_cmd::wait_agent` join. `--wait=DURATION` adds a caller-side deadline without changing the child's timeout. `--json` on a single launch requires `--wait`.
 
-Launch resolution and the `profiles` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`. A profile named in the wrong section produces an error that names both. Commands and teams are shared between the two, but `profiles` never lists teams, because one launch produces one agent.
+Launch resolution and the `profiles` catalog read `[subagents.profiles]`, while `rimz agents` reads `[agents.profiles]`. A profile named in the wrong section produces an error that names both. Commands and teams are shared between the two; a team-role spec uses its role's profile from `[agents.profiles]`. The `profiles` catalog never lists teams, because one launch produces one agent.
 
 ### The parent caps a child's posture
 
@@ -73,7 +73,7 @@ Parent-message resume ([resuming an ended child](#resuming-an-ended-child)) rech
 
 A yolo child that resolves to scoped isolation gets a stderr note that `sudo` and setuid binaries do not work in the view, with `--isolation host` as the fix (`SupervisedLaunch.yolo_sandbox`, `launcher::Notice::YoloSandbox`, rendered by `cli::launch_interaction`). The note is skipped under a scoped parent, where the cap refuses that fix, and at parent-message resume. Why the view blocks escalation is in [sandbox.md](../sandbox.md#the-launch-plan).
 
-Both caps apply only where the planner sees `subagent` set, and at parent-message resume. Peers (`rimz agents`, interactive or `-p`), teams, loop fires, workflow steps, restart, fork, and cohort resume are uncapped.
+Both caps apply only where the planner sees `subagent` set, and at parent-message resume. Peers (`rimz agents`, interactive or `-p`), teams, loop fires, workflow steps, restart, fork, and cohort resume are uncapped. A child's restart sets `subagent` on its exec request for child launch treatment, but replays the recorded mode and isolation without re-capping.
 
 ## Fanout
 
@@ -188,7 +188,7 @@ Four independent layers keep a child from launching work of its own. Each covers
 
 The launch planner refuses any `rimz agents`, `rimz teams`, or `rimz subagents` launch whose durable caller is a launched child (`SubagentCaller` above). That blocks another RimZ process.
 
-Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the subagent profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`launcher/resolve.rs`](../../../crates/rimz/src/launcher/resolve.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
+Every child request, fanout entries included and whatever its skills, carries a fixed body in its launch reminder. The body tells the child to do the assigned work itself and report the result in its final response, and it names no delegation skill. It travels the adapter's [launch reminder channel](./fleet.md#launch-reminders) with the child's model line, which the launch profile's `model-reminder` can turn off. An adapter with no append-system-text channel gets the body alone, as a tag-wrapped suffix on the user prompt (`supervised_prompt` in [`launcher/resolve.rs`](../../../crates/rimz/src/launcher/resolve.rs)). fleet.md owns which adapters have which channel, and [adapter_codex.md](../agents/adapter_codex.md) owns the Codex `developer_instructions` route.
 
 The child's skill view also withholds model invocation of `rimz-subagents`, even when its profile lists the skill or has no list. Host Claude and Codex use their provider switches; a supported scoped view rewrites only that skill when no list is configured. Other skills retain the profile's policy. The profile's own list still decides refusals and unenforced-list warnings, so the exclusion introduces neither for an unconfigured child ([skill views](../sandbox.md#profile-skill-views)).
 
@@ -519,7 +519,7 @@ A child's lifecycle transitions also fire `agent.*` signals ([loops.md](./loops.
 
 There are no `subagents restart` or `subagents resume` verbs. Parent-message resume continues an existing session, and when its preconditions fail, launching the same profile and prompt creates a new child.
 
-The durable launch record does not stamp which profile namespace produced a child. Generic restart therefore resolves `[agents.profiles]`, and a subagent-only profile degrades or refuses through the missing-profile path. Persisting the doorway scope with the launch event is the upgrade path. No resume path or rebirth plans a launched child ([fleet.md § Resume entry points](./fleet.md#resume-entry-points)), and [fleet.md § Rebirth](./fleet.md#rebirth) owns crash-time run settlement. The parent-message doorway explicitly selects the subagent profile scope and does not change generic recovery.
+`agents restart @child` and `agents explain @child` read the row's launched-child lineage to retain child launch treatment: the child reminder replaces the catalog and team context, the delegation skill is withheld, and native delegation is disabled. The profile resolves from `[subagents.profiles]`, or from `[agents.profiles]` for a child launched from a team role whose profile is defined only there. The restarted pane closes when the provider exits instead of dropping to a shell. Its replacement does not continue the child's supervised run, so the parent's `subagents wait` receives no new answer from it. Standalone resume and rebirth do not plan launched children ([fleet.md § Resume entry points](./fleet.md#resume-entry-points)), and [fleet.md § Rebirth](./fleet.md#rebirth) owns crash-time run settlement. Parent-message resume shares that profile selection without changing generic recovery.
 
 One-shot providers cannot be kept interactive by the wrapper. A follow-up after their exit requires provider session resume support.
 

@@ -728,6 +728,20 @@ impl LaunchAgents {
         }
     }
 
+    /// The table a launch's recorded profile name resolves in. A child takes
+    /// `[subagents.profiles]`, except for a name only `[agents.profiles]`
+    /// defines, which a child launched from a team role records.
+    pub fn profiles_for_launch(&self, child: bool, profile: Option<&str>) -> &ProfilesConfig {
+        let agents_only = profile.is_some_and(|name| {
+            !self.subagent_profiles.0.contains_key(name) && self.profiles.0.contains_key(name)
+        });
+        if child && !agents_only {
+            &self.subagent_profiles
+        } else {
+            &self.profiles
+        }
+    }
+
     /// Return a trust error only when a requested launch spec would consume a
     /// repo profile or team while the project is not trusted. Repo entries are
     /// otherwise inert: machine profiles, machine commands, and built-in cells

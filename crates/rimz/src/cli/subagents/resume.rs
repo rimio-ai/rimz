@@ -85,7 +85,7 @@ fn resume_resolved(
             stamped_mode: child.mode,
             stamped_tier: child.tier.as_deref(),
         },
-        launch.profiles_for(rimz::config::effective::ProfileScope::Subagents),
+        launch.profiles_for_launch(child.is_launched_child(), child.profile.as_deref()),
     );
     if let Some(reason) = &posture.degraded {
         bail!("{reason}");
@@ -312,7 +312,6 @@ fn resume_request(
         rimz::harness::plan::run_exit_policy(!run.keep);
     ExecRequest {
         run_id: Some(run.run_id.clone()),
-        subagent: true,
         follow_up_message,
         close_pane_on_exit,
         exit_on_run_completion,
