@@ -282,7 +282,6 @@ fn named_attach_preserves_recorded_room_owner() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
         .bounded_output()
         .expect("run rimz attach");
 
@@ -323,7 +322,6 @@ fn cold_cwd_attach_claims_recorded_room_owner() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
         .bounded_output()
         .expect("run rimz attach");
 

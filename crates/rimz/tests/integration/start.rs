@@ -41,7 +41,6 @@ fn configure_actionable_hooks(
         .env("RIMZ_TEST_ZELLIJ_LOG", zellij_log)
         .env("RIMZ_PRESENCE_PLUGIN", presence)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", sessions)
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES)
         .env(
             "RIMZ_ANTIGRAVITY_HOOKS",
@@ -1187,7 +1186,6 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
         command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
         command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
         command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &sessions);
-        command.env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250");
         command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
         let mut child = pair
             .slave
@@ -1298,7 +1296,6 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
     command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
     command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "");
-    command.env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250");
     command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
     command.env(
         "RIMZ_ANTIGRAVITY_HOOKS",
