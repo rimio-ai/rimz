@@ -1109,16 +1109,49 @@ fn gc_tmp_floor_evicts_machine_wide_oldest_first_and_keeps_live_units() {
     let unnamed = paths.temp_unit_dir(None);
     std::fs::create_dir_all(&unnamed).unwrap();
 
-    for config in ["[gc]\nauto = false\n", "[gc]\ntmp_floor_min = \"broken\"\n"] {
+    let mut outcomes = Vec::new();
+    let mut outputs = Vec::new();
+    for (config, reason) in [
+        (
+            "[gc]\nauto = false\n",
+            "pressure eviction is paused by gc.auto = false; rimz gc --all removes temp units past gc.tmp_grace; rimz config set gc.auto true resumes pressure eviction.",
+        ),
+        (
+            "[gc]\ntmp_floor_min = \"broken\"\n",
+            "gc.tmp_floor_min size `broken` is not an integer: cannot parse integer from empty string; use B/KB/KiB/MB/MiB/GB/GiB",
+        ),
+    ] {
         write_machine_config(&env, config);
-        env.rimz()
-            .args(["gc", "--tmp-floor"])
-            .env("RIMZ_TEST_DISK_SPACE", "1,100")
-            .assert()
-            .success();
-        assert!(paths.temp_unit_dir(Some("oldest")).exists());
-        assert!(!env.rimz_home().join("logs/assists.log.jsonl").exists());
+        for json in [false, true] {
+            let mut command = env.rimz();
+            command.args(["gc", "--tmp-floor"]);
+            command.env("RIMZ_TEST_DISK_SPACE", "1,100");
+            if json {
+                command.arg("--json");
+            }
+            let output = command.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            outcomes.push((
+                output.status.success(),
+                output.stdout.is_empty(),
+                stderr.contains(reason),
+                !stderr.contains("--tmp-floor"),
+            ));
+            outputs.push(output);
+            assert!(paths.temp_unit_dir(Some("oldest")).exists());
+            assert!(!env.rimz_home().join("logs/assists.log.jsonl").exists());
+        }
     }
+    assert_eq!(
+        outcomes,
+        [
+            (true, true, true, true),
+            (true, true, true, true),
+            (false, true, true, true),
+            (false, true, true, true),
+        ],
+        "{outputs:?}"
+    );
     write_machine_config(
         &env,
         "[gc]\ntmp_floor_percent = 10\ntmp_floor_min = \"1GiB\"\n",
@@ -1148,6 +1181,48 @@ fn gc_tmp_floor_evicts_machine_wide_oldest_first_and_keeps_live_units() {
         })
         .collect();
     assert_eq!(handles, ["oldest", "orphan", "recent"]);
+}
+
+#[test]
+fn gc_tmp_floor_reports_a_busy_pressure_lock_without_eviction() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let unit = env
+        .state_path_for(&env.project_root)
+        .temp_unit_dir(Some("orphan"));
+    std::fs::create_dir_all(&unit).unwrap();
+    let lock = env.runtime_paths().shared_root.join("tmp-floor.lock");
+    let _guard = rimz::disk::lock::WorkspaceLock::try_acquire(&lock)
+        .unwrap()
+        .expect("hold machine pressure lock");
+    let mut outcomes = Vec::new();
+    for json in [false, true] {
+        let mut command = env.rimz();
+        command.args(["gc", "--tmp-floor"]);
+        command.env("RIMZ_TEST_DISK_SPACE", "1,100");
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        outcomes.push((
+            output.status.success(),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        ));
+        assert!(unit.exists());
+        assert!(!env.rimz_home().join("logs/assists.log.jsonl").exists());
+    }
+    assert_eq!(
+        outcomes,
+        vec![
+            (
+                true,
+                String::new(),
+                "another free-space pass is already running\n".to_owned(),
+            );
+            2
+        ]
+    );
 }
 
 #[test]

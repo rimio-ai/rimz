@@ -2708,6 +2708,113 @@ fn temp_units_without_measurement_show_counts_and_reclaimable_warning() {
 }
 
 #[test]
+fn temp_units_paused_above_the_floor_adds_only_an_uncounted_eviction_row() {
+    let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+        free_bytes: 20,
+        total_bytes: 100,
+        floor_bytes: 10,
+        eviction_paused: true,
+        ..Default::default()
+    });
+    let mut tally = Tally::default();
+    let out = strip(|w| render_temp_units(w, &report, &mut tally));
+    assert!(
+        out.lines()
+            .any(|line| line.trim_start().starts_with("eviction:")
+                && line.contains("pressure eviction is paused by gc.auto = false")),
+        "{out}"
+    );
+    assert!(tally.warns.is_empty());
+    assert!(tally.alarms.is_empty());
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing.contains("everything checked is healthy"),
+        "{closing}"
+    );
+}
+
+#[test]
+fn temp_units_paused_with_past_grace_units_offers_a_machine_sweep_or_resume() {
+    let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+        free_bytes: 1,
+        total_bytes: 100,
+        floor_bytes: 10,
+        eviction_paused: true,
+        reclaimable_units: 3,
+        past_grace_units: 2,
+        ..Default::default()
+    });
+    let mut tally = Tally::default();
+    let _out = strip(|w| render_temp_units(w, &report, &mut tally));
+    assert_eq!(tally.warns.len(), 1);
+    assert!(tally.alarms.is_empty());
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("gc.auto = false"), "{closing}");
+    assert!(closing.contains("rimz gc --all"), "{closing}");
+    assert!(closing.contains("2 units past the grace"), "{closing}");
+    assert!(
+        closing.contains("rimz config set gc.auto true"),
+        "{closing}"
+    );
+    assert!(!closing.contains("--tmp-floor"), "{closing}");
+}
+
+#[test]
+fn temp_units_paused_inside_the_grace_offers_only_resume() {
+    let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+        free_bytes: 1,
+        total_bytes: 100,
+        floor_bytes: 10,
+        eviction_paused: true,
+        reclaimable_units: 2,
+        ..Default::default()
+    });
+    let mut tally = Tally::default();
+    let _out = strip(|w| render_temp_units(w, &report, &mut tally));
+    assert_eq!(tally.warns.len(), 1);
+    assert!(tally.alarms.is_empty());
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("gc.auto = false"), "{closing}");
+    assert!(
+        closing.contains("rimz config set gc.auto true"),
+        "{closing}"
+    );
+    assert!(!closing.contains("--tmp-floor"), "{closing}");
+    assert!(!closing.contains("rimz gc --all"), "{closing}");
+}
+
+#[test]
+fn temp_units_paused_without_reclaimable_units_explains_cleanup_after_stopping() {
+    let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+        free_bytes: 1,
+        total_bytes: 100,
+        floor_bytes: 10,
+        eviction_paused: true,
+        in_use_units: 3,
+        ..Default::default()
+    });
+    let mut tally = Tally::default();
+    let _out = strip(|w| render_temp_units(w, &report, &mut tally));
+    assert!(tally.warns.is_empty());
+    assert_eq!(tally.alarms.len(), 1);
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("stop or restart"), "{closing}");
+    assert!(closing.contains("rimz agents show @handle"), "{closing}");
+    assert!(closing.contains("gc.auto = false"), "{closing}");
+    assert!(
+        closing.contains("stopped agents' units remain"),
+        "{closing}"
+    );
+    assert!(
+        closing.contains("rimz config set gc.auto true"),
+        "{closing}"
+    );
+    assert!(closing.contains("rimz gc --all"), "{closing}");
+    assert!(closing.contains("once past the grace"), "{closing}");
+    assert!(!closing.contains("--tmp-floor"), "{closing}");
+}
+
+#[test]
 fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
     let render = |earliest_reclaim| {
         let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {

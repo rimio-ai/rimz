@@ -1405,6 +1405,7 @@ fn doctor_temp_units_reports_pressure_without_writing_state() {
     let report = doctor_json(&output);
     assert_eq!(report["temp_units"]["ready"]["free_bytes"], 1);
     assert_eq!(report["temp_units"]["ready"]["floor_bytes"], 10);
+    assert_eq!(report["temp_units"]["ready"]["eviction_paused"], false);
     assert_eq!(report["temp_units"]["ready"]["reclaimable_units"], 1);
     assert_eq!(report["temp_units"]["ready"]["past_grace_units"], 0);
     assert_eq!(report["temp_units"]["ready"]["in_use_units"], 0);
@@ -1427,6 +1428,51 @@ fn doctor_temp_units_reports_pressure_without_writing_state() {
         .unwrap();
     let text = String::from_utf8(text.stdout).unwrap();
     assert!(text.contains("stop or restart"), "{text}");
+}
+
+#[test]
+fn doctor_temp_units_reports_paused_eviction_and_the_resume_fix() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_machine_config(
+        &env,
+        "[gc]\nauto = false\ntmp_floor_percent = 10\ntmp_floor_min = \"0\"\n",
+    );
+    let unit = env
+        .state_path_for(&env.project_root)
+        .temp_unit_dir(Some("orphan"));
+    std::fs::create_dir_all(&unit).unwrap();
+    let before = tree_listing(&env.rimz_home());
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .output()
+        .unwrap();
+    let report = doctor_json(&output);
+    let units = &report["temp_units"]["ready"];
+    assert_eq!(units["reclaimable_units"], 1);
+    assert_eq!(units["past_grace_units"], 0);
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(tree_listing(&env.rimz_home()), before);
+    assert_eq!(
+        (
+            units["eviction_paused"].as_bool(),
+            text.lines().any(|line| line.contains("eviction")
+                && line.contains("pressure eviction is paused by gc.auto = false")),
+            text.contains("rimz config set gc.auto true"),
+            text.contains("rimz gc --tmp-floor"),
+            text.contains("rimz gc --all"),
+        ),
+        (Some(true), true, true, false, false),
+        "{units}\n{text}"
+    );
 }
 
 #[test]
