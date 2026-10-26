@@ -1,6 +1,6 @@
 # OpenCode adapter
 
-This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream plugin protocol, pinned at OpenCode 2.0.27, and model-selection server at 2.1.4 are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
+This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, based on OpenCode 2.0.27 with versioned updates, and the model-selection server at 2.1.4 are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
 
 RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` declares a 2.0.0 floor through `min_version`. RimZ authors the whole wire: an in-process TypeScript plugin flattens OpenCode's hooks and bus events into a snake_case envelope that RimZ owns. A payload drift is therefore a RimZ bug in the plugin, never an upstream one.
 
@@ -8,7 +8,7 @@ RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs:
 
 | File | Owns |
 | --- | --- |
-| `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, native delegation denial, and `context_window_for` |
+| `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, system-prompt delivery and native delegation denial in one env hook, and `context_window_for` |
 | `crates/rimz/src/agents/adapters/opencode/plugin.ts` | The plugin RimZ installs: activation, root and child classification, the event mapping, the gauge, launch reminders, and cleanup |
 | `crates/rimz/src/agents/adapters/opencode/payloads.rs` | `OpencodeHookPayload`, the typed envelope, and its tolerant parse |
 | `crates/rimz/src/agents/adapters/opencode/database.rs` | Database discovery, the logical stat, read-only SQLite access, and credential loading |
@@ -111,19 +111,43 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 
 Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model selection is verified on 2.1.4, without raising the floor for model-less launches. Fork and effort presets are unsupported; unsupported fast and auto-compact settings warn and launch without the setting.
 
-OpenCode never carries this launch text:
+Other launch text limits:
 
-- A profile system-prompt replacement or prompt file refuses with `PromptComposeErr::Unsupported`, because the adapter declares no system-prompt matcher (`crates/rimz/src/harness/prompt_compose.rs`).
 - A headless request refuses, because `launch.headless` is `None`.
 - A compaction instruction is dropped without notice, because `CompactInstruction::Unsupported` renders only `/compact`.
 
+`crates/rimz/src/agents/adapters/opencode/mod.rs::OPENCODE_DESCRIPTOR` declares `SystemPromptFile` as `PresetArgMatcher::EnvConfigMember`, naming `OPENCODE_CONFIG_CONTENT` and `agents.build.system`. Every OpenCode definition therefore requires a nonempty `agents/opencode.md` kind base, even without a craft body. A home with no definitions needs none; there, a bare `rimz agents opencode` still launches without a replacement. The [kind-base validation rule](../../reference/definitions.md#kind-bases) supplies the missing-base error.
+
+The [shared composition order](../harness/fleet.md#system-prompt-composition) applies to kind bases, crafts, profile bodies, CLI prompt files, and team layers. `crates/rimz/src/harness/prompt_compose.rs::plan_system_prompt` always plans a content-addressed `live/prompt/sys.<digest32>.md` artifact for this matcher, including a lone file base. Its materialized value adds no argv or env directly: `MaterializedSystemPrompt.hook_path` travels through `LaunchReminders.system_prompt_file` to the final env hook. `crates/rimz/src/harness/launch_plan.rs::compile` carries it for every launch action, resume included, and `crates/rimz/src/harness/launch_plan.rs::apply` writes the artifact before the provider starts. `rimz agents explain opencode` shows `OPENCODE_CONFIG_CONTENT agents.build.system` and the planned artifact without writing it.
+
+`crates/rimz/src/harness/prompt_compose.rs::render` refuses a non-UTF-8 artifact path or one containing `{`, `}`, `"`, `\`, or a control character, before the provider starts. A `{` would let OpenCode's `{env:}` substitution, which runs before `{file:}`, consume the reference. The refusal is:
+
+```text
+opencode system prompt artifact `<path>` cannot be carried by a {file:} reference: its path must be UTF-8 and contain no `{`, `}`, `"`, `\`, or control characters; set XDG_RUNTIME_DIR to a directory whose path has none of them
+```
+
 Launch reminders arrive through `SystemTextChannel::ExtensionEnv`, which sets `RIMZ_LAUNCH_REMINDERS` ([fleet.md](../harness/fleet.md#launch-reminders) owns the text). The first activation in the process claims the value into a `globalThis` symbol and deletes the variable, so tool children never inherit it. The `context` hook then appends `{type: "text", text}` to the mutable `system` array for root sessions only. The hook checks the session and nothing else: it has no request-kind check.
 
-An OpenCode launch covered by the [native delegation policy](../harness/subagents.md#native-delegation-policy) calls `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter::disable_native_subagent_env` from `crates/rimz/src/harness/launch.rs::compile_agent_process_with_extra_env`. Its base `OPENCODE_CONFIG_CONTENT` is the value the process would otherwise see: composed launch env over inherited login env. The adapter parses it as JSONC, preserves every key including `permissions`, and appends `"-opencode.tool.subagent"` last in `plugins`, creating the array when absent and not doubling a selector already last. It writes strict JSON into the final launch env. This removes the built-in tool rather than denying a permission, so neither `--auto` nor an agent-specific allow restores it ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-native-requests)).
+Every managed OpenCode launch calls `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter::finalize_launch_env` once from `crates/rimz/src/harness/launch.rs::compile_agent_process_with_extra_env`. The hook receives the effective login env (composed launch env over inherited login env), the mutable final env, the native-delegation decision, and the optional composed prompt path. All edits to one variable share one JSONC parse, so prompt delivery cannot erase delegation denial or vice versa. A value exported only by shell startup files is not an input to this merge; the final override wins over it ([env precedence](../harness/trust.md#env-application)).
 
-Absent content becomes `{"plugins":["-opencode.tool.subagent"]}` without a warning. Invalid JSONC, a non-object root, or non-array `plugins` gets that same fallback plus one `crates/rimz/src/harness/launch_plan.rs::LaunchPlanWarning::LaunchEnv`, carried from the process compiler to the launch plan. The warning names `OPENCODE_CONFIG_CONTENT` and the problem, says the launch ignored the configured value, and gives both fixes: set a JSON object whose `plugins` is an array, or unset it. The exec wrapper prints and records it with the other launch warnings.
+When neither native delegation is switched off nor a prompt is delivered, the hook leaves `OPENCODE_CONFIG_CONTENT` untouched, even if malformed; an absent value stays absent. Otherwise it parses the effective value as a JSONC object (absent means `{}`), keeps every valid user key, and writes strict JSON after these edits:
 
-Every managed OpenCode launch also calls `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter::finalize_launch_env` from the same process compiler, regardless of the native delegation policy. Its base `OPENCODE_CLI_CONFIG_CONTENT` is composed launch env over inherited login env, not a value set only by shell startup files. The step writes strict JSON with `tabs.mode = "off"` into the final launch env without changing `OPENCODE_CONFIG_CONTENT`:
+- With [native delegation switched off](../harness/subagents.md#native-delegation-policy), append `"-opencode.tool.subagent"` last in `plugins`, creating the array when absent and not doubling a selector already last. This removes the built-in tool rather than denying a permission, so neither `--auto` nor an agent-specific allow restores it ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-native-requests)).
+- With a prompt, write `agents.build.system = "{file:<absolute artifact path>}"`, creating absent containers and preserving siblings in `agents` and `agents.build`. Leave `plugins` alone unless delegation is also switched off. OpenCode substitutes the file contents without re-scanning them for `{env:...}` or `{file:...}` ([upstream rules](../../externals/agent-adapter/opencode-reference.md#system-prompts-and-config-substitution)).
+
+Invalid JSONC, a non-object root, non-array `plugins` when delegation edits it, or non-object `agents` or `agents.build` when prompt delivery edits them discards the entire configured value before applying all requested edits to `{}`. `crates/rimz/src/agents/adapters/opencode/mod.rs::parse_inline_config` checks `plugins` first, then `agents`, then `agents.build`, only when needed. It returns one warning naming the first offending member and its required shape (for a parse or root error, the first required member):
+
+```text
+OPENCODE_CONFIG_CONTENT <problem>; this launch ignored the configured value; set it to a JSON object whose <member> is <shape>, or unset it
+```
+
+When delivering a prompt, a pre-existing `agents.build.system` in valid effective inline content, any value including an empty string, is replaced with exactly this warning:
+
+```text
+OPENCODE_CONFIG_CONTENT set agents.build.system; RimZ's composed system prompt replaced it for this launch; move that prompt into agents/opencode.md or a profile's system-prompt-file, or remove it from the variable
+```
+
+The same hook always edits `OPENCODE_CLI_CONFIG_CONTENT`, regardless of delegation or prompt delivery. It reads the effective value from the same env snapshot and writes strict JSON with `tabs.mode = "off"`:
 
 | Effective CLI config content | Final CLI config content | Warning |
 | --- | --- | --- |
@@ -132,6 +156,14 @@ Every managed OpenCode launch also calls `crates/rimz/src/agents/adapters/openco
 | Invalid JSONC (including whitespace-only), non-object root, or non-object `tabs` | `{"tabs":{"mode":"off"}}` | One `LaunchPlanWarning::LaunchEnv`, naming the variable and problem, saying this launch ignored the configured value, and giving the fix: set a JSON object whose `tabs` is an object, or unset it |
 
 This hides the native session tab strip from OpenCode 2.0.13 onward; 2.0.0 through 2.0.12 keep their tabs, and the minimum supported version remains 2.0.0. Manual OpenCode launches, including from a room shell, are unchanged. RimZ validates only the root and `tabs` container shapes, not OpenCode's versioned settings schema: another invalid setting such as `{"theme":42}` or `{"tabs":{"scope":42}}` makes OpenCode drop the whole inline value, including RimZ's mode, and fall back to `cli.json`. The [upstream CLI config reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment) owns parsing, precedence, version support, and legacy-tab normalization.
+
+Warnings return in order, core config before CLI config, at most one per variable. Each becomes `crates/rimz/src/harness/launch_plan.rs::LaunchPlanWarning::LaunchEnv`; the exec wrapper prints and records it with the other launch warnings.
+
+### Replacement limits
+
+- RimZ writes only `agents.build.system`; it does not pin `default_agent`. A different configured primary agent or a resumed session persisted under another agent uses that agent's own prompt. For `build`, OpenCode reads the configured system text per request, so a resume gets the replacement again without extra argv. [Upstream source](../../externals/agent-adapter/opencode-reference.md#system-prompts-and-config-substitution) shows this, and a live `rimz agents resume` on OpenCode 2.1.4 confirmed it: a prompt changed between stop and resume took effect in the resumed session.
+- Project instructions and RimZ's plugin reminder still follow the replaced built-in prompt. Managed settings load after inline content and can override `agents.build.system`; RimZ does not discover them and cannot warn about that override.
+- The artifact freezes the launched text, but runtime GC can sweep it by mtime after `gc.older_than` (default 7 days), even while a session remains open ([runtime retention](../store.md#garbage-collection)). A later OpenCode config reload then re-reads a missing file. On 2.0.30 and later, OpenCode warns and substitutes empty, restoring its built-in prompt until restart. On 2.0.0 through 2.0.29, the reload fails and keeps the previous config; a missing reference at startup instead fails the load ([versioned behavior](../../externals/agent-adapter/opencode-reference.md#system-prompts-and-config-substitution)).
 
 ## Model selection
 
@@ -230,7 +262,7 @@ The spend cache stamps one origin per database file, either an origin override f
 
 - Native answering, background parking, background shells, and remote control are unsupported.
 - Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.
-- Plan mode at launch, effort presets, fork, system-prompt replacement, and headless runs are unsupported.
+- Plan mode at launch, effort presets, fork, and headless runs are unsupported. System-prompt replacement has the [agent-selection, managed-settings, and artifact-retention limits](#replacement-limits) above.
 - RimZ does not read `OPENCODE_DB`, and it skips channel databases whose names contain a `.`, which OpenCode allows ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-storage-and-credentials)).
 - Workspace-scoped spend reads one origin for the whole shared database.
 - The reference does not record whether OpenCode runs the `context` hook for title or generate requests, so whether those requests carry the launch reminder is unverified.
