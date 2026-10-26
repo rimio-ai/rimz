@@ -1197,6 +1197,15 @@ pub enum LaunchFinalizeError {
     )]
     UnsupportedSystemPrompt { agent: &'static str },
     #[error(
+        "{agent} takes no system prompt, so the prompt from {} cannot be delivered; \
+         launch on a kind that takes a system prompt",
+        origin.display()
+    )]
+    UnsupportedDefinitionPrompt {
+        agent: &'static str,
+        origin: PathBuf,
+    },
+    #[error(
         "{agent} append-system-prompt-files requires a base system-prompt-file; add one to the profile, role, or launch command"
     )]
     MissingSystemPromptBase { agent: &'static str },
@@ -1218,6 +1227,7 @@ impl LaunchFinalizeError {
             | Self::PromptFile(_)
             | Self::UnsupportedPresetField { .. }
             | Self::UnsupportedSystemPrompt { .. }
+            | Self::UnsupportedDefinitionPrompt { .. }
             | Self::MissingSystemPromptBase { .. }
             | Self::PromptValidation { .. } => &[],
         }
@@ -1559,18 +1569,26 @@ fn validate_system_prompt_support(
     cell: &AgentCell,
     adapter: Option<&crate::agents::AgentDefinition>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    if SystemPromptSources::from_cell(cell).is_empty() {
+    let sources = SystemPromptSources::from_cell(cell);
+    if sources.is_empty() {
         return Ok(());
     }
     let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
         kind: cell.kind.to_string(),
     })?;
-    if adapter
-        .spec()
-        .launch
-        .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
-        .is_none()
-    {
+    if !adapter.spec().launch.takes_system_prompt() {
+        if let Some(source) = sources
+            .system_prompt_file
+            .iter()
+            .chain(&sources.append_system_prompt_files)
+            .chain(sources.team_prompt.iter().flat_map(|prompt| &prompt.files))
+            .find(|source| source.file().is_none())
+        {
+            return Err(LaunchFinalizeError::UnsupportedDefinitionPrompt {
+                agent: adapter.spec().kind,
+                origin: source.origin().to_owned(),
+            });
+        }
         return Err(LaunchFinalizeError::UnsupportedSystemPrompt {
             agent: adapter.spec().kind,
         });

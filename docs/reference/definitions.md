@@ -85,6 +85,8 @@ Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, ex
 
 A kind that takes no system prompt carries no RimZ prompt. Validation refuses its kind base (delete the file), a definition with a craft body on it (remove the body or choose a kind that takes a system prompt), and a team seat on it (choose a definition on a kind that takes a system prompt). A bodyless standalone definition on such a kind needs no base. A definition on a kind whose base failed to load fails too, naming that base rather than asking you to create it.
 
+Overriding a definition's kind with `--agent` does not discard its prompt. If the chosen kind cannot receive it, launch refuses, names the first definition file supplying the prompt (base, then crafts, then team pipeline), and asks you to choose a kind that takes a system prompt.
+
 ### Traits
 
 `traits: [careful, concise]` reads `traits/careful.md` then `traits/concise.md`, deduplicating first-seen names. Names cannot be empty, `.` or `..`, or contain path separators. These files are plain Markdown: their complete trimmed contents are joined with blank lines and replace the first `${traits}` in the body. Later tokens collapse to a blank line. With no traits, the token disappears. Naming traits without a token is an error. Other `${...}` placeholders survive unchanged; the team pipeline is not trait-substituted.
