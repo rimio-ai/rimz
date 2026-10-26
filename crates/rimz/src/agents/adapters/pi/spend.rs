@@ -11,10 +11,12 @@
 //! `2026-06-04T06-45-56-308Z_019e9161-….jsonl`, the uuid being the session
 //! id). Upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`;
 //! the `PI_AGENT_DIR` env honored here is RimZ's own comma-separated test
-//! override, not a pi variable. Upstream shapes are mirrored in
-//! `docs/externals/agent-adapter/pi-reference.md`. Usage appears on assistant
-//! and tool-result messages and at the top level of compaction, branch-summary,
-//! and standalone usage entries. Assistant entries also carry durable tool-call counts:
+//! override, not a pi variable. Home and session overrides resolve from the
+//! caller's login environment, never the process environment. Upstream
+//! shapes are mirrored in `docs/externals/agent-adapter/pi-reference.md`.
+//! Usage appears on assistant and tool-result messages and at the top
+//! level of compaction, branch-summary, and standalone usage entries.
+//! Assistant entries also carry durable tool-call counts:
 //! ```json
 //! { "type": "message",
 //!   "timestamp": "2026-01-01T10:00:00.000Z",
@@ -34,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, price_split,
@@ -162,33 +165,29 @@ struct PiCost {
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 
-pub(super) fn pi_session_roots() -> Vec<PathBuf> {
+pub(super) fn pi_session_roots(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
-    if let Ok(env_val) = std::env::var("PI_AGENT_DIR") {
+    if let Some(env_val) = login_env.get("PI_AGENT_DIR") {
         for raw in env_val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             let p = PathBuf::from(raw);
             roots.push(p);
         }
-    } else if let Ok(raw) = std::env::var("PI_CODING_AGENT_SESSION_DIR") {
+    } else if let Some(raw) = login_env
+        .get("PI_CODING_AGENT_SESSION_DIR")
+        .filter(|raw| !raw.is_empty())
+    {
         roots.push(PathBuf::from(raw));
-    } else {
-        roots.push(pi_config_dir().join("sessions"));
+    } else if let Some(home) = super::PiAdapter.config_home(login_env) {
+        roots.push(home.join("sessions"));
     }
 
     roots
 }
 
-pub(super) fn pi_config_dir() -> PathBuf {
-    pi_config_dir_from(
-        std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref().map(Path::new),
-    )
-    .unwrap_or_else(|| PathBuf::from("/.pi/agent"))
-}
-
 pub(super) fn pi_config_dir_from(configured: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
     configured
+        .filter(|configured| !configured.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.map(|home| home.join(".pi/agent")))
 }

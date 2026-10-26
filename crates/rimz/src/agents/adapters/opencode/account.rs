@@ -10,7 +10,7 @@ fn config() -> Config {
     Config {
         adapter: Adapter::OpenCode,
         load_credentials: Box::new(database::load_credentials),
-        used_provider: database::latest_message_provider,
+        used_provider: Box::new(database::latest_message_provider),
         api_key_types: &["key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
     }

@@ -1,5 +1,6 @@
 //! Pi account path and active-provider discovery.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
@@ -8,7 +9,8 @@ use std::time::{Duration, SystemTime};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::spend::{pi_config_dir, pi_session_roots};
+use super::spend::pi_session_roots;
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::delegated_account::{Adapter, Config};
 use crate::agents::{AccountUsageProbe, read_transcript_tail};
 
@@ -16,31 +18,39 @@ const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 const INPUTS_STAMP_DOMAIN: &[u8] = b"rimz/pi-account-inputs/v1";
 const MAX_SESSION_HEADER_BYTES: usize = 1024 * 1024;
 
-fn config() -> Config {
-    Config {
+fn config(login_env: &BTreeMap<String, String>) -> Option<Config> {
+    let home = super::PiAdapter.config_home(login_env)?;
+    let roots = pi_session_roots(login_env);
+    Some(Config {
         adapter: Adapter::Pi,
-        load_credentials: Box::new(|| {
-            crate::agents::delegated_account::load_auth_file(
-                &pi_config_dir().join("auth.json"),
-                Adapter::Pi,
-            )
+        load_credentials: Box::new(move || {
+            crate::agents::delegated_account::load_auth_file(&home.join("auth.json"), Adapter::Pi)
         }),
-        used_provider,
+        used_provider: Box::new(move || used_provider_from(&roots)),
         api_key_types: &["api_key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
-    }
+    })
 }
 
-pub(super) fn probe() -> crate::agents::account::AccountProbe {
-    crate::agents::delegated_account::probe_account(&config())
+pub(super) fn probe(login_env: &BTreeMap<String, String>) -> crate::agents::account::AccountProbe {
+    config(login_env).map_or(crate::agents::account::AccountProbe::LoggedOut, |config| {
+        crate::agents::delegated_account::probe_account(&config)
+    })
 }
 
-pub(super) fn probe_usage() -> AccountUsageProbe {
-    crate::agents::delegated_account::probe_account_usage(&config())
+pub(super) fn probe_usage(login_env: &BTreeMap<String, String>) -> AccountUsageProbe {
+    config(login_env).map_or(
+        AccountUsageProbe::NoCredentials(Default::default()),
+        |config| crate::agents::delegated_account::probe_account_usage(&config),
+    )
 }
 
-pub(super) fn inputs_stamp() -> u64 {
-    inputs_stamp_from(&pi_config_dir().join("auth.json"), &pi_session_roots())
+pub(super) fn inputs_stamp(login_env: &BTreeMap<String, String>) -> Option<u64> {
+    let home = super::PiAdapter.config_home(login_env)?;
+    Some(inputs_stamp_from(
+        &home.join("auth.json"),
+        &pi_session_roots(login_env),
+    ))
 }
 
 /// Hashes `auth.json`'s mtime and each session root's entries one level
@@ -108,10 +118,6 @@ fn hash_modified(hasher: &mut Sha256, modified: Option<Duration>) {
 }
 
 /// Provider of the newest Pi session candidate, read through a usable parent once.
-fn used_provider() -> Option<String> {
-    used_provider_from(&pi_session_roots())
-}
-
 fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
     let directories = roots.iter().flat_map(|root| {
         let subdirectories = std::fs::read_dir(root)

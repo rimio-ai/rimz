@@ -60,7 +60,7 @@ Hermes follows the same watched/unattended rule: from your own shell, launch `ri
 | `minimax` (`mcode`) | `<dataDir>/plugins/rimz/{.minimax-plugin/plugin.json,hooks/rimz.json,icon.png}` | Whole native plugin package |
 | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/rimz.ts` | Whole file |
 | `omp` | `~/.omp/agent/extensions/rimz.ts` | Whole file; default home only |
-| `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
+| `pi` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
 | `qoder` | `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` | Merge; needs Qoder CLI 1.1.72 or later |
 | `muse` | `${XDG_CONFIG_HOME:-~/.config}/muse/rimz-hooks.json`, `settings.json` in the same directory | Whole hook file plus managed-hook settings; needs Muse Code 1.4.9 or later |

@@ -277,7 +277,7 @@ mod tests {
         let config = Config {
             adapter: Adapter::OpenCode,
             load_credentials: Box::new(move || load_credentials_at(&load_path)),
-            used_provider: || None,
+            used_provider: Box::new(|| None),
             api_key_types: &["key"],
             account_key_domain: b"test",
         };

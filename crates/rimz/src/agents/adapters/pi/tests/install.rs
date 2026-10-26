@@ -7,6 +7,41 @@ fn managed_event_names() -> Vec<String> {
 }
 
 #[test]
+fn extension_path_uses_login_home() {
+    let env = BTreeMap::from([("PI_CODING_AGENT_DIR".into(), "/selected".into())]);
+    assert_eq!(
+        pi_extension_path(&env).unwrap(),
+        PathBuf::from("/selected/extensions/rimz.ts"),
+    );
+}
+
+#[test]
+fn extension_override_comes_from_login_env() {
+    let mut env = BTreeMap::from([
+        ("PI_CODING_AGENT_DIR".into(), "/selected".into()),
+        ("RIMZ_PI_EXTENSION".into(), "/override/rimz.ts".into()),
+    ]);
+    assert_eq!(
+        pi_extension_path(&env).unwrap(),
+        PathBuf::from("/override/rimz.ts"),
+    );
+    env.insert("RIMZ_PI_EXTENSION".into(), String::new());
+    assert_eq!(
+        pi_extension_path(&env).unwrap(),
+        PathBuf::from("/selected/extensions/rimz.ts"),
+    );
+}
+
+#[test]
+fn extension_path_without_home_is_a_typed_install_error() {
+    let result = pi_extension_path(&BTreeMap::new());
+    assert!(matches!(result, Err(AgentErr::Install { agent: "pi", .. })));
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("$PI_CODING_AGENT_DIR"));
+    assert!(message.contains("$HOME"));
+}
+
+#[test]
 fn managed_extension_install_preview_and_uninstall() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("extensions").join("rimz.ts");

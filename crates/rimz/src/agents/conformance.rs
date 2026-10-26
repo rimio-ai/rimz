@@ -411,15 +411,7 @@ fn builtin_config_homes_honor_provider_overrides() {
         env.insert(key.into(), String::new());
         let empty_override = adapter.config_home(&env);
         env.remove(key);
-        assert_eq!(
-            empty_override,
-            if kind == "pi" {
-                Some(PathBuf::new())
-            } else {
-                adapter.config_home(&env)
-            },
-            "{kind}"
-        );
+        assert_eq!(empty_override, adapter.config_home(&env), "{kind}");
     }
 }
 
