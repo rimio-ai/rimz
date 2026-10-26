@@ -441,6 +441,10 @@ pub struct Profile {
     /// Complete family renders exist only for Markdown definitions.
     #[serde(skip)]
     pub definition_renders: Option<super::tiers::DefinitionRenders>,
+    /// Whether unwritten mode and effort take the definition defaults of the kind and model
+    /// the launch finally runs on.
+    #[serde(skip)]
+    pub kind_defaults: bool,
     #[serde(skip)]
     pub model_tier: Option<super::tiers::TierProvenance>,
     #[serde(skip)]
@@ -527,6 +531,20 @@ pub struct Profile {
     pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
+}
+
+impl Profile {
+    /// The effort used when launching on this profile's own kind and model.
+    pub fn effective_effort(&self) -> Option<String> {
+        self.effort.clone().or_else(|| {
+            if !self.kind_defaults {
+                return None;
+            }
+            crate::agents::definition_defaults(&self.agent, self.model.as_deref())
+                .effort
+                .map(str::to_owned)
+        })
+    }
 }
 
 pub(super) fn native_auto_compact(window: Option<u64>, kind: &str) -> Option<String> {

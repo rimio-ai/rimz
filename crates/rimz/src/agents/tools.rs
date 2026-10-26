@@ -160,7 +160,20 @@ pub fn definition_model_kind(model: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
-    let spec = definitions(kind);
+    spec_by_kind(kind).map_or(
+        DefinitionDefaults {
+            mode: None,
+            effort: None,
+        },
+        |spec| defaults_for_launch(&spec.launch, requested_model),
+    )
+}
+
+fn defaults_for_launch(
+    launch: &super::LaunchSpec,
+    requested_model: Option<&str>,
+) -> DefinitionDefaults {
+    let spec = launch.definitions;
     let effort = requested_model
         .and_then(|model| {
             spec.models
@@ -174,7 +187,12 @@ pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> 
                         .and_then(|entry| entry.effort)
                 })
         })
-        .or(spec.effort);
+        .or(spec.effort)
+        .filter(|_| {
+            launch
+                .preset_arg_matcher(super::PresetField::Effort)
+                .is_some()
+        });
     DefinitionDefaults {
         mode: spec.mode,
         effort,
@@ -550,6 +568,34 @@ mod tests {
                 mode: None,
                 effort: None
             }
+        );
+    }
+
+    #[test]
+    fn definition_effort_defaults_require_a_matcher() {
+        let mut launch = super::super::LaunchSpec {
+            definitions: DefinitionSpec {
+                mode: Some(PermissionMode::Auto),
+                effort: Some("xhigh"),
+                ..DefinitionSpec::EMPTY
+            },
+            ..super::super::LaunchSpec::EMPTY
+        };
+        let unsupported = defaults_for_launch(&launch, None);
+        launch.presets.effort = Some(super::super::StaticPresetMatcher::Flag(&["--effort"]));
+        let supported = defaults_for_launch(&launch, None);
+        assert_eq!(
+            [unsupported, supported],
+            [
+                DefinitionDefaults {
+                    mode: Some(PermissionMode::Auto),
+                    effort: None,
+                },
+                DefinitionDefaults {
+                    mode: Some(PermissionMode::Auto),
+                    effort: Some("xhigh"),
+                },
+            ]
         );
     }
 }

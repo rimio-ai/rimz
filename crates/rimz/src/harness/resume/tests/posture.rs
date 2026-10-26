@@ -4,6 +4,38 @@
 use super::*;
 
 #[test]
+fn recorded_agent_override_resolves_defaults_for_its_kind() {
+    let mut worker = profile("claude");
+    worker.kind_defaults = true;
+    let profiles = profiles("worker", worker);
+    let mut actual = Vec::new();
+    for (kind, base) in [("claude", None), ("qwen", Some("qwen"))] {
+        let record = crate::agents::LaunchRecord {
+            agent: base.map(str::to_owned),
+            ..Default::default()
+        };
+        let posture = resolve_posture(
+            PostureRequest {
+                record: base.map(|_| &record),
+                profile: Some("worker"),
+                kind: &AgentKind::new_unchecked(kind),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            &profiles,
+        );
+        actual.push((posture.degraded, posture.launch.mode, posture.launch.effort));
+    }
+    assert_eq!(
+        actual,
+        [
+            (None, Some(PermissionMode::Auto), Some("xhigh".into())),
+            (None, None, None),
+        ]
+    );
+}
+
+#[test]
 fn resumed_tools_policy_reaches_the_exec_request() {
     let mut actual = Vec::new();
     for tools in [vec!["Bash"], vec!["Skill", "Read"]] {

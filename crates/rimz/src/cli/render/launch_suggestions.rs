@@ -73,7 +73,7 @@ fn agents_message(
                     profile.model.as_deref(),
                     profile.model_tier.as_ref().map(|tier| tier.tier),
                     profile.model_tier.as_ref().map(|tier| tier.fell_back),
-                    profile.effort.as_deref(),
+                    profile.effective_effort().as_deref(),
                     profile.fast == Some(true),
                 )),
             ),

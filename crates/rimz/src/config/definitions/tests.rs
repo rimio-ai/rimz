@@ -1899,6 +1899,8 @@ fn bases_are_emitted_in_both_namespaces_with_sources() {
 #[test]
 fn runtime_resolution_aliases_and_defaults() {
     let root = fixture();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
     for (name, fields, kind, model, effort) in [
         (
             "alias",
@@ -1935,22 +1937,48 @@ fn runtime_resolution_aliases_and_defaults() {
             "custom",
             "xhigh",
         ),
+        (
+            "written",
+            "agent: claude\neffort: low\nmode: plan\ntools: [Bash]",
+            "claude",
+            "",
+            "low",
+        ),
     ] {
         definition(root.path(), &format!("agents/{name}.md"), fields, "");
         let loaded = clean(root.path());
         let profile = &loaded.agent_profiles.0[name];
         assert_eq!(profile.agent, kind);
-        assert_eq!(profile.model.as_deref(), Some(model));
-        assert_eq!(profile.effort.as_deref(), Some(effort));
+        assert_eq!(
+            profile.model.as_deref(),
+            (!model.is_empty()).then_some(model)
+        );
+        let resolved = crate::harness::spec::resolve_profile(name, &loaded.agent_profiles).unwrap();
+        actual.push((
+            profile.kind_defaults,
+            profile.mode,
+            profile.effort.clone(),
+            profile.effective_effort(),
+            resolved.launch.mode,
+            resolved.launch.effort,
+        ));
+        let written = name == "written";
+        let mode = written.then_some(crate::agents::PermissionMode::Plan);
+        expected.push((
+            true,
+            mode,
+            written.then(|| effort.to_owned()),
+            Some(effort.to_owned()),
+            mode.or_else(|| (kind == "claude").then_some(crate::agents::PermissionMode::Auto)),
+            Some(effort.to_owned()),
+        ));
         assert_eq!(
             profile.auto_compact_default.as_deref(),
             if kind == "pi" { None } else { Some("272000") }
         );
         assert!(profile.append_system_prompt_files.is_empty());
-        if kind == "claude" {
-            assert_eq!(profile.mode, Some(crate::agents::PermissionMode::Auto));
-        }
     }
+    assert_eq!(actual, expected);
 }
 
 #[test]

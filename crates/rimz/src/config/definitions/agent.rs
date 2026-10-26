@@ -25,6 +25,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
         definition_renders: None,
+        kind_defaults: false,
         tools: None,
         model_tier: None,
         tier_stamp: None,
@@ -328,11 +329,7 @@ impl Resolver<'_> {
             // The probe loop rendered or excluded every table family, and the walk passes the excluded ones.
             let mut selected = renders[&pick.kind].clone();
             selected.model = Some(pick.model.clone());
-            selected.effort = fm.effort.clone().or_else(|| {
-                agents::definition_defaults(&pick.kind, Some(&pick.model))
-                    .effort
-                    .map(str::to_owned)
-            });
+            selected.effort = fm.effort.clone();
             selected.model_tier = Some(TierProvenance {
                 tier,
                 fell_back: pick.used_tier.is_some(),
@@ -546,22 +543,12 @@ impl Resolver<'_> {
             self.scope.skills,
         )?;
         profile.tools = tools;
-        let defaults = agents::definition_defaults(kind, fm.model.as_deref());
+        profile.kind_defaults = true;
         profile.isolation = fm.isolation;
         profile.empty_dir = fm.empty_dir;
-        profile.mode = fm.mode.or(defaults.mode);
+        profile.mode = fm.mode;
         profile.model = fm.model.clone();
-        profile.effort = fm.effort.clone().or_else(|| {
-            agents::find_definition(kind)
-                .and_then(|definition| {
-                    definition
-                        .spec()
-                        .launch
-                        .preset_arg_matcher(PresetField::Effort)
-                })
-                .and(defaults.effort)
-                .map(str::to_owned)
-        });
+        profile.effort = fm.effort.clone();
         profile.auto_compact = fm
             .auto_compact
             .clone()

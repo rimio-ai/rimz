@@ -48,7 +48,7 @@ pub fn catalog(
             source: SubagentProfileSource::Profile,
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
-            effort: profile.effort.clone(),
+            effort: profile.effective_effort(),
             description: profile.description.clone(),
         })
         .collect::<Vec<_>>();
@@ -155,6 +155,7 @@ mod tests {
                 empty_dir: None,
                 allowed_tools: None,
                 definition_renders: None,
+                kind_defaults: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,
@@ -215,6 +216,7 @@ mod tests {
                 empty_dir: None,
                 allowed_tools: None,
                 definition_renders: None,
+                kind_defaults: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,

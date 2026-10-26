@@ -1514,6 +1514,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 definition_renders: None,
+                kind_defaults: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,
@@ -1545,6 +1546,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 empty_dir: None,
                 definition_renders: None,
+                kind_defaults: false,
                 tools: None,
                 auto_compact_default: None,
                 model_tier: None,

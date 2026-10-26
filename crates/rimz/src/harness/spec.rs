@@ -180,6 +180,9 @@ pub(super) fn agent_pane_name(profile: Option<&str>, kind: &AgentKind) -> String
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
     notices: Vec<CellNotice>,
+    kind_defaults: bool,
+    filled_mode: bool,
+    filled_effort: bool,
     pub empty_dir: Option<bool>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
@@ -206,9 +209,21 @@ impl ResolvedProfile {
         self.layers
     }
 
+    /// The chain or role's written mode, excluding a filled kind default.
+    pub(super) fn written_mode(&self) -> Option<PermissionMode> {
+        if self.filled_mode {
+            None
+        } else {
+            self.launch.mode
+        }
+    }
+
     fn bare(kind: &str) -> Self {
         Self {
             notices: Vec::new(),
+            kind_defaults: false,
+            filled_mode: false,
+            filled_effort: false,
             kind: AgentKind::new_unchecked(kind),
             empty_dir: None,
             layers: Vec::new(),
@@ -227,6 +242,7 @@ impl ResolvedProfile {
     }
 
     fn fill_missing(&mut self, layer: &Profile) {
+        self.kind_defaults |= layer.kind_defaults;
         self.empty_dir = self.empty_dir.or(layer.empty_dir);
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
@@ -271,6 +287,32 @@ impl ResolvedProfile {
         }
     }
 
+    fn fill_kind_defaults(&mut self) {
+        if !self.kind_defaults {
+            return;
+        }
+        let defaults = crate::agents::definition_defaults(&self.kind, self.launch.model.as_deref());
+        if self.launch.mode.is_none() {
+            self.launch.mode = defaults.mode;
+            self.filled_mode = self.launch.mode.is_some();
+        }
+        if self.launch.effort.is_none() {
+            self.launch.effort = defaults.effort.map(str::to_owned);
+            self.filled_effort = self.launch.effort.is_some();
+        }
+    }
+
+    fn clear_kind_defaults(&mut self) {
+        if self.filled_mode {
+            self.launch.mode = None;
+            self.filled_mode = false;
+        }
+        if self.filled_effort {
+            self.launch.effort = None;
+            self.filled_effort = false;
+        }
+    }
+
     fn effective_auto_compact(&self) -> Option<String> {
         self.auto_compact.clone().or_else(|| {
             crate::agents::find_definition(&self.kind)?
@@ -282,6 +324,7 @@ impl ResolvedProfile {
     }
 
     fn apply_role(&mut self, binding: &RoleBinding) {
+        self.clear_kind_defaults();
         if binding.model.is_some() {
             self.launch.tier = None;
         }
@@ -310,6 +353,7 @@ impl ResolvedProfile {
         if binding.args.is_some() {
             self.args.clone_from(&binding.args);
         }
+        self.fill_kind_defaults();
     }
 }
 
@@ -1274,6 +1318,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     for layer in layers {
         resolved.fill_missing(layer);
     }
+    resolved.fill_kind_defaults();
     normalize_auto_compact(&mut resolved.auto_compact, name)?;
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
@@ -1791,6 +1836,7 @@ fn virtual_cell_from(
 ) -> Result<Cell> {
     let mut base = resolved.clone();
     base.launch.mode = None;
+    base.filled_mode = false;
     let error_origin = profile_name
         .as_deref()
         .unwrap_or_else(|| resolved.kind.as_str());
@@ -2287,6 +2333,8 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     let Some(base) = base else {
         return original;
     };
+    original.clear_kind_defaults();
+    original.kind_defaults |= base.kind_defaults;
     let same_kind = original.kind == base.kind;
     original.launch.tier = None;
 
@@ -2294,7 +2342,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     original.kind.clone_from(&base.kind);
     original.layers.retain(|layer| !base.layers.contains(layer));
     original.layers.extend_from_slice(&base.layers);
-    if base.launch.effort.is_some() {
+    if !base.filled_effort && base.launch.effort.is_some() {
         original.launch.effort.clone_from(&base.launch.effort);
     }
     if original.skills.is_none() {
@@ -2309,7 +2357,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.isolation_default = original.isolation_default.or(base.isolation_default);
     original.empty_dir = original.empty_dir.or(base.empty_dir);
-    original.launch.mode = original.launch.mode.or(base.launch.mode);
+    original.launch.mode = original.launch.mode.or(base.written_mode());
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);
     }
@@ -2350,6 +2398,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         original.args.clone_from(&base.args);
     }
 
+    original.fill_kind_defaults();
     original
 }
 

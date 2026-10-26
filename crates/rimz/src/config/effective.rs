@@ -257,11 +257,7 @@ impl LaunchAgents {
                     {
                         let mut selected = render.clone();
                         selected.model = Some(model.to_owned());
-                        selected.effort = renders.effort.clone().or_else(|| {
-                            crate::agents::definition_defaults(kind, Some(model))
-                                .effort
-                                .map(str::to_owned)
-                        });
+                        selected.effort = renders.effort.clone();
                         selected.model_tier = None;
                         selected.tier_stamp = None;
                         consumed |=
@@ -299,11 +295,7 @@ impl LaunchAgents {
                 )?;
                 // Load renders or excludes every table family, and the walk passes the excluded ones.
                 let mut selected = renders.renders[&pick.kind].clone();
-                selected.effort = renders.effort.clone().or_else(|| {
-                    crate::agents::definition_defaults(&pick.kind, Some(&pick.model))
-                        .effort
-                        .map(str::to_owned)
-                });
+                selected.effort = renders.effort.clone();
                 selected.model = Some(pick.model.clone());
                 selected.tier_stamp = Some(Box::new(crate::agents::TierStamp {
                     tier: requested,

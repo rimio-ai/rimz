@@ -2695,6 +2695,65 @@ fn explicit_resume_mode_beats_recorded_and_profile_modes() {
 }
 
 #[test]
+fn agent_override_kind_default_mode_does_not_replace_the_saved_mode() {
+    let mut profiles = profiles("planner", profile("claude"));
+    let mut base = profile("claude");
+    base.kind_defaults = true;
+    profiles.0.insert("base".into(), base);
+    let mut actual = Vec::new();
+    for mode in [None, Some(PermissionMode::Ask), Some(PermissionMode::Yolo)] {
+        let cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell));
+        let mut agent = agent("claude", "a1", "/repo", 1);
+        agent.profile = Some("planner".into());
+        agent.mode = mode;
+        restore_routed_cells(
+            &mut layout,
+            &[CohortSeed::Resume(Box::new(agent))],
+            &profiles,
+            &ResumeOverrides {
+                agent: Some("base"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        actual.push((cell.launch.mode, cell.args.clone()));
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                Some(PermissionMode::Auto),
+                vec![
+                    "--effort".into(),
+                    "xhigh".into(),
+                    "--permission-mode".into(),
+                    "auto".into()
+                ]
+            ),
+            (
+                Some(PermissionMode::Ask),
+                vec![
+                    "--effort".into(),
+                    "xhigh".into(),
+                    "--permission-mode".into(),
+                    "default".into()
+                ]
+            ),
+            (
+                Some(PermissionMode::Yolo),
+                vec![
+                    "--effort".into(),
+                    "xhigh".into(),
+                    "--dangerously-skip-permissions".into()
+                ]
+            ),
+        ]
+    );
+}
+
+#[test]
 fn agent_override_mode_precedence_and_refusals() {
     let mut planner = profile("claude");
     planner.mode = Some(PermissionMode::Plan);
