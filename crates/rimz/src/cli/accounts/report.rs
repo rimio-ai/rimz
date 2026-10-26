@@ -426,8 +426,10 @@ fn build_report(
     let definition = rimz::agents::spec_by_kind(kind)
         .expect("reports are assembled only for registered provider kinds");
     let account = record.and_then(|record| record.account.as_ref());
+    let undecided = panel.is_some_and(|panel| panel.undecided)
+        || account.is_some_and(|account| account.is_undecided());
     let entitlement = panel.map_or(Entitlement::Ok, |panel| panel.entitlement);
-    let raw_plan = if matches!(entitlement, Entitlement::Lapsed { .. }) {
+    let raw_plan = if undecided || matches!(entitlement, Entitlement::Lapsed { .. }) {
         None
     } else {
         account.and_then(|account| account.plan.clone())
@@ -451,11 +453,14 @@ fn build_report(
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         probe_error: record.and_then(|record| record.probe_error.as_ref().map(ToString::to_string)),
         installed: context.installed.contains(kind),
-        plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
-            raw_plan
-                .as_deref()
-                .map(|plan| definition.plan_label.format(plan))
-        }),
+        plan_label: panel
+            .filter(|_| !undecided)
+            .and_then(|panel| panel.plan.clone())
+            .or_else(|| {
+                raw_plan
+                    .as_deref()
+                    .map(|plan| definition.plan_label.format(plan))
+            }),
         plan: raw_plan,
         account_id: account.and_then(|account| account.account_id.clone()),
         sub_provider: account.and_then(|account| account.sub_provider.clone()),
@@ -464,7 +469,8 @@ fn build_report(
             .or_else(|| panel.map(|panel| panel.account_scope.clone())),
         metered: panel
             .map(|panel| panel.metered)
-            .or_else(|| account.and_then(|account| account.metered)),
+            .or_else(|| account.and_then(|account| account.metered))
+            .filter(|_| !undecided),
         version: panel
             .and_then(|panel| panel.version.clone())
             .or_else(|| account.and_then(|account| account.version.clone())),

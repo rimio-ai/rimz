@@ -716,6 +716,7 @@ fn provider_panel(
         version: Some("2.1.158".to_owned()),
         plan: Some("Claude Max".to_owned()),
         metered,
+        undecided: false,
         remote_control: if remote_control {
             crate::store::snapshot::RemoteControlBadge::Healthy
         } else {

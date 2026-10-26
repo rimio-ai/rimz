@@ -812,6 +812,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         version: None,
         plan: None,
         metered,
+        undecided: false,
         remote_control: Default::default(),
         active_sessions: 0,
         spending: Some(

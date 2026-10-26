@@ -51,8 +51,11 @@ pub struct AccountsCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRecord {
     pub probed_at_ms: u64,
-    /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a confident result rides
-    /// `ACCOUNTS_TTL`, or the retry floor once its adapter's inputs stamp moves.
+    /// Start of the version read, aged independently of provisional retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_probed_at_ms: Option<u64>,
+    /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a successful result rides
+    /// `ACCOUNTS_TTL`, or the retry floor while provisional or after its adapter's stamp moves.
     pub ok: bool,
     /// The adapter's inputs stamp read before the probe that wrote this record.
     /// Absent for an adapter without one and on a record an older build wrote,
@@ -724,13 +727,16 @@ pub(super) fn file_mtime_ms(path: &Path) -> Option<u64> {
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
-/// The outcome of an out-of-band account probe. The three arms drive the
-/// producer's cache TTL: a `Found` or `LoggedOut` answer is authoritative and
-/// rides the long success TTL, while `Unavailable` — a binary that would not run,
-/// a non-zero exit, an unreadable file — is a transient failure the producer
-/// retries on the short failure TTL instead of pinning the dashboard empty for
-/// the full success window.
+/// The outcome of an out-of-band account probe. A settled `Found` or `LoggedOut`
+/// answer rides the producer's long success TTL. A provisional `Found` retries
+/// on the short TTL, as does `Unavailable` — a binary that would not run, a
+/// non-zero exit, or an unreadable file — rather than pinning the dashboard
+/// empty for the full success window.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "account facts move directly into the cache without another allocation"
+)]
 pub enum AccountProbe {
     /// A logged-in account with the identity, plan, and metering facts its
     /// provider exposes.

@@ -10379,6 +10379,7 @@ fn loop_add_resolves_a_markdown_profiles_provider_before_selecting_its_account()
         logins: BTreeMap::from([(
             "claude@hooloovoo".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                version_probed_at_ms: None,
                 inputs_stamp: None,
                 profile: None,
                 probe_error: None,
@@ -10521,6 +10522,7 @@ fn loop_fire_keeps_a_pinned_markdown_profiles_provider_when_unavailable() {
         logins: BTreeMap::from([(
             "claude@rimio".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                version_probed_at_ms: None,
                 inputs_stamp: None,
                 profile: None,
                 probe_error: None,
@@ -10590,6 +10592,7 @@ fn loop_fire_skips_when_its_pinned_account_cannot_run() {
         logins: BTreeMap::from([(
             "claude@work".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                version_probed_at_ms: None,
                 inputs_stamp: None,
                 profile: None,
                 probe_error: None,

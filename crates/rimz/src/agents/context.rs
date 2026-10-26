@@ -693,13 +693,23 @@ pub struct SubagentObservation {
     pub context: SubagentContext,
 }
 
-/// The provider account/plan a session authenticates against. Account-scoped —
-/// every session of one provider shares it — so the sidebar's provider
-/// dashboard reads it from the freshest session, never paints it per row.
+/// The provider account/plan a session authenticates against. The dashboard
+/// reads account-level facts from the freshest session or the login probe,
+/// never paints them per row. Delegated clients also carry each backing
+/// credential's classification.
 /// Source-agnostic: Codex fills it from the app-server `account/rateLimits/read`
 /// plan type, Claude from `claude auth status` and a bound live profile answer.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentAccount {
+    /// A short-lived classification awaiting the deciding session's provider.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provisional: bool,
+    /// Listed backing credentials, classified independently without nesting.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub credentials: std::collections::BTreeMap<String, AgentAccount>,
+    /// Opaque usage owner for the selected backing credential, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
     /// Opaque profile owner binding; never a display or diagnostic identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_fingerprint: Option<String>,
@@ -742,6 +752,13 @@ pub struct AgentAccount {
     pub credentials_updated_at_ms: Option<u64>,
 }
 
+impl AgentAccount {
+    /// Whether this provisional account has no known backing credential.
+    pub fn is_undecided(&self) -> bool {
+        self.provisional && self.sub_provider.is_none()
+    }
+}
+
 impl std::fmt::Debug for AgentAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentAccount")
@@ -750,6 +767,9 @@ impl std::fmt::Debug for AgentAccount {
                 &self.profile_fingerprint.as_ref().map(|_| "<redacted>"),
             )
             .field("scope", &self.scope)
+            .field("provisional", &self.provisional)
+            .field("credentials", &self.credentials)
+            .field("account_key", &self.account_key)
             .field("plan", &self.plan)
             .field("account_id", &self.account_id)
             .field("metered", &self.metered)

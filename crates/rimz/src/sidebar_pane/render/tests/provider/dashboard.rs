@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn undecided_panel_keeps_its_header_and_stats_without_claiming_a_plan_or_budget() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("pi", "Pi", 28, false, false, None);
+    panel.undecided = true;
+    panel.plan = None;
+    panel.art.clear();
+    let panels = [panel];
+    let outcomes: Vec<_> = [
+        Dashboard::stacked(&theme, &panels),
+        Dashboard::tabbed(&theme, &panels),
+    ]
+    .into_iter()
+    .map(|dashboard| {
+        let text = dashboard.width(60).text();
+        (
+            text.contains("Pi"),
+            text.contains("api"),
+            text.contains('∞'),
+            text.contains('◎'),
+            text.contains('▰'),
+        )
+    })
+    .collect();
+    assert_eq!(outcomes, [(true, false, false, true, false); 2]);
+}
+
+#[test]
 fn go_shaped_panel_shows_a_month_ceiling_on_the_week() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("opencode", "OpenCode", 1, true, false, None);

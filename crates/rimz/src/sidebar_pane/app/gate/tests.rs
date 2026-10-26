@@ -54,6 +54,7 @@ fn provider(
         version: None,
         plan: None,
         metered: true,
+        undecided: false,
         remote_control: Default::default(),
         active_sessions: 0,
         spending: spending.map(Into::into),

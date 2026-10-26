@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        version_probed_at_ms: None,
         inputs_stamp: None,
         profile: None,
         probe_error: None,
@@ -71,6 +72,7 @@ fn successful_probe(kind: &str) -> ProviderProbeResult {
         }),
         outcome_class: ProbeOutcomeClass::Success,
         version: None,
+        version_probed_at_ms: None,
         account_ms: 1,
         version_ms: 0,
         total_ms: 1,
@@ -950,13 +952,20 @@ fn inputs_stamp_due_rule_covers_each_record_state() {
     let past_floor_ms = now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
     let past_ttl_ms = now_ms.saturating_sub(ACCOUNTS_TTL.as_millis() as u64 + 1);
     let snapshot = empty_snapshot();
-    let due = |probed_at_ms, ok, stored: Option<u64>, current: Option<u64>| {
+    let due = |probed_at_ms, ok, stored: Option<u64>, current: Option<u64>, provisional| {
         let mut cache = fresh_cache(now_ms);
         cache.logins.insert(
             key("pi"),
             ProviderRecord {
                 inputs_stamp: stored,
-                ..record(probed_at_ms, ok, None)
+                ..record(
+                    probed_at_ms,
+                    ok,
+                    Some(AgentAccount {
+                        provisional,
+                        ..Default::default()
+                    }),
+                )
             },
         );
         let stamps = current
@@ -1026,8 +1035,88 @@ fn inputs_stamp_due_rule_covers_each_record_state() {
             "a failed probe inside the floor",
         ),
     ] {
-        assert_eq!(due(probed_at_ms, ok, stored, current), expected, "{why}");
+        assert_eq!(
+            due(probed_at_ms, ok, stored, current, false),
+            expected,
+            "{why}"
+        );
     }
+    assert_eq!(
+        [
+            due(
+                now_ms - ACCOUNTS_RETRY_TTL.as_millis() as u64,
+                true,
+                Some(1),
+                Some(1),
+                true
+            ),
+            due(past_floor_ms, true, Some(1), Some(1), true),
+            due(past_floor_ms, true, None, None, true),
+            due(past_floor_ms, true, Some(1), Some(1), false),
+        ],
+        [false, true, true, false]
+    );
+}
+
+#[test]
+fn provisional_reprobes_reuse_versions_only_until_the_original_version_read_expires() {
+    let ttl = ACCOUNTS_TTL.as_millis() as u64;
+    let now = ttl * 3;
+    let calls = AtomicUsize::new(0);
+    let mut previous = record(
+        now - 10_001,
+        true,
+        Some(AgentAccount {
+            provisional: true,
+            version: Some("1.4.0".into()),
+            ..Default::default()
+        }),
+    );
+    let outcomes: Vec<_> = [now - ttl + 1, now - ttl, now - ttl - 1]
+        .into_iter()
+        .map(|read_at| {
+            previous.version_probed_at_ms = Some(read_at);
+            probe_account_version(
+                &AccountProbe::Found(AgentAccount::default()),
+                false,
+                Some(&previous),
+                now,
+                || {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Some("1.5.0".to_owned())
+                },
+            )
+        })
+        .collect();
+    assert_eq!(
+        (outcomes, calls.load(Ordering::Relaxed)),
+        (
+            vec![None, Some("1.5.0".to_owned()), Some("1.5.0".to_owned())],
+            2
+        )
+    );
+    previous.version_probed_at_ms = Some(now - 1);
+    let merged = probe_accounts_with(
+        &BTreeSet::from([key("pi")]),
+        &AccountsCache {
+            logins: BTreeMap::from([(key("pi"), previous)]),
+        },
+        &BTreeSet::new(),
+        now,
+        |_, _| {
+            Some((
+                AccountProbe::Found(AgentAccount {
+                    provisional: true,
+                    ..Default::default()
+                }),
+                None,
+            ))
+        },
+    );
+    assert_eq!(
+        merged.logins[&key("pi")].version_probed_at_ms,
+        Some(now - 1)
+    );
 }
 
 #[test]

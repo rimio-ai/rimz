@@ -1069,7 +1069,7 @@ pub trait AccountCapability: CoreCapability {
     /// whose stamp moved is due again behind the retry floor. Reads metadata
     /// only (no subprocess, file contents, or network), so it is cheap enough
     /// for every refresh pass, and encodes the same inputs the same way in
-    /// every process and build. Defaults to `None`: no stamp, so the account
+    /// every process and build. Defaults to `None`: no stamp, so a settled account
     /// waits out its TTL.
     fn account_inputs_stamp(&self, _login_env: &BTreeMap<String, String>) -> Option<u64> {
         None
@@ -1084,6 +1084,16 @@ pub trait AccountCapability: CoreCapability {
     /// [`AccountUsageProbe::Unsupported`] for an agent with no account-usage surface.
     fn probe_account_usage(&self, _login_env: &BTreeMap<String, String>) -> AccountUsageProbe {
         AccountUsageProbe::Unsupported
+    }
+
+    /// Read one named backing credential, or resolve the login's current one.
+    /// Providers with a single credential keep their ordinary usage probe.
+    fn probe_account_usage_for(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _sub_provider: Option<&str>,
+    ) -> AccountUsageProbe {
+        self.probe_account_usage(login_env)
     }
 
     /// Whether this adapter can read quotas for a backing sub-provider.

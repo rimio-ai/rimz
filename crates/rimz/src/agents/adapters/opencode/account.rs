@@ -2,7 +2,7 @@
 
 use super::database;
 use crate::agents::AccountUsageProbe;
-use crate::agents::delegated_account::{Adapter, Config};
+use crate::agents::delegated_account::{Adapter, Config, UsedProvider};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/opencode-oauth-account-key/v1";
 
@@ -10,7 +10,9 @@ fn config() -> Config {
     Config {
         adapter: Adapter::OpenCode,
         load_credentials: Box::new(database::load_credentials),
-        used_provider: Box::new(database::latest_message_provider),
+        used_provider: Box::new(|| {
+            database::latest_message_provider().map_or(UsedProvider::Silent, UsedProvider::Named)
+        }),
         api_key_types: &["key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
     }
@@ -20,6 +22,6 @@ pub(super) fn probe() -> crate::agents::account::AccountProbe {
     crate::agents::delegated_account::probe_account(&config())
 }
 
-pub(super) fn probe_usage() -> AccountUsageProbe {
-    crate::agents::delegated_account::probe_account_usage(&config())
+pub(super) fn probe_usage(sub_provider: Option<&str>) -> AccountUsageProbe {
+    crate::agents::delegated_account::probe_account_usage(&config(), sub_provider)
 }

@@ -34,6 +34,7 @@ fn pay_per_use_account(credentials_updated_at_ms: Option<u64>) -> AgentAccount {
         version: None,
         sub_provider: None,
         credentials_updated_at_ms,
+        ..Default::default()
     }
 }
 

@@ -38,9 +38,25 @@ impl Adapter {
 pub(super) struct Config {
     pub(crate) adapter: Adapter,
     pub(crate) load_credentials: Box<dyn Fn() -> Credentials>,
-    pub(crate) used_provider: Box<dyn Fn() -> Option<String>>,
+    pub(crate) used_provider: Box<dyn Fn() -> UsedProvider>,
     pub(crate) api_key_types: &'static [&'static str],
     pub(crate) account_key_domain: &'static [u8],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum UsedProvider {
+    Named(String),
+    Fallback(String),
+    Silent,
+}
+
+impl UsedProvider {
+    pub(super) fn provider(&self) -> Option<&str> {
+        match self {
+            Self::Named(provider) | Self::Fallback(provider) => Some(provider),
+            Self::Silent => None,
+        }
+    }
 }
 
 pub(super) struct Credentials {
@@ -151,19 +167,39 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
         return AccountProbe::LoggedOut;
     }
     let used_provider = (config.used_provider)();
-    let Some((provider, credential)) =
-        select_display(&credentials, used_provider.as_deref(), config.adapter)
-    else {
-        return AccountProbe::LoggedOut;
+    let mut account = match select_display(&credentials, used_provider.provider(), config.adapter) {
+        Some((provider, credential)) => credential_account(config, provider, credential),
+        None => AgentAccount {
+            sub_provider: used_provider.provider().map(str::to_owned),
+            metered: used_provider.provider().map(|_| false),
+            ..Default::default()
+        },
     };
+    account.provisional = !matches!(used_provider, UsedProvider::Named(_)) && credentials.len() > 1;
+    account.credentials_updated_at_ms = loaded.stamp;
+    account.credentials = credentials
+        .iter()
+        .map(|(provider, credential)| {
+            let mut account = credential_account(config, provider, credential);
+            account.credentials_updated_at_ms = loaded.stamp;
+            (provider.clone(), account)
+        })
+        .collect();
+    AccountProbe::Found(account)
+}
+
+fn credential_account(config: &Config, provider: &str, credential: &Credential) -> AgentAccount {
     let kind = credential.kind.as_deref();
     let scope = (kind == Some("oauth"))
         .then(|| oauth_scope(config.adapter, provider))
         .flatten()
         .unwrap_or_default();
-    AccountProbe::Found(AgentAccount {
+    AgentAccount {
+        account_key: (kind == Some("oauth"))
+            .then(|| credential_account_key(config, &scope, credential))
+            .flatten(),
         scope,
-        plan: match (config.adapter, provider.as_str(), kind) {
+        plan: match (config.adapter, provider, kind) {
             (Adapter::OpenCode, "opencode", Some("oauth")) => None,
             _ => Some(provider_label(config, provider, kind)),
         },
@@ -174,18 +210,20 @@ pub(super) fn probe_account(config: &Config) -> AccountProbe {
         } else {
             None
         },
-        sub_provider: Some(provider.clone()),
-        credentials_updated_at_ms: loaded.stamp,
+        sub_provider: Some(provider.to_owned()),
         ..Default::default()
-    })
+    }
 }
 
-pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
+pub(super) fn probe_account_usage(
+    config: &Config,
+    sub_provider: Option<&str>,
+) -> AccountUsageProbe {
     let loaded = (config.load_credentials)();
     let stamp = loaded.stamp;
     let selected = loaded
         .entries
-        .and_then(|entries| select_usage_entries(&entries, config));
+        .and_then(|entries| select_usage_entries(&entries, config, sub_provider));
     let selected = match selected {
         Ok(selected) => selected,
         Err(error) => {
@@ -241,13 +279,12 @@ fn select_display<'a>(
     used_provider: Option<&str>,
     adapter: Adapter,
 ) -> Option<(&'a String, &'a Credential)> {
-    used_credential(credentials, used_provider, adapter)
-        .or_else(|| {
-            credentials
-                .iter()
-                .find(|(_, credential)| credential.kind.as_deref() == Some("oauth"))
-        })
-        .or_else(|| credentials.iter().next())
+    if used_provider.is_some() {
+        return used_credential(credentials, used_provider, adapter);
+    }
+    (credentials.len() == 1)
+        .then(|| credentials.iter().next())
+        .flatten()
 }
 
 fn used_credential<'a>(
@@ -300,25 +337,24 @@ fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Err
             adapter: config.adapter.name(),
             source,
         })?;
-    select_usage_entries(&credentials, config)
+    select_usage_entries(&credentials, config, None)
 }
 
 fn select_usage_entries(
     credentials: &BTreeMap<String, Credential>,
     config: &Config,
+    sub_provider: Option<&str>,
 ) -> Result<SelectedCredential, Error> {
     if credentials.is_empty() {
         return Err(Error::NoCredentials {
             adapter: config.adapter.name(),
         });
     }
-    let used_provider = (config.used_provider)();
+    let used_provider = sub_provider
+        .map(|provider| UsedProvider::Named(provider.to_owned()))
+        .unwrap_or_else(|| (config.used_provider)());
     let Some((provider, credential)) =
-        used_credential(credentials, used_provider.as_deref(), config.adapter).or_else(|| {
-            credentials
-                .iter()
-                .find(|(_, credential)| credential.kind.as_deref() == Some("oauth"))
-        })
+        select_display(credentials, used_provider.provider(), config.adapter)
     else {
         return Err(Error::NoCredentials {
             adapter: config.adapter.name(),
@@ -355,31 +391,11 @@ fn select_usage_entries(
         .org_id
         .clone()
         .filter(|id| !id.is_empty());
-    let refresh_token = credential
-        .refresh
-        .as_deref()
-        .filter(|token| !token.is_empty());
     let scope = oauth_scope(config.adapter, provider).unwrap_or_default();
-    let fallback = hashed_account_key(
-        config.account_key_domain,
-        refresh_token
-            .as_ref()
-            .map_or("access-token", |_| "refresh-token"),
-        refresh_token.unwrap_or(&access_token),
-    );
-    let account_key = if scope == ProviderAccountScope::sub_provider("openai", "oauth") {
-        account_id.clone().unwrap_or(fallback)
-    } else if scope == ProviderAccountScope::sub_provider("opencode", "oauth")
-        && let Some(org_id) = &org_id
-    {
-        hashed_account_key(
-            config.account_key_domain,
-            "console-org",
-            &format!("{fallback}\0{org_id}"),
-        )
-    } else {
-        fallback
-    };
+    let account_key =
+        credential_account_key(config, &scope, credential).ok_or(Error::NoCredentials {
+            adapter: config.adapter.name(),
+        })?;
     Ok(SelectedCredential {
         provider: provider.clone(),
         access_token,
@@ -388,6 +404,55 @@ fn select_usage_entries(
         account_id,
         org_id,
     })
+}
+
+fn credential_account_key(
+    config: &Config,
+    scope: &ProviderAccountScope,
+    credential: &Credential,
+) -> Option<String> {
+    let refresh_token = credential
+        .refresh
+        .as_deref()
+        .filter(|token| !token.is_empty());
+    let token = refresh_token.or_else(|| {
+        credential
+            .access
+            .as_deref()
+            .filter(|token| !token.is_empty())
+    })?;
+    let fallback = hashed_account_key(
+        config.account_key_domain,
+        refresh_token
+            .as_ref()
+            .map_or("access-token", |_| "refresh-token"),
+        token,
+    );
+    if *scope == ProviderAccountScope::sub_provider("openai", "oauth") {
+        Some(
+            credential
+                .account_id
+                .as_ref()
+                .or(credential.metadata.account_id.as_ref())
+                .filter(|id| !id.is_empty())
+                .cloned()
+                .unwrap_or(fallback),
+        )
+    } else if *scope == ProviderAccountScope::sub_provider("opencode", "oauth")
+        && let Some(org_id) = credential
+            .metadata
+            .org_id
+            .as_ref()
+            .filter(|id| !id.is_empty())
+    {
+        Some(hashed_account_key(
+            config.account_key_domain,
+            "console-org",
+            &format!("{fallback}\0{org_id}"),
+        ))
+    } else {
+        Some(fallback)
+    }
 }
 
 enum QuotaSurface {
@@ -466,438 +531,4 @@ fn hashed_account_key(domain: &[u8], secret_kind: &str, secret: &str) -> String 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[test]
-    fn delegated_readings_require_a_metered_quota_surface() {
-        for (kind, provider, expected) in [
-            ("pi", "openai", false),
-            ("pi", "openai-codex", true),
-            ("pi", "anthropic", true),
-            ("opencode", "openai", true),
-            ("opencode", "anthropic", true),
-            ("opencode", "other", false),
-        ] {
-            let kind = crate::ids::AgentKind::new_unchecked(kind);
-            assert_eq!(
-                expects_usage_reading(&kind, Some(true), Some(provider)),
-                expected,
-                "{kind}/{provider}"
-            );
-            assert!(!expects_usage_reading(&kind, Some(false), Some(provider)));
-            assert!(!expects_usage_reading(&kind, None, Some(provider)));
-        }
-    }
-
-    #[test]
-    fn undeclared_sub_provider_quota_surfaces_do_not_expect_readings() {
-        let kind = crate::ids::AgentKind::new_unchecked("copilot");
-        assert!(expects_usage_reading(&kind, Some(true), None));
-        assert!(!expects_usage_reading(&kind, Some(true), Some("openai")));
-    }
-
-    #[test]
-    fn reading_expectations_keep_static_windows_and_direct_metered_accounts() {
-        for kind in ["claude", "codex", "kimi"] {
-            let kind = crate::ids::AgentKind::new_unchecked(kind);
-            assert!(expects_usage_reading(&kind, None, None), "{kind}");
-            assert!(!expects_usage_reading(&kind, Some(false), None), "{kind}");
-        }
-        for (kind, expected) in [
-            ("copilot", true),
-            ("qwen", true),
-            ("antigravity", true),
-            ("grok", false),
-            ("cursor", false),
-            ("amp", false),
-        ] {
-            let kind = crate::ids::AgentKind::new_unchecked(kind);
-            assert_eq!(
-                expects_usage_reading(&kind, Some(true), None),
-                expected,
-                "{kind}"
-            );
-            assert!(!expects_usage_reading(&kind, None, None), "{kind}");
-        }
-        let qwen = crate::ids::AgentKind::new_unchecked("qwen");
-        for provider in [
-            "Alibaba Coding Plan (International)",
-            "Alibaba Coding Plan (China)",
-        ] {
-            assert!(expects_usage_reading(&qwen, Some(true), Some(provider)));
-        }
-    }
-
-    fn no_used_provider() -> Option<String> {
-        None
-    }
-
-    fn openai_used_provider() -> Option<String> {
-        Some("openai".to_owned())
-    }
-
-    fn opencode_used_provider() -> Option<String> {
-        Some("opencode".to_owned())
-    }
-
-    fn go_used_provider() -> Option<String> {
-        Some("opencode-go".to_owned())
-    }
-
-    fn config(adapter: Adapter, used: Option<&str>, domain: &'static [u8]) -> Config {
-        Config {
-            adapter,
-            load_credentials: Box::new(|| Credentials {
-                stamp: None,
-                entries: Ok(BTreeMap::new()),
-            }),
-            used_provider: Box::new(match used {
-                Some("openai") => openai_used_provider,
-                Some("opencode") => opencode_used_provider,
-                Some("opencode-go") => go_used_provider,
-                Some(other) => panic!("missing test resolver for {other}"),
-                None => no_used_provider,
-            }),
-            api_key_types: match adapter {
-                Adapter::Pi => &["api_key"],
-                Adapter::OpenCode => &["key"],
-            },
-            account_key_domain: domain,
-        }
-    }
-
-    fn future_ms() -> u64 {
-        unix_now_ms() + 60_000
-    }
-
-    #[test]
-    fn go_sessions_link_console_credentials_but_exact_credentials_win() {
-        let outcomes = [None, Some("oauth"), Some("key")].map(|exact_kind| {
-            let mut body = serde_json::json!({
-                "anthropic": {"type":"oauth", "access":"a", "expires":future_ms()},
-                "opencode": {"type":"oauth", "access":"c", "expires":future_ms()}
-            });
-            if let Some(kind) = exact_kind {
-                body["opencode-go"] = serde_json::json!({
-                    "type":kind, "access":"exact", "expires":future_ms()
-                });
-            }
-            let mut config = config(Adapter::OpenCode, Some("opencode-go"), b"open");
-            let display_body = body.clone();
-            config.load_credentials = Box::new(move || Credentials {
-                stamp: Some(42),
-                entries: Ok(serde_json::from_value(display_body.clone()).unwrap()),
-            });
-            let AccountProbe::Found(account) = probe_account(&config) else {
-                panic!("Go session should select a stored credential")
-            };
-            let usage = select_usage(body.to_string().as_bytes(), &config)
-                .map(|selected| selected.provider)
-                .map_err(|error| matches!(error, Error::ApiKeyOnly { .. }));
-            (account.sub_provider, usage)
-        });
-        assert_eq!(
-            outcomes,
-            [
-                (Some("opencode".to_owned()), Ok("opencode".to_owned())),
-                (Some("opencode-go".to_owned()), Ok("opencode-go".to_owned())),
-                (Some("opencode-go".to_owned()), Err(true)),
-            ]
-        );
-    }
-
-    #[test]
-    fn console_oauth_has_display_only_scope_and_leaves_the_plan_to_usage() {
-        let surfaces =
-            [Adapter::OpenCode, Adapter::Pi].map(|adapter| adapter.has_quota_surface("opencode"));
-        assert_eq!(surfaces, [true, false]);
-        let mut config = config(Adapter::OpenCode, Some("opencode"), b"open");
-        config.load_credentials = Box::new(|| Credentials {
-            stamp: Some(42),
-            entries: Ok(serde_json::from_str(r#"{"opencode":{"type":"oauth"}}"#).unwrap()),
-        });
-        let AccountProbe::Found(account) = probe_account(&config) else {
-            panic!("Console credential should select an account")
-        };
-        assert_eq!(
-            account.scope,
-            ProviderAccountScope::sub_provider("opencode", "oauth")
-        );
-        assert_eq!(account.plan, None);
-        assert_eq!(account.metered, Some(true));
-        let kind = crate::ids::AgentKind::new_unchecked("opencode");
-        assert!(expects_usage_reading(&kind, Some(true), Some("opencode")));
-        assert!(!expects_usage_reading(&kind, Some(false), Some("opencode")));
-    }
-
-    #[test]
-    fn console_org_changes_account_identity_without_exposing_it() {
-        let keys = [
-            None,
-            Some(""),
-            Some("private-org-one"),
-            Some("private-org-two"),
-        ]
-        .map(|org| {
-            let body = serde_json::json!({"opencode": {
-                "type":"oauth", "access":"same-token", "refresh":"stable-refresh",
-                "expires":future_ms(), "metadata":{"orgID":org}
-            }});
-            let selected = select_usage(
-                body.to_string().as_bytes(),
-                &config(Adapter::OpenCode, Some("opencode"), b"open"),
-            )
-            .unwrap();
-            selected.account_key
-        });
-        assert_eq!(keys[0], keys[1]);
-        assert_ne!(
-            keys[2], keys[3],
-            "a Console org switch changes the cache owner"
-        );
-        for key in keys {
-            assert_eq!(key.len(), 64);
-            assert!(!key.contains("private-org"));
-            assert!(!key.contains("same-token"));
-        }
-    }
-
-    #[test]
-    fn pi_opencode_display_selection_preserves_priority_labels_and_metering() {
-        let credentials: BTreeMap<String, Credential> = serde_json::from_str(
-            r#"{
-                "anthropic":{"type":"oauth"},
-                "openai":{"type":"key"},
-                "opencode":{"type":"external"}
-            }"#,
-        )
-        .unwrap();
-        let selected = select_display(&credentials, Some("openai"), Adapter::OpenCode).unwrap();
-        assert_eq!(selected.0, "openai");
-        assert_eq!(
-            provider_label(
-                &config(Adapter::OpenCode, None, b"open"),
-                selected.0,
-                selected.1.kind.as_deref()
-            ),
-            "OpenAI API Key"
-        );
-        assert_eq!(
-            provider_label(
-                &config(Adapter::OpenCode, None, b"open"),
-                "opencode",
-                Some("external")
-            ),
-            "OpenCode External"
-        );
-        assert_eq!(
-            provider_label(&config(Adapter::Pi, None, b"pi"), "custom", None),
-            "custom"
-        );
-        assert_eq!(
-            provider_label(&config(Adapter::Pi, None, b"pi"), "opencode", None),
-            "opencode"
-        );
-        assert_eq!(
-            select_display(&credentials, None, Adapter::OpenCode)
-                .unwrap()
-                .0,
-            "anthropic"
-        );
-    }
-
-    #[test]
-    fn pi_opencode_usage_selection_keeps_scope_expiry_identity_and_adapter_domains() {
-        let json = format!(
-            r#"{{
-                "anthropic":{{"type":"oauth","access":"a","refresh":"stable","expires":{}}},
-                "openai":{{"type":"oauth","access":"o","expires":{},"accountId":"acct"}}
-            }}"#,
-            future_ms(),
-            future_ms()
-        );
-        let pi =
-            select_usage(json.as_bytes(), &config(Adapter::Pi, Some("openai"), b"pi")).unwrap();
-        assert_eq!(
-            pi.account_key,
-            hashed_account_key(b"pi", "access-token", "o")
-        );
-        assert_eq!(pi.scope, ProviderAccountScope::default());
-        let opencode = select_usage(
-            json.as_bytes(),
-            &config(Adapter::OpenCode, Some("openai"), b"open"),
-        )
-        .unwrap();
-        assert_eq!(opencode.account_key, "acct");
-        assert_eq!(
-            opencode.scope,
-            ProviderAccountScope::sub_provider("openai", "oauth")
-        );
-        let codex = format!(
-            r#"{{"openai-codex":{{"type":"oauth","access":"c","expires":{},"accountId":"codex-acct"}}}}"#,
-            future_ms()
-        );
-        let codex = select_usage(codex.as_bytes(), &config(Adapter::Pi, None, b"pi")).unwrap();
-        assert_eq!(codex.account_key, "codex-acct");
-        assert_eq!(
-            codex.scope,
-            ProviderAccountScope::sub_provider("openai", "oauth")
-        );
-
-        let first = select_usage(json.as_bytes(), &config(Adapter::Pi, None, b"pi")).unwrap();
-        let rotated = format!(
-            r#"{{"anthropic":{{"type":"oauth","access":"rotated","refresh":"stable","expires":{}}}}}"#,
-            future_ms()
-        );
-        let rotated = select_usage(rotated.as_bytes(), &config(Adapter::Pi, None, b"pi")).unwrap();
-        let access_only = format!(
-            r#"{{"anthropic":{{"type":"oauth","access":"access-only","expires":{}}}}}"#,
-            future_ms()
-        );
-        let access_only =
-            select_usage(access_only.as_bytes(), &config(Adapter::Pi, None, b"pi")).unwrap();
-        let other = select_usage(
-            json.as_bytes(),
-            &config(Adapter::OpenCode, None, b"opencode"),
-        )
-        .unwrap();
-        assert_eq!(first.provider, "anthropic");
-        assert_eq!(first.account_key, rotated.account_key);
-        assert_ne!(first.account_key, access_only.account_key);
-        assert_ne!(first.account_key, other.account_key);
-        assert_eq!(first.account_key.len(), 64);
-        assert!(!first.account_key.contains("stable"));
-
-        let expired = br#"{"anthropic":{"type":"oauth","access":"a","expires":1}}"#;
-        assert!(matches!(
-            select_usage(expired, &config(Adapter::Pi, None, b"pi")),
-            Err(Error::TokenExpired { .. })
-        ));
-    }
-
-    #[test]
-    fn pi_opencode_usage_selection_handles_api_key_unsupported_empty_and_malformed_maps() {
-        assert!(matches!(
-            select_usage(
-                br#"{"openai":{"type":"api_key","key":"k"}}"#,
-                &config(Adapter::Pi, Some("openai"), b"pi")
-            ),
-            Err(Error::ApiKeyOnly { .. })
-        ));
-        assert!(matches!(
-            select_usage(br#"{}"#, &config(Adapter::OpenCode, None, b"open")),
-            Err(Error::NoCredentials { .. })
-        ));
-        assert!(matches!(
-            select_usage(b"not json", &config(Adapter::Pi, None, b"pi")),
-            Err(Error::Parse { .. })
-        ));
-    }
-
-    #[test]
-    fn pi_opencode_account_probe_handles_files_and_adapter_specific_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("auth.json");
-        let mut pi = config(Adapter::Pi, Some("openai"), b"pi");
-        let auth_path = path.clone();
-        pi.load_credentials = Box::new(move || load_auth_file(&auth_path, Adapter::Pi));
-        assert!(matches!(probe_account(&pi), AccountProbe::LoggedOut));
-
-        std::fs::write(&path, b"not json").unwrap();
-        assert!(matches!(
-            probe_account(&pi),
-            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
-        ));
-
-        std::fs::write(
-            &path,
-            br#"{
-                "anthropic":{"type":"oauth"},
-                "openai":{"type":"api_key"},
-                "opencode":{"type":"external"}
-            }"#,
-        )
-        .unwrap();
-        let AccountProbe::Found(account) = probe_account(&pi) else {
-            panic!("pi account")
-        };
-        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
-        assert_eq!(account.metered, Some(false));
-        assert!(account.credentials_updated_at_ms.is_some());
-
-        std::fs::write(
-            &path,
-            format!(
-                r#"{{"openai":{{"type":"oauth","access":"o","expires":{},"accountId":"acct"}}}}"#,
-                future_ms()
-            ),
-        )
-        .unwrap();
-        let AccountProbe::Found(account) = probe_account(&pi) else {
-            panic!("pi OAuth account")
-        };
-        assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
-        assert_eq!(account.metered, Some(true));
-        assert_eq!(account.scope, ProviderAccountScope::default());
-
-        std::fs::write(
-            &path,
-            br#"{
-                "anthropic":{"type":"oauth"},
-                "openai":{"type":"api_key"},
-                "opencode":{"type":"external"}
-            }"#,
-        )
-        .unwrap();
-
-        let mut opencode = config(Adapter::OpenCode, Some("opencode"), b"open");
-        opencode.load_credentials = Box::new(move || load_auth_file(&path, Adapter::OpenCode));
-        let AccountProbe::Found(account) = probe_account(&opencode) else {
-            panic!("opencode account")
-        };
-        assert_eq!(account.plan.as_deref(), Some("OpenCode External"));
-        assert_eq!(account.metered, None);
-    }
-
-    static RESOLVER_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-    fn counted_openai_provider() -> Option<String> {
-        RESOLVER_CALLS.fetch_add(1, Ordering::Relaxed);
-        Some("openai".to_owned())
-    }
-
-    #[test]
-    fn active_provider_resolves_only_after_valid_nonempty_auth() {
-        RESOLVER_CALLS.store(0, Ordering::Relaxed);
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("auth.json");
-        let mut config = config(Adapter::OpenCode, None, b"open");
-        let auth_path = path.clone();
-        config.load_credentials = Box::new(move || load_auth_file(&auth_path, Adapter::OpenCode));
-        config.used_provider = Box::new(counted_openai_provider);
-
-        assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
-        std::fs::write(&path, b"not json").unwrap();
-        assert!(matches!(
-            probe_account(&config),
-            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
-        ));
-        std::fs::write(&path, b"{}").unwrap();
-        assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
-        assert_eq!(RESOLVER_CALLS.load(Ordering::Relaxed), 0);
-
-        std::fs::write(
-            &path,
-            br#"{"anthropic":{"type":"oauth"},"openai":{"type":"key"}}"#,
-        )
-        .unwrap();
-        let AccountProbe::Found(account) = probe_account(&config) else {
-            panic!("valid credentials should select an account")
-        };
-        assert_eq!(account.sub_provider.as_deref(), Some("openai"));
-        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
-        assert_eq!(RESOLVER_CALLS.load(Ordering::Relaxed), 1);
-    }
-}
+mod tests;

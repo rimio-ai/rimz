@@ -99,6 +99,7 @@ fn probe_with(
         sub_provider: None,
         scope: Default::default(),
         credentials_updated_at_ms: None,
+        ..Default::default()
     })
 }
 

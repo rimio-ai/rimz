@@ -1179,7 +1179,7 @@ fn provider_token_detail(
 /// a metered account whose windows have not arrived yet shows one unknown-track
 /// row per definition-declared placeholder, or one anonymous fallback row when
 /// the shape is unknown; an unmetered account shows one `api` budget row, full
-/// with `∞` when uncapped.
+/// with `∞` when uncapped. An undecided account has no budget row.
 /// Reported extra usage follows the longest spent window; unknown or disabled
 /// extra usage keeps the included-window pair instead.
 /// Model-scoped sub-caps partition their parent window's bar without another row.
@@ -1192,6 +1192,9 @@ fn provider_bar_rows(
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
+    if panel.undecided {
+        return Vec::new();
+    }
     if let Entitlement::Lapsed { since_ms } = panel.entitlement {
         let time = i64::try_from(since_ms)
             .ok()

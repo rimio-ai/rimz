@@ -209,6 +209,7 @@ fn found_account(account_id: String, credentials_updated_at_ms: Option<u64>) -> 
         version: None,
         sub_provider: None,
         credentials_updated_at_ms,
+        ..Default::default()
     })
 }
 

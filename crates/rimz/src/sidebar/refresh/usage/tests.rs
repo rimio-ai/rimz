@@ -849,6 +849,7 @@ fn lagging_published_hint_spawns_once_until_it_moves() {
         logins: BTreeMap::from([(
             key.clone(),
             ProviderRecord {
+                version_probed_at_ms: None,
                 inputs_stamp: None,
                 probed_at_ms: crate::utils::time::unix_now_ms(),
                 ok: true,
@@ -929,6 +930,7 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
                     probe_error: None,
@@ -998,6 +1000,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
                     probe_error: None,
@@ -1059,6 +1062,84 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
 }
 
 #[test]
+fn undecided_account_creates_no_synchronous_usage_claim_or_probe() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            logins: BTreeMap::from([(
+                key.clone(),
+                ProviderRecord {
+                    ok: true,
+                    account: Some(AgentAccount {
+                        provisional: true,
+                        ..Default::default()
+                    }),
+                    probed_at_ms: 1,
+                    version_probed_at_ms: None,
+                    inputs_stamp: None,
+                    profile: None,
+                    probe_error: None,
+                    login: None,
+                },
+            )]),
+        },
+    )
+    .unwrap();
+    let logins = RoomLoginSet::native();
+    assert!(
+        !merge_account_usage_if_due(&runtime, &ProviderLogin::default_for(key.kind), &logins),
+        "an undecided account must not complete a synchronous usage probe"
+    );
+    assert!(
+        !runtime.shared_credits_path().exists(),
+        "no claim was published"
+    );
+}
+
+#[test]
+fn undecided_account_creates_no_usage_claim_or_helper() {
+    let (dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let probed = BTreeMap::from([(
+        key.clone(),
+        AgentAccount {
+            provisional: true,
+            ..Default::default()
+        },
+    )]);
+    let mut agent = crate::sidebar::test_support::root_agent("pi", "pi-session", None);
+    agent.context = Some(crate::agents::AgentContext {
+        rate_limits: Some(usage_windows(70)),
+        ..Default::default()
+    });
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(dir.path()),
+        vec![agent],
+        Timestamp::now(),
+    );
+    let snapshot = snapshot.with_provider_aggregates(
+        &Default::default(),
+        &probed,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &std::collections::BTreeSet::from([key.clone()]),
+    );
+    let mut attempts = 0;
+    refresh_account_usage_with(&snapshot, &runtime, &RoomLoginSet::native(), |_, _, _| {
+        attempts += 1;
+        true
+    });
+    assert_eq!(attempts, 0);
+    assert!(
+        !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
+            .logins
+            .contains_key(&key)
+    );
+}
+
+#[test]
 fn metered_adapter_without_usage_source_creates_no_claim_or_helper() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -1090,6 +1171,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
             logins: std::collections::BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
                     probe_error: None,
@@ -1143,6 +1225,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
                     probe_error: None,
