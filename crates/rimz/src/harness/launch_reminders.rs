@@ -79,7 +79,7 @@ impl Default for LaunchReminders {
 impl LaunchReminders {
     pub(super) fn disable_native_subagents(&self, request: &ExecRequest) -> bool {
         request.subagent
-            || (skill_is_callable(request.skills.as_deref(), "rimz-subagents")
+            || (skill_is_callable(request.callable_skills(), "rimz-subagents")
                 && matches!(self.subagent_catalog, Some(SubagentCatalog::Available(_))))
     }
 }
@@ -117,6 +117,7 @@ pub(super) fn render(
 ) -> String {
     let mut paragraphs = Vec::new();
     let params = &request.identity.params;
+    let skills = request.callable_skills();
     let team_context = reminders
         .team
         .as_ref()
@@ -135,7 +136,7 @@ pub(super) fn render(
         };
         paragraphs.push(format!("### {heading}\n\n{body}"));
     }
-    let lsp_servers = if skill_is_callable(request.skills.as_deref(), "rimz-lsp") {
+    let lsp_servers = if skill_is_callable(skills, "rimz-lsp") {
         reminders.lsp_servers.as_slice()
     } else {
         &[]
@@ -155,12 +156,12 @@ pub(super) fn render(
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
-    } else if skill_is_callable(request.skills.as_deref(), "rimz-subagents")
+    } else if skill_is_callable(skills, "rimz-subagents")
         && let Some(catalog) = reminders.subagent_catalog.as_ref()
     {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
-    if request.skills.as_ref().is_none_or(|skills| {
+    if skills.is_none_or(|skills| {
         skills
             .iter()
             .any(|skill| skill.as_str().starts_with("rimz-"))

@@ -47,6 +47,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         append_system_prompt_files: appended.to_vec(),
         team_prompt: Some(team_prompt.clone()),
         skills: Some(skills.to_vec()),
+        no_skill_tool: false,
         allowed_tools: Some(allowed_tools.to_vec()),
         launch: LaunchParams::default(),
     };
@@ -116,6 +117,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
             append_system_prompt_files: appended.to_vec(),
             team_prompt: Some(team_prompt),
             skills: Some(skills.to_vec()),
+            no_skill_tool: false,
             allowed_tools: Some(allowed_tools.to_vec()),
             provider_account: rimz::harness::launch::ProviderAccountState::Pending { binding },
             run_id: Some(run_id),

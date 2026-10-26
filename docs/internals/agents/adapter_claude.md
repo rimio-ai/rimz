@@ -124,8 +124,8 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | launch reminders | `--append-system-prompt`, internal only ([system prompt](#system-prompt)) |
 | fast preset | `fastMode: true`, merged into the launch's one `--settings` ([settings merge](#settings-merge)) |
 | compaction command | `/compact <brief>` |
-| Native delegation disabled | for a `rimz subagents` child, or a launch with callable `rimz-subagents` and an available catalog, `--disallowedTools` gains `Agent` in one final occurrence, even when `tools:` lists it |
-| shared language servers configured | `--disallowedTools` gains `LSP` ([native LSP denial](#native-lsp-denial)) |
+| Native delegation disabled | for a `rimz subagents` child, or a launch with [callable `rimz-subagents`](../harness/fleet.md#launch-reminders) and an available catalog, `--disallowedTools` gains `Agent` in one final occurrence, even when `tools:` lists it |
+| shared language servers configured | with callable `rimz-lsp`, `--disallowedTools` gains `LSP` ([native LSP denial](#native-lsp-denial)) |
 | skills home | `<config home>/skills` |
 | temp root | `CLAUDE_CODE_TMPDIR` set to the launch's `TMPDIR` (`temp_dir_env_keys`), so Claude's internal temp files land in the agent's temp unit on macOS too, where Claude ignores `TMPDIR` ([upstream](../../externals/agent-adapter/claude-reference.md#temp-root)). Under scoped isolation the value is `/tmp`. |
 
@@ -170,7 +170,7 @@ The version probe runs the program resolved through the configured shell startup
 
 ### Native LSP denial
 
-Effective shared-language-server configuration calls `disable_native_lsp_args` only when the launched profile makes `rimz-lsp` callable, and it merges `LSP` into one `--disallowedTools` flag before native delegation denial adds `Agent`. The denial follows configuration even when optional admission is refused, and profile `--tools` allowlists stay unchanged. Without a callable `rimz-lsp`, RimZ leaves the profile's flags alone, a user-configured `LSP` denial included. The [pinned precedence probe](../../externals/agent-adapter/claude-reference.md#native-lsp-denial) shows why this keeps Claude from starting private servers. Server lifecycle, callability, and reminders belong to [shared language servers](../lsp.md).
+Effective shared-language-server configuration calls `disable_native_lsp_args` only when the launch's tools and skills make `rimz-lsp` callable, and it merges `LSP` into one `--disallowedTools` flag before native delegation denial adds `Agent`. The denial follows configuration even when optional admission is refused, and profile `--tools` allowlists stay unchanged. Without a callable `rimz-lsp`, RimZ leaves the profile's flags alone, a user-configured `LSP` denial included. The [pinned precedence probe](../../externals/agent-adapter/claude-reference.md#native-lsp-denial) shows why this keeps Claude from starting private servers. Server lifecycle, callability, and reminders belong to [shared language servers](../lsp.md).
 
 ### Folder trust
 

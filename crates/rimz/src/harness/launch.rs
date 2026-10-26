@@ -606,6 +606,9 @@ pub struct ExecRequest {
         deserialize_with = "crate::config::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<crate::config::SkillName>>,
+    /// Whether the applied tools list excludes `Skill`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_skill_tool: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     #[serde(default)]
@@ -632,6 +635,15 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
+    /// The skills callable with the launch's applied tools and profile policy.
+    pub fn callable_skills(&self) -> Option<&[crate::config::SkillName]> {
+        if self.no_skill_tool {
+            Some(&[])
+        } else {
+            self.skills.as_deref()
+        }
+    }
+
     pub(super) fn launch_skills(
         &self,
     ) -> (Option<Vec<crate::config::SkillName>>, Option<&'static str>) {
@@ -657,6 +669,7 @@ impl ExecRequest {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            no_skill_tool: cell.no_skill_tool,
             allowed_tools: cell.allowed_tools.clone(),
             isolation_default: cell.isolation_default,
             identity,
@@ -677,6 +690,7 @@ impl ExecRequest {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            no_skill_tool: false,
             allowed_tools: None,
             isolation_default: None,
             provider_account: ProviderAccountState::Unbound,
@@ -986,7 +1000,7 @@ fn compile_agent_process_with_extra_env(
     }
     let mut action = request.action.clone();
     if reminders.lsp_configured
-        && crate::config::skill_is_callable(request.skills.as_deref(), "rimz-lsp")
+        && crate::config::skill_is_callable(request.callable_skills(), "rimz-lsp")
     {
         adapter.disable_native_lsp_args(action.extra_args_mut());
     }

@@ -1227,7 +1227,8 @@ path = "crates/rimz/src/harness"
 # CellNotice carries spec losses to the launch finalizer without printing (+1).
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
 # FloorOutcome tells the GC CLI a paused or busy pressure pass from a completed one (+1).
-surface-budget = 995
+# ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
+surface-budget = 996
 
 [[verdict]]
 kind = "item"
@@ -3151,7 +3152,8 @@ allowed-dependencies = [
 # `validate_agent_shell` and its error serve room start and config set (+2).
 # `CompiledAgentProcess::login_shell_argv` rewraps version-gated args after launch resolution (+1).
 # `ExecRequest::launch_skills` shares child selection across host and scoped views (+1).
-surface-budget = 48
+# ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"

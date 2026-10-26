@@ -259,6 +259,7 @@ pub struct ResumeLaunchPosture {
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub no_skill_tool: bool,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
@@ -281,6 +282,7 @@ impl ResumeLaunchPosture {
             append_system_prompt_files: self.append_system_prompt_files,
             team_prompt: self.team_prompt,
             skills: self.skills,
+            no_skill_tool: self.no_skill_tool,
             allowed_tools: self.allowed_tools,
             launch: crate::agents::LaunchParams {
                 profile,
@@ -310,6 +312,7 @@ impl ResumeLaunchPosture {
             append_system_prompt_files: self.append_system_prompt_files.clone(),
             team_prompt: self.team_prompt.clone(),
             skills: self.skills.clone(),
+            no_skill_tool: self.no_skill_tool,
             allowed_tools: self.allowed_tools.clone(),
             isolation_default: self.isolation_default,
             ..crate::harness::launch::ExecRequest::bare_launch(kind, Vec::new())
@@ -330,6 +333,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            no_skill_tool: cell.no_skill_tool,
             allowed_tools: cell.allowed_tools.clone(),
             isolation_default: cell.isolation_default,
             mode: cell.launch.mode,
