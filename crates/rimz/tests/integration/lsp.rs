@@ -103,6 +103,8 @@ fn lsp_query_argument_mistakes_do_not_disable_the_server() {
 #[test]
 fn lsp_columnless_position_always_reports_a_target_error() {
     let env = Env::new();
+    std::fs::create_dir(env.project_root.join("src")).unwrap();
+    std::fs::write(env.project_root.join("src/lib.rs"), "").unwrap();
     env.rimz()
         .args(["lsp", "def", "src/lib.rs:12"])
         .assert()
@@ -1908,6 +1910,250 @@ fn lsp_queries_prefer_written_containers_and_list_reusable_twins() {
 }
 
 #[test]
+fn lsp_show_folder_ranges_prefer_the_current_folder_without_a_server() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(env.project_root.join("show.rs"), "root\n").unwrap();
+    std::fs::write(folder.join("show.rs"), "folder\n").unwrap();
+    env.rimz()
+        .current_dir(&folder)
+        .args(["lsp", "show", "show.rs:1-1", "../scope/show.rs:1-1"])
+        .assert()
+        .success()
+        .stdout("scope/show.rs:1-1\n     1\tfolder\n\nscope/show.rs:1-1\n     1\tfolder\n");
+}
+
+#[test]
+fn lsp_show_folder_arguments_print_checkout_relative_enclosing_items() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(env.project_root.join("show.rs"), "root\n".repeat(210)).unwrap();
+    std::fs::write(
+        folder.join("show.rs"),
+        (1..=210)
+            .map(|n| format!("  line {n}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    env.rimz()
+        .current_dir(&folder)
+        .args([
+            "lsp",
+            "show",
+            "show.rs:3-5",
+            "show.rs:4",
+            "show.rs::Parent::child",
+            "show.rs:208:4",
+            "../scope/show.rs:4",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            [
+                "scope/show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+                "scope/show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+                "scope/show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+                "scope/show.rs:208-209\n   208\t  line 208\n   209\t  line 209\n",
+                "scope/show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+            ]
+            .join("\n"),
+        );
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_folder_queries_send_the_resolved_file_and_keep_typed_batch_targets() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(env.project_root.join("show.rs"), "root\n".repeat(210)).unwrap();
+    std::fs::write(folder.join("show.rs"), "folder\n".repeat(210)).unwrap();
+    let (mut broker, directory, _) = start_stub_broker(&env, env.project_root.clone());
+    let outputs: Vec<_> = [
+        ["hover", "show.rs:1:1"],
+        ["symbols", "show.rs"],
+        ["def", "show.rs::child"],
+    ]
+    .map(|[verb, target]| {
+        let output = env
+            .rimz()
+            .current_dir(&folder)
+            .args(["lsp", verb, target])
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout).unwrap(),
+        )
+    })
+    .into();
+    let answers: Vec<_> = outputs
+        .iter()
+        .zip(["fixture hover\n", "Parent", "scope/show.rs:208:4"])
+        .map(|((code, text), expected)| (*code, text.contains(expected)))
+        .collect();
+    assert_eq!(answers, [(Some(0), true); 3], "{outputs:?}");
+    let requests = editor_query(&directory, "requests");
+    let uris: Vec<_> = requests["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|request| request["params"]["textDocument"]["uri"].as_str())
+        .collect();
+    assert!(!uris.is_empty());
+    assert!(
+        uris.iter().all(|uri| uri.ends_with("/scope/show.rs")),
+        "{uris:?}"
+    );
+    let output = env
+        .rimz()
+        .current_dir(&folder)
+        .args(["lsp", "def", "show.rs::absent", "show.rs::child", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let values: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(values[0]["target"], "show.rs::absent");
+    assert_eq!(values[0]["name"], "scope/show.rs::absent");
+    assert_eq!(values[1]["exit"], 0);
+    env.rimz()
+        .current_dir(&folder)
+        .args(["lsp", "hover", "show.rs:4"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "scope/show.rs:4 has no column; line 4 names method child at scope/show.rs:4:4",
+        ));
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+/// The missing-file error for `gone.rs` typed from the `scope` folder of a checkout.
+const GONE_FROM_SCOPE: &str = "file not found: gone.rs; looked in current folder: scope/gone.rs; \
+    checkout root: gone.rs; relative paths are read from the current folder, then the checkout root";
+
+#[test]
+fn lsp_missing_folder_paths_fail_before_selection_even_without_a_server() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    let actual: Vec<_> = [
+        ["hover", "gone.rs:1:1"],
+        ["symbols", "gone.rs"],
+        ["def", "gone.rs:1"],
+    ]
+    .map(|[verb, target]| {
+        let output = env
+            .rimz()
+            .current_dir(&folder)
+            .args(["lsp", verb, target])
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    })
+    .into();
+    let expected = (Some(1), format!("error: {GONE_FROM_SCOPE}\n"));
+    assert_eq!(actual, vec![expected; 3]);
+}
+
+#[test]
+fn lsp_missing_folder_queries_record_no_usage_and_leave_later_targets_running() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("show.rs"), "folder\n").unwrap();
+    env.record(&env.project_root);
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let missing = format!("==> gone.rs:1:1 <==\nerror: {GONE_FROM_SCOPE}\n");
+    env.rimz()
+        .current_dir(&folder)
+        .args(["lsp", "hover", "gone.rs:1:1", "show.rs:1:1"])
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains(missing))
+        .stdout(predicates::str::contains(
+            "==> show.rs:1:1 <==\nfixture hover\n",
+        ));
+    let counts = rimz::lsp::usage::Log::new(&env.state_path_for(&env.project_root))
+        .read()
+        .total;
+    assert_eq!((counts.answered, counts.failed), (1, 0));
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_show_missing_folder_paths_name_both_readings() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&env.project_root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let folder = env.project_root.join("scope");
+    std::fs::create_dir(&folder).unwrap();
+    let missing = format!(
+        "gone.rs:1-2  missing-path  {GONE_FROM_SCOPE}; no checkout file ends with gone.rs\n"
+    );
+    env.rimz()
+        .current_dir(&folder)
+        .args(["lsp", "show", "gone.rs:1-2"])
+        .assert()
+        .code(5)
+        .stdout(missing);
+}
+
+#[test]
 fn lsp_show_batches_source_and_failures() {
     let env = Env::new();
     assert!(
@@ -3115,6 +3361,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
             assert_eq!(String::from_utf8(output.stdout).unwrap(), blocks.join("\n"));
         }
     }
+    std::fs::write(env.project_root.join("x.py"), "pass\n").unwrap();
     env.rimz().args(["lsp", "def", "alias", "x.py:1:1"]).assert().code(1).stderr("").stdout(
         "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server handles .py files (rust covers .rs); use grep for this target\n"
     );
