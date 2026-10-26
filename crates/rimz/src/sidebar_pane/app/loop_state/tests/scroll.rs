@@ -2339,9 +2339,7 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
             rig.state.pane.clock.advance(Duration::from_millis(17));
         }
         let (push, ack) = focus_push(&mut rig, anchor.clone());
-        if !cached {
-            rig.state.pane.clock.advance(Duration::from_millis(23));
-        }
+        rig.state.pane.clock.advance(Duration::from_millis(23));
         rig.state.on_focus_push(push, &mut rig.terminal).unwrap();
 
         assert_eq!(rig.view().ui().selected_pane, Some(anchor.pane_id));
@@ -2351,6 +2349,17 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
         assert_eq!(
             serde_json::to_value(&report).unwrap()["painted_ms"],
             if cached { -17 } else { 23 }
+        );
+        let stage = (!cached).then_some(23);
+        assert_eq!(
+            [
+                report.received_ms,
+                report.snapshot_ms,
+                report.folded_ms,
+                report.finished_ms
+            ],
+            [Some(23), stage, stage, Some(23)],
+            "the loop stamps its report on its own clock"
         );
         assert_eq!(report.misplaced_paints, 0);
         assert_eq!(report.unmatched_paints, 0);
