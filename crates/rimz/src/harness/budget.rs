@@ -721,7 +721,6 @@ pub(crate) fn project_parks(
             config,
             &provider,
             day_cutoff,
-            now,
             &zone,
         ) {
             agent.budget_park = Some(park);
@@ -732,7 +731,7 @@ pub(crate) fn project_parks(
             .entry(scope.clone())
             .or_insert_with(|| scope.read_ledger(runtime, state));
         agent.budget_park = daily_scope_park(
-            &scope, account, runtime, config, &provider, day_cutoff, now, &zone,
+            &scope, account, runtime, config, &provider, day_cutoff, &zone,
         );
     }
 }
@@ -783,10 +782,6 @@ fn agent_scope_park(
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one daily-scope projection boundary"
-)]
 fn daily_scope_park(
     scope: &DailyBudgetScope,
     ledger: &DailyBudgetLedger,
@@ -794,7 +789,6 @@ fn daily_scope_park(
     config: &MachineConfig,
     provider: &crate::agents::spending::ProviderSpendingCache,
     day_cutoff: Option<u64>,
-    now: Timestamp,
     zone: &TimeZone,
 ) -> Option<BudgetPark> {
     let parked = ledger.parked.as_ref()?;
@@ -815,7 +809,7 @@ fn daily_scope_park(
         at: parked.at,
         scope: park_scope,
         account_kind,
-        resets_at: next_day_start(now, zone),
+        resets_at: park_reset_at(BudgetWindow::Day, parked.at, zone),
     })
 }
 
@@ -898,6 +892,9 @@ fn evaluate_scopes(
     now: Timestamp,
     day_cutoff: Option<u64>,
 ) -> ScopeVerdicts {
+    let cutoff = local_day_start(now, &config.time_zone());
+    let in_current_window =
+        |parked: &BudgetParkStamp| cutoff.is_none_or(|cutoff| parked.at >= cutoff);
     let fleet_spend = if snapshot.fleet_day_spend_epoch_secs == day_cutoff {
         snapshot.fleet_day_spend_usd.unwrap_or_default()
     } else {
@@ -906,6 +903,7 @@ fn evaluate_scopes(
     let fleet_scope = DailyBudgetScope::Fleet;
     let mut fleet = fleet_scope.read_ledger(runtime, state);
     let fleet_parked_before = fleet.parked.clone();
+    fleet.parked = fleet.parked.filter(in_current_window);
     let fleet_cap = fleet_scope.effective_cap_usd(&fleet, config);
     let fleet_verdict = evaluate_daily_scope(&mut fleet.parked, fleet_cap, fleet_spend, now);
 
@@ -928,6 +926,7 @@ fn evaluate_scopes(
     for scope in account_scopes {
         let mut ledger = scope.read_ledger(runtime, state);
         let parked_before = ledger.parked.clone();
+        ledger.parked = ledger.parked.filter(in_current_window);
         let cap = scope.effective_cap_usd(&ledger, config);
         let spend = scope
             .account_login()
@@ -1057,7 +1056,13 @@ fn update_auto_continue(
         && ledger.is_some_and(|ledger| ledger.last_interrupt_at.is_some()))
         || (classification.scope_parked && scope_interrupted(ctx.scope_state, agent));
     if daily_park && pause_applies(agent, interrupted) {
-        if let Some(deadline) = next_day_start(ctx.now, ctx.zone) {
+        let deadline = if classification.scope_parked {
+            binding_scope_park(ctx.scopes, &agent.login_key())
+                .and_then(|at| park_reset_at(BudgetWindow::Day, at, ctx.zone))
+        } else {
+            ledger.and_then(|ledger| ledger_day_reset(ledger, ctx.now, ctx.zone))
+        };
+        if let Some(deadline) = deadline {
             crate::harness::auto_continue::arm_budget_park(
                 ctx.runtime,
                 &agent.kind,
@@ -1322,13 +1327,17 @@ fn interrupt_due(last: Option<Timestamp>, now: Timestamp) -> bool {
     last.is_none_or(|last| now.as_second() - last.as_second() >= INTERRUPT_RETRY_SECS)
 }
 
-fn next_day_start(now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
-    now.to_zoned(zone.clone())
-        .tomorrow()
-        .ok()?
-        .start_of_day()
-        .ok()
-        .map(|zoned| zoned.timestamp())
+fn park_reset_at(window: BudgetWindow, parked_at: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
+    match window {
+        BudgetWindow::Day => parked_at
+            .to_zoned(zone.clone())
+            .tomorrow()
+            .ok()?
+            .start_of_day()
+            .ok()
+            .map(|zoned| zoned.timestamp()),
+        BudgetWindow::Session | BudgetWindow::Turn => None,
+    }
 }
 
 fn local_day_start(now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
