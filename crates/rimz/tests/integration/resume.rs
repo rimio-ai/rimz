@@ -230,6 +230,7 @@ mod agent_ref {
         trace: PathBuf,
         shim: PathBuf,
         shell: PathBuf,
+        kind: String,
     }
 
     impl Fixture {
@@ -343,6 +344,7 @@ mod agent_ref {
                 trace,
                 shim,
                 shell,
+                kind: kind.to_owned(),
             }
         }
 
@@ -406,7 +408,7 @@ mod agent_ref {
             let layout = layout.parse().unwrap();
             let (_, argv) = resumed_pane(&layout).unwrap();
             let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
-            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap()
+            rimz::harness::launch::decode_exec_request(&self.kind, None, &payload[1]).unwrap()
         }
 
         fn attach_and_end(
@@ -1452,6 +1454,9 @@ mod agent_ref {
             1,
             "{stderr}"
         );
+        let params = fixture.request().identity.params;
+        assert!(params.fast);
+        assert!(params.record.unwrap().fast);
     }
 
     #[test]
