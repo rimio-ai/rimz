@@ -16,6 +16,73 @@ fn accounts(env: &Env, args: &[&str]) -> Output {
 }
 
 #[test]
+fn accounts_and_providers_json_keep_day_and_month_budget_fields_separate() {
+    use rimz::agents::spending::{
+        ProviderSpendingCache, SpendTally, SpendWindow, utc_month_start_secs,
+        write_provider_spending_cache,
+    };
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[accounts.budget]\nclaude = '10/month'\n",
+    )
+    .unwrap();
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        concat!(
+            "case \"$1\" in\n--version) echo '2.1.0 (Claude Code)';;\n",
+            "auth) echo '{\"loggedIn\":true,\"authMethod\":\"api_key\"}';;\nesac",
+        ),
+    );
+    let key: rimz::ids::LoginKey = "claude@default".parse().unwrap();
+    let now = jiff::Timestamp::now();
+    let recorded = SpendWindow {
+        usd: 99.0,
+        sessions: 1,
+        ..Default::default()
+    };
+    let tally = SpendTally {
+        month: recorded.clone(),
+        year: recorded,
+        ..Default::default()
+    };
+    let mut cache = ProviderSpendingCache {
+        month_cutoff_secs: utc_month_start_secs(now.as_second() as u64).unwrap(),
+        month_by_login: [(
+            key.clone(),
+            SpendWindow {
+                usd: 6.0,
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    cache.spending.by_login.insert(key, tally.clone());
+    cache
+        .spending
+        .by_provider
+        .insert("claude".to_owned(), tally);
+    write_provider_spending_cache(&env.runtime_paths().shared_provider_spending_path(), &cache);
+    for args in [
+        vec!["accounts", "show", "claude", "--json"],
+        vec!["providers", "claude", "--json"],
+    ] {
+        let output = hermetic(&env, &mut env.rimz()).args(args).output().unwrap();
+        let rows: Value = serde_json::from_str(&succeeded(&output)).unwrap();
+        assert_eq!(rows[0]["day_budget"], Value::Null);
+        assert_eq!(
+            rows[0]["month_budget"],
+            json!({"cap_usd":10.0,"spend_usd":6.0,"parked":false})
+        );
+    }
+    let detail = succeeded(&accounts(&env, &["show", "claude"]));
+    assert!(detail.contains("$6.00 of $10.00/month"), "{detail}");
+}
+
+#[test]
 fn unsupported_login_check_does_not_claim_logout() {
     let env = Env::new();
     crate::common::write_path_shim(&provider_bin(&env), "kiro-cli", "echo 2.31.0");
@@ -998,7 +1065,8 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "account_scope": null,
             "version": null,
             "spending": null,
-            "day_budget": null
+            "day_budget": null,
+            "month_budget": null
         })
     );
 

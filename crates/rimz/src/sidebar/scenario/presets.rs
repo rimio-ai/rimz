@@ -2508,6 +2508,7 @@ fn provider_panel(
         active_sessions: spending.headline.sessions,
         spending: Some(spending.into()),
         day_budget: None,
+        month_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(crate::ExtraCredits::Disabled),
         reset_credits: None,
         redeem_forecast: None,

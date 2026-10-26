@@ -365,6 +365,7 @@ struct ProviderReport {
     spend_step: SpendStep,
     spending: Option<ProviderSpend>,
     day_budget: Option<DailyBudgetView>,
+    month_budget: Option<DailyBudgetView>,
     agents: Option<usize>,
     active: bool,
     default_for: Scopes,
@@ -491,6 +492,7 @@ fn build_report(
                 year: tally.year.clone(),
             }),
         day_budget: panel.and_then(|panel| panel.day_budget),
+        month_budget: panel.and_then(|panel| panel.month_budget),
         agents: context
             .agents
             .map(|counts| counts.get(&login.key()).copied().unwrap_or(0)),
@@ -549,6 +551,7 @@ struct AccountRow {
     version: Option<String>,
     spending: Option<ProviderSpend>,
     day_budget: Option<DailyBudgetView>,
+    month_budget: Option<DailyBudgetView>,
     #[serde(skip)]
     installed: bool,
     #[serde(skip)]
@@ -574,6 +577,7 @@ impl AccountRow {
         self.version = report.version.clone();
         self.spending = report.spending.clone();
         self.day_budget = report.day_budget;
+        self.month_budget = report.month_budget;
         self.installed = report.installed;
         self.legacy_spend_step = report.spend_step;
     }
@@ -604,6 +608,7 @@ impl AccountRow {
             version: self.version.clone(),
             spending: self.spending.clone(),
             day_budget: self.day_budget,
+            month_budget: self.month_budget,
             installed: self.installed,
         }
     }
@@ -760,6 +765,7 @@ fn account_rows(
             version: None,
             spending: None,
             day_budget: None,
+            month_budget: None,
             installed: false,
             legacy_spend_step: SpendStep::Subscription,
         }
@@ -1438,12 +1444,16 @@ fn write_pretty(
         } else if report.account.name.is_default() {
             rows.push("spend", unknown_cell());
         }
-        if let Some(budget) = report.day_budget {
+        if let Some((budget, window)) = report
+            .day_budget
+            .map(|budget| (budget, "day"))
+            .or_else(|| report.month_budget.map(|budget| (budget, "month")))
+        {
             let mut spans = vec![
                 money_cell(budget.spend_usd),
                 cell(" of "),
                 money_cell(budget.cap_usd),
-                cell("/day"),
+                cell(format!("/{window}")),
             ];
             if budget.parked {
                 spans.push(cell(" · parked"));

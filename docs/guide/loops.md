@@ -337,7 +337,7 @@ A held fire shows `held: <reason>` in `rimz loop list` and `rimz loop show`, Ctr
 
 Two brakes bound a task that runs without you.
 
-Dollar budgets cap what a task spends. `--budget 5` caps each fired run, and `--budget-per-day 20` sums that task's run costs in the configured local day and skips a fire it cannot fund, recording `budget skipped`. A room-wide or per-account daily cap gates the same fires the same way, before the task's check or pane exists. The LAST column in `rimz loop list` includes spend against the task's daily cap, and `rimz loop show` breaks the costs down per run; the caps themselves are the [budgets guide](./budget.md).
+Dollar budgets cap what a task spends. `--budget 5` caps each fired run, and `--budget-per-day 20` sums that task's run costs in the configured local day and skips a fire it cannot fund, recording `budget skipped`. A room's daily cap or account's day or month cap gates the same fires the same way, before the task's check or pane exists. The LAST column in `rimz loop list` includes spend against the task's daily cap, and `rimz loop show` breaks the costs down per run; the caps themselves are the [budgets guide](./budget.md).
 
 A task spends on the room's current account for its provider unless you pin it: `--account work` beside `--agent` holds every fire on the [named account](./accounts.md) `work`, with that account's caps and windows, whatever the room switches to. Its `window.*` conditions read that account's last stored window. A pinned fire never borrows another account. When `work` is removed, loses its home, or has a stored logged-out status, the fire records `account skipped` with the fix and adds no strike; an idle account RimZ holds no status for launches, and a login the provider rejects then fails that run ([the account pin](../reference/cli/loop.md#the-account-pin)).
 
@@ -473,7 +473,7 @@ The evidence is the structured per-turn failure record the agent's own CLI write
 The cause picks the clock:
 
 - A rate-limit or spend-limit park waits for the latest applicable account or model window to reset, including a Fable model limit. If the provider still reports a limit afterward, nudges stay at least two minutes apart; those limit replies do not restart the attempt cap.
-- A daily dollar-cap park resumes at the next local midnight, when the cap reopens.
+- A daily dollar-cap park reopens at local midnight; an account's monthly park at 00:00 UTC on the next 1st. Continue waits for the last binding cap's reset.
 - A transient overload or API-error park has no reset clock, so it retries on a lengthening ramp: the first attempt three minutes after the failure, then every five (`resume.auto_continue_backoff_secs`, default `[180, 300]`, last value repeating). Overload replies do not restart the attempt cap either.
 
 Each attempt is a keystroke you could have typed: when the clock fires and the agent is still parked, RimZ sends the configured nudge (`continue` by default, `resume.auto_continue_text`) into the agent's pane through the same path as `rimz message --steer`. All causes share one attempt cap (`resume.auto_continue_max_retries`, default 12, just under an hour on the default ramp); when it runs out, the card goes `failed` and routes to you like any other actionable card. Every attempt appends the park time, delivery verdict, and message id to the assist log that `rimz stats --assists` prints.

@@ -58,6 +58,7 @@ fn provider(
         active_sessions: 0,
         spending: spending.map(Into::into),
         day_budget: None,
+        month_budget: None,
         extra_credits: None,
         reset_credits: None,
         redeem_forecast: None,

@@ -192,4 +192,4 @@ If a live room pins the account, `remove` warns and names it. Add the account ba
 
 - [Accounts CLI](../reference/cli/accounts.md): overview columns, account details with `show`, mutation flags, and the JSON shape.
 - [Configuration](./configuration.md#accounts): the `[accounts]` tables in the per-machine and project config.
-- [Budgets](./budget.md): daily account caps and how a park lifts.
+- [Budgets](./budget.md): day or month account caps and how a park lifts.

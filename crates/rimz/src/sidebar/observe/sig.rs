@@ -450,6 +450,17 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
                 }),
             ),
             (
+                PanelField::MonthBudget,
+                panel.month_budget.map(|budget| {
+                    let parked = if budget.parked { "/parked" } else { "" };
+                    format!(
+                        "{}/{}{parked}",
+                        cents(budget.spend_usd),
+                        cents(budget.cap_usd)
+                    )
+                }),
+            ),
+            (
                 PanelField::ExtraCredits,
                 panel.extra_credits.as_ref().map(|credits| match credits {
                     ExtraCredits::Unlimited => "unlimited".to_owned(),
@@ -593,6 +604,11 @@ mod tests {
                 spend_usd: 12.5,
                 parked: true,
             }),
+            month_budget: Some(crate::store::snapshot::DailyBudgetView {
+                cap_usd: 500.0,
+                spend_usd: 125.0,
+                parked: false,
+            }),
             extra_credits: Some(crate::agents::ExtraCredits::Known {
                 used_usd: Some(3.0),
                 remaining_usd: None,
@@ -662,6 +678,7 @@ mod tests {
             ),
             ("provider_field:claude@default:extra_credits", "300/-/1000"),
             ("provider_field:claude@default:metered", "true"),
+            ("provider_field:claude@default:month_budget", "12500/50000"),
             ("provider_field:claude@default:plan", "Claude Max"),
             ("provider_field:claude@default:redeem_forecast", "armed"),
             ("provider_field:claude@default:remote_control", "healthy"),

@@ -100,7 +100,7 @@ pub struct ParkedWorkflow {
     pub since: jiff::Timestamp,
 }
 
-/// One configured local-day dollar cap and its current metered state.
+/// One configured time-windowed dollar cap and its current metered state.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DailyBudgetView {
     pub cap_usd: f64,
@@ -192,8 +192,11 @@ pub struct SidebarProviderPanel {
     /// Configured provider-login local-day dollar cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_budget: Option<DailyBudgetView>,
+    /// Counting provider-login UTC-calendar-month dollar cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub month_budget: Option<DailyBudgetView>,
     /// Paid usage beyond subscription windows: provider extra credits or
-    /// API-key spend against an optional display ceiling.
+    /// API-key spend against a monthly budget or optional display ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credits: Option<ExtraCredits>,
     /// Banked rate-limit reset credits, shown as a compact header marker.

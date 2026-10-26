@@ -217,8 +217,15 @@ fn exhausted_month_pool_agrees_in_enforcement_launch_gate_and_tier_routing() {
             ..Default::default()
         },
     );
-    let snapshot =
-        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], now);
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], now)
+            .with_provider_aggregates(
+                &Default::default(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &std::collections::BTreeSet::from([key.clone()]),
+            );
     enforce(&snapshot, &runtime, None, &config);
     assert!(
         scope.read_ledger(&runtime, Some(&state)).parked.is_some(),
@@ -238,6 +245,169 @@ fn exhausted_month_pool_agrees_in_enforcement_launch_gate_and_tier_routing() {
     let json = serde_json::to_value(reason).unwrap();
     assert_eq!(json["reason"], "daily_cap");
     assert_eq!(json["window"], "month");
+    let logins = RoomLoginSet::new(
+        Some(BTreeMap::new().into()),
+        Some(account_catalog(&config)),
+        BTreeMap::new(),
+    )
+    .with_agents(&snapshot.agents);
+    project_budget_views(
+        &mut snapshot,
+        &runtime,
+        Some(&state),
+        &config,
+        &crate::agents::spending::read_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+        ),
+        &logins,
+    );
+    let panel = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.login_key() == key)
+        .unwrap();
+    assert_eq!(panel.day_budget, None);
+    assert_eq!(
+        panel.month_budget,
+        Some(crate::store::snapshot::DailyBudgetView {
+            cap_usd: 5.0,
+            spend_usd: 6.0,
+            parked: true,
+        })
+    );
+}
+
+#[test]
+fn monthly_views_project_api_bars_only_for_counting_in_use_month_caps() {
+    use crate::agents::ExtraCredits;
+    use crate::agents::spending::{ProviderSpendingCache, SpendWindow, utc_month_start_secs};
+
+    let now: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
+    let ceiling = ExtraCredits::known(Some(12.0), None, Some(25.0));
+    let cases = [
+        (Some("10/month"), None, false, true, false, false, false),
+        (
+            Some("10/month"),
+            Some(15.0),
+            false,
+            true,
+            false,
+            false,
+            false,
+        ),
+        (None, None, false, true, false, false, false),
+        (Some("10/day"), None, false, true, false, false, false),
+        (Some("10/month"), None, true, true, false, false, false),
+        (Some("10/month"), None, false, false, false, false, false),
+        (Some("10/month"), None, false, true, true, false, false),
+        (Some("10/month"), None, true, true, false, true, false),
+        (Some("10/month"), None, false, true, false, true, false),
+        (Some("10/month"), None, false, true, false, false, true),
+    ];
+    let mut actual = Vec::new();
+    for (cap, raised, metered, in_use, stale, subscription, empty) in cases {
+        let (_dir, runtime) = split_shared_roots();
+        let config = accounts_config(&cap.map_or_else(String::new, |cap| {
+            format!("[accounts.budget]\nclaude = '{cap}'\n")
+        }));
+        let key: LoginKey = "claude@default".parse().unwrap();
+        if subscription {
+            publish_account_metering(&runtime, &[("claude@default", Some(true))]);
+        }
+        let scope = DailyBudgetScope::Account(key.clone());
+        let mut ledger = scope.read_ledger(&runtime, None);
+        ledger.raised_cap_usd = raised;
+        scope
+            .write_ledger(&runtime, &state_paths(&runtime), &ledger)
+            .unwrap();
+        let provider = ProviderSpendingCache {
+            day_cutoff_secs: local_day_cutoff_secs(now, &config.time_zone()).unwrap(),
+            day_by_login: [(
+                key.clone(),
+                SpendWindow {
+                    usd: 2.0,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            month_cutoff_secs: if stale {
+                0
+            } else {
+                utc_month_start_secs(now.as_second() as u64).unwrap()
+            },
+            month_by_login: (!empty)
+                .then_some((
+                    key.clone(),
+                    SpendWindow {
+                        usd: 6.0,
+                        ..Default::default()
+                    },
+                ))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![agent(0.0, AgentStatus::Idle, None)],
+            now,
+        )
+        .with_provider_aggregates(
+            &Default::default(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &std::collections::BTreeSet::from([key]),
+        );
+        let panel = &mut snapshot.providers[0];
+        panel.metered = metered;
+        panel.extra_credits = Some(ceiling.clone());
+        let logins = RoomLoginSet::new(
+            in_use.then(|| BTreeMap::new().into()),
+            in_use.then(|| account_catalog(&config)),
+            BTreeMap::new(),
+        );
+        project_budget_views(&mut snapshot, &runtime, None, &config, &provider, &logins);
+        let panel = &snapshot.providers[0];
+        actual.push((
+            panel
+                .month_budget
+                .map(|view| (view.cap_usd, view.spend_usd)),
+            panel.day_budget.map(|view| (view.cap_usd, view.spend_usd)),
+            panel.extra_credits.clone(),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (
+                Some((10.0, 6.0)),
+                None,
+                Some(ExtraCredits::known(Some(6.0), None, Some(10.0)))
+            ),
+            (
+                Some((15.0, 6.0)),
+                None,
+                Some(ExtraCredits::known(Some(6.0), None, Some(15.0)))
+            ),
+            (None, None, Some(ceiling.clone())),
+            (None, Some((10.0, 2.0)), Some(ceiling.clone())),
+            (Some((10.0, 6.0)), None, Some(ceiling.clone())),
+            (None, None, Some(ceiling.clone())),
+            (
+                Some((10.0, 0.0)),
+                None,
+                Some(ExtraCredits::known(None, None, Some(10.0)))
+            ),
+            (None, None, Some(ceiling.clone())),
+            (None, None, Some(ceiling)),
+            (
+                Some((10.0, 0.0)),
+                None,
+                Some(ExtraCredits::known(Some(0.0), None, Some(10.0)))
+            ),
+        ]
+    );
 }
 
 #[test]

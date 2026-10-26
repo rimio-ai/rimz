@@ -1,10 +1,192 @@
-//! CLI coverage for room-fleet and provider-account daily dollar caps.
+//! CLI coverage for room-fleet and provider-account dollar caps.
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 
 use crate::common::Env;
 use rimz::ids::{AgentKind, LoginKey};
+
+#[test]
+fn budget_account_month_set_raise_and_off_keep_the_window() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["budget", "--account", "claude", "10/month"])
+        .assert()
+        .success()
+        .stdout(contains("of $10.00 this month"));
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude", "+5", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["window"], "month");
+    assert_eq!(report["accounts"][0]["cap_usd"], 15.0);
+    assert_eq!(report["accounts"][0]["source"], "raised");
+    env.rimz()
+        .arg("budget")
+        .assert()
+        .success()
+        .stdout(contains("$15.00/month"));
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude", "off", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["window"], serde_json::Value::Null);
+    assert_eq!(report["accounts"][0]["cap_usd"], serde_json::Value::Null);
+    env.rimz()
+        .args(["budget", "--account", "claude"])
+        .assert()
+        .success()
+        .stdout(contains("50/day"))
+        .stdout(contains("300/month"));
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude", "3/day", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["window"], "day");
+    assert_eq!(report["accounts"][0]["source"], "override");
+}
+
+#[test]
+fn budget_month_report_reads_pool_month_spend_not_local_day() {
+    use rimz::agents::spending::{
+        ProviderSpendingCache, SpendWindow, utc_month_start_secs, write_provider_spending_cache,
+    };
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        concat!(
+            "timezone = 'UTC'\n[accounts.budget]\nclaude = '10/month'\n",
+            "[accounts.claude.work]\nhistory = 'standalone'\n",
+            "home = '/srv/budget-month-work'\nbudget = '20/month'\n",
+        ),
+    )
+    .unwrap();
+    let now = jiff::Timestamp::now();
+    let key: LoginKey = "claude@work".parse().unwrap();
+    let runtime = env.runtime_paths();
+    let mut provider = ProviderSpendingCache {
+        day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+            now.as_second() as u64,
+            Some("UTC"),
+        )
+        .unwrap(),
+        day_by_login: [(
+            key.clone(),
+            SpendWindow {
+                usd: 2.0,
+                ..Default::default()
+            },
+        )]
+        .into(),
+        month_cutoff_secs: utc_month_start_secs(now.as_second() as u64).unwrap(),
+        month_by_login: [(
+            key,
+            SpendWindow {
+                usd: 12.0,
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude@work", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["spend_usd"], 12.0);
+    assert_eq!(report["accounts"][0]["cap_usd"], 20.0);
+    assert_eq!(report["accounts"][0]["window"], "month");
+    provider.month_cutoff_secs = 0;
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude@work", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["spend_usd"], 0.0);
+}
+
+#[test]
+fn budget_fleet_month_refusal_points_to_account_caps() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["budget", "10/month"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "fleet cap is `/day` only; `/month` applies with `--account`",
+        ));
+}
+
+#[test]
+fn budget_relative_raises_refuse_both_window_suffixes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.rimz().args(["budget", "1/day"]).assert().success();
+    let actual = ["+10/day", "+10/month"].map(|value| {
+        let result = env.rimz().args(["budget", value]).assert().failure();
+        String::from_utf8_lossy(&result.get_output().stderr)
+            .contains("a relative budget raise uses `+AMOUNT`, without `/day` or `/month`")
+    });
+    assert_eq!(actual, [true, true]);
+}
+
+#[test]
+fn budget_month_subscription_warning_survives_no_cap_filter_and_runtime_edits() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[accounts.budget]\nclaude = '10/month'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.runtime_paths().shared_accounts_path(),
+        serde_json::to_vec(&serde_json::json!({
+            "logins": {"claude@default": {"probed_at_ms":0, "ok":true, "account":{"metered":true}}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let inspected = env
+        .rimz()
+        .args(["budget", "--json"])
+        .assert()
+        .success()
+        .stderr(contains("accounts.budget.claude"))
+        .stderr(contains("pool claude@default"))
+        .stderr(contains("claude@default reads as a subscription"))
+        .stderr(contains(
+            "API-key billing only and will never park this account",
+        ))
+        .stderr(contains("extra-usage limit in Claude's settings"));
+    let report: serde_json::Value = serde_json::from_slice(&inspected.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"], serde_json::json!([]));
+    for value in ["20/month", "+5"] {
+        let json = env
+            .rimz()
+            .args(["budget", "--account", "claude", value, "--json"])
+            .assert()
+            .success()
+            .stderr(contains("runtime override"));
+        let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+        assert_eq!(report["accounts"][0]["cap_usd"], serde_json::Value::Null);
+        assert_eq!(report["accounts"][0]["window"], serde_json::Value::Null);
+    }
+}
 
 #[test]
 fn budget_reports_configured_pools_when_the_catalog_is_invalid() {
@@ -37,7 +219,8 @@ fn budget_reports_plain_facts_and_runtime_pools() {
         "parked": false,
         "scope": "fleet",
         "source": "none",
-        "spend_usd": 0.0
+        "spend_usd": 0.0,
+        "window": null
       },
       "turn_cap_usd": null
     }
@@ -65,7 +248,8 @@ fn budget_reports_plain_facts_and_runtime_pools() {
         "parked": true,
         "scope": "fleet",
         "source": "override",
-        "spend_usd": 0.0
+        "spend_usd": 0.0,
+        "window": "day"
       },
       "turn_cap_usd": null
     }
@@ -125,7 +309,8 @@ fn budget_reports_plain_facts_and_runtime_pools() {
           "requested": "claude@work",
           "scope": "claude@default",
           "source": "override",
-          "spend_usd": 0.0
+          "spend_usd": 0.0,
+          "window": "day"
         }
       ],
       "fleet": null,
@@ -224,7 +409,7 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "--account", "claude", "clear", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("no daily cap"));
+        .stdout(contains("no cap"));
 
     env.rimz()
         .args([
@@ -242,7 +427,7 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "--account", "claude"])
         .assert()
         .success()
-        .stdout(contains("no daily cap"));
+        .stdout(contains("no cap"));
     env.rimz()
         .args(["budget", "--account", "claude@missing"])
         .assert()
@@ -392,7 +577,11 @@ fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
             .args(["off", "--no-continue"])
             .assert()
             .success()
-            .stdout(contains("no daily cap"));
+            .stdout(contains(if matches!(scope, DailyBudgetScope::Fleet) {
+                "no daily cap"
+            } else {
+                "no cap"
+            }));
         refresh();
         let ledger = scope.read_ledger(&runtime, Some(store.paths()));
         assert!(ledger.disabled);
