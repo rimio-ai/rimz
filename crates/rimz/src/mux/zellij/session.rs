@@ -8,7 +8,7 @@ use super::pane_topology::{
     PaneTopologyCache, PaneTopologyPane, pane_topology_cache_is_fresh, read_pane_topology_cache,
 };
 use super::parse::{is_no_active_sessions, session_state_from_line};
-use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
+use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
 use crate::mux::{CommandSpec, MuxErr, PaneReadConsistency, Result, SessionLiveness};
@@ -426,7 +426,7 @@ impl ZellijBackend {
         name: &str,
         workspace_id: &WorkspaceId,
     ) -> Result<()> {
-        self.topology_panes_for_workspace(name, workspace_id, None, health_probe_timeout())
+        self.topology_panes_for_workspace(name, workspace_id, None, self.health_probe_timeout())
             .map(drop)
     }
 
