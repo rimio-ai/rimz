@@ -59,6 +59,11 @@ process.env.RIMZ_WORKSPACE_ID = "workspace";
 process.env.RIMZ_BIN = directory + "/missing-rimz";
 assert.equal(await plugin.setup({}), undefined, "missing executable must be inert");
 process.env.RIMZ_BIN = binary;
+const argv = process.argv;
+process.argv = [...argv, "serve", "--service"];
+assert.equal(await plugin.setup({}), undefined, "shared service setup must be inert");
+assert.equal(process.env.RIMZ_LAUNCH_REMINDERS, reminders);
+process.argv = argv;
 
 const hooks = new Map();
 let subscriptions = 0, catalogReads = 0, deliver, handled;

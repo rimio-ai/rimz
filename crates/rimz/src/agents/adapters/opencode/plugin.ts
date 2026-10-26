@@ -50,6 +50,9 @@ function executable(): string | undefined {
 
 function setup(ctx: Context): Promise<Cleanup> | undefined {
   if (!process.env.RIMZ_WORKSPACE_ID) return;
+  // The machine-wide service serves every client, but kept the environment of the pane that
+  // happened to spawn it.
+  if (process.argv.includes("--service")) return;
   const rimz = executable();
   if (!rimz) return;
   const existing = activations.get(ctx);
