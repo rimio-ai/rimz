@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn frame_replacement_preserves_full_width_lines_and_removes_stale_content() {
-        let mut terminal = vt100::Parser::new(4, 8, 0);
+        let mut terminal = vt100::Parser::new(4.try_into().unwrap(), 8.try_into().unwrap(), 0);
         terminal.process(b"old-old!\r\nstale...\r\nremove!!\r\nmore...");
         let mut out = RecordingWriter::default();
 

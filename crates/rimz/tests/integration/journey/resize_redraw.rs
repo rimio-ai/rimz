@@ -113,7 +113,11 @@ fn sidebar_redraws_at_new_size_on_resize() {
     // The reader thread feeds one persistent parser, so each grid read is
     // O(grid) rather than re-parsing the whole growing stream per poll, and it
     // never contends with the reader for a separate buffer lock.
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(GRID_ROWS, GRID_COLS, 0)));
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        GRID_ROWS.try_into().unwrap(),
+        GRID_COLS.try_into().unwrap(),
+        0,
+    )));
     let mut reader = pair.master.try_clone_reader().expect("clone reader");
     let sink = Arc::clone(&parser);
     let reader_thread = std::thread::spawn(move || {

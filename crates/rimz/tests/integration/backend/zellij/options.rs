@@ -148,7 +148,7 @@ fn rendered_screen(client: &AttachedClient) -> String {
     // A pane rename also appears in OSC window-title sequences with frames off.
     // Inspect displayed cells, not those non-rendering title notifications.
     // Frame assertions use the top row: the bottom status bar can name the pane too.
-    let mut parser = vt100::Parser::new(40, 120, 0);
+    let mut parser = vt100::Parser::new(40.try_into().unwrap(), 120.try_into().unwrap(), 0);
     parser.process(&client.output_bytes());
     parser.screen().contents()
 }

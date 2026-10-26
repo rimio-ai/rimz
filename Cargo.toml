@@ -235,7 +235,7 @@ insta = { version = "1", features = ["json", "yaml", "filters"] }
 proptest = "1"
 assert_cmd = "2"
 predicates = "3"
-vt100 = "0.16"
+vt100 = "0.18"
 portable-pty = "0.9"
 # Performance benches. Dev-only: a small modern harness with built-in
 # allocation profiling, so the cost model can be regenerated without linking

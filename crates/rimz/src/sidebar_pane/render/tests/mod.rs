@@ -191,7 +191,7 @@ fn snapshot_to_screen_with_alert_and_ui(
     height: u16,
 ) -> String {
     let bytes = snapshot_to_bytes_with_alert_and_ui(snapshot, alert, ui, pane_ui, width, height);
-    let mut parser = vt100::Parser::new(height, width, 0);
+    let mut parser = vt100::Parser::new(height.try_into().unwrap(), width.try_into().unwrap(), 0);
     parser.process(&bytes);
     parser.screen().contents()
 }

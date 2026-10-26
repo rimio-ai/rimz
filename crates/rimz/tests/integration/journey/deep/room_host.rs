@@ -296,7 +296,11 @@ impl Room {
                         &["split-window", "-h", "-l", "60", "-t", &target, &serve],
                     );
                 }
-                let parser = Arc::new(Mutex::new(vt100::Parser::new(40, 180, 0)));
+                let parser = Arc::new(Mutex::new(vt100::Parser::new(
+                    40.try_into().unwrap(),
+                    180.try_into().unwrap(),
+                    0,
+                )));
                 let mut command = CommandBuilder::new("tmux");
                 command.scrub_session_env();
                 command.arg("-S");

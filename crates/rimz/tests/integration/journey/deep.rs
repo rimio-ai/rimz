@@ -263,7 +263,11 @@ fn tmux_cell_only_sidebar_bounds_client_bytes() {
             &serve,
         ],
     );
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(120, 200, 0)));
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        120.try_into().unwrap(),
+        200.try_into().unwrap(),
+        0,
+    )));
     let mut attach = CommandBuilder::new("tmux");
     env.pin_pty_command(&mut attach);
     attach.env("TERM", "xterm-256color");
@@ -3223,7 +3227,11 @@ fn zellij_supervised_run_holds_its_account_history_link_until_it_dies() {
         .expect("start room");
     assert!(started.status.success(), "room start failed: {started:?}");
     // A Zellij server lays out a new tab only for an attached client.
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(40, 160, 0)));
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        40.try_into().unwrap(),
+        160.try_into().unwrap(),
+        0,
+    )));
     let _client = AttachProcess::spawn(&workspace_session(&env), &parser, |cmd| {
         env.pin_pty_command(cmd);
     });
@@ -3274,7 +3282,11 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
     let started = start();
     assert!(started.status.success(), "room start failed: {started:?}");
     let session = workspace_session(&env);
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(40, 160, 0)));
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(
+        40.try_into().unwrap(),
+        160.try_into().unwrap(),
+        0,
+    )));
     let client = AttachProcess::spawn(&session, &parser, |cmd| {
         env.pin_pty_command(cmd);
     });
@@ -3834,7 +3846,11 @@ struct AttachProcess {
 
 impl AttachedZellijScreen {
     fn new(namespace: &ZellijNamespace, session: &str, cols: u16, rows: u16) -> Self {
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+            rows.try_into().unwrap(),
+            cols.try_into().unwrap(),
+            0,
+        )));
         let path = namespace.path();
         let client = AttachProcess::spawn(session, &parser, |cmd| {
             ZellijNamespace::pin_pty_at(path, cmd);
@@ -3896,8 +3912,8 @@ impl AttachProcess {
         let (rows, cols) = parser.lock().expect("parser").screen().size();
         let pair = native_pty_system()
             .openpty(PtySize {
-                rows,
-                cols,
+                rows: rows.get(),
+                cols: cols.get(),
                 pixel_width: 0,
                 pixel_height: 0,
             })

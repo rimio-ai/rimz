@@ -1503,7 +1503,7 @@ fn host_text_lands_in_scrollback_without_holding_for_input() {
         leave < detail && detail < report,
         "the panel leaves before host text: {final_output:?}"
     );
-    let mut parser = vt100::Parser::new(24, 100, 100);
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 100);
     parser.process(final_output.as_bytes());
     assert!(!parser.screen().alternate_screen());
     let main = parser.screen().contents();
@@ -1599,7 +1599,7 @@ fn assert_supervised_logs_survive(payload: &str, raw_tty: bool) {
     let (output, settings) = run_pty_command(remote_connect_pty(), cmd);
     assert_shell_tty(&settings);
 
-    let mut parser = vt100::Parser::new(24, 100, 100);
+    let mut parser = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 100);
     parser.process(output.as_bytes());
     assert!(!parser.screen().alternate_screen());
     let main = parser.screen().contents();
@@ -1676,7 +1676,7 @@ fn supervised_end_line_preserves_the_command_row_with_and_without_a_panel() {
             ),
         );
         let (output, _) = run_pty_command(pair, cmd);
-        let mut parser = vt100::Parser::new(24, 100, 100);
+        let mut parser = vt100::Parser::new(24.try_into().unwrap(), 100.try_into().unwrap(), 100);
         parser.process(output.as_bytes());
         let main = parser.screen().contents();
         assert!(!parser.screen().alternate_screen());

@@ -414,7 +414,7 @@ fn dashboard_fits_every_tab_without_wrapping_or_a_final_newline() {
     assert_eq!(output.text.lines().count(), 40);
     let mut terminal = Vec::new();
     rimz::tui::replace_frame(&mut terminal, output.text.as_bytes()).unwrap();
-    let mut parser = vt100::Parser::new(40, 119, 0);
+    let mut parser = vt100::Parser::new(40.try_into().unwrap(), 119.try_into().unwrap(), 0);
     parser.process(&terminal);
     let screen = parser.screen().contents();
     assert!(

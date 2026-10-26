@@ -188,7 +188,11 @@ impl StatsRefreshHarness {
         let child = pair.slave.spawn_command(cmd).expect("spawn rimz stats");
         drop(pair.slave);
 
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, cols, 0)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+            ROWS.try_into().unwrap(),
+            cols.try_into().unwrap(),
+            0,
+        )));
         let writer = pair.master.take_writer().expect("pty writer");
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let sink = Arc::clone(&parser);
