@@ -114,7 +114,7 @@ profiling_binary="$(cargo metadata --format-version 1 --no-deps | jq -r .target_
 
 ### Heap-profiling build
 
-On Linux glibc the binary exports jemalloc's `malloc` family, which binds ahead of any preloaded library, and Rust frees go through jemalloc's `sdallocx`. A heap profiler that interposes `malloc`, such as `heaptrack` or DHAT, therefore records nothing from a normal build: `heaptrack` hangs after the process exits, its output file empty. The `rimz_system_malloc` cfg drops jemalloc and keeps glibc malloc. Build it in its own target directory, since a `RUSTFLAGS` change rebuilds every crate. The `testkit` feature lets `cargo xtask sandbox room` run the binary:
+On Linux glibc the binary exports jemalloc's `malloc` family, which binds ahead of any preloaded library, and Rust frees go through jemalloc's `sdallocx`. A heap profiler that interposes `malloc`, such as `heaptrack` or DHAT, therefore records nothing from a normal build: `heaptrack` hangs after the process exits, its output file empty, and DHAT's run dies with `SIGSEGV` in jemalloc's free path. The `rimz_system_malloc` cfg drops jemalloc and keeps glibc malloc. Build it in its own target directory, since a `RUSTFLAGS` change rebuilds every crate. The `testkit` feature lets `cargo xtask sandbox room` run the binary:
 
 ```sh
 RUSTFLAGS='--cfg rimz_system_malloc' cargo build --profile profiling -p rimz --bin rimz --features testkit --target-dir "$TMPDIR/heap-target"
