@@ -377,7 +377,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
-Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills, and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
+Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills (unless the definition's `tools` list [turns them off](./definitions.md#tools-to-provider-arguments)), and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
 
 OMP likewise retains its discovered append/context material after replacement, and the full replacement text is visible in process arguments. RimZ's launch reminders append through the extension without displacing `APPEND_SYSTEM.md`.
 
