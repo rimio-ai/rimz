@@ -1908,6 +1908,64 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
 }
 
 #[test]
+fn definition_prompt_refusal_names_first_origin_in_compose_order() {
+    use crate::config::PromptSource;
+    use crate::harness::team_prompt::{Consensus, TeamPrompt};
+
+    let text = |path: &str| PromptSource::Text {
+        origin: PathBuf::from(path),
+        text: "Prompt.".to_owned(),
+    };
+    let base = text("agents/claude.md");
+    let craft = text("agents/reviewer.md");
+    let team = text("teams/review.md");
+    let file = PromptSource::File(PathBuf::from("prompt.md"));
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for kind in ["amp", "droid"] {
+        for (source, append, files, origin) in [
+            (
+                Some(base.clone()),
+                vec![craft.clone()],
+                vec![team.clone()],
+                "agents/claude.md",
+            ),
+            (
+                Some(file.clone()),
+                vec![file.clone(), craft.clone(), base.clone()],
+                vec![team.clone()],
+                "agents/reviewer.md",
+            ),
+            (
+                Some(file.clone()),
+                vec![file.clone()],
+                vec![file.clone(), team.clone(), base.clone()],
+                "teams/review.md",
+            ),
+            (None, vec![craft.clone()], vec![], "agents/reviewer.md"),
+            (None, vec![], vec![team.clone()], "teams/review.md"),
+        ] {
+            let Cell::Agent(mut cell) = preset_cell(kind, &[], None, None) else {
+                unreachable!()
+            };
+            cell.system_prompt_file = source;
+            cell.append_system_prompt_files = append;
+            cell.team_prompt = (!files.is_empty()).then_some(TeamPrompt {
+                consensus: Consensus::BuiltIn,
+                files,
+            });
+            actual.push(
+                validate_finalized_cell(&cell, crate::agents::find_definition(kind))
+                    .err()
+                    .map(|error| error.to_string()),
+            );
+            expected.push(Some(format!("{kind} takes no system prompt, so the prompt from {origin} cannot be delivered; launch on a kind that takes a system prompt")));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     let dir = tempfile::tempdir().expect("temp dir");
     let profile_prompt = dir.path().join("profile.md");

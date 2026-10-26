@@ -333,6 +333,33 @@ fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
 }
 
 #[test]
+fn agents_explain_names_definition_prompt_on_kind_override() {
+    let env = Env::new();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "reviewer",
+        "description: Reviewer\nagent: minimax",
+        "Craft.",
+    );
+    env.rimz()
+        .args(["agents", "explain", "reviewer", "--agent", "opencode"])
+        .assert()
+        .code(1)
+        .stderr(
+            contains("opencode takes no system prompt")
+                .and(contains(
+                    env.rimz_home()
+                        .join("agents/minimax.md")
+                        .display()
+                        .to_string(),
+                ))
+                .and(contains("launch on a kind that takes a system prompt"))
+                .and(contains("system-prompt-file").not()),
+        );
+}
+
+#[test]
 fn agents_validate_warns_only_for_explicit_sandbox_without_a_switch() {
     let env = Env::new();
     write_machine_file(
