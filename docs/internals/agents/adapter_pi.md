@@ -31,6 +31,7 @@ The `envelope` helper stamps these fields on every event, then adds the event's 
 | `session_id` | `ctx.sessionManager.getSessionId()` |
 | `cwd` | `ctx.sessionManager.getCwd()`, else `ctx.cwd` |
 | `model` | `ctx.model.id` |
+| `fast` | whether the extension would request priority for `ctx.model` now; absent without a model ([Fast mode](#fast-mode)) |
 | `effort` | `pi.getThinkingLevel()`, `off` through `max` |
 | `session_name` | the latest `/name` title, from `session_info_changed` or hydration |
 | `context_pct`, `context_window`, `total_tokens` | `ctx.getContextUsage()`, with the percentage and the token count rounded |
@@ -197,6 +198,7 @@ Profile presets render through `PresetMatchers`, pinned in `crates/rimz/src/agen
 | --- | --- |
 | `model` | `--model <value>` |
 | `effort` | `--thinking <value>` |
+| `fast` | `RIMZ_LAUNCH_FAST=1`, no argv ([Fast mode](#fast-mode)) |
 | `system-prompt-file` | `--system-prompt <text>`, the file's contents as one argument |
 | `auto-compact` | skipped with a warning at launch |
 
@@ -211,6 +213,16 @@ A plain resume or fork passes neither `--model` nor its dependent `--provider` f
 Launch reminders ride the extension, because Pi's additive flag drops the user's file: any `--append-system-prompt` replaces the discovered `APPEND_SYSTEM.md` instead of adding to it ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#cli-and-environment)). `append_system_text_channel` returns `SystemTextChannel::ExtensionEnv`, and the launch exports the rendered text as `RIMZ_LAUNCH_REMINDERS` (`crates/rimz/src/harness/launch.rs`). It is always exported for Pi, empty when there is no reminder, so a parent's value never reaches a child launch.
 
 The first extension instance in a process moves the text into a `globalThis` marker and deletes it from `process.env`, so tool subprocesses and child Pi processes never inherit it. The primary session's `before_agent_start` handler returns `systemPrompt` with the reminders appended to the prompt Pi built, `APPEND_SYSTEM.md` included. In-process children get none. A Pi that passes no `systemPrompt` to the event, or an extension that predates the channel, launches without reminders.
+
+### Fast mode
+
+`PI_DESCRIPTOR` uses `FastSwitch::ExtensionEnv`: `LaunchSpec::fast_args` succeeds with no argv, so finalization and relaunch retain fast in the launch record without a skip warning. `crates/rimz/src/harness/launch.rs::compile_agent_process_with_extra_env` sets `RIMZ_LAUNCH_FAST=1` only for this switch with effective fast on. Every other launch of every kind removes the key and lists it in `unset`, so a nested RimZ launch never inherits its caller's policy. Records written before Pi supported fast remain off until a launch explicitly requests it.
+
+The extension's `before_provider_request` handler returns a shallow copy of a non-null, non-array object payload with `service_tier: "priority"` when `RIMZ_LAUNCH_FAST` is exactly `"1"`, Pi is at least 0.57.0, and the current model passes both gates: its exact id is in `FAST_MODELS`, and its `(provider, api)` is either (`openai`, `openai-responses`) or (`openai-codex`, `openai-codex-responses`). It leaves other routes, including `pi-virtual` and OpenAI Completions, untouched. An admitted request overwrites an existing `service_tier`; otherwise the handler returns `undefined`, including on an exception. Pi runs handlers in order and a returned payload replaces the previous one ([Pi 1.4.0 runner](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/extensions/runner.ts)); the hook dates to [0.57.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/CHANGELOG.md).
+
+Unlike launch reminders, fast stays in `process.env`: each in-process session and each child Pi process that loads the extension applies the gate to its own current model, on every request. Cache warming goes through the same hook and carries the tier too. The envelope reports `fast` alongside `model`, including `false` on an unsupported model or Pi below 0.57.0. `PiHookPayload` and `pi_observed_context` project it to `AgentContext.fast`, overriding the launch-record badge; an older extension's absent field leaves the fallback intact. This is requested policy, not evidence of the delivered tier. Native child rows retain the reading but do not draw a fast badge.
+
+`FAST_MODELS` lives beside the gate in `extension.ts`; [model upgrades](../../contributing/model-upgrades.md#pi-fast-capable-models) names the evidence for adding an id. `gpt-6-sol` is advertised with priority by Codex's catalog but has no published OpenAI Fast price, so its acceptance through provider `openai` is unverified.
 
 ### Modes the extension cannot see
 
@@ -305,7 +317,9 @@ Historical tool statistics count the `toolCall` blocks inside the assistant entr
 - The account probes, the usage probe, and the spend roots read the process environment, not the caller's login map, so a named Pi login sees the ambient account.
 - Pi has no native tool-permission policy or questionnaire. A permission-gate extension's dialog raises a generic question wait on Pi 0.84.4 and later, with no permission kind and no `rimz answer` support.
 - Subagents stay partial: nicobailon foreground children stay invisible until the user lists the extension path for them, and a reused child row keeps its first verdict.
-- Launch reminders need the current extension, so `pi --no-extensions` or an older extension launches without them.
+- Launch reminders and fast each need an extension that implements them: `pi --no-extensions` runs without either, and an older extension can lack one or both. Fast also needs Pi 0.57.0 or newer; missing or stale extensions never refuse a launch, and `rimz start` offers to refresh a changed managed extension.
+- A project not allowed the requested tier gets OpenAI's 400 on each request. RimZ does not retry without the tier; relaunch with `--no-fast` to drop the request.
+- Pi prices fast usage only when the response reports the tier; an omitted tier or `default` stays at the standard price. Pi stores no delivered tier on assistant messages, so RimZ's token-fallback pricing and per-turn fast marks in `rimz agents attribution` do not count Pi turns as fast.
 - Idle stays partial because the shared concern also covers an idle-timeout notification nudge, which Pi does not expose. Pi's own `agent_settled` boundary is wired.
 - A run whose setup fails after `before_agent_start` may never fire `agent_settled` ([pi-reference.md](../../externals/agent-adapter/pi-reference.md#extension-events)), and RimZ then receives no turn end for it.
 - Background tasks, background shells, and remote control are unsupported. Pi has no native background-task signal and no remote-control surface.

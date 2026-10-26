@@ -1,6 +1,6 @@
 # Model upgrades
 
-What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's. Pricing follows on its own for both, with two narrow exceptions.
+What to change when a provider ships a new model. The work splits by who resolves the alias a definition names: Claude Code resolves its own, and RimZ resolves Codex's. Pi's fast-capable list needs an explicit entry. Pricing follows on its own, with two narrow exceptions.
 
 ## Claude: fable, opus, sonnet, haiku
 
@@ -20,6 +20,10 @@ An existing family's new release needs no RimZ change. The exec wrapper resolves
 Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and `cargo xtask test 'config::definitions'`, then `cargo xtask docs-links`.
 
 Definitions and tier cells retain the requested alias. With a durable launch record, resume, restart, and fork resolve that requested model through the same pins, catalog, and passthrough path as a fresh launch, ignoring observed `/model` switches. Only legacy sessions without a launch record replay the last observed model for an alias posture, and not when the resume names `--model`, `--tier`, or `--agent`; without an observed model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution. Pi instead restores its native session's provider and model on resume or fork without an explicit model override: RimZ emits no model flag and bypasses alias resolution in that case.
+
+## Pi: fast-capable models
+
+Add an exact id to `FAST_MODELS` in [`agents/adapters/pi/extension.ts`](../../crates/rimz/src/agents/adapters/pi/extension.ts) only with evidence: a Codex catalog `service_tiers` entry whose `id` is `priority`, or a published OpenAI Fast price. The list admits only the two OpenAI Responses routes; a catalog entry does not itself verify acceptance on the OpenAI API, as the `gpt-6-sol` comment records. Keep the Node test's admitted-id cases in `crates/rimz/tests/integration/examples/pi_extension.rs::run_extension_harness` in sync, and run `cargo xtask test -E 'binary(integration) & test(/^examples::pi_extension::/)'`. Existing installations need the refreshed extension; `rimz start` offers it when the managed copy differs.
 
 ## Model tier bindings
 

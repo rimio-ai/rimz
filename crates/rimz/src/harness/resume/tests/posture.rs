@@ -106,10 +106,43 @@ fn recorded_fast_replays_over_the_current_profile() {
 }
 
 #[test]
+fn pi_recorded_fast_replays_without_argv_or_warnings() {
+    let record = crate::agents::LaunchRecord {
+        fast: true,
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("worker"),
+            kind: &AgentKind::new_unchecked("pi"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles("worker", profile("pi")),
+    );
+    let replayed = crate::agents::LaunchRecord::replay_or_new(
+        posture.launch.record.as_deref(),
+        posture.launch.model.as_deref(),
+        posture.launch.effort.as_deref(),
+        posture.launch.fast,
+    );
+    assert_eq!((posture.launch.fast, replayed.fast), (true, true));
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert!(
+        posture.launch.notices.is_empty(),
+        "{:?}",
+        posture.launch.notices
+    );
+    assert!(posture.launch.args.is_empty(), "{:?}", posture.launch.args);
+}
+
+#[test]
 fn resume_posture_normalizes_unmapped_flags_before_recording() {
+    // Resume requires a registered adapter; Copilot lacks both preset switches.
     let profiles = profiles(
         "worker",
-        toml::from_str("agent = 'pi'\nfast = true\nauto-compact = '272000'").unwrap(),
+        toml::from_str("agent = 'copilot'\nfast = true\nauto-compact = '272000'").unwrap(),
     );
     let record = crate::agents::LaunchRecord {
         fast: true,
@@ -120,7 +153,7 @@ fn resume_posture_normalizes_unmapped_flags_before_recording() {
             PostureRequest {
                 record,
                 profile: Some("worker"),
-                kind: &AgentKind::new_unchecked("pi"),
+                kind: &AgentKind::new_unchecked("copilot"),
                 stamped_mode: None,
                 stamped_tier: None,
             },

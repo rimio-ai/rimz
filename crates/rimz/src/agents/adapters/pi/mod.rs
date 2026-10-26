@@ -6,11 +6,12 @@
 //! extension forwards pi's lifecycle events to `rimz hooks feed --source pi`
 //! as fire-and-forget children, inverting the Claude/Codex child direction
 //! (pi runs RimZ, not the other way around); the wire it posts is the typed
-//! shape in [`payloads`], with the model, effort, and context gauge
+//! shape in [`payloads`], with the model, effort, fast reading, and context gauge
 //! (`context_pct` / `context_window` / `total_tokens`) and cumulative cost
 //! stamped on every envelope from the in-process extension — payload-first, so
 //! the sidebar's bar and dollar line stay current with the turn-end spend walk
-//! reconciling the final total.
+//! reconciling the final total. The extension also requests OpenAI priority
+//! serving for fast launches, gated by the session's current model.
 //! Lifecycle maps per docs/internals/agents/adapter_pi.md: `session_start`
 //! registers, `before_agent_start` starts the turn with the prompt,
 //! `agent_end` captures its in-band verdict, `agent_settled` ends it once no
@@ -151,7 +152,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),
             system_prompt_file: Some(super::StaticPresetMatcher::TextFlag(&["--system-prompt"])),
-            fast: super::FastSwitch::NONE,
+            fast: super::FastSwitch::ExtensionEnv,
         },
         ..super::LaunchSpec::EMPTY
     },
@@ -740,6 +741,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextOb
         session_name: parsed.session_name,
         model_id: parsed.model,
         effort: parsed.effort,
+        fast: parsed.fast,
         cost,
         tokens,
         rate_limits,

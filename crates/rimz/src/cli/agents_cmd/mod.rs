@@ -297,7 +297,8 @@ pub(crate) struct LaunchOverrideArgs {
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL")]
     pub(crate) effort: Option<String>,
-    /// Launch in the provider's fast mode (Claude, Codex, Amp); resumes replay it.
+    /// Launch in the provider's fast mode (Claude, Codex, Amp, Pi on OpenAI).
+    /// Resumes replay it.
     #[arg(long, conflicts_with = "no_fast")]
     pub(crate) fast: bool,
     /// Request no fast mode, even where the profile sets `fast`; resumes replay it.

@@ -1426,7 +1426,7 @@ mod agent_ref {
     }
 
     #[test]
-    fn continue_reports_each_skipped_field_and_tool_notice_once() {
+    fn continue_keeps_pi_fast_and_reports_the_tool_notice_once() {
         let env = Env::new();
         let cwd = env.project_root.join("checkout");
         let fixture = Fixture::at_cwd(env, cwd, LaunchParams::default(), false, None, "pi");
@@ -1444,12 +1444,14 @@ mod agent_ref {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "{stderr}");
-        for warning in [
-            "warning: `worker` fast is unsupported on pi; launching without it",
-            "warning: profile `worker` drops tools on pi: WebSearch",
-        ] {
-            assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
-        }
+        assert!(!stderr.contains("fast is unsupported"), "{stderr}");
+        assert_eq!(
+            stderr
+                .matches("warning: profile `worker` drops tools on pi: WebSearch")
+                .count(),
+            1,
+            "{stderr}"
+        );
     }
 
     #[test]

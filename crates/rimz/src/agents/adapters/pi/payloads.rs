@@ -56,6 +56,8 @@ pub(super) struct PiHookPayload {
     /// Every event: the session's model id (`ctx.model.id`); `agent_end`
     /// overrides it with the last assistant message's model when present.
     pub model: Option<String>,
+    /// Every envelope with a model: whether priority would be requested now.
+    pub fast: Option<bool>,
     /// Every event: pi's thinking level (`off` | `minimal` | … | `max`),
     /// the closest pi has to Claude's effort.
     pub effort: Option<String>,

@@ -175,7 +175,7 @@ struct SubagentLaunchArgs {
     /// Reasoning effort for the child.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
-    /// Run the child in the provider's fast mode (Claude, Codex, Amp).
+    /// Run the child in the provider's fast mode (Claude, Codex, Amp, Pi on OpenAI).
     #[arg(long, conflicts_with = "no_fast")]
     fast: bool,
     /// Request no fast mode for the child, even where its profile sets `fast`.

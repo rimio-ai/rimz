@@ -69,6 +69,30 @@ fn finalized_launch_stamps_verbatim_record() {
 }
 
 #[test]
+fn pi_fast_keeps_the_launch_and_record_on_without_argv_or_warnings() {
+    let mut layout = LayoutSpec::single(preset_cell("pi", &[], None, None));
+    let warnings = finalize(
+        &mut layout,
+        &crate::agents::LaunchPreset {
+            fast: Some(true),
+            ..Default::default()
+        },
+        &[],
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(
+        (
+            cell.launch.fast,
+            cell.launch.record.as_deref().unwrap().fast
+        ),
+        (true, true)
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(cell.args.is_empty(), "{:?}", cell.args);
+}
+
+#[test]
 fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
     let on = crate::agents::LaunchPreset {
         fast: Some(true),
@@ -130,12 +154,12 @@ fn fast_override_renders_strips_stamps_and_skips_where_unsupported() {
         "{warning}"
     );
 
-    // A provider with no alternative names none.
-    let mut layout = LayoutSpec::single(preset_cell("pi", &[], None, None));
+    // Finalization requires a registered adapter; Copilot has no fast alternative.
+    let mut layout = LayoutSpec::single(preset_cell("copilot", &[], None, None));
     let warnings = finalize(&mut layout, &on, &[]).expect("unsupported fast still launches");
     assert_eq!(
         warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        ["warning: `pi-coder` fast is unsupported on pi; launching without it"]
+        ["warning: `copilot-coder` fast is unsupported on copilot; launching without it"]
     );
 }
 

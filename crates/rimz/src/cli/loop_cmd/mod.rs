@@ -292,7 +292,7 @@ struct AddArgs {
     /// Reasoning effort for the launched agent.
     #[arg(long)]
     effort: Option<String>,
-    /// Launch the agent in the provider's fast mode (Claude, Codex, Amp).
+    /// Launch the agent in the provider's fast mode (Claude, Codex, Amp, Pi on OpenAI).
     #[arg(long, conflicts_with = "no_fast")]
     fast: bool,
     /// Request no fast mode, even where the agent's profile sets `fast`.

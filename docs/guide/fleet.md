@@ -305,7 +305,7 @@ rimz agents planner --model opus --effort high --budget 5
 rimz agents planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
 ```
 
-A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` is passed to the provider's own effort flag without validation, so the levels are whatever that CLI accepts. `--fast` asks Claude, Codex, or Amp for its fast mode, which answers sooner at a higher price, and `--no-fast` drops a profile's `fast` for one agent; the agent keeps either choice across restart and resume. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider account in the [budgets guide](./budget.md).
+A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` is passed to the provider's own effort flag without validation, so the levels are whatever that CLI accepts. `--fast` asks Claude, Codex, Amp, or Pi for its fast mode, which answers sooner at a higher price (Pi only on supported OpenAI models), and `--no-fast` drops a profile's `fast` for one agent; the agent keeps either choice across restart and resume. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider account in the [budgets guide](./budget.md).
 
 To try a profile on a different provider without changing it, add `--agent`:
 
