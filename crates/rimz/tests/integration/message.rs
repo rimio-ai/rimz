@@ -4613,6 +4613,12 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
 
 #[cfg(unix)]
 #[test]
+fn parent_message_resumes_a_team_role_child_on_its_agent_profile() {
+    assert_parent_follow_up_case(None, None, ResumeFollowUpCase::TeamRole);
+}
+
+#[cfg(unix)]
+#[test]
 fn parent_message_recreates_missing_empty_dir_before_resuming_child() {
     assert_parent_message_resumes_child(Some(true), None);
 }
@@ -4643,6 +4649,7 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResumeFollowUpCase {
     Ordinary,
+    TeamRole,
     Late,
     InFlight,
     RegistrationWindow,
@@ -4712,6 +4719,15 @@ fn assert_parent_follow_up_case(
     }
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
+    if case == ResumeFollowUpCase::TeamRole {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "reviewer",
+            "description: Review\nagent: claude\ntools: [Read]\nallowed-tools: [Read]",
+            "Review the changes.",
+        );
+    }
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let cwd = if empty_grant.is_some() {
@@ -4856,6 +4872,8 @@ fn assert_parent_follow_up_case(
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
                     isolation: Some(rimz::config::Isolation::Host),
+                    profile: (case == ResumeFollowUpCase::TeamRole).then(|| "reviewer".into()),
+                    role: (case == ResumeFollowUpCase::TeamRole).then(|| "reviewer".into()),
                     ..LaunchParams::default()
                 },
                 state: AgentLaunchState::Starting,

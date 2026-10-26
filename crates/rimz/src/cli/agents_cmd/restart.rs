@@ -336,6 +336,7 @@ pub(in crate::cli) fn relaunch_request(
     };
     ExecRequest {
         close_pane_on_exit: true,
+        subagent: agent.is_launched_child(),
         identity: rimz::harness::launch::ExecIdentity {
             resume_model_override: false,
             name: identity_name.map(ToOwned::to_owned),
@@ -362,10 +363,11 @@ pub(super) fn restart_posture(
 ) -> Result<ResumePosture> {
     let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     launch.block_set_failure()?;
+    let profiles = launch.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
     if agent
         .profile
         .as_deref()
-        .is_some_and(|name| !launch.profiles.0.contains_key(name))
+        .is_some_and(|name| !profiles.0.contains_key(name))
     {
         launch.block_failed_reference(agent.profile.as_deref(), None)?;
     }
@@ -377,7 +379,7 @@ pub(super) fn restart_posture(
             stamped_mode: agent.mode,
             stamped_tier: agent.tier.as_deref(),
         },
-        &launch.profiles,
+        profiles,
         &launch.teams,
         agent.team.as_deref(),
         agent.role.as_deref(),
@@ -776,6 +778,150 @@ mod tests {
                     },
                 },
             }
+        );
+    }
+
+    #[test]
+    fn relaunch_request_keeps_child_treatment_without_a_supervised_run() {
+        let mut child = rimz::testkit::agent_state("claude", "child", jiff::Timestamp::UNIX_EPOCH);
+        child.parent_agent_id = Some("parent".into());
+        child.parent_agent_kind = Some(child.kind.clone());
+        child.launch_depth = Some(1);
+
+        let request = relaunch_request(
+            &child,
+            &ResumePosture::default(),
+            ExecAction::Resume {
+                session_id: child.agent_id.to_string(),
+                extra_args: Vec::new(),
+            },
+            None,
+            None,
+        );
+
+        assert_eq!(
+            (
+                request.subagent,
+                request.run_id,
+                request.close_pane_on_exit,
+                request.exit_on_run_completion,
+                request.follow_up_message,
+            ),
+            (true, None, true, false, None)
+        );
+    }
+
+    #[test]
+    fn relaunch_request_does_not_treat_a_peer_as_a_child() {
+        let mut peer = rimz::testkit::agent_state("claude", "peer", jiff::Timestamp::UNIX_EPOCH);
+        peer.launch_depth = Some(1);
+        peer.launched_by = Some(rimz::agents::LaunchedBy {
+            kind: peer.kind.clone(),
+            agent_id: "launcher".into(),
+        });
+
+        let request = relaunch_request(
+            &peer,
+            &ResumePosture::default(),
+            ExecAction::Resume {
+                session_id: peer.agent_id.to_string(),
+                extra_args: Vec::new(),
+            },
+            None,
+            None,
+        );
+
+        assert!(!request.subagent);
+    }
+
+    #[test]
+    fn restart_posture_uses_the_profile_table_of_the_launch_doorway() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace =
+            rimz::WorkspaceResolver::resolve_under(dir.path(), None, &dir.path().join("rimz-home"))
+                .unwrap();
+        let mut machine = rimz::config::MachineConfig::default();
+        for (profiles, tool) in [
+            (&mut machine.agents.profiles, "Bash"),
+            (&mut machine.subagents.profiles, "Read"),
+        ] {
+            let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+            profile.allowed_tools = Some(vec![tool.parse().unwrap()]);
+            profiles.0.insert("worker".to_owned(), profile);
+        }
+        let mut child = rimz::testkit::agent_state("claude", "child", jiff::Timestamp::UNIX_EPOCH);
+        child.profile = Some("worker".to_owned());
+        child.parent_agent_id = Some("parent".into());
+        child.parent_agent_kind = Some(child.kind.clone());
+        child.launch_depth = Some(1);
+        let mut peer = child.clone();
+        peer.parent_agent_id = None;
+        peer.parent_agent_kind = None;
+        peer.launched_by = Some(rimz::agents::LaunchedBy {
+            kind: peer.kind.clone(),
+            agent_id: "launcher".into(),
+        });
+        let mut top_level = peer.clone();
+        top_level.launch_depth = None;
+        top_level.launched_by = None;
+
+        let tools = [&child, &peer, &top_level].map(|agent| {
+            restart_posture(agent, &workspace, &machine)
+                .unwrap()
+                .launch
+                .allowed_tools
+        });
+
+        assert_eq!(
+            tools,
+            [
+                Some(vec!["Read".parse().unwrap()]),
+                Some(vec!["Bash".parse().unwrap()]),
+                Some(vec!["Bash".parse().unwrap()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn restart_posture_keeps_a_team_role_childs_agent_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace =
+            rimz::WorkspaceResolver::resolve_under(dir.path(), None, &dir.path().join("rimz-home"))
+                .unwrap();
+        let mut machine = rimz::config::MachineConfig::default();
+        let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+        profile.allowed_tools = Some(vec!["Read".parse().unwrap()]);
+        machine
+            .agents
+            .profiles
+            .0
+            .insert("claude-agent".to_owned(), profile);
+        machine.agents.teams.0.insert(
+            "forge".to_owned(),
+            toml::from_str("roles = [{ role = 'reviewer', profile = 'claude-agent' }]").unwrap(),
+        );
+        let launch = rimz::config::effective::load(&machine, &workspace.project_root).unwrap();
+        let resolved = rimz::harness::plan::resolve_launch(
+            &launch,
+            rimz::config::effective::ProfileScope::Subagents,
+            &machine.agents.commands,
+            Some("forge.reviewer"),
+            None,
+        )
+        .unwrap();
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        let mut child = rimz::testkit::agent_state("claude", "child", jiff::Timestamp::UNIX_EPOCH);
+        child.profile = cell.launch.profile.clone();
+        child.role = cell.launch.role.clone();
+        child.parent_agent_id = Some("parent".into());
+        child.parent_agent_kind = Some(child.kind.clone());
+        child.launch_depth = Some(1);
+
+        let posture = restart_posture(&child, &workspace, &machine).unwrap();
+
+        assert_eq!(
+            (posture.degraded, posture.launch.allowed_tools),
+            (None, Some(vec!["Read".parse().unwrap()]))
         );
     }
 

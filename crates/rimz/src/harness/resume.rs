@@ -416,9 +416,6 @@ pub struct PostureRequest<'a> {
 /// Recovery paths run unattended at room birth, so this never fails: a profile
 /// that is gone, broken, or now resolves to a different provider degrades to a
 /// bare resume carrying a warning.
-// ponytail: posture records do not stamp the launch doorway; persist profile
-// scope on launch events before subagent-only profiles can resume in posture
-// outside the parent-message resume doorway, which passes the scope itself.
 pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
     ResumePosture::degrade_to_bare(request, resolve_posture_with_role(request, profiles, None))
 }

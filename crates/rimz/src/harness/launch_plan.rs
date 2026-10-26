@@ -1045,11 +1045,8 @@ fn reminders(
             vec![LaunchPlanWarning::DefaultReminders],
         );
     };
-    let profiles = if request.subagent {
-        &effective.subagent_profiles
-    } else {
-        &effective.profiles
-    };
+    let profiles =
+        effective.profiles_for_launch(request.subagent, request.identity.params.profile.as_deref());
     let lsp_configured = !effective.lsp_servers.is_empty();
     let model = request
         .identity

@@ -1622,7 +1622,10 @@ fn assert_subagent_checkout_case(
             &env,
             "subagents",
             "researcher",
-            &format!("description: Research\nagent: {kind}\ntools: [Read]\nempty-dir: true"),
+            &format!(
+                "description: Research\nagent: {kind}\ntools: [Read]\n\
+                 allowed-tools: [Read]\nempty-dir: true"
+            ),
             "",
         );
         std::fs::write(
@@ -2050,6 +2053,33 @@ fn assert_subagent_checkout_case(
         assert!(
             reopened.contains(&format!("\t--cwd\t{}\t", checkout.display())),
             "{reopened}"
+        );
+        let args = reopened.split('\t').collect::<Vec<_>>();
+        let payload = args
+            .windows(2)
+            .find(|args| args[0] == "--request")
+            .expect("restarted exec request")[1];
+        let visible_worktree = args
+            .windows(2)
+            .find(|args| args[0] == "--worktree-path")
+            .map(|args| std::path::Path::new(args[1]));
+        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, payload)
+            .expect("restarted child request");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            (
+                decoded.subagent,
+                decoded.run_id,
+                empty.and(decoded.allowed_tools),
+                stderr.contains("launching as bare"),
+            ),
+            (
+                true,
+                None,
+                empty.map(|_| vec!["Read".parse().unwrap()]),
+                false,
+            ),
+            "restart: {stderr}"
         );
     }
 }

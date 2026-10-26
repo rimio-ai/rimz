@@ -1438,7 +1438,11 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");
     let mut machine_config = crate::config::MachineConfig::default();
-    for (name, agent, model_reminder) in [("quiet", "claude", false), ("loud", "quiet", true)] {
+    for (name, agent, model_reminder) in [
+        ("quiet", "claude", false),
+        ("loud", "quiet", true),
+        ("team-child", "claude", false),
+    ] {
         machine_config.agents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
@@ -1505,6 +1509,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         (Some("loud"), false, true),
         (Some("quiet"), true, true),
         (Some("child"), true, false),
+        (Some("team-child"), true, false),
         (None, false, true),
         (None, true, true),
     ] {
@@ -2736,7 +2741,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
     let mut parent =
         crate::testkit::agent_state("claude", "parent-session", jiff::Timestamp::UNIX_EPOCH);
     parent.name = Some("otter".to_owned());
-    // A restart keeps the durable parent stamp and drops `subagent`.
+    // The unit follows the durable parent stamp, not the `subagent` flag.
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
     request.identity.name = Some("fox".to_owned());
     request.identity.params.parent_agent_id = Some("parent-session".into());
