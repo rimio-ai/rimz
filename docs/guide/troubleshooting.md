@@ -10,7 +10,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. This capture excerpt comes from `rimz doctor --audit`, which adds the disk figures under `STORAGE`. It uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse, and the machine-dependent `TEMP UNITS` section is omitted:
+The report reads top to bottom, machine setup first and live room state last. If a bare-name `agents.shell` selected the wrong shell, the informational row in `MULTIPLEXER` shows the room's saved path and other copies you can pin with `rimz config set agents.shell <path>` ([doctor rows](../reference/cli/getting-started.md#diagnose-with-doctor)). This capture excerpt comes from `rimz doctor --audit`, which adds the disk figures under `STORAGE`. It uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse, and the machine-dependent `TEMP UNITS` section is omitted:
 
 ```console
 RimZ doctor

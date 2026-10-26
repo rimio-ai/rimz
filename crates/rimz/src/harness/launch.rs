@@ -110,20 +110,7 @@ impl From<AgentShellErr> for crate::blocker::Blocker {
     }
 }
 
-/// Validate an absolute shell before the config editor writes it.
-/// Launch readers use [`resolve_agent_shell`] for room-aware name lookup.
-pub fn validate_agent_shell(shell: &Path) -> Result<(), AgentShellErr> {
-    if !shell.is_absolute() {
-        return Err(AgentShellErr {
-            shell: shell.to_path_buf(),
-            reason: "is not an absolute path".into(),
-            path: None,
-        });
-    }
-    resolve_agent_shell(shell, None).path.map(|_| ())
-}
-
-fn validate_agent_shell_path(shell: &Path) -> Result<(), AgentShellErr> {
+fn validate_agent_shell(shell: &Path) -> Result<(), AgentShellErr> {
     let reason = if !shell.is_absolute() {
         "is not an absolute path"
     } else if !shell.is_file() {
@@ -199,7 +186,7 @@ fn resolve_agent_shell_with(
         saved => (saved, None),
     };
     let path = if shell.is_absolute() {
-        validate_agent_shell_path(shell).map(|()| shell.to_path_buf())
+        validate_agent_shell(shell).map(|()| shell.to_path_buf())
     } else if !bare_agent_shell(shell) {
         Err(AgentShellErr {
             shell: shell.to_path_buf(),
@@ -207,7 +194,7 @@ fn resolve_agent_shell_with(
             path: None,
         })
     } else if let Some(saved) = saved {
-        validate_agent_shell_path(&saved.path)
+        validate_agent_shell(&saved.path)
             .map(|()| saved.path.clone())
             .map_err(|error| AgentShellErr {
                 shell: shell.to_path_buf(),
@@ -230,7 +217,7 @@ fn resolve_agent_shell_with(
             path: None,
         })
         .and_then(|path| {
-            validate_agent_shell_path(&path)
+            validate_agent_shell(&path)
                 .map(|()| path)
                 .map_err(|error| AgentShellErr {
                     shell: shell.to_path_buf(),

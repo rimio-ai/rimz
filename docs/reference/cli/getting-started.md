@@ -251,6 +251,8 @@ When stderr is a terminal, a delayed stderr progress line names the oldest check
 
 The room section also lists each configuration setting skipped at its latest start or attach, with the recorded warning and fix. In JSON the room object carries `skipped: [{"setting": "...", "message": "..."}]`, or an empty array. These recorded warnings remain until the next room entry judges the configuration again.
 
+When `agents.shell` is a bare name, an informational row after the skipped settings shows `"bash" → /usr/bin/bash` for the room's saved lookup. Without a matching saved lookup, it shows doctor's own PATH hit, or `not on PATH`, marked `not saved by the room; each launch looks it up`. When the saved path is no longer a file, it shows the same lookup marked `saved path <path> is no longer a file; each launch looks it up`, and the gone path never appears as the arrow target. Other distinct files on doctor's PATH follow with a `rimz config set agents.shell <path>` pin command; copies of the same file collapse. This row adds no warning or problem to the tally. JSON adds `mux.ready.room.agent_shell` with `name`, `path` (or `null`), `saved`, and `also_on_path`; the field and row are omitted for an unset or absolute value. A gone saved path reports `saved: false` and doctor's own lookup in `path`, without an additional field.
+
 Plain `--json` carries multiplexer log text verbatim, up to 8 KiB per log record; add `--no-log-text` to omit it without changing other report sections.
 
 The human report opens with the RimZ version, OS user, and binary path, then prints these sections in order. A section marked conditional appears only when it has something to show.
@@ -258,7 +260,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | Section | Reports |
 | --- | --- |
 | `WORKSPACE` | Workspace id, project root and root class, worktree root and branch, session name, socket-path headroom. |
-| `MULTIPLEXER` | Backend and version against the floor, binary, server log scan and its scope, sockets, room ownership, session health, daemon tab shape, Zellij presence and plugins, ttyd. |
+| `MULTIPLEXER` | Backend and version against the floor, binary, server log scan and its scope, sockets, room ownership, skipped settings, bare-name agent shell lookup, session health, daemon tab shape, Zellij presence and plugins, ttyd. |
 | `TERMINAL` | Color depth. |
 | `HOME` | The RimZ home and whether `RIMZ_HOME` set it, the definition root `RIMZ_AGENTS_HOME` points at when it is set, and one warning naming legacy XDG roots still on disk but not read. The closing block carries the manual [move steps](../../guide/configuration.md#moving-from-the-xdg-roots). |
 | `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.rimz` fragments, with paths and fixes. |

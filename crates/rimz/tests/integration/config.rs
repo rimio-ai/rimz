@@ -204,6 +204,10 @@ fn config_set_agent_shell_refuses_an_unusable_path_before_writing() {
     let seed = "[agents]\nisolation = \"host\"\n";
     write_machine_file(&path, seed);
     let missing = env.home_root.join("missing").join("bash");
+    let bin = env.home_root.join("shell-bin");
+    for name in ["bash", "nologin", "false", "tcsh"] {
+        crate::common::write_path_shim(&bin, name, "exit 0");
+    }
     for value in [
         missing.display().to_string(),
         format!("\"{}\"", missing.display()),
@@ -216,12 +220,194 @@ fn config_set_agent_shell_refuses_an_unusable_path_before_writing() {
             .stderr(contains("does not exist"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
     }
+    let refusals = [
+        ("missing-shell", "is not on PATH"),
+        ("./bash", "is a relative path"),
+        ("nologin", "disables logins"),
+        ("false", "disables logins"),
+        ("tcsh", "is a csh-family shell"),
+    ]
+    .map(|(value, reason)| {
+        let output = env
+            .rimz()
+            .args(["config", "set", "agents.shell", value])
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+        let error = String::from_utf8_lossy(&output.stderr);
+        !output.status.success()
+            && output.stdout.is_empty()
+            && error.contains(reason)
+            && error.contains("set it to the name or full path")
+    });
+    assert_eq!(refusals, [true; 5]);
     env.rimz()
         .args(["config", "set", "agents.shell", "/bin/sh"])
         .assert()
         .success();
     let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(config["agents"]["shell"].as_str(), Some("/bin/sh"));
+}
+
+#[test]
+fn config_set_prints_value_receipts_for_defaults_unset_and_unchanged_keys() {
+    let fresh = ["5000", "100000"].map(|value| {
+        let env = Env::new();
+        let output = env
+            .rimz()
+            .args(["config", "set", "tmux.history_limit", value])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    });
+    assert_eq!(
+        fresh,
+        [
+            "set tmux.history_limit = 5000  (was 100000, the default)\n",
+            "set tmux.history_limit = 100000  (unchanged)\n",
+        ]
+    );
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[notifications]\ntriggers = [\"waiting\", \"failed\"] # keep this comment\n",
+    );
+    let actual = [
+        ("agents.startup-relaunches", "5"),
+        ("harness.idle_compact", "off"),
+        ("theme", "Catppuccin Mocha"),
+        ("notifications.triggers", "[\"waiting\"]"),
+        ("agents.startup-relaunches", "5"),
+        ("loop.default-timeout", "15m"),
+        ("theme.pets.enabled", "false"),
+        ("agents.isolation", "host"),
+    ]
+    .map(|(key, value)| {
+        let output = env
+            .rimz()
+            .args(["config", "set", key, value])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    });
+    assert_eq!(
+        actual,
+        [
+            "set agents.startup-relaunches = 5  (was 3, the default)\n",
+            "set harness.idle_compact = \"off\"  (was \"100k\", the default)\n",
+            "set theme.scheme = \"Catppuccin Mocha\"  (was unset)\n",
+            "set notifications.triggers = [\"waiting\"]  (was [\"waiting\", \"failed\"])\n",
+            "set agents.startup-relaunches = 5  (unchanged)\n",
+            "set loop.default-timeout = \"15m\"  (was unset)\n",
+            "set theme.pets.enabled = false  (was unset)\n",
+            "set agents.isolation = \"host\"  (unchanged)\n",
+        ]
+    );
+}
+
+#[test]
+fn config_set_receipts_render_tables_inline_and_ignore_comments_for_equality() {
+    let env = Env::new();
+    write_machine_file(
+        &theme_config_path(&env),
+        "[theme.display.context_meter.red]\npercent = 90 # old percent\ntokens = 400_000\n",
+    );
+    let actual = [
+        "{percent=90, tokens=400_000}",
+        "{percent=95, tokens=500000}",
+        "{ tokens = 500_000, percent = 95 }",
+    ]
+    .map(|value| {
+        let output = env
+            .rimz()
+            .args(["config", "set", "theme.display.context_meter.red", value])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    });
+    assert_eq!(
+        actual,
+        [
+            concat!(
+                "set theme.display.context_meter.red = { percent = 90, tokens = 400_000 }  ",
+                "(unchanged)\n"
+            ),
+            concat!(
+                "set theme.display.context_meter.red = { percent = 95, tokens = 500000 }  ",
+                "(was { percent = 90, tokens = 400_000 })\n"
+            ),
+            concat!(
+                "set theme.display.context_meter.red = { tokens = 500_000, percent = 95 }  ",
+                "(unchanged)\n"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn config_set_receipts_keep_multiline_values_on_one_line() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[agents.worktree.hooks]\ncreated = '''echo one\necho two'''\n",
+    );
+    let receipt = concat!(
+        "set agents.worktree.hooks.created = \"echo three\\necho four\"  ",
+        "(was \"echo one\\necho two\")\n"
+    );
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "agents.worktree.hooks.created",
+            "'''echo three\necho four'''",
+        ])
+        .assert()
+        .success()
+        .stdout(receipt);
+}
+
+#[test]
+fn config_set_bare_agent_shell_keeps_the_name_and_reports_distinct_path_copies() {
+    let env = Env::new();
+    let first = env.home_root.join("first");
+    let second = env.home_root.join("second");
+    let alias = env.home_root.join("alias");
+    let hit = crate::common::write_path_shim(&first, "bash", "exit 0");
+    let other = crate::common::write_path_shim(&second, "bash", "exit 0");
+    std::os::unix::fs::symlink(&first, &alias).unwrap();
+    let path = std::env::join_paths([&first, &alias, &second]).unwrap();
+    let outputs = ["bash".to_owned(), other.display().to_string()].map(|value| {
+        let output = env
+            .rimz()
+            .args(["config", "set", "agents.shell", &value])
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stored: toml::Value =
+            toml::from_str(&std::fs::read_to_string(machine_config_path(&env)).unwrap()).unwrap();
+        assert_eq!(stored["agents"]["shell"].as_str(), Some(value.as_str()));
+        String::from_utf8(output.stdout).unwrap()
+    });
+    assert_eq!(
+        outputs,
+        [
+            format!(
+                "set agents.shell = \"bash\"  (was unset)\n  resolves to {} here\n  also on PATH: {}; pass its full path to use that one instead\n",
+                hit.display(),
+                other.display()
+            ),
+            format!(
+                "set agents.shell = \"{}\"  (was \"bash\")\n",
+                other.display()
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -899,6 +1085,10 @@ fn config_get_set_round_trip_preserves_template_comments() {
 #[test]
 fn remote_control_codex_config_set_applies_start_and_stop_immediately() {
     let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[remote_control]\ncodex = false\n",
+    );
     let codex = env
         .home_root
         .join(".codex/packages/standalone/current/codex");
@@ -917,12 +1107,12 @@ fn remote_control_codex_config_set_applies_start_and_stop_immediately() {
         .args(["config", "set", "remote_control.codex", "true"])
         .assert()
         .success()
-        .stdout(contains("set remote_control.codex"));
+        .stdout("set remote_control.codex = true  (was false)\n");
     env.rimz()
         .args(["config", "set", "remote_control.codex", "false"])
         .assert()
         .success()
-        .stdout(contains("set remote_control.codex"));
+        .stdout("set remote_control.codex = false  (was true)\n");
 
     assert_eq!(
         std::fs::read_to_string(log).expect("read Codex control log"),

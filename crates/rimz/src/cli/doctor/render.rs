@@ -1005,6 +1005,20 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
                 ),
             );
         }
+        if let Some(shell) = &room.agent_shell {
+            let mut label = shell.path.as_ref().map_or_else(
+                || format!("{:?} not on PATH", shell.name),
+                |path| format!("{:?} → {path}", shell.name),
+            );
+            if let Some(path) = &shell.missing_saved_path {
+                label.push_str(&format!(
+                    " (saved path {path} is no longer a file; each launch looks it up)"
+                ));
+            } else if !shell.saved {
+                label.push_str(" (not saved by the room; each launch looks it up)");
+            }
+            kv.push("agents.shell", cell(label).fg(palette::body()));
+        }
     }
     if let Some(health) = &mux.session_health {
         kv.push("session health", session_health_cell(tally, health));
@@ -1053,6 +1067,17 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     }
     kv.render(w)?;
 
+    if let Some(shell) = mux.room.as_ref().and_then(|room| room.agent_shell.as_ref()) {
+        for path in &shell.also_on_path {
+            let pin =
+                crate::cli::usage::shell_command(["rimz", "config", "set", "agents.shell", path]);
+            detail(
+                w,
+                palette::body(),
+                &format!("also on PATH: {path}; pin with {pin}"),
+            )?;
+        }
+    }
     render_mux_binary_notes(w, mux, tally)?;
     render_mux_log_notes(w, &mux.log, tally)?;
     render_duplicate_session_notes(w, &mux.duplicate_sessions, tally)

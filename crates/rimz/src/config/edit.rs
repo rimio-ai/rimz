@@ -133,23 +133,51 @@ impl ConfigEditor {
         }
     }
 
-    pub fn set(&self, key: &str, raw_value: &str) -> Result<()> {
+    pub fn set(&self, key: &str, raw_value: &str) -> Result<String> {
         let requested_key = parse_key(key)?;
         let value = parse_set_value(&requested_key, raw_value);
         let key = normalize_set_key(&requested_key, &value)?;
         validate_set_key(&self.files, &key)?;
         let file = file_for_key(&self.files, &key);
-        let text = read_config_or_template(file.path(), file.template())?;
-        let mut doc = parse_document(file.path(), &text)?;
+        let existing = read_existing(file.path())?;
+        let text = existing.as_deref().unwrap_or(file.template());
+        let mut doc = parse_document(file.path(), text)?;
         let doc_key = document_key_for_set(&key);
+        let previous = existing
+            .as_ref()
+            .and_then(|_| item_at(&doc, &doc_key))
+            .and_then(item_to_value);
         if item_at(&doc, &doc_key).is_none()
-            && let Some(uncommented) = uncomment_template_default(&text, &doc_key)
+            && let Some(uncommented) = uncomment_template_default(text, &doc_key)
             && let Ok(uncommented) = uncommented.parse::<DocumentMut>()
         {
             doc = uncommented;
         }
         apply_logical_key(&mut doc, file.path(), &key, value, self.files.agents_home())?;
-        write(file.path(), doc.to_string().as_bytes())
+        // A successful edit stores the addressed key, including table-valued settings.
+        let value = item_at(&doc, &doc_key)
+            .and_then(item_to_value)
+            .expect("successful config edit stores the key");
+        let key = key.join(".");
+        let defaults = toml::Value::try_from(MachineConfig::default())
+            .map_err(|source| ConfigEditErr::Serialize { source })?;
+        let default = value_at(&defaults, &key);
+        let old = previous
+            .as_ref()
+            .and_then(as_toml_value)
+            .or_else(|| default.cloned());
+        let was = if old == as_toml_value(&value) {
+            "unchanged".to_owned()
+        } else if let Some(previous) = previous {
+            format!("was {}", receipt_value(previous))
+        } else if let Some(default) = default {
+            format!("was {default}, the default")
+        } else {
+            "was unset".to_owned()
+        };
+        let receipt = format!("set {key} = {}  ({was})", receipt_value(value));
+        write(file.path(), doc.to_string().as_bytes())?;
+        Ok(receipt)
     }
 
     /// Declare `[accounts.<kind>.<name>]`, or set the given fields of a
@@ -232,7 +260,9 @@ impl ConfigEditor {
         name: &crate::ids::LoginName,
     ) -> Result<()> {
         if !name.is_default() {
-            return self.set(&format!("accounts.use.{kind}"), name.as_str());
+            return self
+                .set(&format!("accounts.use.{kind}"), name.as_str())
+                .map(|_| ());
         }
         let file = self.files.file(MachineConfigFileKind::Core);
         let Some(text) = read_existing(file.path())? else {
@@ -1016,9 +1046,43 @@ fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
 fn as_toml_value(value: &Value) -> Option<toml::Value> {
     // A bare TOML value is not a document; wrap and reparse so equality ignores
     // toml_edit formatting/decor and compares the semantic value.
-    toml::from_str::<toml::Table>(&format!("x = {}", value.to_string().trim()))
+    toml::from_str::<toml::Table>(&format!("x = {}", receipt_value(value.clone())))
         .ok()?
         .remove("x")
+}
+
+fn receipt_value(mut value: Value) -> String {
+    fn clean(value: &mut Value) {
+        value.decor_mut().clear();
+        match value {
+            Value::String(string) if string.display_repr().contains(['\n', '\r']) => {
+                // JSON quoting escapes line breaks; TOML additionally requires escaped DEL.
+                let quoted = serde_json::Value::String(string.value().clone())
+                    .to_string()
+                    .replace('\u{7f}', "\\u007f");
+                *value = quoted
+                    .parse()
+                    .expect("JSON with escaped DEL is a TOML string");
+            }
+            Value::Array(array) => {
+                for value in array.iter_mut() {
+                    clean(value);
+                }
+                array.fmt();
+            }
+            Value::InlineTable(table) => {
+                for (_, value) in table.iter_mut() {
+                    clean(value);
+                }
+                table.fmt();
+                table.set_trailing("");
+                table.set_trailing_comma(false);
+            }
+            _ => {}
+        }
+    }
+    clean(&mut value);
+    value.to_string()
 }
 
 fn file_for_key(files: &MachineConfigFiles, path: &[String]) -> MachineConfigFile {
