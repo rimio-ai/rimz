@@ -219,6 +219,8 @@ A test of a timing floor or rate limit queues the inputs it means to merge befor
 
 A table test that must be shown red first collects every case's result and asserts the whole vector in one `assert_eq!`, so one failing run shows each case.
 
+A test that asserts on a value it captured from a run (an error string, a child's output, a pid parsed from either) prints that value in the assertion's message: a flake under load fails once, in a log nobody can rerun, and a bare `assert!(error.contains(..))` or `.expect(..)` leaves its cause to inference. The [integration suite contract](../../crates/rimz/tests/integration/AGENTS.md) applies the same rule to event counts.
+
 ## Dependency budget
 
 The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why RimZ does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.
