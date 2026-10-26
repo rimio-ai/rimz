@@ -125,7 +125,7 @@ pub(crate) use scheme::{
     DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_colors, resolve_inline_palette,
 };
 pub use scheme::{SchemeSwatch, scheme_swatches};
-use sentry::SentryConfig;
+pub(crate) use sentry::SentryConfig;
 pub use sidebar::SidebarConfig;
 pub(crate) use sidebar::SidebarKeys;
 pub(crate) use skills::{SkillListErr, deserialize_optional_skill_list, validate_skill_list};
@@ -590,6 +590,8 @@ impl MachineConfig {
         agents_home: &Path,
         env: &BTreeMap<String, String>,
     ) -> Result<(Self, AgentSpecSources)> {
+        #[cfg(feature = "testkit")]
+        record_machine_config_load("strict");
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
         let loop_path = files.path(MachineConfigFileKind::Loop);
@@ -616,6 +618,8 @@ impl MachineConfig {
         agents_home: &Path,
         env: &BTreeMap<String, String>,
     ) -> Self {
+        #[cfg(feature = "testkit")]
+        record_machine_config_load("lenient");
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
         let loop_path = files.path(MachineConfigFileKind::Loop);
@@ -1199,6 +1203,22 @@ impl<T: Default> Default for Parsed<T> {
             value: T::default(),
             unknown_keys: Vec::new(),
         }
+    }
+}
+
+#[cfg(feature = "testkit")]
+fn record_machine_config_load(kind: &str) {
+    use std::io::Write;
+
+    let Some(path) = std::env::var_os("RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{kind}");
     }
 }
 

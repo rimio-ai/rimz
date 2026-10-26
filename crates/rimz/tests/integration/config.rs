@@ -16,6 +16,37 @@ const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/ope
 const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
 
 #[test]
+fn machine_config_load_hook_records_strict_and_lenient_builds() {
+    let env = Env::new();
+    let loads = env.home_root.join("machine-config-loads");
+    let commands: [&[&str]; 2] = [
+        &["config", "get"],
+        &[
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--mux",
+            "tmux",
+            "--json",
+        ],
+    ];
+    let actual = commands
+        .into_iter()
+        .map(|args| {
+            std::fs::write(&loads, "").unwrap();
+            env.rimz()
+                .args(args)
+                .env("RIMZ_TEST_MACHINE_CONFIG_LOAD_LOG", &loads)
+                .assert()
+                .success();
+            std::fs::read_to_string(&loads).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, ["strict\n", "lenient\n"]);
+}
+
+#[test]
 fn team_notes_retention_config_round_trips_and_names_invalid_values() {
     let env = Env::new();
     let key = "gc.team_notes_retention";

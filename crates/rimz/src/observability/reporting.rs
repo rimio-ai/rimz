@@ -37,7 +37,7 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::registry::LookupSpan;
 
 use super::{BREADCRUMB_TARGET, SIDEBAR_HEALTH_TARGET, ScopeFacts};
-use crate::config::MachineConfig;
+use crate::config::{MachineConfig, SentryConfig};
 use crate::workspace::ENV_WORKSPACE_ID;
 
 const ENV_DSN: &str = "RIMZ_SENTRY_DSN";
@@ -97,7 +97,7 @@ impl Reporting {
 /// a DSN that fails to parse yields [`Reporting::InvalidDsn`] rather than a
 /// panic or a degraded surface.
 pub fn init() -> Reporting {
-    let config = MachineConfig::load_lenient();
+    let config = SentryConfig::load_lenient(&MachineConfig::config_path());
     let Some((dsn, environment)) = resolve_from(
         env_nonempty(ENV_DSN),
         env_nonempty(ENV_ENVIRONMENT),
@@ -346,13 +346,13 @@ fn env_nonempty(key: &str) -> Option<String> {
 fn resolve_from(
     env_dsn: Option<String>,
     env_environment: Option<String>,
-    config: &MachineConfig,
+    config: &SentryConfig,
 ) -> Option<(String, String)> {
     let dsn = env_dsn
-        .or_else(|| config.sentry.dsn.clone())
+        .or_else(|| config.dsn.clone())
         .filter(|value| !value.is_empty())?;
     let environment = env_environment
-        .or_else(|| config.sentry.environment.clone())
+        .or_else(|| config.environment.clone())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_environment().to_owned());
     Some((dsn, environment))
@@ -378,16 +378,51 @@ fn environment_for_build_profile(profile: Option<&str>) -> &'static str {
 mod tests {
     use super::*;
 
-    fn config_with(dsn: Option<&str>, environment: Option<&str>) -> MachineConfig {
-        let mut config = MachineConfig::default();
-        config.sentry.dsn = dsn.map(ToOwned::to_owned);
-        config.sentry.environment = environment.map(ToOwned::to_owned);
-        config
+    fn config_with(dsn: Option<&str>, environment: Option<&str>) -> SentryConfig {
+        SentryConfig {
+            dsn: dsn.map(ToOwned::to_owned),
+            environment: environment.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn core_file_sentry_read_preserves_whole_file_leniency() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let sentry = "[sentry]\ndsn = 'https://k@o1.ingest.sentry.io/2'\nenvironment = 'staging'\n";
+        let expected = config_with(Some("https://k@o1.ingest.sentry.io/2"), Some("staging"));
+        let cases = [
+            (sentry.to_owned(), expected.clone()),
+            ("timezone = 'UTC'\n".to_owned(), SentryConfig::default()),
+            (
+                format!("{sentry}[mux]\ndefault = 'invalid'\n"),
+                SentryConfig::default(),
+            ),
+            (
+                format!("{sentry}[agents.profiles.retired]\n"),
+                SentryConfig::default(),
+            ),
+            (format!("{sentry}broken = [\n"), SentryConfig::default()),
+        ];
+        let actual = cases
+            .iter()
+            .map(|(text, _)| {
+                std::fs::write(&path, text).unwrap();
+                SentryConfig::load_lenient(&path)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            cases
+                .into_iter()
+                .map(|(_, config)| config)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn unset_dsn_resolves_to_none() {
-        assert!(resolve_from(None, None, &MachineConfig::default()).is_none());
+        assert!(resolve_from(None, None, &SentryConfig::default()).is_none());
         // An empty config value is also "off".
         assert!(resolve_from(None, None, &config_with(Some(""), None)).is_none());
     }
