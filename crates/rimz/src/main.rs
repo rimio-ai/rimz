@@ -24,13 +24,15 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 // SAFETY: jemalloc expects malloc_conf to point to a static NUL-terminated C string.
 // An array reference is a thin pointer; a byte slice would have the wrong ABI.
+// `thp:never` keeps jemalloc's 2 MiB-aligned extents off transparent huge pages,
+// which a kernel in THP `always` mode faults in whole even for a small process.
 #[cfg(all(target_os = "linux", target_env = "gnu", not(rimz_system_malloc)))]
 #[expect(
     unsafe_code,
     reason = "jemalloc reads its configuration through this exported symbol"
 )]
 #[unsafe(export_name = "malloc_conf")]
-static ALLOCATOR_CONFIG: &[u8; 17] = b"dirty_decay_ms:0\0";
+static ALLOCATOR_CONFIG: &[u8; 27] = b"dirty_decay_ms:0,thp:never\0";
 
 const DEFAULT_LOG_FILTER: &str = "warn";
 const RENDERED_PANE_LOG_FILTER: &str = "off";
