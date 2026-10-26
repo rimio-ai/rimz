@@ -446,6 +446,7 @@ fn lagging_published_hint_does_not_repeat_the_usage_request_on_the_next_snapshot
         logins: std::collections::BTreeMap::from([(
             "claude@default".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                version_probed_at_ms: None,
                 inputs_stamp: None,
                 probed_at_ms: rimz::utils::time::unix_now_ms(),
                 ok: true,
@@ -1949,6 +1950,96 @@ fn serve_after_failures(
         requests
     });
     (format!("http://{addr}"), handle)
+}
+
+#[test]
+fn silent_pi_account_rechecks_a_provider_append_only_after_the_provisional_floor() {
+    use rimz::agents::account::AccountsCache;
+    use std::io::Write as _;
+
+    let env = Env::new();
+    let key = rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("pi"));
+    let pi_home = env.home_root.join(".pi/agent");
+    let sessions = pi_home.join("sessions/--home-project--");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        pi_home.join("auth.json"),
+        r#"{
+        "anthropic": {"type": "api_key", "key": "private-key"},
+        "openai": {"type": "oauth", "access": "private-token", "expires": 4102444800000}
+    }"#,
+    )
+    .unwrap();
+    let session = sessions.join("silent.jsonl");
+    std::fs::write(&session, "{\"type\":\"session\"}\n").unwrap();
+    let bin_dir = env.home_root.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let pi = bin_dir.join("pi");
+    std::fs::write(&pi, "#!/bin/sh\nprintf '%s\\n' '1.4.0'\n").unwrap();
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let show = || -> Value {
+        let output = env
+            .rimz()
+            .args(["accounts", "show", "pi", "--json"])
+            .env("PATH", path_with_front(&bin_dir))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reports: Value = serde_json::from_slice(&output.stdout).unwrap();
+        reports
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|report| report["kind"] == "pi")
+            .unwrap()
+            .clone()
+    };
+    let first = show();
+    let mut cache: AccountsCache =
+        serde_json::from_value(read_json(env.runtime_paths().shared_accounts_path())).unwrap();
+    cache.logins.get_mut(&key).unwrap().probed_at_ms = rimz::utils::time::unix_now_ms();
+    env.publish_accounts(&cache);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&session)
+        .unwrap()
+        .write_all(b"{\"type\":\"model_change\",\"provider\":\"anthropic\"}\n")
+        .unwrap();
+    let immediate = show();
+    let mut cache: AccountsCache =
+        serde_json::from_value(read_json(env.runtime_paths().shared_accounts_path())).unwrap();
+    let record = cache.logins.get_mut(&key).unwrap();
+    let stamp = record.inputs_stamp;
+    record.probed_at_ms = rimz::utils::time::unix_now_ms() - 10_001;
+    env.publish_accounts(&cache);
+    let retried = show();
+    let outcomes: Vec<_> = [first, immediate, retried]
+        .into_iter()
+        .map(|report| (report["plan"].clone(), report["metered"].clone()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (Value::Null, Value::Null),
+            (Value::Null, Value::Null),
+            (
+                Value::String("Anthropic API Key".into()),
+                Value::Bool(false)
+            )
+        ]
+    );
+    let cache: AccountsCache =
+        serde_json::from_value(read_json(env.runtime_paths().shared_accounts_path())).unwrap();
+    let record = &cache.logins[&key];
+    assert_eq!(
+        record.inputs_stamp, stamp,
+        "only the provisional arm made this due"
+    );
+    assert!(!record.account.as_ref().unwrap().provisional);
 }
 
 #[test]

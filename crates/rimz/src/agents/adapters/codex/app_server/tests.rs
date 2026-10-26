@@ -999,6 +999,7 @@ fn app_server_context(app_at: Timestamp) -> AgentContext {
             version: None,
             sub_provider: None,
             credentials_updated_at_ms: None,
+            ..Default::default()
         }),
         turn_opened_by: Vec::new(),
         turn_error: None,

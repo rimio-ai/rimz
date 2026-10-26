@@ -158,6 +158,7 @@ impl Selection {
             version: None,
             sub_provider: Some(self.provider.label().to_owned()),
             credentials_updated_at_ms: self.credentials_stamp(),
+            ..Default::default()
         }
     }
 }

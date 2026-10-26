@@ -160,6 +160,7 @@ fn accounts() -> AccountsCache {
             (
                 kind.to_owned(),
                 ProviderRecord {
+                    version_probed_at_ms: None,
                     inputs_stamp: None,
                     profile: None,
                     probe_error: None,
@@ -174,6 +175,7 @@ fn accounts() -> AccountsCache {
     providers.insert(
         "claude".to_owned(),
         ProviderRecord {
+            version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,
             probe_error: None,
@@ -189,12 +191,14 @@ fn accounts() -> AccountsCache {
                 sub_provider: None,
                 credentials_updated_at_ms: None,
                 profile_fingerprint: None,
+                ..Default::default()
             }),
         },
     );
     providers.insert(
         "codex".to_owned(),
         ProviderRecord {
+            version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,
             probe_error: None,
@@ -210,6 +214,7 @@ fn accounts() -> AccountsCache {
                 sub_provider: None,
                 credentials_updated_at_ms: None,
                 profile_fingerprint: None,
+                ..Default::default()
             }),
         },
     );

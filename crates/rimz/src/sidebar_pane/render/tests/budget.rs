@@ -138,6 +138,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         version: Some("1.2.3".to_owned()),
         plan: Some("Max".to_owned()),
         metered: true,
+        undecided: false,
         remote_control: Default::default(),
         active_sessions: 0,
         spending: Some(

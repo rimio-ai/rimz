@@ -1090,7 +1090,15 @@ impl crate::agents::capabilities::AccountCapability for OpencodeAdapter {
         &self,
         _login_env: &BTreeMap<String, String>,
     ) -> crate::agents::AccountUsageProbe {
-        account::probe_usage()
+        account::probe_usage(None)
+    }
+
+    fn probe_account_usage_for(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        sub_provider: Option<&str>,
+    ) -> crate::agents::AccountUsageProbe {
+        account::probe_usage(sub_provider)
     }
 }
 

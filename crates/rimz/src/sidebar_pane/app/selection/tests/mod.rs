@@ -305,6 +305,7 @@ fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
         version: None,
         plan: None,
         metered: false,
+        undecided: false,
         remote_control: Default::default(),
         active_sessions: 0,
         spending: None,

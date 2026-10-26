@@ -108,6 +108,9 @@ impl SidebarSnapshot {
             let account = freshest
                 .and_then(|context| context.account.clone())
                 .or_else(|| probed_accounts.get(&key).cloned());
+            let undecided = account
+                .as_ref()
+                .is_some_and(|account| account.is_undecided());
 
             // Budget windows are account-scoped too. Reject content-stale
             // readings and expired windows, then prefer the newest content per
@@ -121,7 +124,7 @@ impl SidebarSnapshot {
                 .filter(|agent| agent.account_key.is_some())
                 .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
                 .and_then(|agent| agent.account_key.clone());
-            let windows = fresh_windows(
+            let mut windows = fresh_windows(
                 sessions
                     .iter()
                     .filter(|agent| {
@@ -135,12 +138,16 @@ impl SidebarSnapshot {
                     .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
                 now,
             );
+            if undecided {
+                windows.clear();
+            }
             let has_windows = !windows.is_empty();
 
-            let metered = account
-                .as_ref()
-                .and_then(|account| account.metered)
-                .unwrap_or(has_windows || account_key.is_some());
+            let metered = !undecided
+                && account
+                    .as_ref()
+                    .and_then(|account| account.metered)
+                    .unwrap_or(has_windows || account_key.is_some());
             let account_scope = account
                 .as_ref()
                 .map(|account| account.scope.clone())
@@ -204,6 +211,7 @@ impl SidebarSnapshot {
                     version,
                     plan,
                     metered,
+                    undecided,
                     remote_control,
                     active_sessions,
                     spending: spending.map(std::sync::Arc::new),

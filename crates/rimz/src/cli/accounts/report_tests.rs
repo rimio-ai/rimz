@@ -197,6 +197,7 @@ fn assemble_reports(
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        version_probed_at_ms: None,
         inputs_stamp: None,
         profile: None,
         probe_error: None,
@@ -235,6 +236,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         version: Some("1.2.3".to_owned()),
         plan: Some("Claude Max".to_owned()),
         metered: true,
+        undecided: false,
         remote_control: RemoteControlBadge::Hidden,
         active_sessions: 0,
         spending: None,
@@ -260,6 +262,45 @@ fn unlimited_credits_render_in_overview_and_detail() {
     write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
     let text = String::from_utf8(out.into_inner()).unwrap();
     assert!(text.contains("unlimited"), "{text}");
+}
+
+#[test]
+fn undecided_report_keeps_unknown_metering_with_or_without_a_panel() {
+    let login = ProviderLogin::default_for(AgentKind::new_unchecked("pi"));
+    let record = record(
+        1,
+        true,
+        Some(AgentAccount {
+            provisional: true,
+            ..Default::default()
+        }),
+    );
+    let mut panel = panel("pi");
+    panel.undecided = true;
+    panel.metered = false;
+    panel.plan = None;
+    let config = MachineConfig::default();
+    let context = ReportContext {
+        day_cutoff_secs: None,
+        config: &config,
+        agents: None,
+        installed: &BTreeSet::new(),
+        spend_step: &|_| SpendStep::Subscription,
+    };
+    let outcomes: Vec<_> = [Some(&panel), None]
+        .into_iter()
+        .map(|panel| {
+            let report = build_report(
+                &login,
+                Some(&record),
+                panel,
+                &ProviderSpendingCache::default(),
+                &context,
+            );
+            (report.plan, report.plan_label, report.metered)
+        })
+        .collect();
+    assert_eq!(outcomes, [(None, None, None), (None, None, None)]);
 }
 
 #[test]

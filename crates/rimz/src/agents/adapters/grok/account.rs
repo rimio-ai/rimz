@@ -125,6 +125,7 @@ impl AuthRecord {
             version: None,
             sub_provider: (!provider_label.is_empty()).then(|| provider_label.to_owned()),
             credentials_updated_at_ms: mtime_ms,
+            ..Default::default()
         }
     }
 }

@@ -2500,6 +2500,7 @@ fn provider_panel(
         version: version.map(ToOwned::to_owned),
         plan: plan.map(ToOwned::to_owned),
         metered,
+        undecided: false,
         remote_control: if remote_control {
             RemoteControlBadge::Healthy
         } else {

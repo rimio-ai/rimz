@@ -178,6 +178,9 @@ pub struct SidebarProviderPanel {
     pub plan: Option<String>,
     /// Whether the account is metered by rate-limit windows.
     pub metered: bool,
+    /// No backing credential is known yet; show neither plan nor budget bars.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undecided: bool,
     /// Visibility and managed-server health for the `⇅ rc` flag.
     #[serde(default)]
     pub remote_control: RemoteControlBadge,

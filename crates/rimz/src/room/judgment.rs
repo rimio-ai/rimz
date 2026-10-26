@@ -556,6 +556,7 @@ mod tests {
         let runtime = crate::RuntimePaths::for_state(&state).unwrap();
         let record = crate::agents::account::ProviderRecord {
             probed_at_ms: 0,
+            version_probed_at_ms: None,
             ok: true,
             inputs_stamp: None,
             account: Some(crate::agents::AgentAccount {

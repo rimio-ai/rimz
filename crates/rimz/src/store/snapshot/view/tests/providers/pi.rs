@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn undecided_account_cannot_infer_metering_or_windows_from_a_session() {
+    let probed = BTreeMap::from([(
+        provider_key("pi"),
+        AgentAccount {
+            provisional: true,
+            ..Default::default()
+        },
+    )]);
+    let snapshot = room(vec![
+        agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![window(70, 3_600)]),
+    ])
+    .with_provider_aggregates(
+        &Default::default(),
+        &probed,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &shown(&["pi"]),
+    );
+    let panel = &snapshot.providers[0];
+    assert_eq!(
+        (
+            panel.undecided,
+            panel.metered,
+            panel.plan.as_deref(),
+            panel.windows.len()
+        ),
+        (true, false, None, 0)
+    );
+}
+
+#[test]
 fn pi_uses_its_own_windows_without_sibling_borrowing() {
     let codex_reading = window(40, 3_600);
     let pi_reading = window(70, 3_600);
@@ -13,6 +44,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         version: Some("0.78.0".to_owned()),
         sub_provider: Some("openai".to_owned()),
         credentials_updated_at_ms: None,
+        ..Default::default()
     };
     let mut probed: BTreeMap<crate::ids::LoginKey, AgentAccount> = BTreeMap::new();
     probed.insert(provider_key("pi"), account);

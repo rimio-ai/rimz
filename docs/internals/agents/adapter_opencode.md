@@ -237,17 +237,18 @@ Both account probes run through `crates/rimz/src/agents/delegated_account.rs`, w
 
 `crates/rimz/src/agents/adapters/opencode/database.rs::credentials_in_file` reads the newest database's `credential` table, ordered by `active DESC, time_created DESC, id DESC`, and keeps the first row that parses for each `integration_id`. The credential stamp is the largest `time_updated`, in milliseconds, of the rows kept. Session writes therefore never invalidate the OAuth usage cache. A missing database or `credential` table reads as logged out. A database that exists but fails to read is unavailable.
 
-The account probe and the usage probe select the credential differently:
+The account probe and the unnamed usage probe share credential resolution:
 
 | Step | Account probe (`select_display`) | Usage probe (`select_usage_entries`) |
 | --- | --- | --- |
 | 1 | the exact provider key of the latest assistant row, across databases | the same |
 | 2 | for `opencode-go` without an exact credential, the `opencode` Console credential | the same |
-| 3 | the first OAuth credential in provider-key order | the same |
-| 4 | the first credential in provider-key order | none: no credentials |
+| 3 | a named but unlisted provider is an unlabeled, unmetered API key | no credentials |
+| 4 | no provider and one credential selects that credential | the same |
+| 5 | no provider and several credentials leaves plan and metering unknown, provisionally | no credentials |
 | a non-OAuth pick | shown, with its metering | refused as API-key only |
 
-The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, except for the Console `opencode` OAuth credential, whose plan comes from the Go status reply. The selected credential's raw provider key becomes `sub_provider`. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain. Console credentials also hash a non-empty `metadata.orgID` into that key, so an organization switch changes the cache owner without recording the organization id.
+The account probe maps `oauth` to metered, `key` to unmetered, and `external` to unknown metering. It labels the plan `<Provider> OAuth`, `API Key`, or `External`, except for the Console `opencode` OAuth credential, whose plan comes from the Go status reply. The selected credential's raw provider key becomes `sub_provider`. A caller can name an exact usage credential through `AccountCapability::probe_account_usage_for`, keeping the `opencode-go` alias above. The usage probe also refuses an empty access token and an expired or undated one. For the `openai` scope, the account key is the credential's top-level `accountId`, then `metadata.accountID`. An empty top-level value masks the metadata. Every other case hashes the refresh token, or the access token, under the account-key domain. Console credentials also hash a non-empty `metadata.orgID` into that key, so an organization switch changes the cache owner without recording the organization id.
 
 | OpenCode provider | Quota surface | Account scope |
 | --- | --- | --- |

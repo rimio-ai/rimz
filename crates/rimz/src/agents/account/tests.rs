@@ -66,6 +66,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         (false, planned(), None, Unavailable, "a failed probe"),
     ] {
         let record = ProviderRecord {
+            version_probed_at_ms: None,
             inputs_stamp: None,
             profile: None,
             probe_error: None,
@@ -101,6 +102,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         "an unrecorded login leaves the bytes an older build reads"
     );
     let stamped = ProviderRecord {
+        version_probed_at_ms: None,
         inputs_stamp: Some(7),
         ..legacy.clone()
     };
@@ -111,6 +113,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         stamped
     );
     let recorded = ProviderRecord {
+        version_probed_at_ms: None,
         probe_error: None,
         login: Some(Login::LoggedOut),
         ..legacy

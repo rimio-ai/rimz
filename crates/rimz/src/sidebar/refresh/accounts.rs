@@ -136,6 +136,7 @@ struct ProviderProbeResult {
     profile: Option<AccountProfileState>,
     outcome_class: ProbeOutcomeClass,
     version: Option<String>,
+    version_probed_at_ms: Option<u64>,
     account_ms: u64,
     version_ms: u64,
     total_ms: u64,
@@ -415,10 +416,15 @@ fn due_provider_logins(
                 .inputs_stamp
                 .zip(inputs_stamps.get(key))
                 .is_some_and(|(stored, current)| stored != *current);
+            let provisional = record
+                .account
+                .as_ref()
+                .is_some_and(|account| account.provisional);
             let version_missing = active_version_kinds.contains(kind)
                 && !context_versions.contains_key(key)
                 && account_version(record.account.as_ref()).is_none();
-            age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64 && (inputs_moved || version_missing)
+            age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64
+                && (provisional || inputs_moved || version_missing)
         })
         .collect()
 }
@@ -476,10 +482,7 @@ fn probe_accounts(
             login,
             set,
             active,
-            previous
-                .logins
-                .get(&key)
-                .and_then(|record| record.profile.as_ref()),
+            previous.logins.get(&key),
             policy,
             trigger_ms,
             probed_at_ms,
@@ -522,7 +525,7 @@ fn probe_one_account(
     login: &ProviderLogin,
     set: &RoomLoginSet,
     active: bool,
-    previous_profile: Option<&AccountProfileState>,
+    previous: Option<&ProviderRecord>,
     policy: ProfileReadPolicy,
     trigger_ms: u64,
     probed_at_ms: u64,
@@ -533,6 +536,7 @@ fn probe_one_account(
     let adapter = crate::agents::find_definition(kind)?;
     let inputs_stamp = adapter.account_inputs_stamp(&login_env);
     let account_started = Instant::now();
+    let account_probed_at_ms = unix_now_ms();
     let outcome = adapter.probe_account(&login_env);
     let account_ms = duration_ms(account_started.elapsed());
     let outcome_class = match &outcome {
@@ -541,18 +545,25 @@ fn probe_one_account(
         AccountProbe::Unavailable(_) => ProbeOutcomeClass::Unavailable,
     };
     let version_started = Instant::now();
-    let version = match &outcome {
-        AccountProbe::Found(account) if account_version(Some(account)).is_none() => {
-            adapter.probe_version()
-        }
-        AccountProbe::LoggedOut | AccountProbe::Unavailable(_) if active => adapter.probe_version(),
-        _ => None,
+    let version_started_at_ms = unix_now_ms();
+    let version = probe_account_version(&outcome, active, previous, version_started_at_ms, || {
+        adapter.probe_version()
+    });
+    let version_probed_at_ms = if version.is_some() {
+        Some(version_started_at_ms)
+    } else if matches!(
+        &outcome,
+        AccountProbe::Found(account) if account_version(Some(account)).is_some()
+    ) {
+        Some(account_probed_at_ms)
+    } else {
+        None
     };
     let version_ms = duration_ms(version_started.elapsed());
     let profile = match &outcome {
         AccountProbe::Found(account) => read_account_profile(
             account,
-            previous_profile,
+            previous.and_then(|record| record.profile.as_ref()),
             policy,
             trigger_ms,
             probed_at_ms,
@@ -568,10 +579,37 @@ fn probe_one_account(
         outcome,
         outcome_class,
         version,
+        version_probed_at_ms,
         account_ms,
         version_ms,
         total_ms: duration_ms(started.elapsed()),
     })
+}
+
+fn probe_account_version(
+    outcome: &AccountProbe,
+    active: bool,
+    previous: Option<&ProviderRecord>,
+    now_ms: u64,
+    probe: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match outcome {
+        AccountProbe::Found(account) if account_version(Some(account)).is_none() => {
+            let reusable = previous.is_some_and(|record| {
+                record
+                    .account
+                    .as_ref()
+                    .is_some_and(|account| account.provisional)
+                    && account_version(record.account.as_ref()).is_some()
+                    && record.version_probed_at_ms.is_some_and(|read_at| {
+                        now_ms.saturating_sub(read_at) < ACCOUNTS_TTL.as_millis() as u64
+                    })
+            });
+            if reusable { None } else { probe() }
+        }
+        AccountProbe::LoggedOut | AccountProbe::Unavailable(_) if active => probe(),
+        _ => None,
+    }
 }
 
 fn execute_account_probes(
@@ -617,6 +655,7 @@ fn merge_probe_results(
             outcome,
             profile,
             version: probed_version,
+            version_probed_at_ms,
             ..
         } = result;
         let active = active_version_kinds.contains(key.kind.as_str());
@@ -632,6 +671,8 @@ fn merge_probe_results(
         };
         let previous_record = previous.logins.get(&key);
         let profile = profile.or_else(|| previous_record.and_then(|record| record.profile.clone()));
+        let version_probed_at_ms = version_probed_at_ms
+            .or_else(|| previous_record.and_then(|record| record.version_probed_at_ms));
         let account = match outcome {
             AccountProbe::Found(mut account) => {
                 if account_version(Some(&account)).is_none() {
@@ -676,6 +717,7 @@ fn merge_probe_results(
         logins.insert(
             key,
             ProviderRecord {
+                version_probed_at_ms: account_version(account.as_ref()).and(version_probed_at_ms),
                 inputs_stamp,
                 profile,
                 probe_error,
@@ -701,6 +743,12 @@ fn probe_accounts_with(
         let kind = key.kind.as_str();
         let active = active_version_kinds.contains(kind);
         let (outcome, version) = probe(kind, active)?;
+        let version_probed_at_ms = (version.is_some()
+            || matches!(
+                &outcome,
+                AccountProbe::Found(account) if account_version(Some(account)).is_some()
+            ))
+        .then_some(probed_at_ms);
         let outcome_class = match &outcome {
             AccountProbe::Found(_) => ProbeOutcomeClass::Success,
             AccountProbe::LoggedOut => ProbeOutcomeClass::LoggedOut,
@@ -713,6 +761,7 @@ fn probe_accounts_with(
             outcome,
             outcome_class,
             version,
+            version_probed_at_ms,
             account_ms: 0,
             version_ms: 0,
             total_ms: 0,

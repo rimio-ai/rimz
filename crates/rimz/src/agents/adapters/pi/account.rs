@@ -11,12 +11,13 @@ use sha2::{Digest, Sha256};
 
 use super::spend::pi_session_roots;
 use crate::agents::capabilities::LaunchCapability;
-use crate::agents::delegated_account::{Adapter, Config};
+use crate::agents::delegated_account::{Adapter, Config, UsedProvider};
 use crate::agents::{AccountUsageProbe, read_transcript_tail};
 
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/pi-oauth-account-key/v1";
 const INPUTS_STAMP_DOMAIN: &[u8] = b"rimz/pi-account-inputs/v1";
 const MAX_SESSION_HEADER_BYTES: usize = 1024 * 1024;
+const MAX_PROVIDER_CANDIDATES: usize = 32;
 
 fn config(login_env: &BTreeMap<String, String>) -> Option<Config> {
     let home = super::PiAdapter.config_home(login_env)?;
@@ -26,7 +27,7 @@ fn config(login_env: &BTreeMap<String, String>) -> Option<Config> {
         load_credentials: Box::new(move || {
             crate::agents::delegated_account::load_auth_file(&home.join("auth.json"), Adapter::Pi)
         }),
-        used_provider: Box::new(move || used_provider_from(&roots)),
+        used_provider: Box::new(move || resolve_provider_from(&roots)),
         api_key_types: &["api_key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
     })
@@ -38,10 +39,13 @@ pub(super) fn probe(login_env: &BTreeMap<String, String>) -> crate::agents::acco
     })
 }
 
-pub(super) fn probe_usage(login_env: &BTreeMap<String, String>) -> AccountUsageProbe {
+pub(super) fn probe_usage(
+    login_env: &BTreeMap<String, String>,
+    sub_provider: Option<&str>,
+) -> AccountUsageProbe {
     config(login_env).map_or(
         AccountUsageProbe::NoCredentials(Default::default()),
-        |config| crate::agents::delegated_account::probe_account_usage(&config),
+        |config| crate::agents::delegated_account::probe_account_usage(&config, sub_provider),
     )
 }
 
@@ -117,8 +121,8 @@ fn hash_modified(hasher: &mut Sha256, modified: Option<Duration>) {
     }
 }
 
-/// Provider of the newest Pi session candidate, read through a usable parent once.
-fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
+/// Newest Pi session provider, or a bounded fallback, with one usable-parent hop per candidate.
+fn resolve_provider_from(roots: &[PathBuf]) -> UsedProvider {
     let directories = roots.iter().flat_map(|root| {
         let subdirectories = std::fs::read_dir(root)
             .into_iter()
@@ -132,7 +136,7 @@ fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
             });
         std::iter::once(root.clone()).chain(subdirectories)
     });
-    let (_, newest) = directories
+    let mut candidates: Vec<_> = directories
         .flat_map(|directory| std::fs::read_dir(directory).into_iter().flatten().flatten())
         .filter_map(|entry| {
             let path = entry.path();
@@ -142,9 +146,30 @@ fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
             let metadata = std::fs::metadata(&path).ok()?;
             metadata.is_file().then_some((mtime(&metadata)?, path))
         })
-        .max()?;
-    let deciding = parent_session(&newest).unwrap_or(newest);
-    let tail = read_transcript_tail(&deciding)?;
+        .collect();
+    candidates.sort_unstable();
+    let mut candidates = candidates.into_iter().rev().take(MAX_PROVIDER_CANDIDATES);
+    let Some((_, newest)) = candidates.next() else {
+        return UsedProvider::Silent;
+    };
+    let parent = parent_session(&newest);
+    if let Some(provider) = session_provider(parent.as_deref().unwrap_or(&newest)) {
+        return UsedProvider::Named(provider);
+    }
+    if parent.is_some() {
+        return UsedProvider::Silent;
+    }
+    for (_, candidate) in candidates {
+        let parent = parent_session(&candidate);
+        if let Some(provider) = session_provider(parent.as_deref().unwrap_or(&candidate)) {
+            return UsedProvider::Fallback(provider);
+        }
+    }
+    UsedProvider::Silent
+}
+
+fn session_provider(path: &Path) -> Option<String> {
+    let tail = read_transcript_tail(path)?;
     tail.lines().rev().find_map(provider_of_line).or_else(|| {
         tail.lines()
             .rev()
@@ -204,6 +229,10 @@ fn provider_of_line(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
+        resolve_provider_from(roots).provider().map(str::to_owned)
+    }
 
     #[test]
     fn provider_line_reads_assistant_provider() {
@@ -406,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn newest_root_without_a_provider_does_not_fall_back_to_an_older_session() {
+    fn newest_silent_root_falls_back_to_an_older_named_session() {
         let dir = tempfile::tempdir().unwrap();
         write_session(
             &dir.path().join("--cwd--/old.jsonl"),
@@ -416,7 +445,45 @@ mod tests {
         );
         write_session(&dir.path().join("--cwd--/new.jsonl"), None, None, 2);
 
-        assert_eq!(used_provider_from(&[dir.path().to_owned()]), None);
+        assert_eq!(
+            resolve_provider_from(&[dir.path().to_owned()]),
+            UsedProvider::Fallback("anthropic".to_owned())
+        );
+    }
+
+    #[test]
+    fn fallback_walk_is_bounded_and_reads_each_candidates_usable_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("--cwd--");
+        let parent = dir.path().join("outside/cwd/parent.jsonl");
+        write_session(&parent, None, Some("anthropic"), 1);
+        write_session(&root.join("old.jsonl"), Some(&parent), Some("openai"), 2);
+        write_session(&root.join("new.jsonl"), None, None, 3);
+        let first = resolve_provider_from(&[dir.path().to_owned()]);
+        for index in 0..MAX_PROVIDER_CANDIDATES - 2 {
+            write_session(
+                &root.join(format!("silent-{index}.jsonl")),
+                None,
+                None,
+                index as u64 + 4,
+            );
+        }
+        let at_bound = resolve_provider_from(&[dir.path().to_owned()]);
+        write_session(
+            &root.join("beyond-bound.jsonl"),
+            None,
+            None,
+            MAX_PROVIDER_CANDIDATES as u64 + 4,
+        );
+        let beyond_bound = resolve_provider_from(&[dir.path().to_owned()]);
+        assert_eq!(
+            [first, at_bound, beyond_bound],
+            [
+                UsedProvider::Fallback("anthropic".to_owned()),
+                UsedProvider::Fallback("anthropic".to_owned()),
+                UsedProvider::Silent
+            ]
+        );
     }
 
     #[test]

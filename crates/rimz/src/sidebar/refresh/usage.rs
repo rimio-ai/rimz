@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
+use crate::agents::account::read_accounts_cache;
 use crate::agents::{
     AccountUsageIdentity, AccountUsageSnapshot, Entitlement, ProviderLogin, RoomLoginSet,
 };
@@ -394,6 +395,14 @@ fn merge_account_usage_if_due(
     }
     let key = login.key();
     let cached_hint = cached_account_usage_hint(runtime, &key);
+    if read_accounts_cache(&runtime.shared_accounts_path())
+        .logins
+        .get(&key)
+        .and_then(|record| record.account.as_ref())
+        .is_some_and(|account| account.is_undecided())
+    {
+        return false;
+    }
     let Some(claim_id) = claim_provider_account_usage(runtime, &key, cached_hint) else {
         return false;
     };

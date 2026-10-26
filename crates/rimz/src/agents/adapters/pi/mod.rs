@@ -747,7 +747,15 @@ impl crate::agents::capabilities::AccountCapability for PiAdapter {
         &self,
         login_env: &BTreeMap<String, String>,
     ) -> crate::agents::AccountUsageProbe {
-        account::probe_usage(login_env)
+        account::probe_usage(login_env, None)
+    }
+
+    fn probe_account_usage_for(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        sub_provider: Option<&str>,
+    ) -> crate::agents::AccountUsageProbe {
+        account::probe_usage(login_env, sub_provider)
     }
 }
 
