@@ -131,7 +131,7 @@ Dollars arrive when the turn ends, through history reconciliation. `model_usage`
 
 ## Known gaps
 
-- Only the default agent directory is wired: relocated profiles and homes refuse, and named RimZ accounts are unsupported. Session-only relocation through `--session-dir` or `PI_CODING_AGENT_SESSION_DIR` passes the preflight but puts history outside the scanned roots.
+- Only the default agent directory is wired: relocated profiles and homes refuse, and named RimZ accounts are unsupported. Session-only relocation through `--session-dir` or `PI_CODING_AGENT_SESSION_DIR` passes the preflight but puts history outside the scanned roots. An `omp` launched from a named-Pi pane inherits `PI_CODING_AGENT_DIR` and refuses with the existing fix to unset that variable for OMP panes; RimZ does not strip another provider's exported home.
 - Task children are filtered from every handler, so they have no rows and no spend. Whether a parent's records already include child usage is unverified, and counting both risks double-counting.
 - An `agent_end` without `willContinue` ends the RimZ turn, but no extension settlement event proves complete RPC quiescence. Background work can outlive the displayed end. Background parking and background shells are unsupported, and there is no idle-timeout notification.
 - A failed manual compaction emits no closing event. The card can stay compacting until later lifecycle activity. Automatic compaction's abort, error, and skip are covered.

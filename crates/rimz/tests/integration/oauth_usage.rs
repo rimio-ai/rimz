@@ -1883,11 +1883,27 @@ fn accounts_redeem_kind_without_named_accounts_lists_supported_kinds() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains(&format!(
-                "{kind} has no named accounts; accounts are supported for claude, codex"
+                "{kind} has no named accounts; accounts are supported for claude, codex, pi"
             )),
             "{stderr}"
         );
     }
+}
+
+#[test]
+fn pi_accounts_refuse_reset_credit_redemption_at_the_provider() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["accounts", "redeem", "pi", "--dry-run"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("pi does not support reset-credit redemption"),
+        "{stderr}"
+    );
 }
 
 fn serve_after_failures(

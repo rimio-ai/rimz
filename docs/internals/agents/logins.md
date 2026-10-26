@@ -16,7 +16,7 @@ A login never changes a process-wide variable. It is an override on an ambient e
 | stamp | the login recorded on an agent row (`AgentState::login`). `None` is `default` | `AgentState::login_key` |
 | room default | the login the room launches a kind under now | `RoomLoginSet::default_login` |
 
-Named accounts exist for Claude (`CLAUDE_CONFIG_DIR`) and Codex (`CODEX_HOME`) only ([`AccountsConfig::named`](../../../crates/rimz/src/config/accounts.rs)). Every other kind has only `default`. An account without a configured `home` lives at `~/.rimz/accounts/<kind>/<name>` (`crates/rimz/src/agents/login.rs::default_named_home`), and nothing in RimZ removes it.
+Named accounts exist for Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), and Pi (`PI_CODING_AGENT_DIR`) only ([`AccountsConfig::named`](../../../crates/rimz/src/config/accounts.rs)). Every other kind has only `default`. An account without a configured `home` lives at `~/.rimz/accounts/<kind>/<name>` (`crates/rimz/src/agents/login.rs::default_named_home`), and nothing in RimZ removes it.
 
 `LoginCatalog::from_config` refuses a declaration named `default`, a relative home, a home containing `,` or ending in `projects`, a home two accounts share, and the provider's own home (`LoginConfigErr`). The read-side catalog (`LoginCatalog::room_view`) drops only the kind whose declaration fails, so the other kinds keep their pools.
 
@@ -107,6 +107,7 @@ A name is unshared when it equals an adapter's `private_home_entries` entry or s
 | --- | --- | --- | --- |
 | Claude | `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json`, `.oauth_refresh.lock`, `.last-update-result.json` | `projects/` |
 | Codex | `config.toml`, `AGENTS.md`, `rules/` | `auth.json`, `app-server-control`, `app-server-daemon`, `packages`, `models_cache.json` | `sessions/`, `archived_sessions/` |
+| Pi | `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `trust.json`, `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `extensions/`, `skills/`, `prompts/`, `themes/`, `npm/`, `git/` | `auth.json`, `models-store.json`, `mcp-auth.json`, `oauth.json`, `mcp.log`, `crashes.json`, `pi-debug.log`, `pi-tui-debug.log`, `pi-tui-crash.log` | `sessions/` |
 
 ### What happens to each entry
 

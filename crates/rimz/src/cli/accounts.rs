@@ -118,7 +118,7 @@ enum AccountsSubcmd {
         /// Unpin this kind and follow the project or machine default live.
         #[arg(long, conflicts_with_all = ["name", "global"])]
         reset: bool,
-        /// Provider kind: claude or codex.
+        /// Provider kind: claude, codex, or pi.
         kind: String,
         /// Declared account name, or `default` for the provider's own home.
         #[arg(required_unless_present = "reset")]
@@ -128,7 +128,7 @@ enum AccountsSubcmd {
     ///
     /// Rerun to finish an account whose setup stopped part way.
     Add {
-        /// Provider kind: claude or codex.
+        /// Provider kind: claude, codex, or pi.
         kind: String,
         /// Account name, such as `work`.
         name: LoginName,
@@ -159,7 +159,7 @@ enum AccountsSubcmd {
     },
     /// Forget a named account; its home directory stays on disk.
     Remove {
-        /// Provider kind: claude or codex.
+        /// Provider kind: claude, codex, or pi.
         kind: String,
         /// Account name.
         name: LoginName,

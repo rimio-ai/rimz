@@ -42,6 +42,9 @@ pub struct AccountsConfig {
     /// Named Codex accounts: each one a standalone `CODEX_HOME`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub codex: BTreeMap<LoginName, NamedAccount>,
+    /// Named Pi accounts: each one a standalone `PI_CODING_AGENT_DIR`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pi: BTreeMap<LoginName, NamedAccount>,
 }
 
 /// One declared account of a provider kind. An empty table takes the default
@@ -184,6 +187,7 @@ impl AccountsConfig {
         match kind.as_str() {
             "claude" => Some(&self.claude),
             "codex" => Some(&self.codex),
+            "pi" => Some(&self.pi),
             _ => None,
         }
     }
@@ -195,6 +199,7 @@ impl AccountsConfig {
         match kind.as_str() {
             "claude" => Some(&mut self.claude),
             "codex" => Some(&mut self.codex),
+            "pi" => Some(&mut self.pi),
             _ => None,
         }
     }
@@ -445,6 +450,11 @@ mod tests {
             home = "/srv/homes/work"
 
             [codex.personal]
+
+            [pi.work]
+            home = "/srv/pi/work"
+            label = "Work seat"
+            history = "standalone"
             "#,
         )
         .expect("parse named accounts");
@@ -452,6 +462,16 @@ mod tests {
         assert_eq!(claude["work"].home, Some(PathBuf::from("/srv/homes/work")));
         let codex = config.named(&AgentKind::new_unchecked("codex")).unwrap();
         assert_eq!(codex["personal"].home, None);
+        let pi = config.named(&AgentKind::new_unchecked("pi"));
+        assert!(pi.is_some(), "Pi supports declared accounts");
+        let pi = &pi.unwrap()["work"];
+        assert_eq!(pi.home, Some(PathBuf::from("/srv/pi/work")));
+        assert_eq!(pi.label.as_deref(), Some("Work seat"));
+        assert_eq!(pi.history, AccountHistory::Standalone);
+        assert_eq!(
+            toml::from_str::<AccountsConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config,
+        );
         assert!(config.named(&AgentKind::new_unchecked("grok")).is_none());
         assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
         let serialized = toml::Value::try_from(&config).unwrap();
@@ -482,13 +502,14 @@ mod tests {
 
     #[test]
     fn named_account_refuses_an_unknown_field_and_a_bad_name() {
-        assert!(
-            toml::from_str::<AccountsConfig>("[claude.work]\npath = \"/srv/work\"")
-                .unwrap_err()
-                .to_string()
-                .contains("unknown field")
-        );
-        assert!(toml::from_str::<AccountsConfig>("[claude.Work]\n").is_err());
+        let refused = ["claude", "pi"].map(|kind| {
+            [
+                toml::from_str::<AccountsConfig>(&format!("[{kind}.work]\npath = \"/srv/work\""))
+                    .is_err_and(|error| error.to_string().contains("unknown field")),
+                toml::from_str::<AccountsConfig>(&format!("[{kind}.Work]\n")).is_err(),
+            ]
+        });
+        assert_eq!(refused, [[true, true]; 2]);
     }
 
     #[test]

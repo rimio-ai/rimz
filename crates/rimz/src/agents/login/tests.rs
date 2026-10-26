@@ -295,7 +295,11 @@ fn assert_default_login_env(login: &ProviderLogin, key: &str) {
 
 #[test]
 fn session_defaults_drop_exported_declared_homes() {
-    for (provider, key) in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")] {
+    for (provider, key) in [
+        ("claude", "CLAUDE_CONFIG_DIR"),
+        ("codex", "CODEX_HOME"),
+        ("pi", "PI_CODING_AGENT_DIR"),
+    ] {
         let accounts = accounts(&format!("[{provider}.work]\nhome = '/srv/work'\n"));
         for stamp in [None, Some(name("default"))] {
             let login = session_login(&kind(provider), stamp.as_ref(), &accounts).unwrap();
@@ -306,7 +310,11 @@ fn session_defaults_drop_exported_declared_homes() {
 
 #[test]
 fn catalog_defaults_drop_exported_declared_homes() {
-    for (provider, key) in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")] {
+    for (provider, key) in [
+        ("claude", "CLAUDE_CONFIG_DIR"),
+        ("codex", "CODEX_HOME"),
+        ("pi", "PI_CODING_AGENT_DIR"),
+    ] {
         let catalog = LoginCatalog::from_config_under(
             &accounts(&format!("[{provider}.work]\nhome = '/srv/work'\n")),
             Some(Path::new("/home/u")),
@@ -635,7 +643,8 @@ fn birth_selection_prefers_requested_over_project() {
         born,
         RoomLogins::from([
             (kind("claude"), name("work")),
-            (kind("codex"), name("work"))
+            (kind("codex"), name("work")),
+            (kind("pi"), LoginName::default_login()),
         ])
     );
     assert_eq!(
@@ -645,6 +654,7 @@ fn birth_selection_prefers_requested_over_project() {
         RoomLogins::from([
             (kind("claude"), LoginName::default_login()),
             (kind("codex"), LoginName::default_login()),
+            (kind("pi"), LoginName::default_login()),
         ])
     );
 
@@ -710,7 +720,9 @@ fn machine_selection_fills_only_unset_kinds() {
         (kind("codex"), name("work")),
     ]);
     let born = catalog.birth_selection(&empty, &empty, &machine).unwrap();
-    assert_eq!(born, machine);
+    let mut expected = machine.clone();
+    expected.insert(kind("pi"), LoginName::default_login());
+    assert_eq!(born, expected);
     let requested = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
     let project = RoomLogins::from([(kind("codex"), LoginName::default_login())]);
     let overridden = catalog

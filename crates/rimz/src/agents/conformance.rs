@@ -205,6 +205,7 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
     for (kind, filename) in [
         ("claude", "settings.json"),
         ("codex", "config.toml"),
+        ("pi", "extensions/rimz.ts"),
         ("qwen", "settings.json"),
         ("qoder", "settings.json"),
         ("grok", "hooks/rimz.json"),
