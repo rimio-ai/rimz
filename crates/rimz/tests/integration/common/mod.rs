@@ -150,6 +150,21 @@ pub fn exec_args(env: &Env, request: &rimz::harness::launch::ExecRequest) -> Vec
         .collect()
 }
 
+/// The `loop show` refusal for a name with `count` retained runs, from `error: ` on. The age is
+/// read back from `stderr`: a run the producer stamped just now can cross a `rel_age` boundary
+/// between the subprocess and the assertion.
+pub fn retained_runs_refusal(stderr: &str, name: &str, count: usize) -> String {
+    let age = stderr
+        .split_once(", last ")
+        .and_then(|(_, rest)| rest.split_once(": `"))
+        .map(|(age, _)| age)
+        .unwrap_or_else(|| panic!("no retained-runs hint in {stderr:?}"));
+    let noun = if count == 1 { "run" } else { "runs" };
+    format!(
+        "error: no loop task named `{name}`; see `rimz loop list`\n  {count} retained {noun}, last {age}: `rimz loop logs {name}`\n"
+    )
+}
+
 const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 const MAX_OSC_TITLE_BYTES: usize = 64 * 1024;
 

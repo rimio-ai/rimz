@@ -715,20 +715,7 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
         let (stdout, stderr) = loop_fail(&env, &["loop", "show", name]);
         assert!(stdout.is_empty(), "{stdout}");
         let count = history.iter().filter(|run| run.task == name).count();
-        let age = stderr
-            .split_once(", last ")
-            .unwrap()
-            .1
-            .split_once(": `")
-            .unwrap()
-            .0;
-        let noun = if count == 1 { "run" } else { "runs" };
-        assert_eq!(
-            stderr,
-            format!(
-                "error: no loop task named `{name}`; see `rimz loop list`\n  {count} retained {noun}, last {age}: `rimz loop logs {name}`\n"
-            )
-        );
+        assert_eq!(stderr, retained_runs_refusal(&stderr, name, count));
     }
     let outside = tempfile::tempdir().unwrap();
     let output = env

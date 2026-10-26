@@ -4,7 +4,7 @@ use crate::common::wait::{
     agent_wait, loop_instances_path, register_agent, register_calling_agent,
     register_calling_agent_with_launch, wait_instances, wait_ok,
 };
-use crate::common::{Env, canonical, zellij_trace_shim};
+use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::{EventKind, MessageEventMethod};
@@ -1656,21 +1656,8 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    let name = &records[0].task;
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let age = stderr
-        .split_once(", last ")
-        .unwrap()
-        .1
-        .split_once(": `")
-        .unwrap()
-        .0;
-    assert_eq!(
-        stderr,
-        format!(
-            "error: no loop task named `{name}`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs {name}`\n"
-        )
-    );
+    assert_eq!(stderr, retained_runs_refusal(&stderr, &records[0].task, 1));
     assert!(!message.contains("--- watch"), "{message}");
     assert_eq!(wait_for_wait_messages(&env, 1).len(), 1);
 
@@ -1820,21 +1807,8 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    let name = &records[0].task;
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let age = stderr
-        .split_once(", last ")
-        .unwrap()
-        .1
-        .split_once(": `")
-        .unwrap()
-        .0;
-    assert_eq!(
-        stderr,
-        format!(
-            "error: no loop task named `{name}`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs {name}`\n"
-        )
-    );
+    assert_eq!(stderr, retained_runs_refusal(&stderr, &records[0].task, 1));
 }
 
 #[test]
