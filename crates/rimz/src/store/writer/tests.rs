@@ -1077,6 +1077,55 @@ fn skipped_settings_are_replaced_preserved_and_reset_with_the_room() {
 }
 
 #[test]
+fn agent_shell_survives_rerecords_and_recovery_but_not_reset() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let workspace = WorkspaceResolver::resolve(&project, None).unwrap();
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let shell = record::AgentShell {
+        name: "bash".into(),
+        path: "/usr/bin/bash".into(),
+    };
+    let mut recorded = record::WorkspaceRecord::from_resolved(&workspace);
+    recorded.agent_shell = Some(shell.clone());
+    record::write(&paths, &recorded).unwrap();
+
+    let mut actual = Vec::new();
+    store.record_workspace(&workspace).unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    store.set_skipped_settings(&workspace, Vec::new()).unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    store
+        .pin_room_logins(&workspace, &crate::ids::RoomLogins::new())
+        .unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    let bin = dir.path().join("builds/build/rimz");
+    crate::disk::atomic::write_executable_bytes_atomically(&bin, b"build").unwrap();
+    store
+        .record_room_bin(&workspace, bin, "build".to_owned())
+        .unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    store.reset_records_keeping_logins().unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    store.reset_records(false).unwrap();
+    actual.push(record::read(&paths.workspace_record).unwrap().agent_shell);
+    assert_eq!(
+        actual,
+        [
+            Some(shell.clone()),
+            Some(shell.clone()),
+            Some(shell.clone()),
+            Some(shell.clone()),
+            Some(shell),
+            None
+        ]
+    );
+}
+
+#[test]
 fn remote_control_off_survives_rerecords_and_recovery_but_not_reset() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
@@ -1093,7 +1142,7 @@ fn remote_control_off_survives_rerecords_and_recovery_but_not_reset() {
     };
 
     store
-        .set_remote_control_off(&workspace, off.clone())
+        .set_room_birth_settings(&workspace, off.clone(), None)
         .expect("record waiver");
     assert_eq!(read_off(), off);
     store
@@ -1114,10 +1163,10 @@ fn remote_control_off_survives_rerecords_and_recovery_but_not_reset() {
     store.reset_records(false).expect("soft reset");
     assert!(read_off().is_empty());
     store
-        .set_remote_control_off(&workspace, off.clone())
+        .set_room_birth_settings(&workspace, off.clone(), None)
         .expect("record waiver again");
     store
-        .set_remote_control_off(&workspace, BTreeSet::new())
+        .set_room_birth_settings(&workspace, BTreeSet::new(), None)
         .expect("a later start clears the waiver");
     assert!(read_off().is_empty());
 }

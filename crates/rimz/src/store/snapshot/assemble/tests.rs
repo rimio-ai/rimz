@@ -23,6 +23,7 @@ fn write_workspace_record(paths: &StatePaths, project_root: PathBuf, root_class:
             rimz_build: None,
             pins: Default::default(),
             remote_control_off: Default::default(),
+            agent_shell: None,
             skipped: Vec::new(),
             updated_at: Timestamp::UNIX_EPOCH,
         },

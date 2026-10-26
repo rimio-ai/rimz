@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::capabilities::SystemTextChannel;
-use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::launch_reminders::LaunchReminders;
 use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, prompt_artifact_path};
 use crate::harness::spec::AgentCell;
@@ -77,14 +77,22 @@ pub(crate) const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 /// Claude Code's own shell override, stamped beside `SHELL` under a configured
 /// `[agents] shell` so the provider's tool shell is the wrapper's.
 const ENV_CLAUDE_CODE_SHELL: &str = "CLAUDE_CODE_SHELL";
-const AGENT_SHELL_FIX: &str = "set it to the absolute path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config";
+const AGENT_SHELL_FIX: &str = "set it to the name or full path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config";
+
+/// Whether a room birth saves its bare-name shell lookup for later launches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentShellPersistence {
+    Room,
+    PerLaunch,
+}
 
 /// A configured `[agents] shell` that cannot carry an agent launch.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[error("[agents] shell = \"{}\" {reason}; {AGENT_SHELL_FIX}", shell.display())]
 pub struct AgentShellErr {
     shell: PathBuf,
-    reason: &'static str,
+    reason: String,
+    path: Option<PathBuf>,
 }
 
 impl From<AgentShellErr> for crate::blocker::Blocker {
@@ -96,16 +104,26 @@ impl From<AgentShellErr> for crate::blocker::Blocker {
         ))
         .with_fix(
             AGENT_SHELL_FIX,
-            Some("rimz config set agents.shell \"$(command -v bash)\"".into()),
+            Some("rimz config set agents.shell bash".into()),
             crate::blocker::Surface::Plain,
         )
     }
 }
 
-/// Refuse a configured `[agents] shell` the launch wrapper cannot run under.
-/// A relative name would resolve through a PATH other than the one checked
-/// here, and a csh-family shell would silently skip the wrapper.
+/// Validate an absolute shell before the config editor writes it.
+/// Launch readers use [`resolve_agent_shell`] for room-aware name lookup.
 pub fn validate_agent_shell(shell: &Path) -> Result<(), AgentShellErr> {
+    if !shell.is_absolute() {
+        return Err(AgentShellErr {
+            shell: shell.to_path_buf(),
+            reason: "is not an absolute path".into(),
+            path: None,
+        });
+    }
+    resolve_agent_shell(shell, None).path.map(|_| ())
+}
+
+fn validate_agent_shell_path(shell: &Path) -> Result<(), AgentShellErr> {
     let reason = if !shell.is_absolute() {
         "is not an absolute path"
     } else if !shell.is_file() {
@@ -119,8 +137,113 @@ pub fn validate_agent_shell(shell: &Path) -> Result<(), AgentShellErr> {
     };
     Err(AgentShellErr {
         shell: shell.to_path_buf(),
-        reason,
+        reason: reason.into(),
+        path: Some(shell.to_path_buf()),
     })
+}
+
+/// The configured shell's room-aware selection, including a failed lookup or validation.
+#[derive(Clone, Debug)]
+pub struct AgentShellResolution {
+    pub name: PathBuf,
+    pub path: Result<PathBuf, AgentShellErr>,
+    pub saved: bool,
+    pub(super) missing_saved_path: Option<PathBuf>,
+}
+
+impl AgentShellResolution {
+    pub fn is_bare_name(&self) -> bool {
+        bare_agent_shell(&self.name)
+    }
+
+    /// The selected path even when validation fails; a PATH miss selects nothing.
+    pub fn selected_path(&self) -> Option<&Path> {
+        match &self.path {
+            Ok(path) => Some(path),
+            Err(error) => error.path.as_deref(),
+        }
+    }
+
+    pub fn missing_saved_path(&self) -> Option<&Path> {
+        self.missing_saved_path.as_deref()
+    }
+}
+
+/// Resolve a configured shell through a matching room lookup, then this process's PATH.
+/// With no record path, take a fresh lookup suitable for birth or configuration editing.
+pub fn resolve_agent_shell(shell: &Path, record_path: Option<&Path>) -> AgentShellResolution {
+    let saved = record_path
+        .filter(|_| bare_agent_shell(shell))
+        .and_then(|path| crate::workspace::record::read_optional(path).ok().flatten())
+        .and_then(|record| record.agent_shell);
+    let path = std::env::var_os("PATH");
+    let cwd = std::env::current_dir().ok();
+    resolve_agent_shell_with(shell, saved.as_ref(), path.as_deref(), cwd.as_deref())
+}
+
+fn bare_agent_shell(shell: &Path) -> bool {
+    shell
+        .file_name()
+        .is_some_and(|name| shell.as_os_str() == name)
+}
+
+fn resolve_agent_shell_with(
+    shell: &Path,
+    saved: Option<&crate::workspace::record::AgentShell>,
+    path: Option<&std::ffi::OsStr>,
+    cwd: Option<&Path>,
+) -> AgentShellResolution {
+    let saved = saved.filter(|saved| bare_agent_shell(shell) && saved.name == shell);
+    let (saved, missing_saved_path) = match saved {
+        Some(saved) if !saved.path.is_file() => (None, Some(saved.path.clone())),
+        saved => (saved, None),
+    };
+    let path = if shell.is_absolute() {
+        validate_agent_shell_path(shell).map(|()| shell.to_path_buf())
+    } else if !bare_agent_shell(shell) {
+        Err(AgentShellErr {
+            shell: shell.to_path_buf(),
+            reason: "is a relative path".into(),
+            path: None,
+        })
+    } else if let Some(saved) = saved {
+        validate_agent_shell_path(&saved.path)
+            .map(|()| saved.path.clone())
+            .map_err(|error| AgentShellErr {
+                shell: shell.to_path_buf(),
+                ..error
+            })
+    } else {
+        let hit = path.and_then(|path| {
+            let mut lookup = which::WhichConfig::new()
+                .binary_name(shell.as_os_str().to_owned())
+                .custom_path_list(path.to_owned())
+                .system_cwd(false);
+            if let Some(cwd) = cwd {
+                lookup = lookup.custom_cwd(cwd.to_path_buf());
+            }
+            lookup.first_result().ok()
+        });
+        hit.ok_or_else(|| AgentShellErr {
+            shell: shell.to_path_buf(),
+            reason: "is not on PATH".into(),
+            path: None,
+        })
+        .and_then(|path| {
+            validate_agent_shell_path(&path)
+                .map(|()| path)
+                .map_err(|error| AgentShellErr {
+                    shell: shell.to_path_buf(),
+                    ..error
+                })
+        })
+    };
+    AgentShellResolution {
+        name: shell.to_path_buf(),
+        path,
+        saved: saved.is_some(),
+        missing_saved_path,
+    }
 }
 
 /// The env a configured `[agents] shell` stamps on a launch: the shell under
@@ -179,6 +302,8 @@ pub enum ProgramLookupErr {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
+    #[error(transparent)]
+    Paths(#[from] crate::disk::paths::PathErr),
     #[error(transparent)]
     AccountBudget(#[from] crate::config::AccountBudgetConfigError),
     #[error("agent `{kind}` cannot launch: {conflict}")]
@@ -970,9 +1095,10 @@ fn compile_agent_process_with_extra_env(
     let user_shell = crate::proc::user_shell();
     let (shell, shell_env) = match reminders.agent_shell.as_deref() {
         Some(configured) => {
-            validate_agent_shell(configured)?;
-            let env = agent_shell_env(configured, user_shell.as_deref());
-            (Some(configured.to_path_buf()), env)
+            let state = StatePaths::for_project_root(project_root)?;
+            let shell = resolve_agent_shell(configured, Some(&state.workspace_record)).path?;
+            let env = agent_shell_env(&shell, user_shell.as_deref());
+            (Some(shell), env)
         }
         None => (user_shell, BTreeMap::new()),
     };

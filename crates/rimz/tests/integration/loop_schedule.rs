@@ -5595,11 +5595,17 @@ fn external_tick_spawns_an_agent_without_a_workspace_record() {
         return;
     }
     let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nshell = 'bash'\n",
+    )
+    .unwrap();
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &env.project_root);
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let login_shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    std::os::unix::fs::symlink(&login_shell, agent_bin.join("bash")).unwrap();
     let shell = write_path_shim(
         &env.home_root.join("interactive-shell-bin"),
         "rimz-test-sh",
@@ -5648,6 +5654,126 @@ fn external_tick_spawns_an_agent_without_a_workspace_record() {
         "{:?}",
         read_loop_run_records(&env),
     );
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.get("agent_shell"), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_birth_saves_shell_lookups_only_for_manual_fires() {
+    use crate::common::CommandTimeoutExt;
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (kind, prior, verb) in [
+        ("check", false, "run"),
+        ("check", true, "run"),
+        ("agent", true, "run"),
+        ("stay", false, "run"),
+        ("stay", true, "run"),
+        ("workflow", false, "run"),
+        ("workflow", true, "run"),
+        ("agent", true, "fire"),
+        ("check-agent", true, "fire"),
+        ("agent", true, "print"),
+    ] {
+        let env = Env::new();
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nshell = 'bash'\n",
+        )
+        .unwrap();
+        env.install_agent_hooks("codex");
+        trust_codex_preflight_hooks(&env);
+        trust_codex_project(&env, &env.project_root);
+        let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+        let shell = write_fake_login_shell(&env, "bash", &[]);
+        let hit = agent_bin.join("bash");
+        std::os::unix::fs::symlink(&shell, &hit).unwrap();
+        let path = env.state_path_for(&env.project_root).workspace_record;
+        if prior {
+            env.record(&env.project_root);
+            let mut record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            record["agent_shell"] = json!({"name": "bash", "path": "/previous/bash"});
+            std::fs::write(&path, record.to_string()).unwrap();
+        }
+        let effect = match kind {
+            "check" => "check = 'true'\n".to_owned(),
+            "agent" => "agent = 'codex'\nprompt = 'repair'\ntimeout = '1s'\n".to_owned(),
+            "stay" => "agent = 'codex'\nprompt = 'repair'\nstay = true\n".to_owned(),
+            "check-agent" => format!(
+                "check = {:?}\n",
+                shlex::try_join([
+                    env.rimz_bin().to_str().unwrap(),
+                    "--mux",
+                    "zellij",
+                    "agents",
+                    "-p",
+                    "codex",
+                    "repair",
+                    "--timeout",
+                    "1s",
+                ])
+                .unwrap(),
+            ),
+            "workflow" => {
+                let dir = env.rimz_home().join("workflows/review");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("workflow.toml"),
+                    "[workflow]\nscope = 'worktree'\nstart = 'ready'\n\
+                     [checks.ready]\nrun = 'true'\non.ok = '@done'\n",
+                )
+                .unwrap();
+                "workflow = 'review'\n".to_owned()
+            }
+            _ => unreachable!(),
+        };
+        write_loop_config(
+            &env,
+            &format!(
+                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\nthrottle = 'off'\n{effect}",
+                env.project_root,
+            ),
+        );
+        let mut command = env.rimz();
+        command.args(["--mux", "zellij"]);
+        if verb == "print" {
+            command.args(["agents", "-p", "codex", "repair", "--timeout", "1s"]);
+        } else {
+            command.args(["loop", verb, "lookup"]);
+        }
+        let output = command
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", &shell)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+            .bounded_output_within(LOOP_RUNNER_DEADLINE)
+            .unwrap();
+        let records = read_loop_run_records(&env);
+        assert_eq!(
+            records.len(),
+            usize::from(verb != "print"),
+            "{kind}/{prior}/{verb}: {output:?}"
+        );
+        let record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&path).unwrap_or_else(|error| panic!("{error}: {output:?}")),
+        )
+        .unwrap();
+        actual.push((kind, prior, verb, record.get("agent_shell").cloned()));
+        expected.push((
+            kind,
+            prior,
+            verb,
+            (verb != "run").then(|| json!({"name": "bash", "path": hit})),
+        ));
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]

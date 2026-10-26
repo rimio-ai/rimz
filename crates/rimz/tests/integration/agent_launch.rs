@@ -5584,6 +5584,59 @@ fn configured_agent_shell_runs_the_spawned_agent() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn bare_agent_shell_uses_the_saved_path_or_the_exec_path_fallback() {
+    for saved in [true, false] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let shell = write_fake_bash_shell(&env);
+        write_agent_shell_config(&env, std::path::Path::new("bash"));
+        if saved {
+            let record_path = env.state_path_for(&env.project_root).workspace_record;
+            let mut record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+            record["agent_shell"] = serde_json::json!({"name": "bash", "path": shell});
+            std::fs::write(record_path, record.to_string()).unwrap();
+        }
+        let shim = write_env_dump_shim(&env, "codex");
+        let dump = env.home_root.join("bare-agent-shell.env");
+        let mut command = env.rimz();
+        command
+            .args(exec_args(&env, &fresh_exec("codex", None)))
+            .env("PATH", path_with_front(&shim))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump);
+        if !saved {
+            command.env(
+                "PATH",
+                std::env::join_paths(
+                    [shell.parent().unwrap().to_path_buf(), shim]
+                        .into_iter()
+                        .chain(std::env::split_paths(
+                            &std::env::var_os("PATH").unwrap_or_default(),
+                        )),
+                )
+                .unwrap(),
+            );
+        }
+        let output = command.bounded_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let dumped = std::fs::read_to_string(dump).unwrap();
+        for key in ["SHELL", "CLAUDE_CODE_SHELL"] {
+            assert!(
+                dumped
+                    .lines()
+                    .any(|line| line == format!("{key}={}", shell.display())),
+                "saved={saved}: {dumped}"
+            );
+        }
+    }
+}
+
 /// Unlike an unlaunchable `$SHELL`, which falls back to direct exec, a
 /// configured shell is a precondition: the provider never starts.
 #[cfg(unix)]

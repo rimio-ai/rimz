@@ -231,7 +231,7 @@ aggressive_resize = true
 # env-reminder = true                   # include cwd and shell in launch reminders
 # runtime-env = true                    # Claude and Codex: team memory files and git state arrive with the first prompt of a conversation and each stage notice
 # allow-routine-rimz = true             # Claude launch settings and Codex installed rules; off removes Codex rules on next hook install/start consent
-## shell = "/bin/bash"                  # absolute path every agent launch runs under; default = your login shell
+## shell = "bash"                       # name looked up at room start, or full path; default = your login shell
 # `rimz agents <spec>` names a team or uses inline cells made from profiles,
 # commands, or built-ins. Built-ins include `term`, agent kinds, and
 # adapter-supported `<kind>-<mode>` variants such as `claude-auto` or

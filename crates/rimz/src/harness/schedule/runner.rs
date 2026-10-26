@@ -1758,6 +1758,10 @@ impl<'a> TaskFire<'a> {
         request.verify.clone_from(&self.entry.verify);
         request.max_attempts = self.entry.max_attempts;
         shape_loop_owned(&mut request, &self.name, &self.config, self.mode)?;
+        request.agent_shell_persistence = match self.mode {
+            LoopRunMode::Scheduled => crate::harness::launch::AgentShellPersistence::PerLaunch,
+            LoopRunMode::Manual => crate::harness::launch::AgentShellPersistence::Room,
+        };
         request.loop_reminder = Some(self.loop_reminder(request.timeout));
         Ok(request)
     }

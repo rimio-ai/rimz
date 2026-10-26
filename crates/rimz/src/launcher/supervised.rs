@@ -544,6 +544,7 @@ fn prepare(
                 && request.from_pr.is_none()
                 && request.loop_task.is_none(),
             force_new_tab: request.force_new_tab,
+            agent_shell_persistence: request.agent_shell_persistence,
             room,
             recovery: context.recovery,
             entry,

@@ -132,6 +132,133 @@ fn start_warns_and_records_an_uninstalled_mux_default() {
 }
 
 #[test]
+fn birth_saves_the_shell_before_panes_and_live_reentry_keeps_it() {
+    let env = Env::new();
+    write_machine_config(&env, "[agents]\nshell = 'bash'\n");
+    let bin = seed_actionable_agent(&env);
+    let shell = bin.join("bash");
+    std::fs::write(&shell, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let wrapper = env.home_root.join("zellij-shell-probe");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\n\
+         case \" $* \" in\n\
+           *' --layout '*)\n\
+             /bin/dd if=\"$RIMZ_TEST_BIRTH_RECORD\" of=\"$RIMZ_TEST_BIRTH_OBSERVED\" 2>/dev/null\n\
+             ;;\n\
+         esac\n\
+         exec \"$RIMZ_TEST_ZELLIJ_REAL\" \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let record_path = env.state_path_for(&env.project_root).workspace_record;
+    let observed = env.home_root.join("record-before-panes.json");
+    let trace = env.home_root.join("shell-birth.log");
+    let _room = ShimRoom::watch(&env, &trace);
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
+    let output = command
+        .env("RIMZ_ZELLIJ_BIN", &wrapper)
+        .env("RIMZ_TEST_ZELLIJ_REAL", zellij_trace_shim())
+        .env("RIMZ_TEST_BIRTH_RECORD", &record_path)
+        .env("RIMZ_TEST_BIRTH_OBSERVED", &observed)
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(observed).unwrap()).unwrap();
+    let expected = serde_json::json!({"name": "bash", "path": shell});
+    assert_eq!(
+        before["agent_shell"], expected,
+        "the session creator must already see the lookup"
+    );
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    let session = record["session_name"].as_str().unwrap();
+    let other = env.home_root.join("other-bin");
+    std::fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&shell, other.join("bash")).unwrap();
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin, &trace, session);
+    let output = command
+        .env("PATH", std::env::join_paths([&other, &bin]).unwrap())
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+    assert_eq!(
+        after["agent_shell"], expected,
+        "live entry must not refresh the lookup"
+    );
+}
+
+#[test]
+fn new_birth_clears_a_previous_shell_for_unset_absolute_or_missing_values() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut actual = Vec::new();
+    for value in [
+        None,
+        Some("/bin/sh"),
+        Some("rimz-test-shell-not-installed"),
+        Some("bash"),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let record_path = env.state_path_for(&env.project_root).workspace_record;
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        record["agent_shell"] = serde_json::json!({"name": "bash", "path": "/old/bash"});
+        std::fs::write(&record_path, record.to_string()).unwrap();
+        write_machine_config(
+            &env,
+            &value
+                .map(|shell| format!("[agents]\nshell = '{shell}'\n"))
+                .unwrap_or_default(),
+        );
+        let bin = seed_actionable_agent(&env);
+        let trace = env.project_root.join("zellij-accounts.log");
+        let mut room = ShimRoom::watch(&env, &trace);
+        room.allow_no_trigger("shell configuration must permit birth");
+        let mut command = env.rimz();
+        configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
+        if value == Some("bash") {
+            let non_utf8 = env.home_root.join(std::ffi::OsStr::from_bytes(b"bin-\xff"));
+            crate::common::write_path_shim(&non_utf8, "bash", "exit 0");
+            command.env("PATH", std::env::join_paths([&non_utf8, &bin]).unwrap());
+        }
+        let output = command.bounded_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+        actual.push(record.get("agent_shell").cloned());
+        if value == Some("rimz-test-shell-not-installed") {
+            assert_skipped(
+                &env,
+                &String::from_utf8_lossy(&output.stderr),
+                "agents.shell",
+                "not on PATH",
+            );
+        }
+    }
+    assert_eq!(actual, [None, None, None, None]);
+}
+
+#[test]
 fn start_warns_and_records_a_missing_configured_agent_shell() {
     let env = Env::new();
     let config_dir = env.rimz_home();
@@ -730,7 +857,7 @@ fn detached_birth_warns_and_waives_a_blocked_host_again() {
     std::fs::write(&record_path, record.to_string()).expect("write waiver");
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        "[remote_control]\nclaude = true\n",
+        "[agents]\nshell = 'bash'\n[remote_control]\nclaude = true\n",
     )
     .expect("machine config");
     let settings = env.home_root.join("claude-settings.json");
@@ -741,6 +868,8 @@ fn detached_birth_warns_and_waives_a_blocked_host_again() {
     std::fs::write(&claude, "#!/bin/sh\nexit 1\n").expect("claude shim");
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
         .expect("chmod claude shim");
+    let shell = bin_dir.join("bash");
+    std::os::unix::fs::symlink("/bin/sh", &shell).unwrap();
     let added = env
         .rimz()
         .args(["loop", "add", "probe", "--check", "true", "--every", "1h"])
@@ -778,6 +907,7 @@ fn detached_birth_warns_and_waives_a_blocked_host_again() {
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
     assert_eq!(record["remote_control_off"], serde_json::json!(["claude"]));
+    assert_eq!(record.get("agent_shell"), None);
 }
 
 #[test]

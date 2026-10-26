@@ -168,6 +168,7 @@ impl RebirthPlan {
         project_root: &Path,
         machine: &MachineConfig,
         logins: Option<&crate::agents::RoomAccounts>,
+        agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
         disabled: bool,
     ) -> std::result::Result<Self, RebirthErr> {
         let paths = StatePaths::for_project_root(project_root).map_err(anyhow::Error::from)?;
@@ -182,6 +183,7 @@ impl RebirthPlan {
             project_root,
             machine,
             logins,
+            agent_shell,
             &crate::agents::ambient_env(),
             disabled,
             OWNER_EXIT_BOUND,
@@ -627,6 +629,7 @@ fn inspect_at(
     project_root: &Path,
     machine: &MachineConfig,
     logins: Option<&crate::agents::RoomAccounts>,
+    agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
     ambient: &BTreeMap<String, String>,
     disabled: bool,
     owner_exit_bound: Duration,
@@ -703,6 +706,7 @@ fn inspect_at(
         project_root,
         machine,
         logins,
+        agent_shell,
         ambient,
         recovery_off,
     );
@@ -771,6 +775,7 @@ fn inspect_live_scope(
         project_root,
         machine,
         None,
+        None,
         ambient,
         recovery_off,
     );
@@ -795,7 +800,7 @@ fn inspect_live_scope(
 /// `scope` already ended, and the plan that resumes the roots it can.
 #[expect(
     clippy::too_many_arguments,
-    reason = "read-only recovery inputs and pending birth accounts"
+    reason = "read-only recovery inputs and pending birth settings"
 )]
 fn plan_settlement(
     projection: Option<&crate::RuntimeProjection>,
@@ -805,6 +810,7 @@ fn plan_settlement(
     project_root: &Path,
     machine: &MachineConfig,
     logins: Option<&crate::agents::RoomAccounts>,
+    agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
     ambient: &BTreeMap<String, String>,
     recovery_off: bool,
 ) -> SettlementPlan {
@@ -878,6 +884,7 @@ fn plan_settlement(
         machine,
         &teams_and_profiles,
         logins,
+        agent_shell,
         ambient,
     );
     candidates.retain(|agent| {
@@ -953,7 +960,7 @@ fn effective_teams_and_profiles(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "recovery config and pending birth accounts"
+    reason = "recovery config and pending birth settings"
 )]
 fn plan_recovery(
     projection: &crate::RuntimeProjection,
@@ -964,6 +971,7 @@ fn plan_recovery(
     machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig),
     logins: Option<&crate::agents::RoomAccounts>,
+    agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
     ambient: &BTreeMap<String, String>,
 ) -> RecoveryPlan {
     let (teams, profiles) = teams_and_profiles;
@@ -993,11 +1001,12 @@ fn plan_recovery(
     );
     let mut health = BTreeMap::new();
     let mut sandbox = None;
-    let shell_error = machine.agents.shell.as_deref().and_then(|shell| {
-        crate::harness::launch::validate_agent_shell(shell)
-            .err()
-            .map(|error| error.to_string())
+    let agent_shell = agent_shell.cloned().or_else(|| {
+        machine.agents.shell.as_deref().map(|shell| {
+            crate::harness::launch::resolve_agent_shell(shell, Some(&paths.workspace_record))
+        })
     });
+    let shell_error = agent_shell.and_then(|shell| shell.path.err().map(|error| error.to_string()));
     let mut unavailable = |kind: &AgentKind,
                            isolation: crate::config::Isolation,
                            hook_fix: &dyn Fn() -> String| {

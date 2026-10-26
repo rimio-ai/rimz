@@ -23,6 +23,7 @@ pub(super) fn judge(
     mux: MuxName,
     hibernation: &Admission,
     live: bool,
+    agent_shell: Option<&crate::harness::launch::AgentShellResolution>,
 ) -> Result<Judgment> {
     let mut skipped = Vec::new();
     let mut warn = |setting: String, message: String| {
@@ -100,8 +101,14 @@ pub(super) fn judge(
     if let Err(error) = crate::harness::schedule::throttle::preflight(&machine.r#loop.throttle) {
         warn("loop.throttle".into(), error.to_string());
     }
-    if let Some(shell) = &machine.agents.shell
-        && let Err(error) = crate::harness::launch::validate_agent_shell(shell)
+    let state = crate::StatePaths::for_project_root(&workspace.project_root)?;
+    let agent_shell = agent_shell.cloned().or_else(|| {
+        machine.agents.shell.as_deref().map(|shell| {
+            crate::harness::launch::resolve_agent_shell(shell, Some(&state.workspace_record))
+        })
+    });
+    if let Some(shell) = agent_shell
+        && let Err(error) = shell.path
     {
         warn(
             "agents.shell".into(),
@@ -126,7 +133,6 @@ pub(super) fn judge(
         warn(format!("accounts.{kind}"), error.to_string());
         account_warnings.insert(kind.clone(), format!("accounts.{kind}"));
     }
-    let state = crate::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = crate::RuntimePaths::for_state(&state)?;
     let scopes: BTreeSet<_> = catalog
         .all()
@@ -394,7 +400,8 @@ mod tests {
                 },
             );
             let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-            let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+            let judgment =
+                judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
             let warnings: Vec<_> = judgment
                 .skipped
                 .iter()
@@ -440,7 +447,7 @@ mod tests {
             ..Default::default()
         };
         let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
         assert!(
             !home.exists(),
             "judgment must not create a failed account's home"
@@ -478,7 +485,7 @@ mod tests {
             ..Default::default()
         };
         let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
         for key in ["tmux.history_limit", "tmux.escape_time_ms"] {
             assert!(
                 judgment.skipped.iter().any(|entry| entry.setting == key),
@@ -512,7 +519,7 @@ mod tests {
         let mut machine = MachineConfig::default();
         machine.mux.default = Some(MuxName::Zellij);
         let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
         assert!(
             judgment
                 .skipped
@@ -575,7 +582,7 @@ mod tests {
         )
         .unwrap();
         let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
         let warnings: BTreeMap<_, _> = judgment
             .skipped
             .iter()
@@ -602,6 +609,33 @@ mod tests {
     }
 
     #[test]
+    fn judgment_names_a_bare_shell_missing_from_path() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+        let mut machine = MachineConfig::default();
+        machine.agents.shell = Some("rimz-test-shell-not-installed".into());
+        let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
+        let warning = judgment
+            .skipped
+            .iter()
+            .find(|entry| entry.setting == "agents.shell")
+            .unwrap();
+        assert!(
+            warning.message.contains("is not on PATH"),
+            "{}",
+            warning.message
+        );
+        assert!(
+            warning
+                .message
+                .contains("rimz config set agents.shell bash"),
+            "{}",
+            warning.message
+        );
+    }
+
+    #[test]
     fn judgment_names_independent_shell_budget_and_schedule_problems() {
         let root = tempfile::tempdir().unwrap();
         let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
@@ -610,7 +644,7 @@ mod tests {
         machine.accounts = toml::from_str("[budget]\ncopilot = '10/day'\n").unwrap();
         machine.agents.hibernate.after = "bad".to_owned();
         let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
-        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false, None).unwrap();
         let settings: BTreeSet<_> = judgment
             .skipped
             .iter()

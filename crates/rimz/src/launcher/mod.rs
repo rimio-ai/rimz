@@ -1025,6 +1025,7 @@ fn settle_layout(
         cleanup_worktree: true,
         inherit_cwd: !worktree_launch && loop_task.is_none(),
         force_new_tab: false,
+        agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
         room: Some(Arc::new(room)),
         recovery: crate::room::AttendedRecovery::RequireExplicitReset,
         entry: RoomEntry::Live,

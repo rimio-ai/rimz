@@ -149,7 +149,11 @@ pub(super) fn run(
                     (Some((session, display_name)), outcome)
                 }
                 Launch::Create(path) => match crate::cli::room::ensure_workspace_room_detached(
-                    &path, globals, false, false,
+                    &path,
+                    globals,
+                    false,
+                    false,
+                    rimz::harness::launch::AgentShellPersistence::Room,
                 ) {
                     Ok(context) => {
                         let session = context.session_name().to_owned();
