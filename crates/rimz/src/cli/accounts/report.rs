@@ -1,5 +1,6 @@
 //! Unified account readings, compatibility projection, and provider tables.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
@@ -155,14 +156,15 @@ pub(super) fn list(
         account_facts,
         &provider_spending,
     );
-    // Kinds with a panel keep the dashboard's usage ranking; the rest follow
-    // registry order, each kind's default account ahead of its named ones.
+    // Configured kinds lead, then cached 30-day use across all accounts. Stable
+    // ties keep registry order and each kind's default-then-named accounts.
     let mut logins = logins;
     logins.sort_by_key(|login| {
-        native_panels
-            .iter()
-            .position(|panel| panel.kind == login.kind().as_str())
-            .unwrap_or(usize::MAX)
+        provider_order(
+            login.kind(),
+            &config.theme.display.provider_list,
+            &provider_spending,
+        )
     });
     let mut panels: BTreeMap<_, _> = native_panels
         .into_iter()
@@ -304,6 +306,23 @@ pub(super) fn list(
         &deciding,
         args.all,
     ))
+}
+
+fn provider_order(
+    kind: &AgentKind,
+    provider_list: &[String],
+    spending: &ProviderSpendingCache,
+) -> (usize, Reverse<u32>) {
+    let configured = provider_list
+        .iter()
+        .position(|entry| entry == kind.as_str())
+        .unwrap_or(usize::MAX);
+    let sessions = spending
+        .spending
+        .by_provider
+        .get(kind.as_str())
+        .map_or(0, |tally| tally.month.sessions);
+    (configured, Reverse(sessions))
 }
 
 fn validate_kind(kind: Option<&str>) -> Result<()> {
