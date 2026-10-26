@@ -27,6 +27,8 @@ pub enum SubagentCatalog {
     Available(Vec<SubagentProfile>),
 }
 
+/// `subagent_profiles` includes every kind base, which serves both namespaces, so a home with
+/// any kind base yields `Available` unless the caller's `subagents` list filters it out.
 pub fn catalog(
     caller_profile: Option<&str>,
     profiles: &ProfilesConfig,
