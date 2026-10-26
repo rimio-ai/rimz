@@ -340,7 +340,13 @@ fn render_definition_tools(
     let mut mapped = Vec::new();
     let mut dropped = Vec::new();
     let mut restrictions = tools.restrictions().to_vec();
+    // Pi has no Skill tool: it lists skills in the system prompt only while `read` or `bash`
+    // is enabled, and the model loads them with that tool.
+    let skills_load = tools.has("Skill") && (tools.has("Read") || tools.has("Bash"));
     for name in tools.bases() {
+        if skills_load && name == "Skill" {
+            continue;
+        }
         let Some(tool) = crate::agents::tools::PI_TOOL_NAMES
             .iter()
             .find_map(|&(canonical, native)| (name == canonical).then_some(native))
@@ -360,11 +366,14 @@ fn render_definition_tools(
     if !restrictions.is_empty() {
         notices.push(ToolNotice::Restrictions(restrictions));
     }
-    let argv = if mapped.is_empty() {
+    let mut argv = if mapped.is_empty() {
         vec!["--no-tools".to_owned()]
     } else {
         vec!["--tools".to_owned(), mapped.join(",")]
     };
+    if !tools.has("Skill") {
+        argv.push("--no-skills".to_owned());
+    }
     (argv, notices)
 }
 

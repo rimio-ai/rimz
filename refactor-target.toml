@@ -268,7 +268,8 @@ upward-dependencies = ["address"]
 # ToolNotice and render_launch_tool_args carry final-provider tool losses to the harness (+2).
 # canonical_tool_name shares portable tool spelling with team-seat filtering (+1).
 # LaunchCapability::finalize_launch_env applies final managed-launch env overrides (+1).
-surface-budget = 1145
+# skills_lack_skill_tool shares the per-kind Skill requirement with definition loading (+1).
+surface-budget = 1146
 
 [[verdict]]
 kind = "item"

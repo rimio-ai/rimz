@@ -941,7 +941,8 @@ fn team_seats_route_pi_question_tool_spellings_only_to_the_leader() {
                         "ask_user_question,read"
                     } else {
                         "read"
-                    }
+                    },
+                    "--no-skills",
                 ],
                 "{question}: {}",
                 role.role
@@ -2548,6 +2549,13 @@ fn skills_are_structural_without_a_library_and_deduplicated() {
         root.path(),
         "agents/probe.md",
         "model: astra\ntools: [Bash]\nskills: []",
+        "",
+    );
+    error(root.path(), "lists no Skill tool");
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: pi\ntools: [Read]\nskills: []",
         "",
     );
     error(root.path(), "lists no Skill tool");

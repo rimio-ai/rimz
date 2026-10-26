@@ -208,9 +208,7 @@ fn role_tools_render_once_for_every_profile_cell_path() {
         assert_eq!(
             notices,
             [&crate::harness::spec::CellNotice::DroppedTools {
-                tools: ["Skill", "WebFetch", "WebSearch"]
-                    .map(str::to_owned)
-                    .to_vec(),
+                tools: ["WebFetch", "WebSearch"].map(str::to_owned).to_vec(),
             }],
             "{spec}: {warnings:?}"
         );
@@ -229,7 +227,7 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
         (
             vec!["Bash(git *)", "Read", "Read(path)", "WebSearch"],
             "pi",
-            vec!["--tools", "bash,read"],
+            vec!["--tools", "bash,read", "--no-skills"],
             vec![
                 crate::harness::spec::CellNotice::DroppedTools {
                     tools: vec!["WebSearch".into()],
@@ -242,7 +240,7 @@ fn carried_tools_warn_for_loss_and_skip_only_where_unsupported() {
         (
             vec!["WebSearch"],
             "pi",
-            vec!["--no-tools"],
+            vec!["--no-tools", "--no-skills"],
             vec![crate::harness::spec::CellNotice::DroppedTools {
                 tools: vec!["WebSearch".into()],
             }],
