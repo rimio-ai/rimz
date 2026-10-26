@@ -303,6 +303,267 @@ fn pane_has_marker(pane: &PaneRef, marker: &str) -> bool {
     .any(|command| command.contains(marker))
 }
 
+fn retention_view(sidebar: SidebarPaneOptions) -> rimz::mux::BackgroundViewOptions {
+    rimz::mux::BackgroundViewOptions {
+        view: rimz::mux::DaemonView {
+            name: rimz::pane::VIEW_NAME.to_owned(),
+            content: vec![held_managed_pane(&[
+                "rimz", "daemon", "content", "--slot", "0",
+            ])],
+            hosts: vec![held_managed_pane(&["rimz", "codex", "app-server", "serve"])],
+            loop_panel: held_managed_pane(&["rimz", "loop", "watch", "--hold"]),
+        },
+        sidebar,
+    }
+}
+
+fn end_pane_command(server: &TmuxServer, pane: &str) {
+    let pid = server.display(pane, "#{pane_pid}").parse().unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .expect("end pane command");
+}
+
+fn wait_for_pane_exit(server: &TmuxServer, window: &str, pane: &str, retained: bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let panes = server.stdout(&["list-panes", "-t", window, "-F", "#{pane_id} #{pane_dead}"]);
+        let state = panes
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .find_map(|(id, dead)| (id == pane).then_some(dead));
+        if state == retained.then_some("1") {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "exited pane {pane} must be retained={retained}: {panes}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn daemon_panes_close_under_retention_and_repair_restores_a_live_command() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-bg-retention";
+    ensure_rimz_session(&server, session, Some((160, 50)));
+    server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let ordinary = server.display(session, "#{window_id}");
+    let ordinary_pane = server.display(session, "#{pane_id}");
+    server.tmux(&["set-option", "-w", "-t", &ordinary, "remain-on-exit", "on"]);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(160));
+    server.backend.open_sidebar(&sidebar, None).unwrap();
+    let opts = retention_view(sidebar);
+    server.backend.open_background_view(&opts).unwrap();
+    let panes = list_session_panes(&server, session);
+    let broker = panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .unwrap();
+    let content = panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "--slot"))
+        .unwrap();
+    let window = broker.view_id.as_deref().unwrap();
+
+    end_pane_command(&server, broker.pane_id.raw());
+    wait_for_pane_exit(&server, window, broker.pane_id.raw(), false);
+    assert_eq!(
+        rimz::daemon_view::repair_daemon_view(
+            &server.backend,
+            session,
+            &opts.sidebar.workspace_id,
+            &opts.view,
+        ),
+        rimz::daemon_view::RepairOutcome::Converged,
+    );
+    let repaired = list_session_panes(&server, session);
+    let broker = repaired
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .unwrap();
+    assert_eq!(server.display(broker.pane_id.raw(), "#{pane_dead}"), "0");
+    end_pane_command(&server, broker.pane_id.raw());
+    wait_for_pane_exit(&server, window, broker.pane_id.raw(), false);
+    end_pane_command(&server, content.pane_id.raw());
+    wait_for_pane_exit(&server, window, content.pane_id.raw(), false);
+
+    end_pane_command(&server, &ordinary_pane);
+    wait_for_pane_exit(&server, &ordinary, &ordinary_pane, true);
+    assert_eq!(server.show_option(&["-g"], "remain-on-exit"), "on");
+    assert_eq!(
+        server.show_option(&["-w", "-t", &ordinary], "remain-on-exit"),
+        "on"
+    );
+}
+
+#[test]
+fn existing_daemon_view_is_repinned_and_dead_panes_are_repaired() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-bg-old-retention";
+    ensure_rimz_session(&server, session, Some((160, 50)));
+    server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(160));
+    server.backend.open_sidebar(&sidebar, None).unwrap();
+    let opts = retention_view(sidebar);
+    server.backend.open_background_view(&opts).unwrap();
+    let panes = list_session_panes(&server, session);
+    let broker = panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .unwrap();
+    let window = broker.view_id.as_deref().unwrap();
+    server.tmux(&["set-option", "-wu", "-t", window, "remain-on-exit"]);
+    end_pane_command(&server, broker.pane_id.raw());
+    wait_for_pane_exit(&server, window, broker.pane_id.raw(), true);
+
+    assert_eq!(
+        server.backend.open_background_view(&opts).unwrap(),
+        rimz::mux::BackgroundViewLaunch::AlreadyRunning,
+    );
+    wait_for_pane_exit(&server, window, broker.pane_id.raw(), false);
+    assert_eq!(
+        server.show_option(&["-w", "-t", window], "remain-on-exit"),
+        "off"
+    );
+    assert_eq!(
+        rimz::daemon_view::repair_daemon_view(
+            &server.backend,
+            session,
+            &opts.sidebar.workspace_id,
+            &opts.view,
+        ),
+        rimz::daemon_view::RepairOutcome::Converged,
+    );
+    let repaired = list_session_panes(&server, session);
+    let broker = repaired
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .unwrap();
+    assert_eq!(server.display(broker.pane_id.raw(), "#{pane_dead}"), "0");
+}
+
+#[test]
+fn all_dead_daemon_view_is_reborn_without_losing_the_only_window_session() {
+    require_tmux!();
+    for dock_sidebar in [false, true] {
+        assert_dead_daemon_view_reborn(dock_sidebar);
+    }
+}
+
+fn assert_dead_daemon_view_reborn(dock_sidebar: bool) {
+    let server = TmuxServer::new();
+    let session = "rimz-bg-all-dead";
+    ensure_rimz_session(&server, session, Some((160, 50)));
+    let ordinary = server.display(session, "#{window_id}");
+    let session_id = server.display(session, "#{session_id}");
+    server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(160));
+    if dock_sidebar {
+        server.backend.open_sidebar(&sidebar, None).unwrap();
+    }
+    let opts = retention_view(sidebar);
+    server.backend.open_background_view(&opts).unwrap();
+    let panes = list_session_panes(&server, session);
+    let window = panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .unwrap()
+        .view_id
+        .as_deref()
+        .unwrap();
+    server.tmux(&["kill-window", "-t", &ordinary]);
+    assert_eq!(
+        server.stdout(&["list-windows", "-t", session, "-F", "#{window_id}"]),
+        window
+    );
+    server.tmux(&["set-option", "-wu", "-t", window, "remain-on-exit"]);
+    let pane_count = 3 + usize::from(dock_sidebar);
+    let panes = server.wait_for_panes(window, pane_count);
+    assert_eq!(panes.len(), pane_count);
+    let sidebars = sidebar_pane_ids(&server, session, Some(window));
+    assert_eq!(sidebars.len(), usize::from(dock_sidebar));
+    for pane in &panes {
+        if sidebars
+            .iter()
+            .any(|sidebar| sidebar.raw() == pane.id.as_str())
+        {
+            continue;
+        }
+        end_pane_command(&server, &pane.id);
+        wait_for_pane_exit(&server, window, &pane.id, true);
+    }
+    for sidebar in &sidebars {
+        assert_eq!(server.display(sidebar.raw(), "#{pane_dead}"), "0");
+    }
+
+    assert_eq!(
+        server.backend.open_background_view(&opts).unwrap(),
+        rimz::mux::BackgroundViewLaunch::Launched,
+    );
+    assert_eq!(server.display(session, "#{session_id}"), session_id);
+    let replacement = server.stdout(&["list-windows", "-t", session, "-F", "#{window_id}"]);
+    assert_ne!(replacement, window);
+    assert_eq!(replacement.lines().count(), 1);
+    let panes = server.stdout(&["list-panes", "-t", &replacement, "-F", "#{pane_dead}"]);
+    assert_eq!(panes.lines().count(), pane_count);
+    assert!(
+        panes.lines().all(|dead| dead == "0"),
+        "replacement must be live: {panes}"
+    );
+    assert_eq!(
+        server.show_option(&["-w", "-t", &replacement], "remain-on-exit"),
+        "off"
+    );
+    assert_eq!(
+        sidebar_pane_ids(&server, session, Some(&replacement)).len(),
+        usize::from(dock_sidebar),
+    );
+}
+
+#[test]
+fn split_close_on_exit_overrides_retention_without_changing_siblings() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-split-retention";
+    ensure_rimz_session(&server, session, Some((160, 50)));
+    server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let window = server.display(session, "#{window_id}");
+    server.tmux(&["set-option", "-w", "-t", &window, "remain-on-exit", "on"]);
+    let mut panes = Vec::new();
+    for close_on_exit in [true, false] {
+        panes.push(
+            server
+                .backend
+                .split_pane(SplitPaneOptions {
+                    target: SplitTarget::Session(session.to_owned()),
+                    command: Some(vec!["sleep".to_owned(), "120".to_owned()]),
+                    close_on_exit,
+                    ..Default::default()
+                })
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    for (pane, retained) in panes.iter().zip([false, true]) {
+        end_pane_command(&server, pane.raw());
+        wait_for_pane_exit(&server, &window, pane.raw(), retained);
+    }
+    assert_eq!(server.show_option(&["-g"], "remain-on-exit"), "on");
+    assert_eq!(
+        server.show_option(&["-w", "-t", &window], "remain-on-exit"),
+        "on"
+    );
+}
+
 #[test]
 fn open_background_view_births_columns_and_is_idempotent() {
     require_tmux!();

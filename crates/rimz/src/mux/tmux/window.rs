@@ -1133,18 +1133,28 @@ impl TmuxBackend {
             })
     }
 
-    /// Whether `session` already holds a window named `name`. A RimZ background
-    /// view is idempotent on its window name, so a relaunch into a session that
-    /// already carries it is skipped.
-    pub(super) fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {
+    /// The id of the window named `name`, ignoring RimZ's status glyph suffix.
+    pub(super) fn session_window_id(&self, session: &str, name: &str) -> Result<Option<String>> {
         let sanitized = sanitize_window_name(name);
         let config = crate::config::MachineConfig::load_lenient();
         let theme = &config.theme;
-        Ok(self
-            .window_names(session)?
-            .iter()
-            .map(|window| crate::theme::strip_status_glyph_suffix(window, theme))
-            .any(|window| window == name || window == sanitized))
+        let output = self
+            .cmd()
+            .args([
+                "list-windows",
+                "-t",
+                session,
+                "-F",
+                "#{window_id}\t#{window_name}",
+            ])
+            .run()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find_map(|(id, window)| {
+                let window = crate::theme::strip_status_glyph_suffix(window.trim(), theme);
+                (window == name || window == sanitized).then(|| id.to_owned())
+            }))
     }
 
     /// Every window name in `session` — one `list-windows` probe that callers

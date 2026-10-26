@@ -9,8 +9,8 @@ use super::TmuxBackend;
 use super::layout::{Layout, Refusal};
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
-    sidebar_serve_command, sidebar_width_option_set_cmd, stack_hook_commands, stack_window_options,
-    window_option_argv,
+    sidebar_serve_command, sidebar_width_option_set_cmd, spawn_command_is_sidebar_serve,
+    stack_hook_commands, stack_window_options, window_option_argv,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::{SplitAxis, TmuxPaneGeometry, sanitize_window_name};
@@ -101,6 +101,72 @@ fn run_session_command(spec: CommandSpec) -> Result<std::process::Output> {
 }
 
 impl TmuxBackend {
+    fn pin_background_window(&self, window: &str) {
+        if let Err(err) = self
+            .cmd()
+            .args(["set-option", "-w", "-t", window, "remain-on-exit", "off"])
+            .run()
+        {
+            tracing::warn!(
+                window,
+                tags.operation = "tmux.daemon_view.retention",
+                error = &err as &dyn std::error::Error,
+                "could not pin daemon window to close exited panes",
+            );
+        }
+    }
+
+    fn sweep_dead_background_panes(&self, window: &str) -> Result<bool> {
+        let format = concat!(
+            "#{pane_id},#{pane_dead},#{s/,/_/g:pane_current_command},",
+            "#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},",
+            "#{pane_start_command}",
+        );
+        let output = self
+            .cmd()
+            .args(["list-panes", "-t", window, "-F", format])
+            .run()?;
+        let listing = String::from_utf8_lossy(&output.stdout);
+        let mut dead = Vec::new();
+        let mut has_live_work = false;
+        for line in listing.lines() {
+            let fields = line.splitn(5, ',').collect::<Vec<_>>();
+            let [pane, exited, command, title, spawn] = fields.as_slice() else {
+                return Err(MuxErr::Output {
+                    program: "tmux".to_owned(),
+                    reason: "invalid daemon pane listing".to_owned(),
+                });
+            };
+            if *exited == "1" {
+                dead.push(*pane);
+                continue;
+            }
+            has_live_work |= title.trim() != crate::pane::SIDEBAR_CHROME_TITLE
+                && !crate::pane::command_is_sidebar_chrome(command)
+                && !spawn_command_is_sidebar_serve(spawn);
+        }
+        // A sidebar closes when its last sibling vanishes. Rebirth before any
+        // sweep when only chrome is live, rather than expose a sidebar-only gap.
+        if !has_live_work {
+            return Ok(false);
+        }
+        for pane in dead {
+            // Recheck death at the kill and keep the last pane: losing a live
+            // sibling during the sweep must not destroy the session's last window.
+            self.cmd()
+                .args([
+                    "if-shell",
+                    "-F",
+                    "-t",
+                    pane,
+                    "#{&&:#{pane_dead},#{>:#{window_panes},1}}",
+                    &format!("kill-pane -t {pane}"),
+                ])
+                .run()?;
+        }
+        Ok(true)
+    }
+
     fn split_pane_phased(
         &self,
         opts: SplitPaneOptions,
@@ -257,6 +323,17 @@ impl TmuxBackend {
                 reason: "split-window did not print a pane id".to_owned(),
             }));
         }
+        let pane = PaneId::from_parts(MuxName::Tmux, &pane_id);
+        if opts.close_on_exit
+            && let Err(err) = self.close_pane_on_exit(&pane)
+        {
+            tracing::warn!(
+                pane = %pane,
+                tags.operation = "tmux.split_pane.retention",
+                error = &err as &dyn std::error::Error,
+                "could not pin the spawned pane to close on exit",
+            );
+        }
         if let Some(title) = title {
             self.set_pane_rimz_title(&pane_id, &title);
         }
@@ -290,7 +367,7 @@ impl TmuxBackend {
                 );
             }
         }
-        Ok(Some(PaneId::from_parts(MuxName::Tmux, pane_id)))
+        Ok(Some(pane))
     }
 
     pub(super) fn global_mux_context_removal_command(&self) -> CommandSpec {
@@ -1086,12 +1163,26 @@ impl MuxBackend for TmuxBackend {
 
     fn open_background_view(&self, opts: &BackgroundViewOptions) -> Result<BackgroundViewLaunch> {
         let session = &opts.sidebar.session_name;
-        // Idempotent on the window name; a relaunch into a session already
-        // carrying the view launches nothing, but still re-asserts its first
-        // position. A failed query propagates rather than risk a duplicate window.
-        if self.session_has_window(session, &opts.view.name)? {
-            self.lead_window(session, &opts.view.name);
-            return Ok(BackgroundViewLaunch::AlreadyRunning);
+        // A failed name lookup propagates rather than risk a duplicate window.
+        let existing_window = self.session_window_id(session, &opts.view.name)?;
+        if let Some(window) = existing_window.as_deref() {
+            self.pin_background_window(window);
+            let has_live_work = match self.sweep_dead_background_panes(window) {
+                Ok(live) => live,
+                Err(err) => {
+                    tracing::warn!(
+                        window,
+                        tags.operation = "tmux.daemon_view.sweep",
+                        error = &err as &dyn std::error::Error,
+                        "could not sweep exited daemon panes; leaving them for the next start",
+                    );
+                    true
+                }
+            };
+            if has_live_work {
+                self.lead_window(session, &opts.view.name);
+                return Ok(BackgroundViewLaunch::AlreadyRunning);
+            }
         }
         // `-d` opens the window without pulling the user's focus to it; `-P -F`
         // prints the window and first content pane ids so daemon hosts split
@@ -1100,7 +1191,7 @@ impl MuxBackend for TmuxBackend {
         // left, so the window is born `sidebar | content`. Daemon hosts, when
         // present, split into a right column sized with the same width verdict
         // as the sidebar. Extra content panes stack inside the middle column.
-        // Daemon panes follow the user's `remain-on-exit`; the sidebar pins its own pane.
+        // The window pin covers content and runtime panes, including later splits.
         let Some((first_content, rest_content)) = opts.view.content.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),
@@ -1115,6 +1206,30 @@ impl MuxBackend for TmuxBackend {
             None,
             &BTreeMap::new(),
         )?;
+        self.pin_background_window(&opened.window_id);
+        if let Some(window) = existing_window {
+            // Birth first and guard the last window at the kill, in case the
+            // replacement's command has already exited and closed its window.
+            if let Err(err) = self
+                .cmd()
+                .args([
+                    "if-shell",
+                    "-F",
+                    "-t",
+                    &window,
+                    "#{>:#{session_windows},1}",
+                    &format!("kill-window -t {window}"),
+                ])
+                .run()
+            {
+                tracing::warn!(
+                    window,
+                    tags.operation = "tmux.daemon_view.replace",
+                    error = &err as &dyn std::error::Error,
+                    "could not remove the dead daemon window after replacement",
+                );
+            }
+        }
         let view_cols = self
             .window_width(&opened.window_id)
             .map(|cols| u16::try_from(cols).unwrap_or(u16::MAX));

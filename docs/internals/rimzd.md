@@ -103,7 +103,7 @@ The supervisor watches the directory that holds `config.toml`, which catches the
 
 Termination is a ladder: `SIGTERM`, a 300 ms grace (`CHILD_SIGNAL_GRACE`), then `SIGKILL`. `SIGHUP` or `SIGTERM` to the supervisor terminates its child that way and exits. The supervisor ignores `SIGINT`, but its child shares the pane's foreground process group, so `Ctrl-C` reaches the child. The default stats pane ignores it (`--hold`). A configured command that exits on it ends the supervisor as below.
 
-When the child exits, the supervisor exits with the child's exit code, or 1 when a signal killed it (`crates/rimz/src/cli/daemon.rs::run_content`). Whether the pane then closes and the next repair pass respawns the slot depends on the backend's close-on-exit handling ([Repair](#repair)).
+When the child exits, the supervisor exits with the child's exit code, or 1 when a signal killed it (`crates/rimz/src/cli/daemon.rs::run_content`). Managed panes close with their command on both backends, so the next repair pass respawns the slot while the view survives ([Repair](#repair)).
 
 The pane count follows the specification, which only a birth or a repair rebuilds. A `[[daemon.pane]]` entry added to a running room creates a new slot in the next specification, and repair spawns it under the preceding slot: on the host tracker's next pass ([Who repairs, and when](#who-repairs-and-when)), or at the next `rimz start`. A removed entry leaves its slot pane outside the specification. Repair ignores unmatched panes, so the orphaned supervisor resolves past the end of the list and runs the stats pane until the room is reborn.
 
@@ -134,7 +134,9 @@ Placement follows specification order within a column:
 3. With an empty column, the column is created to the right of its structural neighbour: content splits off the sidebar, and runtime splits off the first live content pane, else the sidebar.
 4. With none of those alive, it splits right of any pane in the view.
 
-A managed command that exits is respawned only where its pane closes with it. Zellij panes are close-on-exit, whether born from the layout or split by repair. tmux panes follow the user's `remain-on-exit` at birth and at repair, since the tmux split ignores the `close_on_exit` field `split_managed_pane` sets. With `remain-on-exit` on, the dead pane keeps its start command, still matches its marker, and repair never respawns it.
+Managed panes close with their command on both backends, whether born with the view or split by repair. On tmux, `open_background_view` pins the view window to `remain-on-exit off` immediately after birth, before further splits, and re-asserts the pin when `rimz start` finds an existing view. All panes in that window inherit it, including a shell the user opens there; other windows and the global setting stay unchanged. The `close_on_exit` option `split_managed_pane` sets also pins a repair split's printed pane id at pane scope. A failed pin only warns.
+
+At `rimz start`, tmux reads one pane listing before removing any retained dead panes. When a live pane other than sidebar chrome remains, the dead panes are swept before repair restores the missing commands. Otherwise, including when only the docked sidebar is live, the replacement window is born before the old window is removed, preserving even a session whose only window is `rimzd`. A sidebar cannot hold the old view up: removing its dead siblings would let it self-close before repair restores them. A failed sweep only warns. A user's pane-level retention inside the view still wins over the window pin, so such an exited pane stays dead until the next start sweeps it. A command that exits between window birth and the pin can likewise leave a dead pane until the next start. If the whole view closes, repair treats it as deliberate on both backends and waits for the next start.
 
 ### The shape check
 
