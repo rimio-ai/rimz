@@ -263,8 +263,9 @@ pub struct SidebarSnapshot {
     pub attention: crate::config::AttentionConfig,
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
     /// account-scoped budgets, aggregate spend/tokens, and brand emblem.
-    /// One block folds every session of one login, and the rendered snapshot
-    /// carries only the room's current login per kind. Built by
+    /// One block folds every session of one login, with Pi backing credentials
+    /// nested as alternates. The rendered snapshot carries only the room's
+    /// current login per kind. Built by
     /// `Self::with_provider_aggregates` in the machine-config fold (it needs
     /// config and an account probe the pure reducer can't read), so the
     /// placeholder/persisted snapshot leaves it empty.

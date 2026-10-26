@@ -408,7 +408,7 @@ The project-root trunk lane publishes `lanes/trunk-state.json` separately from p
 | `provider-spending.json` | Account-global | Fleet and provider spend totals plus the walk stamp ([spending.md](../agents/spending.md)). |
 | `spending.json` | Account-global | The incremental transcript parse cache behind the spend walk ([spending.md](../agents/spending.md#the-incremental-cache)). |
 | `pricing-cache.json` | Account-global | The remote token-price refresh over the embedded snapshot ([spending.md](../agents/spending.md#token-pricing)). |
-| `accounts.json` | Account-global | Per-login account state ([providers.md → The shared caches](../agents/providers.md#the-shared-caches)). |
+| `accounts.json` | Account-global | Per-login account state, including the credential classifications used by Pi panel alternates ([providers.md → The shared caches](../agents/providers.md#the-shared-caches)). |
 | `rate_limits.json` | Account-global | Fused budget windows per (login, scope), version 7. |
 | `credits.json` | Account-global | Provider-reported paid and extra usage, and direct-query claims per (login, scope); `logins` holds kind-wide entries and the additive `scoped` map holds sub-provider entries. |
 

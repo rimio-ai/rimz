@@ -78,7 +78,11 @@ fn refresh_account_usage_with(
     if crate::agents::credits::oauth_usage_offline() {
         return;
     }
-    for panel in &snapshot.providers {
+    for panel in snapshot
+        .providers
+        .iter()
+        .flat_map(|panel| std::iter::once(panel).chain(&panel.alternates))
+    {
         if !panel.metered {
             continue;
         }

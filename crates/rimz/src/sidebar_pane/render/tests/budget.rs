@@ -140,6 +140,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         plan: Some("Max".to_owned()),
         metered: true,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: Default::default(),
         active_sessions: 0,
         spending: Some(

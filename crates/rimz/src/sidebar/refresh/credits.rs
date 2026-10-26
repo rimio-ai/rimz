@@ -657,39 +657,42 @@ fn apply_credits_cache_with(
 ) {
     let in_use = logins.keys_in_use();
     for panel in &mut snapshot.providers {
-        let entry = in_use
-            .contains(&panel.login_key())
-            .then(|| panel.login_key())
-            .and_then(|key| cache.get(&AccountUsageKey::new(key, panel.account_scope.clone())))
-            .filter(|entry| panel.metered && entry.scope == panel.account_scope);
-        panel.entitlement = entry.map_or(Entitlement::Ok, |entry| entry.entitlement);
-        if matches!(panel.entitlement, Entitlement::Lapsed { .. }) {
-            panel.plan = None;
-            panel.windows.clear();
-            panel.extra_credits = None;
-            panel.reset_credits = None;
-            continue;
-        }
-        let ceiling = accounts.usage_limit(&panel.kind);
-        if panel.metered {
-            let displayable_entry = entry.filter(|entry| entry_is_displayable(entry, now_ms));
-            if panel.plan.is_none() {
-                panel.plan = displayable_entry
-                    .and_then(|entry| entry.plan.as_deref())
-                    .filter(|plan| !plan.trim().is_empty())
-                    .map(|plan| format_plan_label(&panel.kind, plan));
+        panel.for_each_credential_mut(|panel| {
+            let entry = in_use
+                .contains(&panel.login_key())
+                .then(|| panel.login_key())
+                .and_then(|key| cache.get(&AccountUsageKey::new(key, panel.account_scope.clone())))
+                .filter(|entry| panel.metered && entry.scope == panel.account_scope);
+            panel.entitlement = entry.map_or(Entitlement::Ok, |entry| entry.entitlement);
+            if matches!(panel.entitlement, Entitlement::Lapsed { .. }) {
+                panel.plan = None;
+                panel.windows.clear();
+                panel.extra_credits = None;
+                panel.reset_credits = None;
+                return;
             }
-            panel.extra_credits = displayable_entry
-                .and_then(|entry| entry.extra_credits.clone())
-                .map(|credits| credits.with_limit_if_missing(ceiling))
-                .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))));
-            panel.reset_credits = displayable_entry.and_then(|entry| entry.reset_credits.clone());
-            continue;
-        }
+            let ceiling = accounts.usage_limit(&panel.kind);
+            if panel.metered {
+                let displayable_entry = entry.filter(|entry| entry_is_displayable(entry, now_ms));
+                if panel.plan.is_none() {
+                    panel.plan = displayable_entry
+                        .and_then(|entry| entry.plan.as_deref())
+                        .filter(|plan| !plan.trim().is_empty())
+                        .map(|plan| format_plan_label(&panel.kind, plan));
+                }
+                panel.extra_credits = displayable_entry
+                    .and_then(|entry| entry.extra_credits.clone())
+                    .map(|credits| credits.with_limit_if_missing(ceiling))
+                    .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))));
+                panel.reset_credits =
+                    displayable_entry.and_then(|entry| entry.reset_credits.clone());
+                return;
+            }
 
-        let used = panel.spending.as_ref().map(|spending| spending.month.usd);
-        panel.extra_credits = Some(ExtraCredits::known(used, None, ceiling));
-        panel.reset_credits = None;
+            let used = panel.spending.as_ref().map(|spending| spending.month.usd);
+            panel.extra_credits = Some(ExtraCredits::known(used, None, ceiling));
+            panel.reset_credits = None;
+        });
     }
 }
 

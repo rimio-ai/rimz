@@ -153,7 +153,7 @@ The real account home is canonicalized once per reconcile, under the account loc
 
 ## See also
 
-- [providers.md](./providers.md): the balances read under a login, and the panel per login.
+- [providers.md](./providers.md): balances per (login, scope), and each login's panel with Pi credential alternates.
 - [spending.md](./spending.md#discovery): spend discovery across history pools.
 - [store.md](../store.md#the-workspace-record): the `workspace.json` pins.
 - [adapter_codex.md](./adapter_codex.md#remote-control): the Codex daemon the live-writer gate asks.

@@ -1812,6 +1812,9 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
             &BTreeMap::new(),
             &std::collections::BTreeSet::from([default_key.clone(), work_key.clone()]),
         );
+    for panel in &mut snapshot.providers {
+        panel.alternates.push(panel.clone());
+    }
     let mut provider = ProviderSpendingCache {
         day_cutoff_secs: cutoff,
         day_by_provider: BTreeMap::from([(
@@ -1925,6 +1928,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     let budget = panel.day_budget.as_ref().expect("budget");
     assert_eq!(budget.spend_usd, 12.0);
     assert!(budget.parked);
+    assert_eq!(panel.alternates[0].day_budget.as_ref(), Some(budget));
     let native = snapshot
         .providers
         .iter()

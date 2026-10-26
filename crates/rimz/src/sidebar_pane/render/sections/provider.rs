@@ -446,6 +446,10 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
     pub(in crate::sidebar_pane::render) active_provider: Option<&'a crate::ids::LoginKey>,
+    pub(in crate::sidebar_pane::render) selected_sub_provider:
+        Option<(crate::ids::AgentKind, &'a str)>,
+    pub(in crate::sidebar_pane::render) last_sub_providers:
+        &'a std::collections::BTreeMap<crate::ids::AgentKind, String>,
     pub(in crate::sidebar_pane::render) mode: DashboardMode,
     pub(in crate::sidebar_pane::render) fleet_tally: Option<&'a SpendTally>,
     pub(in crate::sidebar_pane::render) pet: Option<&'a PetView>,
@@ -553,6 +557,18 @@ fn provider_block_lines(
     width: usize,
     folded_footer: Option<super::super::chrome::FooterParts>,
 ) -> Vec<Line<'static>> {
+    let panel = context
+        .selected_sub_provider
+        .as_ref()
+        .filter(|(kind, _)| kind.as_str() == panel.kind)
+        .and_then(|(_, provider)| panel.for_sub_provider(provider))
+        .or_else(|| {
+            context
+                .last_sub_providers
+                .get(&crate::ids::AgentKind::new_unchecked(&panel.kind))
+                .and_then(|provider| panel.for_sub_provider(provider))
+        })
+        .unwrap_or(panel);
     let layout = ProviderLayout::for_width(width, context.mode.allow_wide());
     let mut lines = vec![provider_header_line(
         context.theme,

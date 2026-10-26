@@ -25,6 +25,99 @@ fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
 }
 
 #[test]
+fn unmetered_alternate_preserves_a_metered_siblings_kind_wide_unknown_episode() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/pi-shared-usage-key"));
+    let mut top = provider_panel("pi", Vec::new());
+    top.sub_provider = Some("github-copilot".to_owned());
+    let mut alternate = provider_panel("pi", Vec::new());
+    alternate.sub_provider = Some("anthropic".to_owned());
+    alternate.metered = false;
+    top.alternates.push(alternate);
+    let mut snapshot = snapshot_with_panels(workspace, vec![top]);
+    let key = AccountUsageKey::from(login_key("pi"));
+    let (first, refresh) = project_rate_limits(
+        &mut snapshot,
+        &RateLimitsCache::default(),
+        &RoomLoginSet::native(),
+        true,
+        None,
+    );
+    assert_eq!(refresh.as_slice(), std::slice::from_ref(&key));
+    let first = first.unwrap();
+    assert!(
+        first.entries.contains_key(&key),
+        "an unmetered sibling must not erase the metered credential's usage episode"
+    );
+    let since = first.entries[&key].unknown_since_ms;
+    assert!(since.is_some());
+    let (second, refresh) =
+        project_rate_limits(&mut snapshot, &first, &RoomLoginSet::native(), true, None);
+    assert!(
+        refresh.is_empty(),
+        "an unchanged unknown episode is not a new refresh"
+    );
+    assert_eq!(second.unwrap().entries[&key].unknown_since_ms, since);
+}
+
+#[test]
+fn alternate_windows_project_for_consumers_and_publish_for_producers() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/pi-alternates"));
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let mut top = provider_panel("pi", Vec::new());
+    top.metered = false;
+    let mut alternate = provider_panel("pi", Vec::new());
+    alternate.account_scope = scope.clone();
+    let usage_key = AccountUsageKey::new(login_key("pi"), scope.clone());
+    let window = rl_window(70, Some(fuse_now() + SignedDuration::from_hours(4)));
+    let cached = RateLimitsCache {
+        entries: BTreeMap::from([(
+            usage_key.clone(),
+            RateLimitCacheEntry {
+                scope,
+                limits: AgentRateLimits {
+                    windows: vec![window.clone()],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    top.alternates.push(alternate);
+    let empty = RateLimitsCache::default();
+    let mut results = Vec::new();
+    for producer in [false, true] {
+        let mut snapshot = snapshot_with_panels(workspace.clone(), vec![top.clone()]);
+        snapshot.now = fuse_now();
+        if producer {
+            snapshot.providers[0].alternates[0].windows = vec![window.clone()];
+        }
+        let (next, _) = project_rate_limits(
+            &mut snapshot,
+            if producer { &empty } else { &cached },
+            &RoomLoginSet::native(),
+            producer,
+            None,
+        );
+        results.push((
+            snapshot.providers[0].alternates[0].windows.clone(),
+            next.and_then(|cache| {
+                cache
+                    .entries
+                    .get(&usage_key)
+                    .map(|entry| entry.limits.windows.clone())
+            }),
+        ));
+    }
+    assert_eq!(
+        results,
+        [
+            (vec![window.clone()], None),
+            (vec![window.clone()], Some(vec![window]))
+        ]
+    );
+}
+
+#[test]
 fn scoped_readings_coexist_and_projection_keeps_the_other_credential() {
     let (_dir, workspace, runtime) = runtime();
     let login = login_key("pi");

@@ -19,12 +19,13 @@ impl SidebarSnapshot {
     /// Fold each login in `logins` into its dashboard block; a live agent or a
     /// probed account on any other login earns none. The caller names the set:
     /// the room's current login per kind for display, every in-use login for
-    /// the producer's cache writes.
+    /// the producer's cache writes. Reported Pi backing credentials become
+    /// alternates inside the same block, with whole-login stats and spend.
     /// A login in the set needs a session on it or a substantive probed account; an account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
     /// Sums each login's spend, tokens, and edited lines; takes the plan from the
     /// freshest session, the version as the newest any session or the probe
-    /// reports, and rate-limit windows from sessions speaking
-    /// for one birth account. `probed_accounts` carries out-of-band
+    /// reports, and rate-limit windows from sessions speaking for one backing
+    /// credential and birth account. `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is a qualifying probed account still earns a block;
@@ -108,6 +109,20 @@ impl SidebarSnapshot {
             let account = freshest
                 .and_then(|context| context.account.clone())
                 .or_else(|| probed_accounts.get(&key).cloned());
+            let sub_provider = account
+                .as_ref()
+                .and_then(|account| account.sub_provider.clone());
+            let credential_sessions: Vec<_> = sessions
+                .iter()
+                .copied()
+                .filter(|agent| {
+                    agent
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.sub_provider.as_deref())
+                        .is_none_or(|provider| Some(provider) == sub_provider.as_deref())
+                })
+                .collect();
             let undecided = account
                 .as_ref()
                 .is_some_and(|account| account.is_undecided());
@@ -119,25 +134,12 @@ impl SidebarSnapshot {
             // pre-credit high cannot beat a fresh post-credit low. The enrich
             // layer fuses this live candidate with cached and authoritative truth.
             let now = self.now;
-            let account_key = sessions
+            let account_key = credential_sessions
                 .iter()
                 .filter(|agent| agent.account_key.is_some())
                 .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
                 .and_then(|agent| agent.account_key.clone());
-            let mut windows = fresh_windows(
-                sessions
-                    .iter()
-                    .filter(|agent| {
-                        account_key.as_ref().is_none_or(|panel_key| {
-                            agent
-                                .account_key
-                                .as_ref()
-                                .is_none_or(|session_key| session_key == panel_key)
-                        })
-                    })
-                    .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
-                now,
-            );
+            let mut windows = account_windows(&credential_sessions, account_key.as_deref(), now);
             if undecided {
                 windows.clear();
             }
@@ -152,10 +154,8 @@ impl SidebarSnapshot {
                 .as_ref()
                 .map(|account| account.scope.clone())
                 .unwrap_or_default();
-            let sub_provider = account
-                .as_ref()
-                .and_then(|account| account.sub_provider.clone());
             let plan = account
+                .as_ref()
                 .and_then(|account| account.plan.clone())
                 .filter(|plan| !plan.is_empty())
                 .map(|raw| format_plan_label(&kind, &raw));
@@ -198,37 +198,89 @@ impl SidebarSnapshot {
                     .and_then(|account| account.credentials_updated_at_ms),
             };
 
-            panels.push((
-                SidebarProviderPanel {
-                    kind,
-                    account: key.name.clone(),
-                    sub_provider,
-                    account_scope,
-                    entitlement: Default::default(),
-                    account_key,
-                    product_name: accounts.provider_title(&identity.product_name, &key),
-                    art: identity.art,
-                    art_tints: identity.art_tints,
-                    color,
-                    color_rgb,
-                    color_role,
-                    version,
-                    plan,
-                    metered,
-                    undecided,
-                    remote_control,
-                    active_sessions,
-                    spending: spending.map(std::sync::Arc::new),
-                    day_budget: None,
-                    month_budget: None,
-                    extra_credits: None,
-                    reset_credits: None,
-                    redeem_forecast: None,
-                    window_placeholders,
-                    windows,
-                },
-                rank,
-            ));
+            let mut panel = SidebarProviderPanel {
+                kind,
+                account: key.name.clone(),
+                sub_provider,
+                account_scope,
+                entitlement: Default::default(),
+                account_key,
+                product_name: accounts.provider_title(&identity.product_name, &key),
+                art: identity.art,
+                art_tints: identity.art_tints,
+                color,
+                color_rgb,
+                color_role,
+                version,
+                plan,
+                metered,
+                undecided,
+                alternates: Vec::new(),
+                remote_control,
+                active_sessions,
+                spending: spending.map(std::sync::Arc::new),
+                day_budget: None,
+                month_budget: None,
+                extra_credits: None,
+                reset_credits: None,
+                redeem_forecast: None,
+                window_placeholders,
+                windows,
+            };
+            let mut providers: BTreeSet<_> = sessions
+                .iter()
+                .filter_map(|agent| agent.context.as_ref()?.sub_provider.as_deref())
+                .filter(|provider| Some(*provider) != panel.sub_provider.as_deref())
+                .collect();
+            // An older build's record lists no credentials, so it classifies no
+            // other provider until a new-build probe supplies the inventory.
+            if account
+                .as_ref()
+                .is_none_or(|account| account.credentials.is_empty())
+            {
+                providers.clear();
+            }
+            panel.alternates = providers
+                .into_iter()
+                .map(|provider| {
+                    let credential = account
+                        .as_ref()
+                        .and_then(|account| account.credentials.get(provider));
+                    let mut alternate = panel.clone();
+                    alternate.sub_provider = Some(provider.to_owned());
+                    alternate.account_scope = credential
+                        .map(|account| account.scope.clone())
+                        .unwrap_or_default();
+                    alternate.account_key =
+                        credential.and_then(|account| account.account_key.clone());
+                    alternate.plan = credential
+                        .and_then(|account| account.plan.as_deref())
+                        .filter(|plan| !plan.is_empty())
+                        .map(|plan| format_plan_label(&alternate.kind, plan));
+                    alternate.metered = credential
+                        .and_then(|account| account.metered)
+                        .unwrap_or(false);
+                    alternate.undecided = false;
+                    let sessions: Vec<_> = sessions
+                        .iter()
+                        .copied()
+                        .filter(|agent| {
+                            agent
+                                .context
+                                .as_ref()
+                                .and_then(|context| context.sub_provider.as_deref())
+                                == Some(provider)
+                        })
+                        .collect();
+                    alternate.windows = if alternate.metered {
+                        account_windows(&sessions, alternate.account_key.as_deref(), now)
+                    } else {
+                        Vec::new()
+                    };
+                    alternate
+                })
+                .collect();
+            panels.push((panel, rank));
         }
 
         self.providers = resolve_provider_panels(
@@ -239,6 +291,27 @@ impl SidebarSnapshot {
         );
         self
     }
+}
+
+fn account_windows(
+    sessions: &[&AgentState],
+    account_key: Option<&str>,
+    now: Timestamp,
+) -> Vec<RateLimitWindow> {
+    fresh_windows(
+        sessions
+            .iter()
+            .filter(|agent| {
+                account_key.is_none_or(|panel_key| {
+                    agent
+                        .account_key
+                        .as_deref()
+                        .is_none_or(|key| key == panel_key)
+                })
+            })
+            .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
+        now,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

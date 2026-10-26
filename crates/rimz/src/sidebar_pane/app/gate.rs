@@ -282,7 +282,7 @@ fn repair_collapsed_spend(
         if since.is_some()
             && let Some(spending) = prior
         {
-            panel.spending = Some((*spending).clone());
+            panel.for_each_credential_mut(|panel| panel.spending = Some((*spending).clone()));
         }
     }
     episodes

@@ -423,139 +423,149 @@ fn project_rate_limits(
     let mut refresh_logins = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
-        let login_key = logins
-            .in_use(&panel.kind)
-            .into_iter()
-            .map(|login| login.key())
-            .find(|key| *key == panel.login_key());
-        let usage_key = login_key.map(|key| AccountUsageKey::new(key, panel.account_scope.clone()));
-        if !panel.metered {
-            panel.windows.clear();
-            if let Some(key) = &usage_key {
-                next.entries.remove(key);
-            }
-            continue;
-        }
-        // Complete authoritative omissions against matching persisted truth
-        // before indexing the live reading, then fuse each stable duration or
-        // named-quota identity independently.
-        let cached_entry = usage_key.as_ref().and_then(|key| cached.entries.get(key));
-        let prior_entry = cached_entry.filter(|entry| entry.scope == panel.account_scope);
-        let foreign_account = matches!(
-            (
-                prior_entry.and_then(|entry| entry.account_key.as_deref()),
-                panel.account_key.as_deref(),
-            ),
-            (Some(bound), Some(live)) if bound != live
-        );
-        let mut live_limits = AgentRateLimits {
-            windows: std::mem::take(&mut panel.windows),
-        };
-        if foreign_account {
-            live_limits.windows.clear();
-        }
-        complete_omitted_duration_windows(authoritative_windows(prior_entry), &mut live_limits);
-        let index = WindowIndex::new(prior_entry, live_limits.windows);
-
-        // Fuse each duration to its ground truth and carry or advance its
-        // debounce marker. A live reading drives the fusion; absent one, the
-        // prior truth is carried unchanged for the idle projection below.
-        let (truth, pending) = index.fuse(index.projection_keys(), now, producer);
-        if let Some(path) = trace {
-            for (key, window) in &truth {
-                trace_rate_limits(path, &panel.kind, index.live.get(key), window, now);
-            }
-        }
-        let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
-
-        // Display: roll every fused window's reset-to-max projection forward to
-        // `now` — a no-op while its reset is future, a refill once it has passed,
-        // so a live reading carrying an expired longer window never freezes at
-        // `0h00m`. Once the account freshness ceiling has aged out with no live
-        // reading, the cache shows unknown bars. Sorted for stable paint order.
-        let mut display: Vec<RateLimitWindow> = truth
-            .values()
-            .cloned()
-            .map(|window| {
-                let expired_scoped_window =
-                    window.scope.is_some() && window.resets_at.is_some_and(|reset| reset <= now);
-                if cache_unknown || expired_scoped_window {
-                    unknown_idle_window(window)
-                } else {
-                    window.projected_at(now)
-                }
-            })
+        let metered_keys: BTreeSet<_> = std::iter::once(&*panel)
+            .chain(&panel.alternates)
+            .filter(|panel| panel.metered)
+            .map(|panel| AccountUsageKey::new(panel.login_key(), panel.account_scope.clone()))
             .collect();
-        crate::store::snapshot::sort_windows(&mut display);
-        panel.windows = display;
-
-        let Some(usage_key) = usage_key.filter(|_| producer) else {
-            continue;
-        };
-        // Verify a newly suspected refill without forcing another read
-        // on every frame while the same window remains parked.
-        if pending
-            .iter()
-            .any(|refill| !index.pending.contains_key(&refill.key()))
-        {
-            refresh_logins.insert(usage_key.clone());
-        }
-        if !cache_unknown
-            && truth.iter().any(|(key, window)| {
-                index
-                    .prior
-                    .get(key)
-                    .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
-            })
-        {
-            refresh_logins.insert(usage_key.clone());
-        }
-
-        // A dashboard with no usable value is a refresh trigger, not only a paint
-        // state: RimZ no longer knows this account's budget, so the authoritative
-        // probe runs now rather than waiting out the OAuth read's cadence. It
-        // covers every route to a blank panel — an aged-out cache, expired named
-        // quotas, and a cold start whose cache was never written. The marker
-        // carries the open episode so the force fires on the transition alone;
-        // the durable claim keeps the fetch itself single-flight, and completion
-        // restamps the read on success and failure alike, so a provider that
-        // stays unreachable falls back to ordinary throttling.
-        let display_unknown = panel
-            .windows
-            .iter()
-            .all(|window| window.used_percentage.is_none());
-        let unknown_since_ms = match prior_entry.and_then(|entry| entry.unknown_since_ms) {
-            _ if !display_unknown => None,
-            Some(since) => Some(since),
-            None => {
-                refresh_logins.insert(usage_key.clone());
-                Some(unix_now_ms())
+        panel.for_each_credential_mut(|panel| {
+            let login_key = logins
+                .in_use(&panel.kind)
+                .into_iter()
+                .map(|login| login.key())
+                .find(|key| *key == panel.login_key());
+            let usage_key =
+                login_key.map(|key| AccountUsageKey::new(key, panel.account_scope.clone()));
+            if !panel.metered {
+                panel.windows.clear();
+                if let Some(key) = &usage_key
+                    && !metered_keys.contains(key)
+                {
+                    next.entries.remove(key);
+                }
+                return;
             }
-        };
+            // Complete authoritative omissions against matching persisted truth
+            // before indexing the live reading, then fuse each stable duration or
+            // named-quota identity independently.
+            let cached_entry = usage_key.as_ref().and_then(|key| cached.entries.get(key));
+            let prior_entry = cached_entry.filter(|entry| entry.scope == panel.account_scope);
+            let foreign_account = matches!(
+                (
+                    prior_entry.and_then(|entry| entry.account_key.as_deref()),
+                    panel.account_key.as_deref(),
+                ),
+                (Some(bound), Some(live)) if bound != live
+            );
+            let mut live_limits = AgentRateLimits {
+                windows: std::mem::take(&mut panel.windows),
+            };
+            if foreign_account {
+                live_limits.windows.clear();
+            }
+            complete_omitted_duration_windows(authoritative_windows(prior_entry), &mut live_limits);
+            let index = WindowIndex::new(prior_entry, live_limits.windows);
 
-        // Persist fused truth, including authoritative lifted rows, any in-flight
-        // refill, and the open unknown episode's marker. Display-only reset
-        // projections and unknown windows are recomputed each frame.
-        let entry = RateLimitCacheEntry {
-            reset_spotted_at_ms: cached_entry.and_then(|entry| entry.reset_spotted_at_ms),
-            scope: panel.account_scope.clone(),
-            account_key: prior_entry.and_then(|prior| prior.account_key.clone()),
-            limits: AgentRateLimits {
-                windows: truth.into_values().collect(),
-            },
-            // Only the authoritative writer binds credential identity.
-            // Preserve its copy while publishing admitted fused truth for
-            // every reader.
-            bound_limits: prior_entry.and_then(|prior| {
-                prior
-                    .bound_limits
-                    .clone()
-                    .or_else(|| prior.account_key.as_ref().map(|_| prior.limits.clone()))
-            }),
-            pending,
-            unknown_since_ms,
-        };
-        next.entries.insert(usage_key, entry);
+            // Fuse each duration to its ground truth and carry or advance its
+            // debounce marker. A live reading drives the fusion; absent one, the
+            // prior truth is carried unchanged for the idle projection below.
+            let (truth, pending) = index.fuse(index.projection_keys(), now, producer);
+            if let Some(path) = trace {
+                for (key, window) in &truth {
+                    trace_rate_limits(path, &panel.kind, index.live.get(key), window, now);
+                }
+            }
+            let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
+
+            // Display: roll every fused window's reset-to-max projection forward to
+            // `now` — a no-op while its reset is future, a refill once it has passed,
+            // so a live reading carrying an expired longer window never freezes at
+            // `0h00m`. Once the account freshness ceiling has aged out with no live
+            // reading, the cache shows unknown bars. Sorted for stable paint order.
+            let mut display: Vec<RateLimitWindow> = truth
+                .values()
+                .cloned()
+                .map(|window| {
+                    let expired_scoped_window = window.scope.is_some()
+                        && window.resets_at.is_some_and(|reset| reset <= now);
+                    if cache_unknown || expired_scoped_window {
+                        unknown_idle_window(window)
+                    } else {
+                        window.projected_at(now)
+                    }
+                })
+                .collect();
+            crate::store::snapshot::sort_windows(&mut display);
+            panel.windows = display;
+
+            let Some(usage_key) = usage_key.filter(|_| producer) else {
+                return;
+            };
+            // Verify a newly suspected refill without forcing another read
+            // on every frame while the same window remains parked.
+            if pending
+                .iter()
+                .any(|refill| !index.pending.contains_key(&refill.key()))
+            {
+                refresh_logins.insert(usage_key.clone());
+            }
+            if !cache_unknown
+                && truth.iter().any(|(key, window)| {
+                    index
+                        .prior
+                        .get(key)
+                        .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
+                })
+            {
+                refresh_logins.insert(usage_key.clone());
+            }
+
+            // A dashboard with no usable value is a refresh trigger, not only a paint
+            // state: RimZ no longer knows this account's budget, so the authoritative
+            // probe runs now rather than waiting out the OAuth read's cadence. It
+            // covers every route to a blank panel — an aged-out cache, expired named
+            // quotas, and a cold start whose cache was never written. The marker
+            // carries the open episode so the force fires on the transition alone;
+            // the durable claim keeps the fetch itself single-flight, and completion
+            // restamps the read on success and failure alike, so a provider that
+            // stays unreachable falls back to ordinary throttling.
+            let display_unknown = panel
+                .windows
+                .iter()
+                .all(|window| window.used_percentage.is_none());
+            let unknown_since_ms = match prior_entry.and_then(|entry| entry.unknown_since_ms) {
+                _ if !display_unknown => None,
+                Some(since) => Some(since),
+                None => {
+                    refresh_logins.insert(usage_key.clone());
+                    Some(unix_now_ms())
+                }
+            };
+
+            // Persist fused truth, including authoritative lifted rows, any in-flight
+            // refill, and the open unknown episode's marker. Display-only reset
+            // projections and unknown windows are recomputed each frame.
+            let entry = RateLimitCacheEntry {
+                reset_spotted_at_ms: cached_entry.and_then(|entry| entry.reset_spotted_at_ms),
+                scope: panel.account_scope.clone(),
+                account_key: prior_entry.and_then(|prior| prior.account_key.clone()),
+                limits: AgentRateLimits {
+                    windows: truth.into_values().collect(),
+                },
+                // Only the authoritative writer binds credential identity.
+                // Preserve its copy while publishing admitted fused truth for
+                // every reader.
+                bound_limits: prior_entry.and_then(|prior| {
+                    prior
+                        .bound_limits
+                        .clone()
+                        .or_else(|| prior.account_key.as_ref().map(|_| prior.limits.clone()))
+                }),
+                pending,
+                unknown_since_ms,
+            };
+            next.entries.insert(usage_key, entry);
+        });
     }
 
     (

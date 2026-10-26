@@ -75,6 +75,8 @@ Budgets belong to an account, so they live in a pinned panel at the bottom rathe
 
 Three or more providers share the panel under a tab rail, which follows the provider of whichever card you have selected; `←`, `→`, or a click picks one by hand. One or two providers stack instead. With [pets enabled](./pets.md), the companion rides the panel's right edge.
 
+Pi's plan and bars follow the selected Pi card's backing credential in either layout: an API key shows `api ∞`, and an OAuth credential with reported quotas shows its own windows. With no reported credential selected, the block holds your last Pi credential while available, then uses the provider found by the account check. Its sessions, tokens, and spend always cover the whole account.
+
 Codex budget windows refresh at turn boundaries and every five minutes between turns. Card metadata refreshes at turn boundaries; `rimz agents refresh @handle` requests an update sooner.
 
 Reading these figures, and how every one is calculated, is [Token Insight](./insight.md#per-account-the-provider-dashboard). What a full, spent, ticked, or dim bar is telling you is in the [interface reference](../interface/sidebar.md#budget-bars).

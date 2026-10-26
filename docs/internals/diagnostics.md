@@ -224,7 +224,7 @@ The `value_oscillation`, `aggregate_oscillation`, and `order_flap` windows bound
 
 Under heavy mux enumeration churn a published pane frame can briefly drop and re-list one pane. Carry-and-verify covers most of that gap while letting genuine closes through, so a residual row-presence flap stays a diagnostic record.
 
-The provider panel is keyed per login by what it renders. A record's `aggregate` names the key:
+Provider diagnostics describe the top-level panel per login. Pi credential alternates and the view's selected credential do not create separate aggregate signatures. A record's `aggregate` names the key:
 
 | `aggregate` | Names | Value |
 | --- | --- | --- |

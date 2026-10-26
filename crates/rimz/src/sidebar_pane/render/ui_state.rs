@@ -177,6 +177,9 @@ pub(in crate::sidebar_pane) struct ViewState {
     /// Read by `active_dashboard_tab` below the live derivation and re-guarded
     /// against the panel still being on the dashboard.
     pub(in crate::sidebar_pane) last_agent_kind: Option<crate::ids::AgentKind>,
+    /// Last selected credential per dashboard kind, retained while that kind
+    /// has a panel and used only while the credential is still carried there.
+    pub(in crate::sidebar_pane) last_sub_providers: BTreeMap<crate::ids::AgentKind, String>,
     /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
     ///
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.

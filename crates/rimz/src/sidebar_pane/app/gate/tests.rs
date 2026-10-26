@@ -56,6 +56,7 @@ fn provider(
         plan: None,
         metered: true,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: Default::default(),
         active_sessions: 0,
         spending: spending.map(Into::into),
@@ -89,6 +90,22 @@ fn spend_snapshot(
         used_percentage,
     )];
     snapshot
+}
+
+#[test]
+fn pi_alternates_keep_carried_spend_without_copying_windows() {
+    let ws = workspace();
+    let mut previous = spend_snapshot(&ws, None, None, Some(12.0), 70);
+    previous.providers[0].kind = "pi".to_owned();
+    let mut incoming = spend_snapshot(&ws, None, None, None, 20);
+    incoming.providers[0].kind = "pi".to_owned();
+    let alternate = incoming.providers[0].clone();
+    incoming.providers[0].alternates.push(alternate);
+    repair_collapsed_spend(&previous, &mut incoming, &GateState::default(), gate_now());
+    let panel = &incoming.providers[0];
+    assert_eq!(panel.spending, previous.providers[0].spending);
+    assert_eq!(panel.alternates[0].spending, panel.spending);
+    assert_eq!(panel.alternates[0].windows[0].used_percentage, Some(20));
 }
 
 #[test]

@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn dashboard_remembers_only_a_selected_credential_that_its_panel_carries() {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let mut top = provider("pi");
+    top.sub_provider = Some("openai-codex".to_owned());
+    let mut alternate = provider("pi");
+    alternate.sub_provider = Some("anthropic".to_owned());
+    top.alternates.push(alternate);
+    snapshot.providers = vec![top];
+    let mut ui = ViewState {
+        selected_index: Some(0),
+        ..Default::default()
+    };
+    let kind = crate::ids::AgentKind::new_unchecked("pi");
+    let mut outcomes = Vec::new();
+    for reported in [
+        Some("anthropic"),
+        None,
+        Some("unlisted"),
+        Some("openai-codex"),
+    ] {
+        let row = &mut std::sync::Arc::make_mut(
+            &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+        )[0];
+        row.name = "pi".to_owned();
+        row.as_agent_mut().unwrap().context = Some(crate::agents::AgentContext {
+            sub_provider: reported.map(ToOwned::to_owned),
+            ..Default::default()
+        });
+        reconcile_dashboard(&mut ui, &snapshot);
+        outcomes.push(ui.last_sub_providers.get(&kind).cloned());
+    }
+    ui.selected_index = Some(1);
+    reconcile_dashboard(&mut ui, &snapshot);
+    outcomes.push(ui.last_sub_providers.get(&kind).cloned());
+    assert_eq!(
+        outcomes,
+        [
+            "anthropic",
+            "anthropic",
+            "anthropic",
+            "openai-codex",
+            "openai-codex"
+        ]
+        .map(|p| Some(p.to_owned()))
+    );
+}
+
+#[test]
 fn tabs_distinguish_two_logins_of_one_kind() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);

@@ -1,6 +1,99 @@
 use super::*;
 
 #[test]
+fn pi_block_follows_the_card_then_memory_then_the_top_level_in_both_layouts() {
+    let mut agents = Vec::new();
+    for (id, provider) in [
+        ("api", Some("anthropic")),
+        ("oauth", Some("openai-codex")),
+        ("silent", None),
+    ] {
+        let mut card = agent(
+            id,
+            "pi",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        );
+        card.context = Some(AgentContext {
+            sub_provider: provider.map(ToOwned::to_owned),
+            ..Default::default()
+        });
+        agents.push(card);
+    }
+    let mut snapshot = snapshot_with(agents);
+    let mut top = provider_panel("pi", "Pi", 28, true, false, Some((20, 30)));
+    top.sub_provider = Some("openai-codex".to_owned());
+    top.plan = Some("OpenAI-Codex OAuth".to_owned());
+    top.art.clear();
+    let mut alternate = top.clone();
+    alternate.sub_provider = Some("anthropic".to_owned());
+    alternate.plan = Some("Anthropic API Key".to_owned());
+    alternate.metered = false;
+    alternate.windows.clear();
+    top.alternates = vec![alternate];
+    snapshot.providers = vec![top];
+    let mut results = Vec::new();
+    for layout in [
+        crate::config::ProviderTabsMode::Always,
+        crate::config::ProviderTabsMode::Never,
+    ] {
+        snapshot.theme.display.provider_tabs = layout;
+        for (selected, remembered, remove_alternate) in [
+            (Some("api"), None, false),
+            (Some("oauth"), Some("anthropic"), false),
+            (Some("silent"), Some("anthropic"), false),
+            (None, Some("anthropic"), false),
+            (None, Some("anthropic"), true),
+            (None, None, false),
+        ] {
+            let mut frame = snapshot.clone();
+            if remove_alternate {
+                frame.providers[0].alternates.clear();
+            }
+            let mut ui = ViewState::default();
+            ui.selected_index = selected.map(|id| {
+                ui.visible_roster(&frame)
+                    .rows()
+                    .iter()
+                    .position(|row| row.id == id)
+                    .unwrap()
+            });
+            if let Some(provider) = remembered {
+                ui.last_sub_providers.insert(
+                    crate::ids::AgentKind::new_unchecked("pi"),
+                    provider.to_owned(),
+                );
+            }
+            let screen = snapshot_to_screen_with_alert_and_ui(
+                &frame,
+                None,
+                &ui,
+                &UiState::default(),
+                72,
+                50,
+            );
+            results.push((
+                screen.contains("Anthropic API Key"),
+                screen.contains("OpenAI-Codex OAuth"),
+                screen.contains('∞'),
+                screen.contains("5h"),
+            ));
+        }
+    }
+    let expected = [
+        (true, false, true, false),
+        (false, true, false, true),
+        (true, false, true, false),
+        (true, false, true, false),
+        (false, true, false, true),
+        (false, true, false, true),
+    ];
+    assert_eq!(results, expected.repeat(2));
+}
+
+#[test]
 fn undecided_panel_keeps_its_header_and_stats_without_claiming_a_plan_or_budget() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("pi", "Pi", 28, false, false, None);

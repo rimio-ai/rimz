@@ -368,6 +368,64 @@ fn scoped_credits_prefer_the_new_map_and_migrate_matching_legacy_readings() {
 }
 
 #[test]
+fn alternate_credits_and_entitlement_follow_their_own_scope() {
+    let (_dir, runtime) = runtime();
+    let now = unix_now_ms();
+    let scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let mut top = panel("pi", false);
+    let mut alternate = panel("pi", true);
+    alternate.account_scope = scope.clone();
+    top.alternates = vec![alternate];
+    let key = AccountUsageKey::new("pi@default".parse().unwrap(), scope.clone());
+    let mut results = Vec::new();
+    for entitlement in [Entitlement::Ok, Entitlement::Lapsed { since_ms: now }] {
+        let mut cache = CreditsCache::default();
+        *cache.entry_mut(&key) = ProviderCreditsEntry {
+            scope: scope.clone(),
+            entitlement,
+            observed_at_ms: now,
+            ok: true,
+            plan: Some("Anthropic OAuth".to_owned()),
+            extra_credits: Some(ExtraCredits::known(None, Some(9.0), None)),
+            ..Default::default()
+        };
+        let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+            runtime.workspace_id.clone(),
+            vec![top.clone()],
+        );
+        apply_credits_cache_with(
+            &mut snapshot,
+            &cache,
+            &AccountsConfig::default(),
+            &RoomLoginSet::native(),
+            now,
+        );
+        let panel = &snapshot.providers[0];
+        assert_eq!(panel.entitlement, Entitlement::Ok);
+        let alternate = &panel.alternates[0];
+        results.push((
+            alternate.entitlement,
+            alternate.plan.clone(),
+            alternate
+                .extra_credits
+                .as_ref()
+                .and_then(ExtraCredits::remaining_usd_left),
+        ));
+    }
+    assert_eq!(
+        results,
+        [
+            (
+                Entitlement::Ok,
+                Some("Anthropic OAuth".to_owned()),
+                Some(9.0)
+            ),
+            (Entitlement::Lapsed { since_ms: now }, None, None),
+        ]
+    );
+}
+
+#[test]
 fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
     let hint = identity(Some(7), None, ProviderAccountScope::KindWide);
     let sub = ProviderAccountScope::sub_provider("openai", "oauth");
@@ -1152,6 +1210,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         plan: None,
         metered,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: Default::default(),
         active_sessions: 0,
         spending: Some(

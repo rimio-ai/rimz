@@ -1588,8 +1588,10 @@ pub(crate) fn project_budget_views(
     let in_use = logins.keys_in_use();
     let catalog = account_catalog(config);
     for panel in &mut snapshot.providers {
-        panel.day_budget = None;
-        panel.month_budget = None;
+        panel.for_each_credential_mut(|panel| {
+            panel.day_budget = None;
+            panel.month_budget = None;
+        });
         let key = panel.login_key();
         if !in_use.contains(&key) {
             continue;
@@ -1606,7 +1608,7 @@ pub(crate) fn project_budget_views(
             spend_usd,
             parked: ledger.parked.is_some() && spend_usd >= cap.cap_usd,
         };
-        match cap.window {
+        panel.for_each_credential_mut(|panel| match cap.window {
             BudgetWindow::Day => panel.day_budget = Some(view),
             BudgetWindow::Month => {
                 panel.month_budget = Some(view);
@@ -1619,7 +1621,7 @@ pub(crate) fn project_budget_views(
                 }
             }
             BudgetWindow::Session | BudgetWindow::Turn => {}
-        }
+        });
     }
 }
 

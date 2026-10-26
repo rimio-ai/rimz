@@ -4,6 +4,63 @@
 use super::*;
 
 #[test]
+fn pi_credentials_partition_panels_in_both_current_and_in_use_folds() {
+    let mut session = root_agent("pi", "codex", None);
+    session.context = Some(crate::agents::AgentContext {
+        sub_provider: Some("openai-codex".to_owned()),
+        ..Default::default()
+    });
+    let snapshot = SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/tmp/pi-panel-scopes")),
+        vec![session],
+        Timestamp::now(),
+    );
+    let credential = crate::agents::AgentAccount {
+        sub_provider: Some("openai-codex".to_owned()),
+        plan: Some("OpenAI-Codex OAuth".to_owned()),
+        metered: Some(true),
+        scope: crate::agents::ProviderAccountScope::sub_provider("openai", "oauth"),
+        ..Default::default()
+    };
+    let accounts = BTreeMap::from([(
+        "pi@default".parse().unwrap(),
+        crate::agents::AgentAccount {
+            sub_provider: Some("anthropic".to_owned()),
+            plan: Some("Anthropic API Key".to_owned()),
+            metered: Some(false),
+            credentials: BTreeMap::from([("openai-codex".to_owned(), credential)]),
+            ..Default::default()
+        },
+    )]);
+    let mut results = Vec::new();
+    for scope in [PanelScope::Current, PanelScope::InUse] {
+        let folded = fold_machine_config_with(
+            snapshot.clone(),
+            &Default::default(),
+            accounts.clone(),
+            &BTreeMap::new(),
+            RemoteControlServerHealth::default(),
+            &Default::default(),
+            &crate::agents::RoomLoginSet::native(),
+            scope,
+        );
+        let panel = folded
+            .providers
+            .iter()
+            .find(|panel| panel.kind == "pi")
+            .unwrap();
+        results.push(
+            panel
+                .alternates
+                .iter()
+                .map(|panel| panel.sub_provider.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(results, vec![vec![Some("openai-codex".to_owned())]; 2]);
+}
+
+#[test]
 fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

@@ -25,7 +25,7 @@ use super::theme::{Component, Theme};
 use super::{
     Alert, BodyFilter, DashboardMode, FrameInteractions, HitRegion, HitTarget, RenderedBlock,
     ScrollEase, UiState, ViewState, active_dashboard_tab, cockpit_spend_target, dashboard_mode,
-    dashboard_present, labels,
+    dashboard_present, labels, selected_sub_provider,
 };
 
 #[cfg(test)]
@@ -637,6 +637,8 @@ fn dashboard_chrome(
         theme,
         providers: &snapshot.providers,
         active_provider: active_tab.as_ref(),
+        selected_sub_provider: selected_sub_provider(snapshot, view),
+        last_sub_providers: &view.last_sub_providers,
         mode,
         fleet_tally: snapshot.value_tally.as_deref(),
         pet: ui.pet.as_ref(),

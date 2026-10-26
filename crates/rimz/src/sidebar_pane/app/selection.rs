@@ -9,6 +9,7 @@ use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, HitTarget, UiState, ViewState, active_dashboard_tab,
     dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs, selected_agent_kind,
+    selected_sub_provider,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
 
@@ -810,6 +811,20 @@ fn reconcile_dashboard(ui: &mut ViewState, snapshot: &SidebarSnapshot) {
         && dashboard_tab_of_kind(snapshot, kind).is_some()
     {
         ui.last_agent_kind = Some(kind.clone());
+    }
+    ui.last_sub_providers.retain(|kind, _| {
+        snapshot
+            .providers
+            .iter()
+            .any(|panel| panel.kind == kind.as_str())
+    });
+    if let Some((kind, provider)) = selected_sub_provider(snapshot, ui)
+        && snapshot
+            .providers
+            .iter()
+            .any(|panel| panel.kind == kind.as_str() && panel.for_sub_provider(provider).is_some())
+    {
+        ui.last_sub_providers.insert(kind, provider.to_owned());
     }
     if let Some(tab) = &ui.dashboard_tab {
         let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
