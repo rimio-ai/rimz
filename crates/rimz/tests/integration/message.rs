@@ -12563,7 +12563,7 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
     let cache = rimz::agents::account::RateLimitsCache {
         refreshed_at_ms: 0,
         entries: [(
-            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")).into(),
             rimz::agents::account::RateLimitCacheEntry {
                 limits: AgentRateLimits {
                     windows: vec![window],

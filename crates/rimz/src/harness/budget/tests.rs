@@ -1670,7 +1670,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &runtime.shared_rate_limits_path(),
         &crate::agents::account::RateLimitsCache {
             entries: [(
-                LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
                 crate::agents::account::RateLimitCacheEntry {
                     limits: crate::agents::AgentRateLimits {
                         windows: vec![crate::agents::RateLimitWindow {

@@ -214,7 +214,7 @@ fn write_spent_codex_window(runtime: &RuntimePaths) -> Timestamp {
         .unwrap();
     let cache = crate::agents::account::RateLimitsCache {
         entries: BTreeMap::from([(
-            crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")).into(),
             crate::agents::account::RateLimitCacheEntry {
                 limits: crate::agents::AgentRateLimits {
                     windows: vec![crate::agents::RateLimitWindow {

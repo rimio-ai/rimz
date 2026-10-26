@@ -196,7 +196,7 @@ fn rate_cache(used: u8, resets_at: Timestamp) -> RateLimitsCache {
     RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
         entries: BTreeMap::from([(
-            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")).into(),
             rimz::agents::account::RateLimitCacheEntry {
                 limits: windows(used, resets_at),
                 ..Default::default()

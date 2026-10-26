@@ -951,7 +951,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     let mut cache = crate::agents::account::RateLimitsCache::default();
     cache
         .entries
-        .insert(key.clone(), rate_limit_entry(&[(10_080, 100)], now));
+        .insert(key.clone().into(), rate_limit_entry(&[(10_080, 100)], now));
     write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache).unwrap();
     let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     panel.reset_credits = Some(credits(now, Some(Duration::from_secs(10 * 86_400))));
@@ -1065,16 +1065,16 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
     let mut cache = crate::agents::account::RateLimitsCache::default();
     cache.entries.extend([
         (
-            default.clone(),
+            default.clone().into(),
             rate_limit_entry(&[(300, 0), (10_080, 0)], now),
         ),
         (
-            key("used"),
+            key("used").into(),
             rate_limit_entry(&[(300, 0), (10_080, 40)], now),
         ),
-        (key("spent"), rate_limit_entry(&[(10_080, 100)], now)),
+        (key("spent").into(), rate_limit_entry(&[(10_080, 100)], now)),
         (
-            key("unused"),
+            key("unused").into(),
             rate_limit_entry(&[(300, 0), (10_080, 0)], now),
         ),
     ]);
@@ -1083,7 +1083,7 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
     for (name, five_hour_reset) in [("fresh", 300 * 60), ("running", 2 * 3_600)] {
         let mut entry = rate_limit_entry(&[(300, 1), (10_080, 0)], now);
         entry.limits.windows[0].resets_at = Some(now + Duration::from_secs(five_hour_reset));
-        cache.entries.insert(key(name), entry);
+        cache.entries.insert(key(name).into(), entry);
     }
     write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache).unwrap();
     let dying = credits(now, Some(Duration::from_secs(20 * 60)));
@@ -1654,7 +1654,7 @@ fn producer_follows_the_spend_step_without_a_parked_agent() {
         let mut rates = crate::agents::account::RateLimitsCache::default();
         rates
             .entries
-            .insert(key.clone(), rate_limit_entry(&[(10_080, used)], now));
+            .insert(key.clone().into(), rate_limit_entry(&[(10_080, used)], now));
         write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &rates).unwrap();
         let credits = credits(now, dying.then_some(Duration::from_secs(20 * 60)));
         seed_credit_entry(

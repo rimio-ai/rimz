@@ -278,8 +278,9 @@ upward-dependencies = ["address"]
 # AgentState::is_asking is the shared C4 ask predicate (+1).
 # AgentState::is_focused_pair is the shared C4 focus predicate (+1).
 # AccountCapability::probe_account_usage_for names a backing credential for usage reads (+1).
+# AccountUsageKey, its parser error and constructor, and scoped CreditsCache lookups (+5).
 # AgentAccount::is_undecided shares the no-backing-credential classification (+1).
-surface-budget = 1158
+surface-budget = 1163
 
 [[verdict]]
 kind = "item"
@@ -295,6 +296,16 @@ reason = "Adapters return the single-line launch refusal for the process edge to
 kind = "item"
 key = "agents::capabilities::SESSION_STEP_REFUSED"
 reason = "The step and wrapper share the reserved configuration-refusal exit status."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::AccountUsageKey"
+reason = "Rate-limit publications and their readers share the typed login-and-scope cache key."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::InvalidAccountUsageKey"
+reason = "The public usage-key parser reports malformed persisted keys through a typed error."
 
 [[verdict]]
 kind = "item"

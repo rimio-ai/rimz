@@ -1010,6 +1010,7 @@ fn redeem_lock_path(runtime: &RuntimePaths, key: &LoginKey) -> std::path::PathBu
     let account = cache
         .logins
         .get(key)
+        .filter(|entry| entry.scope.is_kind_wide())
         .and_then(|entry| entry.account_key.as_deref());
     runtime.shared_auto_redeem_lock(key, account)
 }

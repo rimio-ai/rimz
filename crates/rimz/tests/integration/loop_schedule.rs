@@ -7587,7 +7587,10 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     runtime.ensure_dirs().expect("runtime dirs");
     let rate_cache = |used_7d, used_30d| RateLimitsCache {
         entries: [(
-            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+            rimz::agents::account::AccountUsageKey::new(
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+                binding.scope().clone(),
+            ),
             RateLimitCacheEntry {
                 scope: binding.scope().clone(),
                 account_key: Some(account_key.clone()),

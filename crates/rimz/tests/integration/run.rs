@@ -526,7 +526,10 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             entries: [(
-                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+                rimz::agents::account::AccountUsageKey::new(
+                    rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+                    binding.scope().clone(),
+                ),
                 RateLimitCacheEntry {
                     scope: binding.scope().clone(),
                     account_key: Some(account_key.clone()),
@@ -760,7 +763,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     runtime.ensure_dirs().unwrap();
     env.publish_rate_limits(&RateLimitsCache {
         entries: [(
-            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
             RateLimitCacheEntry {
                 limits: AgentRateLimits {
                     windows: vec![RateLimitWindow {

@@ -2,6 +2,136 @@ use super::*;
 use crate::ids::AgentKind;
 
 #[test]
+fn usage_keys_round_trip_legacy_and_scoped_text_and_reject_ambiguous_shapes() {
+    for text in [
+        "claude@work",
+        "codex@default",
+        "pi@default/anthropic/oauth",
+        "pi@default/openai/oauth",
+        "qwen@work/alibaba/international",
+    ] {
+        let parsed = text.parse::<AccountUsageKey>();
+        assert!(parsed.is_ok(), "valid usage key {text}: {parsed:?}");
+        let key = parsed.unwrap();
+        assert_eq!(key.to_string(), text);
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<AccountUsageKey>(&json).unwrap(), key);
+    }
+    for text in [
+        "pi",
+        "@default",
+        "pi@",
+        "pi@default/anthropic",
+        "pi@default//oauth",
+        "pi@default/anthropic/",
+        "pi@default/anthropic/oauth/extra",
+    ] {
+        assert!(
+            text.parse::<AccountUsageKey>().is_err(),
+            "invalid usage key {text}"
+        );
+    }
+}
+
+#[test]
+fn rate_limits_cache_skips_invalid_usage_keys_without_losing_valid_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rate_limits.json");
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &serde_json::json!({
+            "version": 7,
+            "refreshed_at_ms": 123,
+            "entries": {
+                "pi@default/azure/openai/oauth": {"limits": {"windows": []}},
+                "pi@default/anthropic/oauth": {"unknown_since_ms": 42}
+            }
+        }),
+    )
+    .unwrap();
+    let cache = read_rate_limits_cache(&path);
+    assert_eq!(cache.entries.len(), 1, "only the invalid key is discarded");
+    assert_eq!(cache.refreshed_at_ms, 123);
+    assert_eq!(
+        cache.entries[&"pi@default/anthropic/oauth".parse().unwrap()].unknown_since_ms,
+        Some(42)
+    );
+}
+
+#[test]
+fn version_six_rate_limits_are_cold_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rate_limits.json");
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &serde_json::json!({
+            "version": 6,
+            "refreshed_at_ms": 123,
+            "entries": {"claude@default": {"limits": {"windows": []}}}
+        }),
+    )
+    .unwrap();
+    let cache = read_rate_limits_cache(&path);
+    assert!(
+        cache.entries.is_empty(),
+        "version 6 must not survive the scoped-key change"
+    );
+    assert_eq!(cache.version, 7);
+}
+
+#[test]
+fn cached_usage_timestamp_reads_the_newest_scope_for_one_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let limits = serde_json::json!({
+        "version": 7,
+        "refreshed_at_ms": 0,
+        "entries": {
+            "pi@default/anthropic/oauth": {
+                "limits": {"windows": [{"observed_at": "2026-10-25T00:00:00Z"}]}
+            },
+            "pi@default/openai/oauth": {
+                "limits": {"windows": [{"observed_at": "2026-10-26T00:00:00Z"}]}
+            },
+            "pi@work/openai/oauth": {
+                "limits": {"windows": [{"observed_at": "2026-10-27T00:00:00Z"}]}
+            }
+        }
+    });
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &limits)
+        .unwrap();
+    assert_eq!(
+        cached_usage_read_at(&runtime, &key),
+        Some("2026-10-26T00:00:00Z".parse().unwrap())
+    );
+    std::fs::remove_file(runtime.shared_rate_limits_path()).unwrap();
+    let entry = |observed_at_ms| serde_json::json!({"observed_at_ms": observed_at_ms, "ok": true});
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_credits_path(),
+        &serde_json::json!({
+            "refreshed_at_ms": 0,
+            "logins": {"pi@default": entry(100)},
+            "scoped": {
+                "pi@default/anthropic/oauth": entry(200),
+                "pi@default/openai/oauth": entry(300),
+                "pi@work/openai/oauth": entry(400)
+            }
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        cached_usage_read_at(&runtime, &key),
+        Some(Timestamp::from_millisecond(300).unwrap())
+    );
+}
+
+#[test]
 fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() {
     use ProviderStatus::{LoggedIn, LoggedOut, Unavailable};
     use RecordedLogin as Login;
@@ -243,7 +373,10 @@ fn go_console_windows_do_not_feed_kind_wide_capacity() {
         &runtime,
         &RateLimitsCache {
             entries: BTreeMap::from([(
-                login_key("opencode"),
+                AccountUsageKey::new(
+                    login_key("opencode"),
+                    ProviderAccountScope::sub_provider("opencode", "oauth"),
+                ),
                 RateLimitCacheEntry {
                     scope: ProviderAccountScope::sub_provider("opencode", "oauth"),
                     limits: AgentRateLimits {
@@ -265,9 +398,10 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");
     let binding = ProviderAccountBinding::new(scope.clone(), "owner".to_owned()).unwrap();
     let other = ProviderAccountBinding::new(scope.clone(), "other".to_owned()).unwrap();
+    let usage_key = AccountUsageKey::new(login_key("qwen"), scope.clone());
     let mut cache = RateLimitsCache {
         entries: BTreeMap::from([(
-            login_key("qwen"),
+            usage_key.clone(),
             RateLimitCacheEntry {
                 scope,
                 reset_spotted_at_ms: None,
@@ -304,12 +438,10 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     assert!(reason.contains("Qwen Alibaba International mo window exhausted"));
     assert!(!reason.contains("owner"));
 
-    cache.entries.get_mut(&login_key("qwen")).unwrap().scope = ProviderAccountScope::KindWide;
-    cache
-        .entries
-        .get_mut(&login_key("qwen"))
-        .unwrap()
-        .account_key = None;
+    let mut entry = cache.entries.remove(&usage_key).unwrap();
+    entry.scope = ProviderAccountScope::KindWide;
+    entry.account_key = None;
+    cache.entries.insert(login_key("qwen").into(), entry);
     write_cache(&runtime, &cache);
     assert!(ProviderCapacity::read(&runtime, &login_key("qwen")).is_some());
     assert!(
@@ -323,7 +455,7 @@ fn managed_launch_state_selects_only_applicable_capacity() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let kind_wide = |kind: &str| {
         (
-            login_key(kind),
+            login_key(kind).into(),
             RateLimitCacheEntry {
                 scope: ProviderAccountScope::KindWide,
                 limits: AgentRateLimits {
@@ -353,7 +485,7 @@ fn managed_launch_state_selects_only_applicable_capacity() {
 
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");
     cache.entries.insert(
-        login_key("qwen"),
+        AccountUsageKey::new(login_key("qwen"), scope.clone()),
         RateLimitCacheEntry {
             scope: scope.clone(),
             account_key: Some("cached".to_owned()),
@@ -442,7 +574,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     );
     let cache = RateLimitsCache {
         version: RateLimitsCache::default().version + 1,
-        entries: BTreeMap::from([(login_key("claude"), Default::default())]),
+        entries: BTreeMap::from([(login_key("claude").into(), Default::default())]),
         ..Default::default()
     };
     write_cache(&runtime, &cache);
@@ -455,7 +587,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
         &runtime,
         &RateLimitsCache {
             version: 5,
-            entries: BTreeMap::from([(login_key("qwen"), Default::default())]),
+            entries: BTreeMap::from([(login_key("qwen").into(), Default::default())]),
             ..Default::default()
         },
     );
@@ -488,7 +620,7 @@ fn usage_reading_age_uses_cache_readers_and_credits_fallback() {
     let newer = stamp + SignedDuration::from_secs(60);
     let mut cache = RateLimitsCache {
         entries: BTreeMap::from([(
-            key.clone(),
+            key.clone().into(),
             RateLimitCacheEntry {
                 limits: crate::agents::AgentRateLimits {
                     windows: vec![RateLimitWindow {

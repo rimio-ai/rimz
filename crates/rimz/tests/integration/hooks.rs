@@ -4528,6 +4528,7 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let env = Env::new();
     let claim_id = env.seed_usage_claim("codex");
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        sub_provider: None,
         workspace_id: env.workspace_id.clone(),
         login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
         claim_id: claim_id.parse().expect("valid usage claim id"),

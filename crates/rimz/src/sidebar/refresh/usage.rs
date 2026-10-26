@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
-use crate::agents::account::read_accounts_cache;
+use crate::agents::account::{AccountUsageKey, read_accounts_cache};
 use crate::agents::{
-    AccountUsageIdentity, AccountUsageSnapshot, Entitlement, ProviderLogin, RoomLoginSet,
+    AccountUsageIdentity, AccountUsageSnapshot, Entitlement, ProviderAccountScope, ProviderLogin,
+    RoomLoginSet,
 };
 use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
@@ -25,7 +26,7 @@ use super::credits::{
     claim_provider_account_usage, complete_provider_account_usage, merge_provider_realtime_usage,
     read_credits_cache, renew_provider_account_usage_claim, write_credits_cache,
 };
-use super::rate_limits::{drop_login_rate_limits, merge_account_rate_limits};
+use super::rate_limits::{drop_account_rate_limits, merge_account_rate_limits};
 use super::trace;
 use super::trace::{TraceEvent, duration_ms};
 
@@ -40,7 +41,7 @@ pub fn mark_entitlement_lapsed(runtime: &RuntimePaths, key: &LoginKey, at_ms: u6
     };
     let path = runtime.shared_credits_path();
     let mut cache = read_credits_cache(&path);
-    let entry = cache.logins.entry(key.clone()).or_default();
+    let entry = cache.entry_mut(&key.clone().into());
     if entry.entitlement == Entitlement::Ok {
         entry.entitlement = Entitlement::Lapsed { since_ms: at_ms };
     }
@@ -53,10 +54,12 @@ pub fn mark_entitlement_lapsed(runtime: &RuntimePaths, key: &LoginKey, at_ms: u6
 pub struct AccountUsageRefreshRequest {
     pub workspace_id: WorkspaceId,
     pub login: LoginKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_provider: Option<String>,
     pub claim_id: Uuid,
 }
 
-/// Claim and spawn each metered provider's direct account-usage refresh, then
+/// Claim and spawn each metered credential's direct account-usage refresh, then
 /// each idle account's.
 pub(super) fn refresh_account_usage(
     snapshot: &SidebarSnapshot,
@@ -70,7 +73,7 @@ fn refresh_account_usage_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
-    mut spawn: impl FnMut(&RuntimePaths, &LoginKey, Uuid) -> bool,
+    mut spawn: impl FnMut(&RuntimePaths, &LoginKey, Uuid, Option<&str>) -> bool,
 ) {
     if crate::agents::credits::oauth_usage_offline() {
         return;
@@ -93,6 +96,8 @@ fn refresh_account_usage_with(
             runtime,
             &login.key(),
             started,
+            panel.sub_provider.as_deref(),
+            Some(&panel.account_scope),
             claim_provider_account_usage,
             &mut spawn,
         );
@@ -104,6 +109,8 @@ fn refresh_account_usage_with(
             runtime,
             &login.key(),
             Instant::now(),
+            None,
+            None,
             claim_idle_account_usage,
             &mut spawn,
         );
@@ -114,8 +121,10 @@ fn claim_and_spawn(
     runtime: &RuntimePaths,
     key: &LoginKey,
     started: Instant,
+    sub_provider: Option<&str>,
+    scope: Option<&ProviderAccountScope>,
     claim: fn(&RuntimePaths, &LoginKey, Option<AccountUsageIdentity>) -> Option<Uuid>,
-    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, Uuid) -> bool,
+    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, Uuid, Option<&str>) -> bool,
 ) {
     let kind = key.kind.as_str();
     let Some(adapter) = crate::agents::find_definition(kind) else {
@@ -126,14 +135,23 @@ fn claim_and_spawn(
         trace_claim(runtime, kind, "unsupported", started.elapsed());
         return;
     }
-    let cached_hint = cached_account_usage_hint(runtime, key);
+    let cached_hint = cached_account_usage_hint(runtime, key, sub_provider)
+        .filter(|hint| scope.is_none_or(|scope| hint.scope == *scope))
+        .or_else(|| {
+            scope
+                .filter(|scope| !scope.is_kind_wide())
+                .map(|scope| AccountUsageIdentity {
+                    scope: scope.clone(),
+                    ..Default::default()
+                })
+        });
     let Some(claim_id) = claim(runtime, key, cached_hint) else {
         trace_claim(runtime, kind, "not_due", started.elapsed());
         return;
     };
     trace_claim(runtime, kind, "claimed", started.elapsed());
     let spawn_started = Instant::now();
-    let spawned = spawn(runtime, key, claim_id);
+    let spawned = spawn(runtime, key, claim_id, sub_provider);
     trace::record(runtime, || TraceEvent::HelperSpawn {
         kind,
         outcome: if spawned { "spawned" } else { "failed" },
@@ -160,14 +178,16 @@ pub fn refresh_claimed_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     claim_id: Uuid,
+    sub_provider: Option<&str>,
 ) -> bool {
     refresh_claimed_account_usage_with(
         runtime,
         key,
         claim_id,
+        sub_provider,
         &crate::store::room_logins_in_use(runtime),
         |adapter, runtime, env| adapter.probe_realtime_account_usage(runtime, env),
-        |adapter, env| adapter.probe_account_usage(env),
+        |adapter, env, provider| adapter.probe_account_usage_for(env, provider),
     )
 }
 
@@ -175,6 +195,7 @@ fn refresh_claimed_account_usage_with(
     runtime: &RuntimePaths,
     key: &LoginKey,
     claim_id: Uuid,
+    sub_provider: Option<&str>,
     set: &RoomLoginSet,
     probe_realtime: impl FnOnce(
         &crate::agents::AgentDefinition,
@@ -184,6 +205,7 @@ fn refresh_claimed_account_usage_with(
     probe: impl FnOnce(
         &crate::agents::AgentDefinition,
         &std::collections::BTreeMap<String, String>,
+        Option<&str>,
     ) -> crate::agents::AccountUsageProbe,
 ) -> bool {
     let started = Instant::now();
@@ -263,7 +285,7 @@ fn refresh_claimed_account_usage_with(
         return wrote;
     }
     let direct_started = Instant::now();
-    let direct_probe = probe(adapter, &login_env);
+    let direct_probe = probe(adapter, &login_env, sub_provider);
     let direct_ms = duration_ms(direct_started.elapsed());
     let outcome = account_usage_outcome(&direct_probe);
     let publication_started = Instant::now();
@@ -349,7 +371,11 @@ fn refresh_provider_usage_with(
     refresh: impl FnOnce(&RuntimePaths, &ProviderLogin) -> bool,
 ) -> bool {
     if force {
-        super::credits::invalidate_oauth_read(runtime, &login.key());
+        let key = login.key();
+        let scope = cached_account_usage_hint(runtime, &key, None)
+            .map(|hint| hint.scope)
+            .unwrap_or_default();
+        super::credits::invalidate_oauth_read(runtime, &AccountUsageKey::new(key, scope));
     }
     refresh(runtime, login)
 }
@@ -394,7 +420,7 @@ fn merge_account_usage_if_due(
         return false;
     }
     let key = login.key();
-    let cached_hint = cached_account_usage_hint(runtime, &key);
+    let cached_hint = cached_account_usage_hint(runtime, &key, None);
     if read_accounts_cache(&runtime.shared_accounts_path())
         .logins
         .get(&key)
@@ -436,7 +462,10 @@ fn complete_direct_account_usage(
         // identity filter keeps the old account's windows out of fusion, while
         // its reset check still compares against them.
         if windows.is_none() {
-            drop_login_rate_limits(runtime, key);
+            drop_account_rate_limits(
+                runtime,
+                &AccountUsageKey::new(key.clone(), completion.identity.scope.clone()),
+            );
         }
     }
     publish_account_usage_windows(runtime, key, completion.identity, windows);
@@ -477,10 +506,16 @@ fn publish_account_usage_windows(
     true
 }
 
-fn spawn_usage_refresh(runtime: &RuntimePaths, key: &LoginKey, claim_id: Uuid) -> bool {
+fn spawn_usage_refresh(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    claim_id: Uuid,
+    sub_provider: Option<&str>,
+) -> bool {
     let request = AccountUsageRefreshRequest {
         workspace_id: runtime.workspace_id.clone(),
         login: key.clone(),
+        sub_provider: sub_provider.map(ToOwned::to_owned),
         claim_id,
     };
     let argv = crate::child_process::agent_helper_argv("refresh-usage", &request);

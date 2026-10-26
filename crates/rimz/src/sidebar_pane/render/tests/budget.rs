@@ -126,6 +126,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
     SidebarProviderPanel {
         account: Default::default(),
         kind: format!("provider{index}"),
+        sub_provider: None,
         account_scope: Default::default(),
         entitlement: Default::default(),
         account_key: None,

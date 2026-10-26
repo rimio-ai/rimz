@@ -98,7 +98,8 @@ fn write_recovered_window(runtime: &RuntimePaths) {
         &RateLimitsCache {
             refreshed_at_ms: 0,
             entries: [(
-                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))
+                    .into(),
                 crate::agents::account::RateLimitCacheEntry {
                     limits: AgentRateLimits {
                         windows: vec![window(20, 9_000)],
@@ -192,7 +193,10 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
         &runtime,
         &RateLimitsCache {
             entries: [(
-                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("qwen")),
+                crate::agents::account::AccountUsageKey::new(
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("qwen")),
+                    crate::agents::ProviderAccountScope::sub_provider("alibaba", "international"),
+                ),
                 crate::agents::RateLimitCacheEntry {
                     reset_spotted_at_ms: None,
                     scope: crate::agents::ProviderAccountScope::sub_provider(
@@ -342,7 +346,7 @@ fn launched_child_arms_and_fires_resume_but_native_child_does_not() {
         &runtime,
         &RateLimitsCache {
             entries: [(
-                crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")).into(),
                 crate::agents::RateLimitCacheEntry {
                     limits: AgentRateLimits {
                         windows: vec![window(100, 5_000)],
@@ -1736,7 +1740,7 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
             &runtime,
             &RateLimitsCache {
                 entries: [(
-                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)).into(),
                     crate::agents::account::RateLimitCacheEntry {
                         limits: AgentRateLimits {
                             windows: vec![window(100, 30_000)],

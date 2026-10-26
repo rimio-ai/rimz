@@ -152,6 +152,9 @@ impl SidebarSnapshot {
                 .as_ref()
                 .map(|account| account.scope.clone())
                 .unwrap_or_default();
+            let sub_provider = account
+                .as_ref()
+                .and_then(|account| account.sub_provider.clone());
             let plan = account
                 .and_then(|account| account.plan.clone())
                 .filter(|plan| !plan.is_empty())
@@ -199,6 +202,7 @@ impl SidebarSnapshot {
                 SidebarProviderPanel {
                     kind,
                     account: key.name.clone(),
+                    sub_provider,
                     account_scope,
                     entitlement: Default::default(),
                     account_key,

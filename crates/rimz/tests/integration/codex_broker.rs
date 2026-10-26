@@ -99,6 +99,7 @@ fn old_login_usage_refresh_does_not_connect_to_room_broker() {
     )
     .unwrap();
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        sub_provider: None,
         workspace_id: runtime.workspace_id.clone(),
         login: "codex@work".parse().unwrap(),
         claim_id,
@@ -321,6 +322,7 @@ fn account_refresh_ignores_a_broker_that_cannot_name_its_child() {
     )
     .unwrap();
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        sub_provider: None,
         workspace_id: runtime.workspace_id.clone(),
         login: "codex@rimio".parse().unwrap(),
         claim_id,

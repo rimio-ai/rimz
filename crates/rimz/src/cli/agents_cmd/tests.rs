@@ -787,6 +787,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
     assert_eq!(args.request, orphan_subagent);
 
     let refresh_usage = AccountUsageRefreshRequest {
+        sub_provider: None,
         workspace_id: workspace_id.clone(),
         login: rimz::ids::LoginKey::default_for(kind.clone()),
         claim_id: "018f7f2e-7b3a-7cc0-8ec1-000000000002".parse().unwrap(),

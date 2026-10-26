@@ -30,6 +30,343 @@ fn nonce(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
 
+fn cache_with_reading(key: LoginKey, entry: ProviderCreditsEntry) -> CreditsCache {
+    let Some(hint) = entry
+        .oauth_read_hint
+        .as_ref()
+        .filter(|hint| hint.scope != entry.scope)
+    else {
+        return CreditsCache {
+            logins: BTreeMap::from([(key, entry)]),
+            ..Default::default()
+        };
+    };
+    let mut cache = CreditsCache::default();
+    *cache.entry_mut(&AccountUsageKey::new(key.clone(), hint.scope.clone())) =
+        ProviderCreditsEntry {
+            scope: hint.scope.clone(),
+            oauth_read_at_ms: entry.oauth_read_at_ms,
+            oauth_read_hint: Some(hint.clone()),
+            auth_settled: entry.auth_settled,
+            ..Default::default()
+        };
+    let usage_key = AccountUsageKey::new(key, entry.scope.clone());
+    *cache.entry_mut(&usage_key) = entry;
+    cache
+}
+
+#[test]
+fn scoped_claims_leases_and_published_hints_do_not_interfere() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let now = unix_now_ms();
+    let anthropic = identity(
+        Some(7),
+        Some("a"),
+        ProviderAccountScope::sub_provider("anthropic", "oauth"),
+    );
+    let openai = identity(
+        Some(7),
+        Some("o"),
+        ProviderAccountScope::sub_provider("openai", "oauth"),
+    );
+    let claim_a = claim_provider_account_usage_with_hint_at(
+        &runtime,
+        &key,
+        Some(anthropic.clone()),
+        now,
+        nonce(1),
+    )
+    .unwrap();
+    let claim_o = claim_provider_account_usage_with_hint_at(
+        &runtime,
+        &key,
+        Some(openai.clone()),
+        now,
+        nonce(2),
+    );
+    assert_eq!(
+        claim_o,
+        Some(nonce(2)),
+        "another credential must have its own lease"
+    );
+    let claim_o = claim_o.unwrap();
+    assert!(account_usage_claim_matches(&runtime, &key, claim_a));
+    assert!(account_usage_claim_matches(&runtime, &key, claim_o));
+    assert!(cancel_provider_account_usage_claim(&runtime, &key, claim_a));
+    assert!(account_usage_claim_matches(&runtime, &key, claim_o));
+    let claim_a = claim_provider_account_usage_with_hint_at(
+        &runtime,
+        &key,
+        Some(anthropic.clone()),
+        now,
+        nonce(3),
+    )
+    .unwrap();
+    assert!(!renew_provider_account_usage_claim_at(
+        &runtime,
+        &key,
+        nonce(1),
+        now + 1
+    ));
+    assert!(renew_provider_account_usage_claim_at(
+        &runtime,
+        &key,
+        claim_o,
+        now + 1
+    ));
+    for (claim, reading, plan) in [
+        (claim_a, &anthropic, "Anthropic"),
+        (claim_o, &openai, "OpenAI"),
+    ] {
+        assert!(
+            complete_provider_account_usage(
+                &runtime,
+                &key,
+                claim,
+                AccountUsageProbe::Found {
+                    identity: reading.clone(),
+                    snapshot: AccountUsageSnapshot {
+                        plan: Some(plan.to_owned()),
+                        ..Default::default()
+                    },
+                }
+            )
+            .is_some()
+        );
+    }
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    let json = serde_json::to_value(cache).unwrap();
+    assert!(
+        json["logins"].as_object().unwrap().is_empty(),
+        "sub-provider writers never use legacy logins"
+    );
+    assert_eq!(
+        json["scoped"]["pi@default/anthropic/oauth"]["plan"],
+        "Anthropic"
+    );
+    assert_eq!(json["scoped"]["pi@default/openai/oauth"]["plan"], "OpenAI");
+    for hint in [&anthropic, &openai] {
+        assert_eq!(
+            claim_provider_account_usage_with_hint_at(
+                &runtime,
+                &key,
+                Some(hint.clone()),
+                now + 2,
+                nonce(4)
+            ),
+            None
+        );
+    }
+    let moved = AccountUsageIdentity {
+        credentials_stamp: Some(8),
+        ..anthropic
+    };
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(moved), now + 2, nonce(4)),
+        Some(nonce(4))
+    );
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(openai), now + 2, nonce(5)),
+        None
+    );
+}
+
+#[test]
+fn a_scope_change_during_completion_keeps_the_other_scopes_live_lease() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let now = unix_now_ms();
+    let prior = identity(Some(7), None, ProviderAccountScope::KindWide);
+    let current = identity(
+        Some(8),
+        Some("owner"),
+        ProviderAccountScope::sub_provider("openai", "oauth"),
+    );
+    let old_claim = claim_provider_account_usage_with_hint_at(
+        &runtime,
+        &key,
+        Some(prior.clone()),
+        now,
+        nonce(1),
+    )
+    .unwrap();
+    let current_claim = claim_provider_account_usage_with_hint_at(
+        &runtime,
+        &key,
+        Some(current.clone()),
+        now,
+        nonce(2),
+    )
+    .unwrap();
+    complete_provider_account_usage(
+        &runtime,
+        &key,
+        old_claim,
+        AccountUsageProbe::Found {
+            identity: current,
+            snapshot: AccountUsageSnapshot::default(),
+        },
+    )
+    .unwrap();
+    assert!(
+        account_usage_claim_matches(&runtime, &key, current_claim),
+        "publishing the newly resolved scope must not revoke its other worker"
+    );
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(prior), now + 1, nonce(3)),
+        None,
+        "the original hint still waits its own attempt floor"
+    );
+}
+
+#[test]
+fn changed_scope_completions_preserve_the_target_scopes_partial_display() {
+    for (failed, repeats_identity) in [(false, true), (true, true), (true, false)] {
+        let (_dir, runtime) = runtime();
+        let key: LoginKey = "pi@default".parse().unwrap();
+        let current = identity(
+            Some(8),
+            Some("owner"),
+            ProviderAccountScope::sub_provider("openai", "oauth"),
+        );
+        let credits = ExtraCredits::known(None, Some(12.0), None);
+        merge_provider_realtime_usage(
+            &runtime,
+            &key,
+            current.clone(),
+            AccountUsageSnapshot {
+                plan: Some("pro".to_owned()),
+                extra_credits: Some(credits.clone()),
+                ..Default::default()
+            },
+        );
+        let claim = claim_provider_account_usage(
+            &runtime,
+            &key,
+            Some(identity(
+                Some(7),
+                Some("old-owner"),
+                ProviderAccountScope::KindWide,
+            )),
+        )
+        .unwrap();
+        let usage_key = AccountUsageKey::new(key.clone(), current.scope.clone());
+        let mut probe_identity = current.clone();
+        if !repeats_identity {
+            probe_identity.account_key = None;
+            probe_identity.credentials_stamp = None;
+        }
+        let probe = if failed {
+            AccountUsageProbe::Failed(probe_identity)
+        } else {
+            AccountUsageProbe::Found {
+                identity: probe_identity,
+                snapshot: AccountUsageSnapshot::default(),
+            }
+        };
+        let completion = complete_provider_account_usage(&runtime, &key, claim, probe).unwrap();
+        let cache = read_credits_cache(&runtime.shared_credits_path());
+        let entry = cache.get(&usage_key).unwrap();
+        assert_eq!(entry.plan.as_deref(), Some("pro"), "failed={failed}");
+        assert_eq!(entry.extra_credits, Some(credits), "failed={failed}");
+        assert!(entry.ok);
+        assert_eq!(completion.identity, current);
+        assert!(!completion.account_changed);
+    }
+}
+
+#[test]
+fn a_kind_wide_claim_does_not_wait_on_a_legacy_scoped_lease() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let now = unix_now_ms();
+    let scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let mut prior = claimed_entry(nonce(1), scope);
+    prior.oauth_read_at_ms = 0;
+    prior.direct_query_claim.as_mut().unwrap().claimed_at_ms = now;
+    write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            logins: BTreeMap::from([(key.clone(), prior)]),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        claim_provider_account_usage_with_hint_at(
+            &runtime,
+            &key,
+            Some(Default::default()),
+            now,
+            nonce(2)
+        ),
+        Some(nonce(2)),
+        "a matching-scope legacy fallback must not block another scope"
+    );
+    assert!(account_usage_claim_matches(&runtime, &key, nonce(1)));
+}
+
+#[test]
+fn scoped_credits_prefer_the_new_map_and_migrate_matching_legacy_readings() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "pi@default".parse().unwrap();
+    let scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let now = unix_now_ms();
+    let entry = |remaining| ProviderCreditsEntry {
+        scope: scope.clone(),
+        observed_at_ms: now,
+        ok: true,
+        extra_credits: Some(ExtraCredits::known(None, Some(remaining), None)),
+        ..Default::default()
+    };
+    let mut json = serde_json::json!({
+        "refreshed_at_ms": now,
+        "logins": {"pi@default": entry(5.0)},
+        "scoped": {"pi@default/anthropic/oauth": entry(9.0)}
+    });
+    for (scoped, expected) in [(true, Some(9.0)), (false, Some(5.0))] {
+        if !scoped {
+            json["scoped"] = serde_json::json!({});
+        }
+        let cache = serde_json::from_value(json.clone()).unwrap();
+        let mut panel = crate::sidebar::test_support::provider_panel("pi", Vec::new());
+        panel.account_scope = scope.clone();
+        let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+            runtime.workspace_id.clone(),
+            vec![panel],
+        );
+        apply_credits_cache_with(
+            &mut snapshot,
+            &cache,
+            &AccountsConfig::default(),
+            &RoomLoginSet::native(),
+            now,
+        );
+        assert_eq!(
+            snapshot.providers[0]
+                .extra_credits
+                .as_ref()
+                .and_then(ExtraCredits::remaining_usd_left),
+            expected,
+            "scoped={scoped}"
+        );
+    }
+    let cache = serde_json::from_value(json).unwrap();
+    write_credits_cache(&runtime.shared_credits_path(), &cache);
+    merge_provider_realtime_usage(
+        &runtime,
+        &key,
+        identity(None, None, scope),
+        AccountUsageSnapshot {
+            plan: Some("new".to_owned()),
+            ..Default::default()
+        },
+    );
+    let json = serde_json::to_value(read_credits_cache(&runtime.shared_credits_path())).unwrap();
+    assert!(json["logins"].get("pi@default").is_none());
+    assert_eq!(json["scoped"]["pi@default/anthropic/oauth"]["plan"], "new");
+}
+
 #[test]
 fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
     let hint = identity(Some(7), None, ProviderAccountScope::KindWide);
@@ -63,10 +400,7 @@ fn unchanged_published_hint_brakes_reads_despite_a_different_probe_identity() {
             .unwrap();
         write_credits_cache(
             &runtime.shared_credits_path(),
-            &CreditsCache {
-                logins: BTreeMap::from([(key.clone(), entry)]),
-                ..Default::default()
-            },
+            &cache_with_reading(key.clone(), entry),
         );
         for (at, current_hint, due) in [
             (now + 1, Some(hint.clone()), false),
@@ -200,8 +534,10 @@ fn absent_recorded_hint_preserves_the_prechange_read_cadence() {
             )
             .unwrap();
         assert_eq!(entry.oauth_read_hint, Some(hint.clone()));
-        cache.logins.insert(key.clone(), entry);
-        write_credits_cache(&runtime.shared_credits_path(), &cache);
+        write_credits_cache(
+            &runtime.shared_credits_path(),
+            &cache_with_reading(key.clone(), entry),
+        );
         assert_eq!(
             claim_provider_account_usage_with_hint_at(
                 &runtime,
@@ -510,6 +846,7 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
         &CreditsCache {
             refreshed_at_ms: 100,
             logins: BTreeMap::from([(key.clone(), prior)]),
+            ..Default::default()
         },
     );
     let check = || {
@@ -528,7 +865,7 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
         },
     );
     check();
-    invalidate_oauth_read(&runtime, &key);
+    invalidate_oauth_read(&runtime, &key.clone().into());
     check();
     assert_eq!(read_credits_cache(&path).logins[&key].oauth_read_hint, None);
     let claim_nonce = nonce(204);
@@ -563,6 +900,7 @@ fn credits_projection_suppresses_stale_plan_windows_and_credits_only_in_use() {
     let key: LoginKey = "claude@default".parse().unwrap();
     let cache = CreditsCache {
         refreshed_at_ms: 1,
+        scoped: Default::default(),
         logins: BTreeMap::from([(
             key,
             with_lapse(
@@ -800,6 +1138,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
     SidebarProviderPanel {
         account: Default::default(),
         kind: kind.to_owned(),
+        sub_provider: None,
         account_scope: Default::default(),
         entitlement: Default::default(),
         account_key: None,
@@ -833,6 +1172,35 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         window_placeholders: Vec::new(),
         windows: Vec::new(),
     }
+}
+
+#[test]
+fn credits_cache_skips_invalid_usage_keys_without_losing_valid_entries() {
+    let (dir, _) = runtime();
+    let path = dir.path().join("credits.json");
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &serde_json::json!({
+            "refreshed_at_ms": 123,
+            "logins": {"claude@default": {"observed_at_ms": 41, "ok": true}},
+            "scoped": {
+                "pi@default/azure/openai/oauth": {"observed_at_ms": 42, "ok": true},
+                "pi@default/anthropic/oauth": {"observed_at_ms": 43, "ok": true}
+            }
+        }),
+    )
+    .unwrap();
+    let cache = read_credits_cache(&path);
+    assert_eq!(cache.scoped.len(), 1, "only the invalid key is discarded");
+    assert_eq!(cache.refreshed_at_ms, 123);
+    assert_eq!(
+        cache.logins[&"claude@default".parse().unwrap()].observed_at_ms,
+        41
+    );
+    assert_eq!(
+        cache.scoped[&"pi@default/anthropic/oauth".parse().unwrap()].observed_at_ms,
+        43
+    );
 }
 
 #[test]
@@ -1192,23 +1560,18 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
         let (_dir, runtime) = runtime();
         write_credits_cache(
             &runtime.shared_credits_path(),
-            &CreditsCache {
-                logins: BTreeMap::from([(
-                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
-                        "codex",
-                    )),
-                    ProviderCreditsEntry {
-                        scope: prior_scope.clone(),
-                        oauth_read_at_ms: now,
-                        oauth_read_hint: recorded_hint,
-                        credentials_stamp: Some(7),
-                        account_key: Some("owner".to_owned()),
-                        ok: true,
-                        ..Default::default()
-                    },
-                )]),
-                ..Default::default()
-            },
+            &cache_with_reading(
+                "codex@default".parse().unwrap(),
+                ProviderCreditsEntry {
+                    scope: prior_scope.clone(),
+                    oauth_read_at_ms: now,
+                    oauth_read_hint: recorded_hint,
+                    credentials_stamp: Some(7),
+                    account_key: Some("owner".to_owned()),
+                    ok: true,
+                    ..Default::default()
+                },
+            ),
         );
         assert_eq!(
             claim_provider_account_usage_with_hint_at(
@@ -1561,39 +1924,35 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
         extra_credits: Some(ExtraCredits::known(None, Some(12.0), None)),
         ..Default::default()
     };
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let usage_key = AccountUsageKey::new(key.clone(), prior.scope.clone());
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            logins: BTreeMap::from([(
-                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-                prior.clone(),
-            )]),
+            logins: BTreeMap::from([(key.clone(), prior.clone())]),
             ..Default::default()
         },
     );
-    invalidate_oauth_read(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-    );
+    invalidate_oauth_read(&runtime, &usage_key);
     let claim = claim_provider_account_usage_at(
         &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        identity(None, Some("owner"), ProviderAccountScope::KindWide),
+        &key,
+        identity(None, Some("owner"), prior.scope.clone()),
         100,
         nonce(1),
     )
     .unwrap();
     complete_provider_account_usage(
         &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        &key,
         claim,
         AccountUsageProbe::Failed(Default::default()),
     )
     .unwrap();
     let entry = read_credits_cache(&runtime.shared_credits_path())
-        .logins
-        .remove(&"codex@default".parse().unwrap())
-        .unwrap();
+        .get(&usage_key)
+        .unwrap()
+        .clone();
     assert!(entry.ok);
     assert_eq!(entry.plan, prior.plan);
     assert_eq!(entry.extra_credits, prior.extra_credits);
@@ -1806,11 +2165,16 @@ fn merged_over(
             &CreditsCache {
                 refreshed_at_ms: 1,
                 logins: BTreeMap::from([(key.clone(), prior)]),
+                ..Default::default()
             },
         );
     }
+    let usage_key = AccountUsageKey::new(key.clone(), incoming.scope.clone());
     merge_provider_realtime_usage(&runtime, &key, incoming, snapshot);
-    read_credits_cache(&runtime.shared_credits_path()).logins[&key].clone()
+    read_credits_cache(&runtime.shared_credits_path())
+        .get(&usage_key)
+        .unwrap()
+        .clone()
 }
 
 fn prior_with_state(
@@ -1885,6 +2249,7 @@ fn realtime_write_after_a_credentials_rewrite_leaves_the_direct_read_due() {
         &CreditsCache {
             refreshed_at_ms: 1,
             logins: BTreeMap::from([(key.clone(), settled)]),
+            ..Default::default()
         },
     );
     let rewritten = identity(Some(9), Some("owner"), ProviderAccountScope::KindWide);

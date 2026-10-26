@@ -128,13 +128,12 @@ fn run(
             let cache =
                 crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
             result.limited = Some(workflow::Limited {
-                reset_at: cache.entries.get(&login).and_then(|entry| {
-                    crate::agents::ProviderCapacity::from_windows(entry.limits.windows.clone())
-                        .latest_spent_window_reset_for_model(
-                            Timestamp::now(),
-                            plan.request.identity.params.model.as_deref(),
-                        )
-                }),
+                reset_at: latest_limit_reset(
+                    &cache,
+                    &login,
+                    Timestamp::now(),
+                    plan.request.identity.params.model.as_deref(),
+                ),
             });
             return Err(error.text.clone());
         }
@@ -152,6 +151,23 @@ fn run(
     evaluated
 }
 
+fn latest_limit_reset(
+    cache: &crate::agents::RateLimitsCache,
+    login: &crate::ids::LoginKey,
+    now: Timestamp,
+    model: Option<&str>,
+) -> Option<Timestamp> {
+    cache
+        .entries
+        .iter()
+        .filter(|(key, _)| key.login == *login)
+        .filter_map(|(_, entry)| {
+            crate::agents::ProviderCapacity::from_windows(entry.limits.windows.clone())
+                .latest_spent_window_reset_for_model(now, model)
+        })
+        .max()
+}
+
 fn object(verdict: Option<Value>, output_path: &std::path::Path) -> Result<Value, String> {
     if let Some(verdict) = verdict {
         crate::disk::atomic::write_temp_then_rename(output_path, &verdict)
@@ -167,6 +183,46 @@ fn object(verdict: Option<Value>, output_path: &std::path::Path) -> Result<Value
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn provider_limit_uses_the_latest_spent_reset_across_only_the_requested_login() {
+        use crate::agents::{
+            AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache,
+        };
+        let now = Timestamp::from_second(2_000_000_000).unwrap();
+        let entries = [
+            ("pi@default/anthropic/oauth", 100, 1),
+            ("pi@default/openai/oauth", 100, 3),
+            ("pi@work/openai/oauth", 100, 4),
+            ("pi@default", 0, 5),
+        ]
+        .into_iter()
+        .map(|(key, used, hours)| {
+            let key: crate::agents::account::AccountUsageKey = key.parse().unwrap();
+            let entry = RateLimitCacheEntry {
+                scope: key.scope.clone(),
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(used),
+                        duration_mins: Some(300),
+                        resets_at: Some(now + jiff::SignedDuration::from_hours(hours)),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            };
+            (key, entry)
+        })
+        .collect();
+        let cache = RateLimitsCache {
+            entries,
+            ..Default::default()
+        };
+        assert_eq!(
+            latest_limit_reset(&cache, &"pi@default".parse().unwrap(), now, None),
+            Some(now + jiff::SignedDuration::from_hours(3))
+        );
+    }
 
     #[test]
     fn structured_object_is_saved_before_settlement() {

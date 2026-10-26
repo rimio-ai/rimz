@@ -1290,7 +1290,7 @@ fn reset_child_report_reads_failed_with_its_open_run() {
     let login = rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude"));
     let cache = rimz::agents::RateLimitsCache {
         entries: [(
-            login.clone(),
+            login.clone().into(),
             rimz::agents::RateLimitCacheEntry {
                 limits: rimz::agents::AgentRateLimits {
                     windows: vec![rimz::agents::RateLimitWindow {
