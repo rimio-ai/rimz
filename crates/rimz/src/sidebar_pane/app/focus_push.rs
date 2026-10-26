@@ -85,17 +85,17 @@ impl FocusPush {
         }
     }
 
-    pub(super) fn elapsed_ms(&self) -> u64 {
-        duration_millis(self.sent.elapsed())
+    pub(super) fn elapsed_ms(&self, now: Instant) -> u64 {
+        duration_millis(now.duration_since(self.sent))
     }
 
-    pub(in crate::sidebar_pane) fn finish(mut self, verdict: PushVerdict) {
-        self.peer.finished_ms = Some(self.elapsed_ms());
+    pub(in crate::sidebar_pane) fn finish(mut self, verdict: PushVerdict, now: Instant) {
+        self.peer.finished_ms = Some(self.elapsed_ms(now));
         self.peer.verdict = Some(verdict);
         let _ = self.ack.0.send(self.peer);
     }
 
-    pub(super) fn finish_painted(mut self, verdict: PushVerdict, painted: Instant) {
+    pub(super) fn finish_painted(mut self, verdict: PushVerdict, painted: Instant, now: Instant) {
         let (elapsed, sign) = if painted >= self.sent {
             (painted.duration_since(self.sent), 1)
         } else {
@@ -103,7 +103,7 @@ impl FocusPush {
         };
         self.peer.painted_ms =
             Some(sign * i64::try_from(duration_millis(elapsed)).unwrap_or(i64::MAX));
-        self.finish(verdict);
+        self.finish(verdict, now);
     }
 }
 
