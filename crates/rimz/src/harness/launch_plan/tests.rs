@@ -1565,7 +1565,7 @@ fn malformed_opencode_delegation_config_surfaces_as_a_launch_warning() {
         actual.push(
             plan.warnings
                 .iter()
-                .filter(|warning| matches!(warning, LaunchPlanWarning::NativeSubagentEnv(_)))
+                .filter(|warning| matches!(warning, LaunchPlanWarning::LaunchEnv(_)))
                 .count(),
         );
     }
