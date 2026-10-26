@@ -40,11 +40,22 @@ pub struct FloorReport {
     pub evictions: Vec<AssistRecord>,
 }
 
+/// Whether a machine-wide pressure pass was skipped or completed.
+#[derive(Debug)]
+pub enum FloorOutcome {
+    /// `gc.auto = false`: nothing was locked, probed, or removed.
+    Paused,
+    /// Another pass holds the machine pressure lock.
+    Busy,
+    Ran(FloorReport),
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct TempUnits {
     pub free_bytes: u64,
     pub total_bytes: u64,
     pub floor_bytes: u64,
+    pub eviction_paused: bool,
     pub reclaimable_units: usize,
     pub past_grace_units: usize,
     pub earliest_reclaim: Option<jiff::Timestamp>,
@@ -68,6 +79,7 @@ pub fn inspect(config: &GcConfig, measure_bytes: bool) -> Result<TempUnits, TmpF
         floor_bytes: config
             .tmp_floor_bytes(space.total)
             .map_err(TmpFloorErr::Config)?,
+        eviction_paused: !config.auto,
         bytes: measure_bytes.then(TempUnitBytes::default),
         ..TempUnits::default()
     };
@@ -115,12 +127,12 @@ impl TempUnits {
     }
 }
 
-pub fn run(config: &GcConfig) -> Result<Option<FloorReport>, TmpFloorErr> {
+pub fn run(config: &GcConfig) -> Result<FloorOutcome, TmpFloorErr> {
     if !config.auto {
-        return Ok(None);
+        return Ok(FloorOutcome::Paused);
     }
     let Some(_guard) = claim(&RuntimePaths::shared().shared_tmp_floor_lock())? else {
-        return Ok(None);
+        return Ok(FloorOutcome::Busy);
     };
     let root = crate::disk::paths::workspaces_dir();
     let space = probe(&root)?;
@@ -128,7 +140,7 @@ pub fn run(config: &GcConfig) -> Result<Option<FloorReport>, TmpFloorErr> {
         .tmp_floor_bytes(space.total)
         .map_err(TmpFloorErr::Config)?;
     if space.free >= floor_bytes {
-        return Ok(Some(FloorReport {
+        return Ok(FloorOutcome::Ran(FloorReport {
             free_bytes: space.free,
             total_bytes: space.total,
             floor_bytes,
@@ -146,7 +158,7 @@ pub fn run(config: &GcConfig) -> Result<Option<FloorReport>, TmpFloorErr> {
             }
         },
     )
-    .map(Some)
+    .map(FloorOutcome::Ran)
 }
 
 fn probe(root: &Path) -> io::Result<DiskSpace> {

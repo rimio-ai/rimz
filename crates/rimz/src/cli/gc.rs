@@ -14,6 +14,7 @@ use super::{GlobalFlags, open_existing_store};
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{self, Assist, AssistRecord};
 use rimz::harness::auto_gc::{self, GcScope};
+use rimz::harness::tmp_floor::{self, FloorOutcome};
 use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
 use rimz::utils::time::format_duration_compact;
@@ -45,12 +46,14 @@ pub struct GcArgs {
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    let gc_config = if args.unattended || args.tmp_floor {
+    let gc_config = if args.tmp_floor {
+        MachineConfig::load()?.gc
+    } else if args.unattended {
         // Never default an unreadable core config: it may contain a gc opt-out.
         // Loop-source errors instead skip the worktree area below.
         let config = match MachineConfig::load() {
             Ok(config) => config,
-            Err(_) if args.unattended && MachineConfig::load_loop().is_err() => {
+            Err(_) if MachineConfig::load_loop().is_err() => {
                 let config = MachineConfig::load_lenient();
                 if config.require_readable_core("automatic gc").is_err() {
                     return Ok(());
@@ -67,38 +70,49 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         MachineConfig::load_lenient().gc.clone()
     };
     if args.tmp_floor {
-        if let Some(report) = rimz::harness::tmp_floor::run(&gc_config)? {
-            if args.json {
-                serde_json::to_writer_pretty(render::out(), &report)?;
-            } else {
-                let mut out = render::out();
-                for record in &report.evictions {
-                    if let Assist::TmpEvict {
-                        workspace_id,
-                        handle,
-                        reclaimed_bytes,
-                        error,
-                        ..
-                    } = &record.assist
-                    {
-                        writeln!(
-                            out,
-                            "{handle}: {} ({workspace_id}){}",
-                            fmt_bytes(*reclaimed_bytes),
-                            error
-                                .as_ref()
-                                .map(|error| format!(" failed: {error}"))
-                                .unwrap_or_default()
-                        )?;
+        match tmp_floor::run(&gc_config)? {
+            FloorOutcome::Paused => writeln!(
+                render::err(),
+                "pressure eviction is paused by gc.auto = false; \
+                 rimz gc --all removes temp units past gc.tmp_grace; \
+                 rimz config set gc.auto true resumes pressure eviction."
+            )?,
+            FloorOutcome::Busy => {
+                writeln!(render::err(), "another free-space pass is already running")?;
+            }
+            FloorOutcome::Ran(report) => {
+                if args.json {
+                    serde_json::to_writer_pretty(render::out(), &report)?;
+                } else {
+                    let mut out = render::out();
+                    for record in &report.evictions {
+                        if let Assist::TmpEvict {
+                            workspace_id,
+                            handle,
+                            reclaimed_bytes,
+                            error,
+                            ..
+                        } = &record.assist
+                        {
+                            writeln!(
+                                out,
+                                "{handle}: {} ({workspace_id}){}",
+                                fmt_bytes(*reclaimed_bytes),
+                                error
+                                    .as_ref()
+                                    .map(|error| format!(" failed: {error}"))
+                                    .unwrap_or_default()
+                            )?;
+                        }
                     }
+                    writeln!(
+                        out,
+                        "free {} of {}, floor {}",
+                        fmt_bytes(report.free_bytes),
+                        fmt_bytes(report.total_bytes),
+                        fmt_bytes(report.floor_bytes)
+                    )?;
                 }
-                writeln!(
-                    out,
-                    "free {} of {}, floor {}",
-                    fmt_bytes(report.free_bytes),
-                    fmt_bytes(report.total_bytes),
-                    fmt_bytes(report.floor_bytes)
-                )?;
             }
         }
         return Ok(());

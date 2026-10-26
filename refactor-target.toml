@@ -1220,7 +1220,8 @@ path = "crates/rimz/src/harness"
 # drainer_outage shares its tracker, observations, transitions and sidebar reader (+9).
 # CellNotice carries spec losses to the launch finalizer without printing (+1).
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
-surface-budget = 994
+# FloorOutcome tells the GC CLI a paused or busy pressure pass from a completed one (+1).
+surface-budget = 995
 
 [[verdict]]
 kind = "item"
@@ -9477,6 +9478,11 @@ reason = "Doctor shares the evictor's inventory and hold rules without locking o
 kind = "item"
 key = "harness::tmp_floor::run"
 reason = "The detached GC CLI delegates machine election and pressure eviction to the harness."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::FloorOutcome"
+reason = "The GC CLI distinguishes a paused or busy pressure pass from a completed report."
 
 [[verdict]]
 kind = "item"

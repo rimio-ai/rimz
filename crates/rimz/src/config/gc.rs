@@ -54,7 +54,7 @@ impl<'de> Deserialize<'de> for HistoryRetention {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GcConfig {
-    /// Sweep once a day from every open room.
+    /// Enable daily sweeps and free-space pressure eviction from open rooms.
     pub auto: bool,
     /// Age cutoff `rimz gc` uses when `--older-than` is absent.
     #[serde(with = "older_than_serde")]

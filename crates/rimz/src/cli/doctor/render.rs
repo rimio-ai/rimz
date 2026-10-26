@@ -358,19 +358,38 @@ fn render_temp_units(
         fmt_bytes(report.total_bytes),
         fmt_bytes(report.floor_bytes)
     );
+    let pause = "pressure eviction is paused by gc.auto = false";
+    let resume = "`rimz config set gc.auto true` resumes pressure eviction";
     let free = if report.free_bytes >= report.floor_bytes {
         verdict(Health::Ok, &free)
     } else if report.reclaimable_units > 0 {
-        counted_verdict(tally, Severity::Warning, &free, "run `rimz gc --tmp-floor`")
+        let fix = match (report.eviction_paused, report.past_grace_units) {
+            (false, _) => "run `rimz gc --tmp-floor`".to_owned(),
+            (true, 0) => format!("{pause}; {resume}"),
+            (true, count) => format!(
+                "{pause}; `rimz gc --all` removes the {} past the grace; {resume}",
+                plural(count, "unit")
+            ),
+        };
+        counted_verdict(tally, Severity::Warning, &free, fix)
     } else {
-        counted_verdict(
-            tally,
-            Severity::Problem,
-            &free,
-            "stop or restart the agents holding the largest units; `rimz agents show @handle` prints the unit path",
-        )
+        let stop = "stop or restart the agents holding the largest units; \
+                    `rimz agents show @handle` prints the unit path";
+        let fix = if report.eviction_paused {
+            format!(
+                "{stop}; {pause}; stopped agents' units remain until \
+                 `rimz config set gc.auto true` resumes eviction, or \
+                 `rimz gc --all` removes them once past the grace"
+            )
+        } else {
+            stop.to_owned()
+        };
+        counted_verdict(tally, Severity::Problem, &free, fix)
     };
     kv.push("free", free);
+    if report.eviction_paused {
+        kv.push("eviction", cell(pause.to_owned()));
+    }
     kv.push(
         "reclaimable",
         cell(if report.reclaimable_units == 0 {
