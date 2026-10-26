@@ -1034,6 +1034,7 @@ fn a_second_focus_move_rearms_the_marker_dwell() {
 #[test]
 fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
     let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
     rig.view().ui().selected_index = Some(19);
     {
         let pane = &mut rig.state.pane;
@@ -1047,7 +1048,7 @@ fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
     rig.view().ui().freeze = None;
     rig.state.pane.dirty = false;
     rig.view().ctx().focus_marker = Some(FocusMarker::Dwelling(
-        Instant::now() + Duration::from_millis(50),
+        rig.state.pane.clock.now() + Duration::from_millis(50),
     ));
     let (active, timeout) = rig.state.frame_timing();
     assert!(!active);
@@ -1055,8 +1056,8 @@ fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
         timeout <= Duration::from_millis(50),
         "the dwell caps the idle timeout"
     );
-    rig.view().ctx().focus_marker = Some(FocusMarker::Dwelling(Instant::now()));
-    rig.state.pane.next_frame = Instant::now() + Duration::from_secs(2);
+    rig.view().ctx().focus_marker = Some(FocusMarker::Dwelling(rig.state.pane.clock.now()));
+    rig.state.pane.next_frame = rig.state.pane.clock.now() + Duration::from_secs(2);
     let (active, _) = rig.state.frame_timing();
     assert!(active, "the elapsed dwell itself makes the frame due");
     rig.paint(active);
@@ -1397,6 +1398,7 @@ fn same_tab_focus_supersedes_pending_cross_tab_push() {
 #[test]
 fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
     let (mut target, _, _) = pane_pair(MuxName::Zellij);
+    let clock = play_clock(&mut target);
     target.view().ctx().current.pane_session_name = Some("rimz-test".into());
     let peers = target
         .focus_plane
@@ -1407,13 +1409,14 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
         let start = &start;
         let work = scope.spawn(move || {
             let (_, mut hidden, output) = pane_pair(MuxName::Zellij);
+            hidden.state.pane.clock = clock;
             hidden.state.pane.focus_peers = Some(peers);
             hidden.view().ctx().filter_observed_at = None;
             hidden.state.pane.titled = true;
             let event = SidebarEventEnvelope::new(
                 hidden.ws.clone(),
                 Some("rimz-test".into()),
-                crate::utils::time::unix_now_ms(),
+                hidden.state.pane.clock.now_ms(),
                 SidebarEvent::BodyFilterChanged,
             );
             let mut inbox = queued([Wakeup::Event(event), Wakeup::Snapshot]);
@@ -1461,6 +1464,7 @@ fn jump_target_paints_while_hidden_non_owner_handles_room_work() {
         });
         ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let (_, _, mut anchor) = hidden_destination();
+        anchor.issued_at_ms = target.state.pane.clock.now_ms();
         anchor.pane_id = pane("terminal_0", "tab_0", false).pane_id;
         anchor.placement = Some(crate::mux::focus_anchor::FocusPlacement {
             row_id: "agent-0".into(),
@@ -1524,6 +1528,7 @@ fn source_click_arms_before_paint_and_release_wakes_each_peer_once() {
 #[test]
 fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
     let (mut source, mut destination, output) = pane_pair(MuxName::Tmux);
+    play_clock(&mut destination);
     paint_scrolled(&mut source, 12);
     let target = PaneId::from_parts(MuxName::Tmux, "%8");
     let mut pulled = destination.state.views.mirror().clone();
@@ -1537,7 +1542,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
         pane_id: target,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
-        issued_at_ms: crate::utils::time::unix_now_ms(),
+        issued_at_ms: destination.state.pane.clock.now_ms(),
         applied_at_ms: None,
         state: crate::mux::focus_anchor::FocusIntentState::Requested,
         pre_action: Vec::new(),
@@ -1552,7 +1557,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
     let event = crate::wakeup::events::SidebarEventEnvelope::new(
         destination.ws.clone(),
         Some("rimz-test".into()),
-        crate::utils::time::unix_now_ms(),
+        destination.state.pane.clock.now_ms(),
         SidebarEvent::BodyFilterChanged,
     );
     let plane = super::super::super::plane::DataPlane::detached();
@@ -1565,21 +1570,21 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
         destination.state.pane.config.instance_id.clone(),
         crate::diag::DiagSink::disabled(),
     ));
-    let clicked = Instant::now();
+    let clicked = destination.state.pane.clock.now();
     let lease = plane
         .focus_peers(
             source.state.pane.config.instance_id.clone(),
             crate::diag::DiagSink::disabled(),
         )
         .arm(anchor.pane_id.clone(), clicked);
-    let (_, _, _, ack, deliveries) = lease.push(&anchor, clicked, Instant::now).unwrap();
+    let (_, _, _, ack, deliveries) = lease.push(&anchor, clicked, || clicked).unwrap();
     assert_eq!(
         deliveries[0].delivery,
         PushDelivery::Sent,
         "a full ordinary inbox cannot lose the priority push"
     );
     let mut inbox = WakeupInbox::new(rx);
-    destination.state.pane.next_frame = Instant::now();
+    destination.state.pane.next_frame = destination.state.pane.clock.now();
     destination
         .state
         .step(&mut inbox, &mut destination.terminal)
@@ -1599,6 +1604,7 @@ fn queued_snapshot_tick_does_not_paint_ahead_of_a_focus_push() {
 #[test]
 fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
     let (mut source, mut destination, _) = pane_pair(MuxName::Tmux);
+    play_clock(&mut destination);
     let previous = destination
         .view()
         .ctx()
@@ -1864,6 +1870,7 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
 
 fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
     let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
     let target = rig.view().ctx().current.worktree_groups[0].rows[19]
         .pane
         .as_ref()
@@ -1872,6 +1879,7 @@ fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
         .clone();
     if rowless_anchor {
         let (_, _, mut anchor) = hidden_destination();
+        anchor.issued_at_ms = rig.state.pane.clock.now_ms();
         anchor.pane_id = target.clone();
         anchor.placement = None;
         anchor.order = None;
@@ -2505,6 +2513,7 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
 #[test]
 fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
     let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
     let (row_id, from_y) = rig.state.pane.ui.painted_rows[1].clone();
     let target = rig
         .view()
@@ -2555,6 +2564,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
     use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
     for (viewport_row, banner) in [(-1, false), (2, false), (2, true)] {
         let (mut rig, _) = scroll_rig();
+        play_clock(&mut rig);
         if banner {
             let mut guard = rig.view();
             let (_, context) = guard.pair();
@@ -2576,7 +2586,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
         rig.view().ui().selected_index = Some(4);
         rig.view().ui().selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
         rig.view().ui().scroll_offset = 30;
-        let stamp = crate::utils::time::unix_now_ms();
+        let stamp = rig.state.pane.clock.now_ms();
         let selected = rig.view().ui().selected_pane.clone().unwrap();
         crate::mux::focus_anchor::store(
             &rig.runtime,
@@ -2689,6 +2699,7 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
 #[test]
 fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
     let (mut rig, _) = scroll_rig();
+    play_clock(&mut rig);
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
     dispatch(&mut rig, &mut inbox);
     let started = rig.view().ui().frame_ms;
@@ -2783,7 +2794,9 @@ fn click_after_wheel_ease_hits_the_landed_frame() {
 #[test]
 fn late_wheel_frame_matches_regular_playback() {
     let (mut regular, _) = scroll_rig();
+    play_clock(&mut regular);
     let (mut late, _) = scroll_rig();
+    play_clock(&mut late);
     let mut starts = Vec::new();
     for rig in [&mut regular, &mut late] {
         let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
