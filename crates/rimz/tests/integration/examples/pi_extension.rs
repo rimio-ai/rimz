@@ -21,8 +21,8 @@ fn extension_tracks_settled_boundary_spend_and_child_lineage() {
     // while older releases emit `agent_settled` themselves on `agent_end`.
     // Both paths must accumulate every upstream usage source, clear cost on
     // shutdown, and stop child rows at the same settled boundary.
-    run_extension_harness("1.1.0", "agent_end", "agent_settled", false);
-    run_extension_harness("0.80.3", "agent_settled", "agent_end", false);
+    run_extension_harness("1.1.0", "agent_end", "agent_settled", false, None);
+    run_extension_harness("0.80.3", "agent_settled", "agent_end", false, None);
 }
 
 #[test]
@@ -36,7 +36,23 @@ fn extension_native_abort_overrides_retained_verdict() {
         crate::common::skip("node not on PATH");
         return;
     }
-    run_extension_harness("1.1.0", "agent_end", "agent_settled", true);
+    run_extension_harness("1.1.0", "agent_end", "agent_settled", true, None);
+}
+
+#[test]
+#[cfg(unix)]
+fn extension_requests_fast_only_for_supported_openai_models() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        crate::common::skip("node not on PATH");
+        return;
+    }
+    run_extension_harness("1.4.0", "agent_end", "agent_settled", false, Some(true));
+    run_extension_harness("0.57.0", "agent_settled", "agent_end", false, Some(true));
+    run_extension_harness("0.56.9", "agent_settled", "agent_end", false, Some(false));
 }
 
 /// Drive the embedded extension through Node as if `PI_VERSION` were
@@ -53,6 +69,7 @@ fn run_extension_harness(
     boundary_event: &str,
     absent_event: &str,
     aborted: bool,
+    fast_supported: Option<bool>,
 ) {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -100,6 +117,7 @@ fn run_extension_harness(
         format!(
             r#"
 import fs from "node:fs/promises";
+import assert from "node:assert/strict";
 
 process.env.RIMZ_BIN = {};
 process.env.RIMZ_CAPTURE = {};
@@ -107,6 +125,8 @@ const boundaryEvent = {};
 const absentEvent = {};
 const hasNativeSettled = {};
 const aborted = {aborted};
+const fastSupported = {};
+delete process.env.RIMZ_LAUNCH_FAST;
 
 const {{ default: rimz }} = await import({});
 const makePi = () => {{
@@ -145,7 +165,7 @@ const ctx = {{
     getBranch: () => structuredClone(rootBranch),
   }},
   getContextUsage: () => ({{ percent: 45, contextWindow: 1000, tokens: 450 }}),
-  model: {{ id: "gpt-5" }},
+  model: {{ id: "gpt-5", provider: "openai-codex", api: "openai-codex-responses" }},
 }};
 const childCtx = {{
   sessionManager: {{
@@ -154,16 +174,66 @@ const childCtx = {{
     getBranch: () => [{{ type: "session_info", name: "general-purpose#abc123" }}],
   }},
   getContextUsage: () => ({{ percent: 5, contextWindow: 1000, tokens: 50 }}),
-  model: {{ id: "gpt-5-mini" }},
+  model: {{ id: "gpt-5-mini", provider: "openai", api: "openai-responses" }},
 }};
 const launchReminders = "<system_reminder>\nroom rules\n</system_reminder>";
 process.env.RIMZ_LAUNCH_REMINDERS = launchReminders;
+if (fastSupported !== null) process.env.RIMZ_LAUNCH_FAST = "1";
 rimz(pi);
 rimz(childPi);
+const fastResults = [];
+const fastExpected = [];
+if (fastSupported !== null) {{
+  assert.equal(process.env.RIMZ_LAUNCH_FAST, "1", "fast must remain inheritable");
+  const payload = {{
+    model: "kept", input: [{{ role: "user", content: "go" }}], service_tier: "flex",
+  }};
+  const codexModel = {{
+    id: "gpt-5.6-sol", provider: "openai-codex", api: "openai-codex-responses",
+  }};
+  const openaiModel = {{ id: "gpt-5.4", provider: "openai", api: "openai-responses" }};
+  const check = (label, model, body, admitted, hooks = handlers) => {{
+    const original = structuredClone(body);
+    const value = hooks.get("before_provider_request")?.({{ payload: body }}, {{ model }});
+    fastResults.push([label, value ?? null, body]);
+    fastExpected.push([
+      label, admitted && fastSupported ? {{ ...original, service_tier: "priority" }} : null,
+      original,
+    ]);
+  }};
+  for (const id of ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex"]) {{
+    check(id, {{ ...codexModel, id }}, payload, true);
+  }}
+  check("openai", openaiModel, {{ input: "go" }}, true);
+  check("child", openaiModel, payload, true, childHandlers);
+  check("child unlisted", childCtx.model, payload, false, childHandlers);
+  check("completions", {{ ...openaiModel, api: "openai-completions" }}, payload, false);
+  check("virtual", {{ ...codexModel, api: "pi-virtual" }}, payload, false);
+  check("other provider", {{ ...openaiModel, provider: "other" }}, payload, false);
+  check("crossed pair", {{ ...openaiModel, api: "openai-codex-responses" }}, payload, false);
+  check("unlisted", {{ ...codexModel, id: "gpt-5.6-sol-extra" }}, payload, false);
+  check("no model", undefined, payload, false);
+  for (const body of [null, [], "payload"]) check("malformed", codexModel, body, false);
+  for (const env of [undefined, "0", "true"]) {{
+    if (env === undefined) delete process.env.RIMZ_LAUNCH_FAST;
+    else process.env.RIMZ_LAUNCH_FAST = env;
+    check(`env ${{env}}`, codexModel, payload, false);
+  }}
+  process.env.RIMZ_LAUNCH_FAST = "1";
+  const throwingPayload = {{ get input() {{ throw new Error("bad payload"); }} }};
+  const exception = handlers.get("before_provider_request")?.(
+    {{ payload: throwingPayload }}, {{ model: codexModel }},
+  );
+  fastResults.push(["exception", exception ?? null]);
+  fastExpected.push(["exception", null]);
+  ctx.model = codexModel;
+}}
 if ("RIMZ_LAUNCH_REMINDERS" in process.env) {{
   throw new Error("launch reminders stayed in the inheritable environment");
 }}
 handlers.get("session_start")({{ reason: "launch" }}, ctx);
+if (fastSupported !== null) ctx.model = {{ ...ctx.model, id: "gpt-5" }};
 const rootStart = await handlers.get("before_agent_start")({{ prompt: "go", systemPrompt: "base" }}, ctx);
 if (rootStart?.systemPrompt !== `base\n\n${{launchReminders}}`) {{
   throw new Error(`primary system prompt lost the launch reminders: ${{JSON.stringify(rootStart)}}`);
@@ -322,6 +392,15 @@ if (payloads.length < expectedPayloads) {{
 const rootPayloads = payloads.filter((payload) =>
   payload.session_id === "sess-1" && !payload.hook_event_name.startsWith("subagent_"));
 const byEvent = Object.fromEntries(rootPayloads.map((payload) => [payload.hook_event_name, payload]));
+if (fastSupported !== null) {{
+  const subprocessStart = payloads.find((payload) =>
+    payload.session_id === "sess-subprocess" && payload.hook_event_name === "session_start");
+  fastResults.push([
+    "envelopes", byEvent.session_start.fast, byEvent.before_agent_start.fast, subprocessStart?.fast,
+  ]);
+  fastExpected.push(["envelopes", fastSupported, false, undefined]);
+  assert.deepEqual(fastResults, fastExpected, "fast requests and current-model envelopes");
+}}
 if (byEvent.tool_call?.tool_call_id !== "ask-call") {{
   throw new Error(`tool_call lost correlation: ${{JSON.stringify(byEvent.tool_call)}}`);
 }}
@@ -407,6 +486,7 @@ if (subprocessStart?.session_id !== "env-parent" || subprocessStart.subagent_lab
             serde_json::to_string(boundary_event).unwrap(),
             serde_json::to_string(absent_event).unwrap(),
             boundary_event == "agent_end",
+            serde_json::to_string(&fast_supported).unwrap(),
             serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
         ),

@@ -12,6 +12,21 @@ fn normalized_context(mut payload: Value) -> Option<AgentContext> {
 }
 
 #[test]
+fn observed_context_keeps_fast_readings_distinct_from_older_envelopes() {
+    let actual: Vec<_> = [Some(true), Some(false), None]
+        .into_iter()
+        .map(|fast| {
+            let mut payload = json!({"model": "gpt-5.6-sol"});
+            if let Some(fast) = fast {
+                payload["fast"] = json!(fast);
+            }
+            normalized_context(payload).unwrap().fast
+        })
+        .collect();
+    assert_eq!(actual, [Some(true), Some(false), None]);
+}
+
+#[test]
 fn observed_context_projects_the_extension_envelope() {
     let context = normalized_context(json!({
         "model": "gpt-5.5",

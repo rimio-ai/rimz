@@ -2779,9 +2779,13 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .unset
                 .iter()
                 .map(String::as_str)
-                // Identity pins have their own rules, not temp-root policy.
+                // Identity pins and launch switches have their own rules, not
+                // temp-root policy.
                 .filter(|key| {
-                    !matches!(*key, "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR")
+                    !matches!(
+                        *key,
+                        "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR" | "RIMZ_LAUNCH_FAST"
+                    )
                         && *key != crate::harness::launch::ENV_RUNTIME_ENV
                         && *key != crate::harness::launch::ENV_AGENT_MODEL
                         && *key != crate::harness::launch::ENV_TEAM

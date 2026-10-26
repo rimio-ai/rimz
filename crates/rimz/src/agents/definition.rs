@@ -277,10 +277,12 @@ impl LaunchSpec {
         })
     }
 
-    /// The provider argv that turns fast mode on, or the provider's alternative.
+    /// The provider argv that turns fast mode on (empty for an extension), or
+    /// the provider's alternative.
     pub fn fast_args(self) -> Result<Vec<String>, &'static str> {
         match self.presets.fast {
             FastSwitch::Args(args) => Ok(args.iter().map(|arg| (*arg).to_owned()).collect()),
+            FastSwitch::ExtensionEnv => Ok(Vec::new()),
             FastSwitch::Unsupported { fix } => Err(fix),
         }
     }
@@ -555,15 +557,18 @@ impl PresetMatchers {
 
 /// How a provider is launched in its fast mode (priority serving).
 ///
-/// Fast is on or off: on renders the switch, off renders nothing, so the
-/// provider's own default stands. A provider without a launch switch carries
-/// the alternative its skip warning names.
+/// Fast is on or off: on renders argv or tells RimZ's extension through the
+/// launch env; off renders nothing, so the provider's own default stands. An
+/// unsupported provider carries the alternative its skip warning names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FastSwitch {
     /// Exact argv appended when fast is on and stripped when a launch turns it
     /// off. Claude's inline `--settings` member is folded into the launch's one
     /// `--settings` at the process boundary.
     Args(&'static [&'static str]),
+    /// RimZ's extension requests priority serving through the launch env,
+    /// without adding provider argv.
+    ExtensionEnv,
     /// No launch switch; `fix` tells the user what to do instead.
     Unsupported { fix: &'static str },
 }

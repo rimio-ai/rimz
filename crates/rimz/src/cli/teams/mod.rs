@@ -139,7 +139,7 @@ struct ResumeArgs {
     /// Save this reasoning effort for subsequent resumes.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
-    /// Save fast mode on for subsequent resumes (Claude, Codex, Amp).
+    /// Save fast mode on for subsequent resumes (Claude, Codex, Amp, Pi on OpenAI).
     #[arg(long, conflicts_with = "no_fast")]
     fast: bool,
     /// Save fast mode off for subsequent resumes.

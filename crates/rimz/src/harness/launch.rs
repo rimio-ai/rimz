@@ -33,6 +33,9 @@ pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// (`SystemTextChannel::ExtensionEnv`). Always exported, empty when there is no
 /// reminder, so a parent's value never leaks into a child launch.
 const ENV_LAUNCH_REMINDERS: &str = "RIMZ_LAUNCH_REMINDERS";
+/// `1` when RimZ's extension requests priority serving for this launch;
+/// cleared on every other launch so a nested launch never inherits it.
+const ENV_LAUNCH_FAST: &str = "RIMZ_LAUNCH_FAST";
 /// Stable RimZ launch identity. The provider may replace the provisional
 /// session key after startup, so launch ancestry resolves this value through
 /// the durable `AgentState::launch_id` stamp.
@@ -1143,6 +1146,14 @@ fn compile_agent_process_with_extra_env(
     } else {
         env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
+    }
+    if request.identity.params.fast
+        && adapter.spec().launch.presets.fast == crate::agents::definition::FastSwitch::ExtensionEnv
+    {
+        env.insert(ENV_LAUNCH_FAST.to_owned(), "1".to_owned());
+    } else {
+        env.remove(ENV_LAUNCH_FAST);
+        unset.insert(ENV_LAUNCH_FAST.to_owned());
     }
     // A launch carries its own model, team, and role, never its caller's.
     let params = &request.identity.params;

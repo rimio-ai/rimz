@@ -11,6 +11,8 @@
 // broken rimz) lets it run. RimZ authors this wire; the event mapping it
 // feeds is docs/internals/agents/adapter_pi.md and the upstream surface is
 // docs/externals/agent-adapter/pi-reference.md.
+// Fast launches also request OpenAI priority serving through
+// `before_provider_request`, without spawning a hook child.
 import { spawn } from "node:child_process";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
@@ -28,6 +30,32 @@ const versionAtLeast = (version, floor) => {
   return true;
 };
 const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
+const hasBeforeProviderRequest = versionAtLeast(PI_VERSION, [0, 57, 0]);
+// Exact model ids a fast launch requests priority serving for; the evidence
+// an addition needs is in docs/contributing/model-upgrades.md. Codex
+// advertises priority for gpt-6-sol, but its acceptance on OpenAI's API
+// remains unverified: no OpenAI Fast price is published for it.
+const FAST_MODELS = new Set([
+  "gpt-6.1-sol",
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.4",
+  "gpt-5.5",
+  "gpt-5.3-codex",
+]);
+const requestsFast = (ctx) => {
+  const model = ctx?.model;
+  return (
+    hasBeforeProviderRequest && process.env.RIMZ_LAUNCH_FAST === "1" && FAST_MODELS.has(model?.id) && (
+      (model.provider === "openai" && model.api === "openai-responses") ||
+      (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+    )
+  );
+};
 const PARENT_SESSION_ENV = "RIMZ_PI_PARENT_SESSION";
 const PRIMARY_SESSION = Symbol.for("rimz.pi.primary-session");
 const LAUNCH_REMINDERS_ENV = "RIMZ_LAUNCH_REMINDERS";
@@ -237,6 +265,7 @@ export default function rimz(pi) {
       session_id: id,
       cwd: ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd,
       model: ctx?.model?.id,
+      fast: ctx?.model == null ? undefined : requestsFast(ctx),
       effort: thinkingLevel(),
       session_name: nameBySession.get(id),
       context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
@@ -438,6 +467,16 @@ export default function rimz(pi) {
     }
     refreshSessionCosts(ctx);
     feed("turn_end", ctx, {});
+  });
+  pi.on("before_provider_request", (ev, ctx) => {
+    try {
+      if (!requestsFast(ctx)) return;
+      const payload = ev?.payload;
+      if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return;
+      return { ...payload, service_tier: "priority" };
+    } catch {
+      return undefined;
+    }
   });
   pi.on("after_provider_response", (ev, ctx) => {
     updateWindows(ev?.headers);

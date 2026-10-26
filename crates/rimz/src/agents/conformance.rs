@@ -831,7 +831,7 @@ fn fast_switch_characterization() {
     amp: on=["--fast"] off=Ok([])
     copilot: on=agent `copilot` has no fast-mode launch switch; launch without --fast off=Ok([])
     kimi: on=agent `kimi` has no fast-mode launch switch; use --model kimi-for-coding-highspeed off=Ok([])
-    pi: on=agent `pi` has no fast-mode launch switch; launch without --fast off=Ok([])
+    pi: on=[] off=Ok([])
     opencode: on=agent `opencode` has no fast-mode launch switch; launch without --fast off=Ok([])
     antigravity: on=agent `antigravity` has no fast-mode launch switch; launch without --fast off=Ok([])
     cursor: on=agent `cursor` has no fast-mode launch switch; choose a fast model id with --model, e.g. claude-opus-5-5-fast off=Ok([])

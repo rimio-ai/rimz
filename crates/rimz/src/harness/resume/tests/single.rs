@@ -106,7 +106,8 @@ fn recorded_fast_override_saves_both_values() {
 
 #[test]
 fn unsupported_fast_warns_and_resumes_without_stamping_it() {
-    let mut saved = agent("pi", "saved", "/repo", 0);
+    // Resume requires a registered adapter; Copilot has no fast alternative.
+    let mut saved = agent("copilot", "saved", "/repo", 0);
     saved.record = Some(Box::new(LaunchRecord::default()));
     let (plan, _) = single(
         &saved,
@@ -124,7 +125,7 @@ fn unsupported_fast_warns_and_resumes_without_stamping_it() {
     );
     assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
     assert!(plan.warnings[0].contains("fast"));
-    assert!(plan.warnings[0].contains("pi"));
+    assert!(plan.warnings[0].contains("copilot"));
     assert!(plan.warnings[0].contains("launching without"));
     let request = decode_exec_request(&single_pane_argv(&plan));
     assert!(!request.identity.params.record.unwrap().fast);

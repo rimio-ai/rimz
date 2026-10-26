@@ -193,12 +193,13 @@ fn fresh_cohort_seeds_retain_the_parked_session_key() {
 
 #[test]
 fn team_restore_forwards_skipped_field_warnings_into_recovery() {
+    // Restore requires registered adapters; Copilot has no fast alternative.
     let (teams, mut profiles, commands) = team_configs();
     for profile in profiles.0.values_mut() {
-        profile.agent = "pi".into();
+        profile.agent = "copilot".into();
         profile.fast = Some(true);
     }
-    let planner = team_agent("pi", "planner", "planner", "/repo/forge", 1);
+    let planner = team_agent("copilot", "planner", "planner", "/repo/forge", 1);
     let (tabs, refilled) = plan_team_restore_tabs(
         &[planner],
         &NO_LOGINS,
@@ -221,7 +222,7 @@ fn team_restore_forwards_skipped_field_warnings_into_recovery() {
         recovery
             .warnings
             .iter()
-            .all(|warning| warning.contains("fast") && warning.contains("pi"))
+            .all(|warning| warning.contains("fast") && warning.contains("copilot"))
     );
 }
 

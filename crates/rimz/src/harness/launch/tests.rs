@@ -1982,6 +1982,59 @@ fn process_compiler_carries_only_the_temp_lines_when_nothing_else_applies() {
 }
 
 #[test]
+fn process_compiler_stamps_or_clears_extension_fast_off_argv() {
+    let project = tempfile::tempdir().expect("project");
+    let cases = [
+        ("pi", true, false),
+        ("pi", false, false),
+        ("codex", true, true),
+        ("pi", false, true),
+    ];
+    let actual: Vec<_> = cases
+        .into_iter()
+        .map(|(kind, fast, inherited)| {
+            let mut invocation = team_request(kind);
+            invocation.identity.params.fast = fast;
+            let extra_env = if inherited {
+                BTreeMap::from([("RIMZ_LAUNCH_FAST".to_owned(), "1".to_owned())])
+            } else {
+                BTreeMap::new()
+            };
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &invocation,
+                project.path(),
+                &extra_env,
+                &LaunchReminders::default(),
+            )
+            .expect("process");
+            assert!(
+                process
+                    .provider_argv
+                    .iter()
+                    .all(|arg| !arg.contains("RIMZ_LAUNCH_FAST") && !arg.contains("service_tier")),
+                "{:?}",
+                process.provider_argv
+            );
+            (
+                process.env.get("RIMZ_LAUNCH_FAST").cloned(),
+                process.unset.contains("RIMZ_LAUNCH_FAST"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (Some("1".to_owned()), false),
+            (None, true),
+            (None, true),
+            (None, true),
+        ]
+    );
+}
+
+#[test]
 fn process_compiler_carries_reminders_in_extension_env_off_argv() {
     let project = tempfile::tempdir().expect("project");
     let team = team();
