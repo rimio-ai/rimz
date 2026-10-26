@@ -248,7 +248,7 @@ The demotion reads durable provider capacity and park records over the audit row
 Each step names the section that owns it.
 
 1. Launch. Caller policy and ancestry pass, the run record and pane are created, and the petname prints. With `--wait`, the parent then joins.
-2. Startup relaunch. A provider that dies before RimZ accepts its first lifecycle observation is relaunched in the same pane, up to `[agents] startup-relaunches` times. Handle, run, pane, and deadline stay the same, and a relaunched death is never reported ([fleet.md § A startup death is relaunched first](./fleet.md#a-startup-death-is-relaunched-first)).
+2. Startup relaunch. A provider that dies before RimZ accepts its first lifecycle observation, other than a configuration refusal (exit 78), is relaunched in the same pane, up to `[agents] startup-relaunches` times. Handle, run, pane, and deadline stay the same, and a relaunched death is never reported ([fleet.md § A startup death is relaunched first](./fleet.md#a-startup-death-is-relaunched-first)).
 3. Work. The child runs until its work ends. A clean turn end with an owed harness wake [parks](./scripting.md#parked-runs) the run as `Running`, so the parent's digest still waits for it. Otherwise the child's hooks fold a terminal status into the run record.
 4. Publish. The newly terminal write publishes the answer to a [response file](#response-files) before the record lands.
 5. Report. The child's in-pane wrapper runs the [fleet reporter](#the-fleet-report). Once nothing in the fleet is still running, the reporter queues one digest to the launcher.
