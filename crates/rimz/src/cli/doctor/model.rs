@@ -259,12 +259,24 @@ pub(super) struct Mux {
 #[derive(Debug, Serialize)]
 pub(super) struct Room {
     pub(super) skipped: Vec<rimz::workspace::record::SkippedSetting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_shell: Option<AgentShellLookup>,
     pub(super) session_name: String,
     pub(super) selected_state: RoomState,
     pub(super) live_on: Vec<MuxName>,
     pub(super) conflict: bool,
     pub(super) zellij: RoomState,
     pub(super) tmux: RoomState,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AgentShellLookup {
+    pub(super) name: String,
+    pub(super) path: Option<String>,
+    pub(super) saved: bool,
+    #[serde(skip)]
+    pub(super) missing_saved_path: Option<String>,
+    pub(super) also_on_path: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

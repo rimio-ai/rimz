@@ -285,20 +285,17 @@ pub enum ToggleErr {
 }
 
 /// Persist machine intent and apply it to running hosts for the config command.
-pub fn persist_toggle(
-    host: RemoteControlHost,
-    enabled: bool,
-) -> Result<crate::config::MachineConfig, ToggleErr> {
+pub fn persist_toggle(host: RemoteControlHost, enabled: bool) -> Result<String, ToggleErr> {
     if enabled {
         preflight_enable(host)?;
     }
-    crate::config::ConfigEditor::machine().set(
+    let receipt = crate::config::ConfigEditor::machine().set(
         &format!("remote_control.{}", host.kind()),
         if enabled { "true" } else { "false" },
     )?;
     let machine = crate::config::MachineConfig::load()?;
     apply_runtime_toggle(host, &machine)?;
-    Ok(machine)
+    Ok(receipt)
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.

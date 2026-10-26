@@ -185,14 +185,41 @@ pub(super) fn collect_mux(
         let ownership = rimz::room::session::probe_room_ownership(mux, &ws.session_name);
         report.room = Some(room_view(&ws.session_name, &ownership));
         if let Some(room) = &mut report.room {
-            room.skipped = rimz::StatePaths::for_project_root(&ws.project_root)
-                .ok()
+            let state = StatePaths::for_project_root(&ws.project_root).ok();
+            room.skipped = state
+                .as_ref()
                 .and_then(|state| {
                     rimz::workspace::record::read_optional(&state.workspace_record)
                         .ok()
                         .flatten()
                 })
                 .map_or_else(Vec::new, |record| record.skipped);
+            room.agent_shell = crate::cli::machine_config()
+                .agents
+                .shell
+                .as_ref()
+                .map(|shell| {
+                    rimz::harness::launch::resolve_agent_shell(
+                        shell,
+                        state.as_ref().map(|state| state.workspace_record.as_path()),
+                    )
+                })
+                .filter(|shell| shell.is_bare_name())
+                .map(|shell| model::AgentShellLookup {
+                    name: shell.name.display().to_string(),
+                    path: shell.selected_path().map(|path| path.display().to_string()),
+                    saved: shell.saved,
+                    missing_saved_path: shell
+                        .missing_saved_path()
+                        .map(|path| path.display().to_string()),
+                    also_on_path: rimz::proc::path_copies(
+                        shell.name.as_os_str(),
+                        shell.selected_path(),
+                    )
+                    .into_iter()
+                    .map(|(path, _)| path.display().to_string())
+                    .collect(),
+                });
         }
         if mux == MuxName::Tmux {
             report.legacy_session =
@@ -252,6 +279,7 @@ pub(super) fn collect_mux(
 fn room_view(session_name: &str, ownership: &rimz::room::session::RoomOwnership) -> model::Room {
     model::Room {
         skipped: Vec::new(),
+        agent_shell: None,
         session_name: session_name.to_owned(),
         selected_state: room_state_view(ownership.selected_state()),
         live_on: ownership.live_on(),

@@ -50,6 +50,133 @@ fn doctor_reports_recorded_skipped_settings_in_room_json_and_text() {
 }
 
 #[test]
+fn doctor_reports_saved_agent_shell_and_distinct_path_copies_without_writing() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nshell = \"bash\"\n",
+    )
+    .unwrap();
+    let first = env.home_root.join("shell-first");
+    let second = env.home_root.join("shell-second");
+    let alias = env.home_root.join("shell-alias");
+    let hit = crate::common::write_path_shim(&first, "bash", "exit 0");
+    let other = crate::common::write_path_shim(&second, "bash", "exit 0");
+    std::os::unix::fs::symlink(&first, &alias).unwrap();
+    env.store()
+        .set_room_birth_settings(
+            &env.resolve_workspace(&env.project_root),
+            Default::default(),
+            Some(rimz::workspace::record::AgentShell {
+                name: "bash".into(),
+                path: hit.clone(),
+            }),
+        )
+        .unwrap();
+    let record = env.state_path_for(&env.project_root).workspace_record;
+    let before = std::fs::read(&record).unwrap();
+    let mux = stub_mux_rooms(&env, StubRoomState::Absent, StubRoomState::Absent);
+    let path = path_with_only(&[second, alias, first, mux]);
+    let report = doctor_json(
+        &env.rimz()
+            .args(["--zellij", "doctor", "--json"])
+            .env("PATH", &path)
+            .output()
+            .unwrap(),
+    );
+    let output = env
+        .rimz()
+        .args(["--zellij", "doctor"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(&record).unwrap(), before);
+    assert_eq!(report["schema"], "rimz.doctor.v1");
+    assert_eq!(
+        report["mux"]["ready"]["room"]["agent_shell"],
+        json!({
+            "name": "bash", "path": hit, "saved": true, "also_on_path": [other],
+        })
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(&format!("\"bash\" → {}", hit.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("rimz config set agents.shell {}", other.display())),
+        "{text}"
+    );
+    assert!(!text.contains("shell-alias/bash"), "{text}");
+
+    std::fs::remove_file(&hit).unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["--zellij", "doctor", "--json"])
+            .env("PATH", &path)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        report["mux"]["ready"]["room"]["agent_shell"],
+        json!({
+            "name": "bash", "path": other, "saved": false, "also_on_path": [],
+        })
+    );
+    let output = env
+        .rimz()
+        .args(["--zellij", "doctor"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        format!("\"bash\" → {}", other.display()),
+        format!(
+            "(saved path {} is no longer a file; each launch looks it up)",
+            hit.display()
+        ),
+    ] {
+        assert!(text.contains(&expected), "{text}");
+    }
+    assert!(!text.contains(&format!("→ {}", hit.display())), "{text}");
+    assert_eq!(std::fs::read(record).unwrap(), before);
+}
+
+#[test]
+fn doctor_agent_shell_falls_back_or_is_omitted_for_non_bare_values() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let mux = stub_mux_rooms(&env, StubRoomState::Absent, StubRoomState::Absent);
+    let hit = crate::common::write_path_shim(&mux, "bash", "exit 0");
+    let actual = [
+        "[agents]\nshell = \"bash\"\n",
+        "[agents]\nshell = \"missing-shell\"\n",
+        "[agents]\nshell = \"/bin/sh\"\n",
+        "",
+    ]
+    .map(|config| {
+        std::fs::write(env.rimz_home().join("config.toml"), config).unwrap();
+        let report = doctor_with_mux(&env, &mux, "--zellij");
+        report["mux"]["ready"]["room"].get("agent_shell").cloned()
+    });
+    assert_eq!(
+        actual,
+        [
+            Some(json!({"name": "bash", "path": hit, "saved": false, "also_on_path": []})),
+            Some(
+                json!({"name": "missing-shell", "path": null, "saved": false, "also_on_path": []})
+            ),
+            None,
+            None,
+        ]
+    );
+}
+
+#[test]
 fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() {
     let env = Env::new();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());

@@ -19,6 +19,7 @@ fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Res
 fn room_skipped_settings_keep_the_setting_and_warning_visible() {
     let mut mux = mux_fixture();
     mux.room = Some(Room {
+        agent_shell: None,
         session_name: "rimz-test".to_owned(),
         selected_state: RoomState::Absent,
         live_on: Vec::new(),
@@ -34,6 +35,73 @@ fn room_skipped_settings_keep_the_setting_and_warning_visible() {
     assert!(
         text.contains("agents.shell") && text.contains("missing shell; fix agents.shell"),
         "{text}"
+    );
+}
+
+#[test]
+fn room_agent_shell_lookup_is_informational_for_saved_and_per_launch_paths() {
+    let actual = [
+        (Some("/saved/bash"), true, None),
+        (Some("/path/bash"), false, None),
+        (None, false, None),
+        (Some("/path/bash"), false, Some("/gone/bash")),
+        (None, false, Some("/gone/bash")),
+    ]
+    .map(|(path, saved, missing_saved_path)| {
+        let mut mux = mux_fixture();
+        mux.room = Some(Room {
+            skipped: Vec::new(),
+            agent_shell: Some(super::super::model::AgentShellLookup {
+                name: "bash".into(),
+                path: path.map(Into::into),
+                saved,
+                missing_saved_path: missing_saved_path.map(Into::into),
+                also_on_path: vec!["/other/bash".into()],
+            }),
+            session_name: "rimz-test".into(),
+            selected_state: RoomState::Absent,
+            live_on: Vec::new(),
+            conflict: false,
+            zellij: RoomState::Absent,
+            tmux: RoomState::Absent,
+        });
+        let mut tally = Tally::default();
+        let text = strip(|w| render_mux(w, &Probe::Ready(mux), &mut tally));
+        assert!(tally.warns.is_empty() && tally.alarms.is_empty(), "{text}");
+        text.lines()
+            .filter(|line| line.contains("agents.shell") || line.contains("also on PATH"))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    assert_eq!(
+        actual,
+        [
+            concat!(
+                "agents.shell: \"bash\" → /saved/bash\n",
+                "also on PATH: /other/bash; pin with rimz config set agents.shell /other/bash"
+            ),
+            concat!(
+                "agents.shell: \"bash\" → /path/bash ",
+                "(not saved by the room; each launch looks it up)\n",
+                "also on PATH: /other/bash; pin with rimz config set agents.shell /other/bash"
+            ),
+            concat!(
+                "agents.shell: \"bash\" not on PATH ",
+                "(not saved by the room; each launch looks it up)\n",
+                "also on PATH: /other/bash; pin with rimz config set agents.shell /other/bash"
+            ),
+            concat!(
+                "agents.shell: \"bash\" → /path/bash ",
+                "(saved path /gone/bash is no longer a file; each launch looks it up)\n",
+                "also on PATH: /other/bash; pin with rimz config set agents.shell /other/bash"
+            ),
+            concat!(
+                "agents.shell: \"bash\" not on PATH ",
+                "(saved path /gone/bash is no longer a file; each launch looks it up)\n",
+                "also on PATH: /other/bash; pin with rimz config set agents.shell /other/bash"
+            ),
+        ]
     );
 }
 
@@ -1891,6 +1959,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut mux = mux_fixture();
         mux.name = MuxName::Zellij;
         mux.room = Some(Room {
+            agent_shell: None,
             skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Live,
@@ -1914,6 +1983,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
         mux.room = Some(Room {
+            agent_shell: None,
             skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Absent,
@@ -1936,6 +2006,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
         mux.room = Some(Room {
+            agent_shell: None,
             skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Live,

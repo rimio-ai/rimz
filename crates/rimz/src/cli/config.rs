@@ -136,21 +136,37 @@ fn set(args: SetArgs) -> Result<()> {
     {
         rimz::sandbox::preflight(rimz::config::Isolation::Scoped)?;
     }
-    if args.key == "agents.shell" {
+    let shell = if args.key == "agents.shell" {
         let shell = args
             .value
             .parse::<toml_edit::Value>()
             .ok()
             .and_then(|value| value.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| args.value.clone());
-        rimz::harness::launch::validate_agent_shell(std::path::Path::new(&shell))?;
-    }
-    if let Some((host, enabled)) = remote_control_transition(&args.key, &args.value) {
-        rimz::remote_control::persist_toggle(host, enabled)?;
+        let resolved =
+            rimz::harness::launch::resolve_agent_shell(std::path::Path::new(&shell), None);
+        resolved.path.as_ref().map_err(Clone::clone)?;
+        Some(resolved)
     } else {
-        ConfigEditor::machine().set(&args.key, &args.value)?;
+        None
+    };
+    let receipt = if let Some((host, enabled)) = remote_control_transition(&args.key, &args.value) {
+        rimz::remote_control::persist_toggle(host, enabled)?
+    } else {
+        ConfigEditor::machine().set(&args.key, &args.value)?
+    };
+    print_line(&receipt)?;
+    if let Some(shell) = shell.filter(|shell| shell.is_bare_name()) {
+        let path = shell.path?;
+        print_line(&format!("  resolves to {} here", path.display()))?;
+        for (other, _) in rimz::proc::path_copies(shell.name.as_os_str(), Some(&path)) {
+            print_line(&format!(
+                "  also on PATH: {}; pass its full path to use that one instead",
+                other.display()
+            ))?;
+        }
     }
-    print_line(&format!("set {}", args.key))
+    Ok(())
 }
 
 fn remote_control_transition(

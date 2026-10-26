@@ -76,7 +76,9 @@ A key RimZ knows but that has no stored value and no printed default fails with 
 
 ## Set a value
 
-`rimz config set <KEY> <VALUE>` changes one key in its owning file and prints `set <KEY>`. It runs these steps, and stops without writing at the first one that fails:
+`rimz config set <KEY> <VALUE>` changes one key in its owning file and prints a plain-text value receipt on stdout: `set <full key> = <TOML value>  (<previous value>)`. Shorthands print the expanded key, such as `theme.scheme`. Values omit comments and surrounding whitespace. Tables print inline, and multiline strings use escaped line breaks to keep the receipt on one line. The parenthesis is `was <old TOML>` when the key was present in the file, `was <default TOML>, the default` when it was absent but had a built-in default, or `was unset`. A value semantically equal to the previous value, including an absent key set to its default, prints `unchanged` instead.
+
+It runs these steps, and stops without writing at the first one that fails:
 
 1. Parses the value (rules below) and rejects a key RimZ does not know, so a typo never lands in the file.
 2. Reads the owning file, or starts from its template when the file does not exist.
@@ -144,9 +146,11 @@ Strict configuration loads reject the retired idle-compaction timer key and any 
 
 ### Keys that do more than write
 
-Three keys check or change the machine beyond the file.
+Four keys check or change the machine beyond the file.
 
 `agents.isolation scoped` probes bubblewrap before writing. On Linux it looks for `bwrap` on `PATH` and runs a trivial command inside a bubblewrap mount view; on any other OS, with `bwrap` missing, or when the probe fails (commonly unprivileged user namespaces disabled by sysctl or AppArmor), the command prints the reason and leaves `config.toml` unchanged. `host`, the default, and `sandbox` run no probe, when saved or at launch, since `sandbox` only adds each provider's own sandbox flag. The setting applies to later launches, restarts included; running panes keep the isolation they started with. The per-launch `--isolation` flag on [`rimz agents`](./agents.md), [`rimz teams`](./teams.md), [`rimz subagents`](./subagents.md), and `rimz agents fork` takes precedence, and what isolation changes is in [security](../../guide/security.md#provider-sandbox-isolation).
+
+`agents.shell` accepts an installed shell's bare name or absolute path. A bare name is looked up on this process's PATH and validated before writing; the file keeps the name. Its receipt adds `  resolves to <path> here`, followed by `  also on PATH: <path>; pass its full path to use that one instead` for each later distinct file in PATH order. Copies of the same file collapse, including symlinks and, on Unix, hard links. An unknown name, a relative path containing a slash, a login-disabled shell such as `nologin` or `false`, or a csh-family shell refuses without writing. Absolute paths are validated and used as written. See [launch preferences](../../guide/configuration.md#agent-definitions-and-launch-preferences) for the room-start lookup, per-launch fallback, and full-path pin.
 
 `remote_control.claude` and `remote_control.codex` switch the provider's remote-control host on the running machine. Setting either to `true` checks the host's preconditions first and refuses with the fix when they fail. After the write, `claude` adds or closes the `claude remote-control` pane in every running room's `rimzd` view, and `codex` starts or stops the shared Codex remote-control daemon. A hand edit reaches Claude hosts on the `rimzd` view's next repair pass, but for Codex it changes only what later room starts do, so use `set` to start or stop a running daemon. A stopped room starts with blocked hosts off for that run and records the warnings without prompting or changing `config.toml`. Entry to a live room warns without changing its applied policy. What each host runs is in the [remote guide](../../guide/remote.md#answer-asks-from-your-phone).
 
