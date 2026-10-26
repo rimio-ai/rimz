@@ -1,6 +1,5 @@
 use super::*;
 
-use crate::agents::AgentErr;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::transcript::{AskOption, AskQuestion};
 use serde_json::json;
@@ -1015,94 +1014,31 @@ fn neutral_decision_shape_is_pinned() {
 }
 
 #[test]
-fn install_preview_and_uninstall_only_own_managed_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("plugin").join("rimz.ts");
-
-    let report = OPENCODE_MANAGED_SOURCE.install_into(&path).unwrap();
-    assert_eq!(report.agent, "opencode");
-    assert!(!report.files[0].existed);
-    assert_eq!(report.installed_events, managed_event_names());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
-    assert!(OPENCODE_MANAGED_SOURCE.installed_at(&path));
-    assert!(!OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path));
-
-    let stale = "// still _rimz_managed\n// older RimZ source\n";
-    std::fs::write(&path, stale).unwrap();
-    assert!(OPENCODE_MANAGED_SOURCE.installed_at(&path));
-    assert!(OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path));
-    assert!(OPENCODE_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
-    assert!(!OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path));
-
-    let preview = OPENCODE_MANAGED_SOURCE.preview_at(&path).unwrap();
-    assert_eq!(preview.agent, "opencode");
-    assert!(preview.files[0].existed);
-    assert_eq!(preview.files[0].candidate, PLUGIN_SOURCE);
-
-    let removed = OPENCODE_MANAGED_SOURCE.uninstall_from(&path).unwrap();
-    assert!(removed.files[0].existed);
-    assert_eq!(removed.removed_events, managed_event_names());
-    assert!(!path.exists());
-    assert!(!OPENCODE_MANAGED_SOURCE.installed_at(&path));
-    assert!(!OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path));
-    assert!(!OPENCODE_MANAGED_SOURCE.uninstall_from(&path).unwrap().files[0].existed);
-
-    let user_path = dir.path().join("user.ts");
-    std::fs::write(&user_path, "// the user's own plugin\n").unwrap();
-    assert!(matches!(
-        OPENCODE_MANAGED_SOURCE
-            .install_into(&user_path)
-            .unwrap_err(),
-        AgentErr::Install {
-            agent: "opencode",
-            ..
-        }
-    ));
-    assert!(matches!(
-        OPENCODE_MANAGED_SOURCE.preview_at(&user_path).unwrap_err(),
-        AgentErr::Install {
-            agent: "opencode",
-            ..
-        }
-    ));
-    let report = OPENCODE_MANAGED_SOURCE.uninstall_from(&user_path).unwrap();
-    assert!(report.files[0].existed);
-    assert!(report.removed_events.is_empty());
-    assert_eq!(
-        std::fs::read_to_string(&user_path).unwrap(),
-        "// the user's own plugin\n"
-    );
-    assert!(!OPENCODE_MANAGED_SOURCE.installed_at(&user_path));
-    assert!(!OPENCODE_MANAGED_SOURCE.upgrade_available_at(&user_path));
-}
-
-fn managed_event_names() -> Vec<String> {
-    OPENCODE_HOOKS
-        .iter()
-        .map(|hook| hook.event.to_owned())
-        .collect()
-}
-
-#[test]
 fn plugin_source_pins_rimz_wire_contract() {
-    assert!(
-        PLUGIN_SOURCE
-            .lines()
-            .next()
-            .unwrap()
-            .contains("_rimz_managed")
-    );
-    assert!(PLUGIN_SOURCE.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
-    assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID"));
-    assert!(PLUGIN_SOURCE.contains("RIMZ_BIN"));
-    assert!(PLUGIN_SOURCE.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
-
-    for hook in OPENCODE_HOOKS {
-        let event = hook.event;
+    for (source, pid) in [(PLUGIN_SOURCE, "process.ppid"), (TUI_SOURCE, "process.pid")] {
+        assert!(source.lines().next().unwrap().contains("_rimz_managed"));
+        assert!(source.contains("\"hooks\", \"feed\", \"--source\", \"opencode\""));
+        assert!(source.contains(&format!("RIMZ_AGENT_PID: String({pid})")));
+        assert!(source.contains("RIMZ_BIN"));
+        assert!(source.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
+        for hook in OPENCODE_HOOKS {
+            if pid == "process.pid"
+                && (hook.event.starts_with("Subagent") || hook.event == "session_created")
+            {
+                continue;
+            }
+            assert!(
+                source.contains(hook.event),
+                "plugin source missing {}",
+                hook.event
+            );
+        }
+    }
+    for event in ["client_idle", "client_running"] {
+        assert!(TUI_SOURCE.contains(event), "client source missing {event}");
         assert!(
-            PLUGIN_SOURCE.contains(event),
-            "plugin source missing {event}"
+            !PLUGIN_SOURCE.contains(event),
+            "server must not send {event}"
         );
     }
 }

@@ -1,7 +1,7 @@
 //! OpenCode 2 hook adapter.
 //!
 //! RimZ launches OpenCode with `--standalone`. Its private serve child loads
-//! `plugin.ts` through `{ id, setup }`; the plugin reads session and model
+//! `index.ts` through `{ id, setup }`; the plugin reads session and model
 //! context through the v2 context API, stamps its parent PID as the pane TUI,
 //! then shells out to
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
@@ -15,6 +15,9 @@
 //! succession hands pane and card ownership to the new conversation.
 //! `session.deleted` and the activation cleanup sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
+//! Plain shared-service clients use `tui.ts` instead: the selected conversation
+//! carries an on-screen stamp, arrivals report state without lifecycle edges,
+//! and background tabs report native asks, replies and deletion of an ask's session.
 
 mod account;
 mod database;
@@ -42,12 +45,12 @@ use super::definition::{
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
-use super::managed_source::ManagedSource;
+use super::managed_source::RIMZ_MANAGED_MARKER;
 use super::pricing::PriceBook;
 use super::{
-    AgentContext, AgentErr, AgentLifecycleObservation, HookOutput, HookRouting, Result,
-    SanitizedPrompt, SubagentIdentity, optional_payload_string, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentContext, AgentErr, AgentLifecycleObservation, HookInstallFilePreview,
+    HookInstallFileReport, HookOutput, HookRouting, Result, SanitizedPrompt, SubagentIdentity,
+    optional_payload_string, read_optional_file, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -185,7 +188,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "in-process plugin session metadata + model catalog",
     },
     hook_install: ConcernCoverage::Wired {
-        via: "~/.config/opencode/plugin/rimz.ts",
+        via: "~/.config/opencode/plugins/rimz/{index.ts,tui.ts}; plain clients follow the screen",
     },
     account_spend: ConcernCoverage::Wired {
         via: "SQLite session_message + credential OAuth usage probe",
@@ -200,10 +203,10 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
 
 const OPENCODE_USER_COVERAGE: UserCoverage = UserCoverage {
     state: CapabilityLevel::Full {
-        note: "the card opens with the session, follows every turn, and clears when it ends",
+        note: "plain shared-service clients follow the on-screen conversation; background asks take the card until answered; home keeps the last card unless deleted",
     },
     live: CapabilityLevel::Full {
-        note: "each message lands the token split, and the dollar is OpenCode's own session total",
+        note: "the selected conversation's token split and session dollars; off-screen cost waits for its next on-screen turn end",
     },
     history: CapabilityLevel::Full {
         note: "stored sessions read end to end, with OpenCode's recorded per-turn tokens and dollars",
@@ -318,15 +321,8 @@ const OPENCODE_HOOKS: &[HookEventSpec] = &[
     .session_ended(),
 ];
 
-const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
-const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
-    "opencode",
-    PLUGIN_SOURCE,
-    OPENCODE_HOOKS,
-    "plugin",
-    opencode_plugin_path,
-    true,
-);
+const PLUGIN_SOURCE: &str = include_str!("index.ts");
+const TUI_SOURCE: &str = include_str!("tui.ts");
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct OpencodeAdapter;
@@ -735,7 +731,29 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
                 reason,
             });
         }
-        OPENCODE_MANAGED_SOURCE.install(env)
+        let files = OpencodeBundle::resolve()?.preflight()?;
+        for file in &files {
+            if file.candidate.is_empty() {
+                std::fs::remove_file(&file.path).map_err(|source| AgentErr::InstallIo {
+                    agent: "opencode",
+                    path: file.path.clone(),
+                    source,
+                })?;
+            } else if file.original.as_deref() != Some(file.candidate.as_str()) {
+                crate::agents::provider_file::write_bytes(&file.path, file.candidate.as_bytes())?;
+            }
+        }
+        Ok(super::HookInstallReport {
+            agent: "opencode",
+            files: files
+                .into_iter()
+                .map(|file| HookInstallFileReport {
+                    path: file.path,
+                    existed: file.existed,
+                })
+                .collect(),
+            installed_events: opencode_event_names(),
+        })
     }
 
     fn preview(
@@ -749,40 +767,265 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
                 reason,
             });
         }
-        OPENCODE_MANAGED_SOURCE.preview(env)
+        Ok(super::HookInstallPreview {
+            agent: "opencode",
+            files: OpencodeBundle::resolve()?.preflight()?,
+            planned_events: opencode_event_names(),
+            status_line_change: None,
+            subagent_status_line_change: None,
+        })
     }
 
-    fn uninstall(&self, env: &BTreeMap<String, String>) -> Result<super::HookUninstallReport> {
-        OPENCODE_MANAGED_SOURCE.uninstall(env)
+    fn uninstall(&self, _env: &BTreeMap<String, String>) -> Result<super::HookUninstallReport> {
+        let bundle = OpencodeBundle::resolve()?;
+        let mut files = Vec::new();
+        for file in bundle.inspect()? {
+            if !file
+                .original
+                .as_deref()
+                .is_some_and(opencode_managed_source)
+            {
+                continue;
+            }
+            std::fs::remove_file(&file.path).map_err(|source| AgentErr::InstallIo {
+                agent: "opencode",
+                path: file.path.clone(),
+                source,
+            })?;
+            files.push(HookInstallFileReport {
+                path: file.path,
+                existed: true,
+            });
+        }
+        match std::fs::remove_dir(&bundle.directory) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(source) => {
+                return Err(AgentErr::InstallIo {
+                    agent: "opencode",
+                    path: bundle.directory,
+                    source,
+                });
+            }
+        }
+        Ok(super::HookUninstallReport {
+            agent: "opencode",
+            removed_events: if files.is_empty() {
+                Vec::new()
+            } else {
+                opencode_event_names()
+            },
+            files,
+        })
     }
 
-    fn installed(&self, env: &BTreeMap<String, String>) -> bool {
-        OPENCODE_MANAGED_SOURCE.installed(env)
+    fn installed(&self, _env: &BTreeMap<String, String>) -> bool {
+        OpencodeBundle::resolve().is_ok_and(|bundle| bundle.installed())
     }
 
     fn upgrade_available(
         &self,
-        env: &BTreeMap<String, String>,
+        _env: &BTreeMap<String, String>,
         _options: crate::agents::HookInstallOptions,
     ) -> bool {
-        OPENCODE_MANAGED_SOURCE.upgrade_available(env)
+        OpencodeBundle::resolve().is_ok_and(|bundle| {
+            bundle.managed_artifacts_present()
+                && !bundle.inspect().is_ok_and(|files| {
+                    files.len() == 2
+                        && files
+                            .iter()
+                            .all(|file| file.original.as_deref() == Some(file.candidate.as_str()))
+                })
+        })
     }
 
-    fn managed_artifacts_present(&self, env: &BTreeMap<String, String>) -> bool {
-        OPENCODE_MANAGED_SOURCE.managed_artifacts_present(env)
+    fn managed_artifacts_present(&self, _env: &BTreeMap<String, String>) -> bool {
+        OpencodeBundle::resolve().is_ok_and(|bundle| bundle.managed_artifacts_present())
     }
 
     fn wiring_input_paths(
         &self,
-        descriptor: &AgentSpec,
-        env: &BTreeMap<String, String>,
+        _descriptor: &AgentSpec,
+        _env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        OPENCODE_MANAGED_SOURCE.wiring_input_paths(descriptor, env)
+        OpencodeBundle::resolve()
+            .map(|bundle| bundle.wiring_input_paths())
+            .unwrap_or_default()
     }
 
     fn install_blocker(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         install_blocker_at(&crate::agents::locate_binary(&OPENCODE_DESCRIPTOR)?)
     }
+}
+
+struct OpencodeBundle {
+    directory: PathBuf,
+    legacy: Option<PathBuf>,
+}
+
+impl OpencodeBundle {
+    fn resolve() -> Result<Self> {
+        if let Some(raw) =
+            std::env::var_os("RIMZ_OPENCODE_PLUGIN").filter(|value| !value.is_empty())
+        {
+            return Ok(Self {
+                directory: PathBuf::from(raw),
+                legacy: None,
+            });
+        }
+        let home = opencode_config_home(
+            std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+            std::env::var_os("HOME").as_deref(),
+        )
+        .ok_or_else(|| AgentErr::Install {
+            agent: "opencode",
+            reason: "$HOME is not set; cannot resolve ~/.config/opencode/plugins/rimz".into(),
+        })?;
+        Ok(Self {
+            directory: home.join("plugins/rimz"),
+            legacy: Some(home.join("plugin/rimz.ts")),
+        })
+    }
+
+    fn check_directory(&self) -> Result<()> {
+        match std::fs::symlink_metadata(&self.directory) {
+            Ok(metadata) if !metadata.is_dir() => Err(AgentErr::Install {
+                agent: "opencode",
+                reason: format!(
+                    "{} must be a real directory, not a symlink or file",
+                    self.directory.display()
+                ),
+            }),
+            Ok(_) => Ok(()),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(AgentErr::InstallIo {
+                agent: "opencode",
+                path: self.directory.clone(),
+                source,
+            }),
+        }
+    }
+
+    fn inspect(&self) -> Result<Vec<HookInstallFilePreview>> {
+        self.check_directory()?;
+        let mut files = Vec::new();
+        for (name, source) in [("index.ts", PLUGIN_SOURCE), ("tui.ts", TUI_SOURCE)] {
+            let path = self.directory.join(name);
+            let original = read_opencode_source(&path)?;
+            files.push(HookInstallFilePreview {
+                path,
+                existed: original.is_some(),
+                original,
+                candidate: source.into(),
+            });
+        }
+        if let Some(path) = &self.legacy
+            && let Some(original) = read_opencode_source(path)?
+        {
+            files.push(HookInstallFilePreview {
+                path: path.clone(),
+                original: Some(original),
+                existed: true,
+                candidate: String::new(),
+            });
+        }
+        Ok(files)
+    }
+
+    fn preflight(&self) -> Result<Vec<HookInstallFilePreview>> {
+        let files = self.inspect()?;
+        for file in &files {
+            if file
+                .original
+                .as_deref()
+                .is_some_and(|text| !opencode_managed_source(text))
+            {
+                return Err(AgentErr::Install {
+                    agent: "opencode",
+                    reason: format!(
+                        "refusing an unmarked user plugin at {}; move it aside or remove it to let RimZ manage this file",
+                        file.path.display()
+                    ),
+                });
+            }
+        }
+        Ok(files)
+    }
+
+    fn installed(&self) -> bool {
+        self.inspect().is_ok_and(|files| {
+            files.len() == 2
+                && files.iter().all(|file| {
+                    file.original
+                        .as_deref()
+                        .is_some_and(opencode_managed_source)
+                })
+        })
+    }
+
+    fn managed_artifacts_present(&self) -> bool {
+        let bundle_owned = self.check_directory().is_ok()
+            && ["index.ts", "tui.ts"].iter().any(|name| {
+                read_opencode_source(&self.directory.join(name))
+                    .is_ok_and(|text| text.as_deref().is_some_and(opencode_managed_source))
+            });
+        bundle_owned
+            || self.legacy.as_ref().is_some_and(|path| {
+                read_opencode_source(path)
+                    .is_ok_and(|text| text.as_deref().is_some_and(opencode_managed_source))
+            })
+    }
+
+    fn wiring_input_paths(self) -> Vec<PathBuf> {
+        let mut paths = vec![
+            self.directory.join("index.ts"),
+            self.directory.join("tui.ts"),
+        ];
+        paths.extend(self.legacy);
+        paths.push(self.directory);
+        paths
+    }
+}
+
+fn read_opencode_source(path: &Path) -> Result<Option<String>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(AgentErr::Install {
+                agent: "opencode",
+                reason: format!(
+                    "{} must be a real file, not a symlink or directory; move it aside",
+                    path.display()
+                ),
+            });
+        }
+        Ok(_) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(AgentErr::InstallIo {
+                agent: "opencode",
+                path: path.to_owned(),
+                source,
+            });
+        }
+    }
+    read_optional_file("opencode", path)
+}
+
+fn opencode_managed_source(text: &str) -> bool {
+    text.lines()
+        .next()
+        .is_some_and(|line| line.contains(RIMZ_MANAGED_MARKER))
+}
+
+fn opencode_event_names() -> Vec<String> {
+    OPENCODE_HOOKS
+        .iter()
+        .map(|hook| hook.event.to_owned())
+        .collect()
 }
 
 impl crate::agents::capabilities::TranscriptCapability for OpencodeAdapter {
@@ -891,7 +1134,7 @@ impl crate::agents::capabilities::SpendingCapability for OpencodeAdapter {
 /// Offline fallback window when the plugin's catalog-resolved
 /// [`context_window`](payloads::OpencodeHookPayload::context_window) is absent —
 /// Claude-family only. Every other model resolves through the plugin's model
-/// catalog ([`plugin.ts`](./plugin.ts)); a bare id here stays unknown.
+/// catalog ([`index.ts`](./index.ts) or [`tui.ts`](./tui.ts)); a bare id here stays unknown.
 fn context_window_for(model: Option<&str>) -> Option<u64> {
     let model = model?.trim().to_ascii_lowercase();
     if model.is_empty() {
@@ -904,21 +1147,6 @@ fn context_window_for(model: Option<&str>) -> Option<u64> {
         return Some(200_000);
     }
     None
-}
-
-fn opencode_plugin_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
-    if let Some(raw) = std::env::var_os("RIMZ_OPENCODE_PLUGIN").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(raw));
-    }
-    let config_home = opencode_config_home(
-        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
-    .ok_or_else(|| AgentErr::Install {
-        agent: "opencode",
-        reason: "$HOME is not set; cannot resolve ~/.config/opencode/plugin/rimz.ts".to_owned(),
-    })?;
-    Ok(config_home.join("plugin/rimz.ts"))
 }
 
 fn opencode_config_home(

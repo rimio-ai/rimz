@@ -1,7 +1,7 @@
 //! Typed OpenCode plugin wire structs.
 //!
-//! RimZ owns the OpenCode wire: [`plugin.ts`](./plugin.ts) flattens the
-//! in-process OpenCode hook and bus payloads into this snake_case envelope
+//! RimZ owns the OpenCode wire: [`index.ts`](./index.ts) and [`tui.ts`](./tui.ts)
+//! flatten the in-process OpenCode hook and bus payloads into this snake_case envelope
 //! before spawning `rimz hooks feed --source opencode`. Upstream drift is
 //! contained inside the plugin; Rust receives the stable adapter-local shape.
 

@@ -12,6 +12,8 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
+OpenCode 2.1.4 plain shared-service clients show one card for the conversation on screen, including its title and usage. A background tab's permission or form ask takes the card until answered. The home route keeps the last conversation's card unless it is deleted; explicit `--server` clients stay silent. Messaging and advanced controls require a RimZ-launched agent. See [OpenCode's mapping and limits](../internals/agents/adapter_opencode.md#known-gaps).
+
 ## Check coverage on your machine
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
