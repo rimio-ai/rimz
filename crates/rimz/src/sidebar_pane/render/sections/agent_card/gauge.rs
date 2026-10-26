@@ -105,8 +105,10 @@ pub(super) fn bar_row(
 /// the bar keeps that room and the stats line pins the age instead. The age
 /// appears from five minutes quiet, with a clock-fill glyph ([`elapsed_glyph`])
 /// and continuous tone: muted until half the known TTL, or the last ten
-/// minutes if earlier, then warn through caution to alarm at the ceiling. Past
-/// the ceiling it wears the fixed expired-cache tone and ringed over face.
+/// minutes if earlier, and never before the last hour
+/// ([`CACHE_WARNING_MAX_SECS`]), then warn through caution to alarm at the
+/// ceiling. Past the ceiling it wears the fixed expired-cache tone and ringed
+/// over face.
 /// Unknown lifetimes stay muted. A keep-warm horizon uses the steady held tone
 /// ([`cache_age_pin`]). Finished cards follow the same ramp. The clock reads
 /// the agent's own quiet time ([`SidebarRow::own_last_activity`]) or last cache
@@ -344,6 +346,11 @@ enum CacheAge {
     },
 }
 
+/// The earliest the cache warning starts before expiry. A long lifetime (a
+/// 12-hour Codex cache) would otherwise warn from half of it, hours before
+/// anything needs doing, so the countdown line never reads past `60m`.
+const CACHE_WARNING_MAX_SECS: i64 = 3_600;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CachePhase {
     Held,
@@ -365,7 +372,9 @@ impl CacheAge {
         if age > ceiling {
             return CachePhase::Expired;
         }
-        let band = (ceiling / 2).max(ceiling.min(600));
+        let band = (ceiling / 2)
+            .max(ceiling.min(600))
+            .min(CACHE_WARNING_MAX_SECS);
         let band_start = ceiling - band;
         if age <= band_start {
             return CachePhase::Calm;
@@ -424,9 +433,9 @@ pub(super) fn cache_age_style(theme: &Theme, row: &SidebarRow, now: jiff::Timest
 /// in the steady `good` tone; otherwise the time since the agent's own activity
 /// or its last cache request (a ping refreshes the cache, not the activity),
 /// face over the card's provider cache TTL, else the hour. After half a known
-/// TTL, or in the last ten minutes if earlier, the pin heats from warn through
-/// caution to alarm; an unknown lifetime stays muted, and an expired cache
-/// wears the meter's expired-cache tone.
+/// TTL, or in the last ten minutes if earlier, but never before the last hour,
+/// the pin heats from warn through caution to alarm; an unknown lifetime stays
+/// muted, and an expired cache wears the meter's expired-cache tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = cache_age_style(theme, row, now);
@@ -629,7 +638,13 @@ mod tests {
             }
             .phase(now)
         };
-        for (ceiling, start) in [(3600_u64, 1800_u64), (1800, 900), (300, 0)] {
+        for (ceiling, start) in [
+            (43_200_u64, 39_600_u64),
+            (7_200, 3_600),
+            (3600, 1800),
+            (1800, 900),
+            (300, 0),
+        ] {
             let band = ceiling - start;
             assert_eq!(
                 phase(start.saturating_sub(1), Some(ceiling as i64)),
