@@ -374,7 +374,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | OpenCode | ✓ | the composed file as `{file:<path>}` in `OPENCODE_CONFIG_CONTENT` `agents.build.system` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| MiniMax Code | ✗ | the composed file appends through `--append-system-prompt-file`; launch reminders use `--append-system-prompt`; native replacement flags require raw `args` |
+| MiniMax Code | ✗ | appends instead: the composed prompt goes through `--append-system-prompt-file` and launch reminders through `--append-system-prompt`, so MiniMax's native prompt stays; its replacing `--system-prompt` and `--system-prompt-file` flags require raw `args` ([mapping](../internals/agents/adapter_minimax.md#launch-and-resume)) |
 | Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
