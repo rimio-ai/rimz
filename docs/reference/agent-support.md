@@ -363,7 +363,7 @@ The fast-mode badge follows the provider's live reading: Claude's statusline `fa
 
 ### Launch-prompt replacement
 
-The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) replace the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent.
+The profile fields `system-prompt-file` and `append-system-prompt-files` (and the matching `rimz agents` flags) supply the agent's system prompt. RimZ joins the base file and the appended files in order into one prompt, then hands it to the agent. Claude Code, Codex, Pi, OMP, Qwen, and process plugins that declare a flag replace their system prompt with it, and MiniMax appends it to its native prompt. Every other agent takes no RimZ prompt, and a launch that carries one for it refuses.
 
 | Agent | Replacement | How the agent receives it |
 | --- | :--: | --- |
@@ -373,7 +373,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | OMP | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| MiniMax Code | ✗ | launch reminders append through `--append-system-prompt`; native replacement flags require raw `args` |
+| MiniMax Code | ✗ | the composed file appends through `--append-system-prompt-file`; launch reminders use `--append-system-prompt`; native replacement flags require raw `args` |
 | OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |

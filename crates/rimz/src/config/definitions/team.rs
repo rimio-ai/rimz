@@ -295,15 +295,6 @@ impl SeatLoader<'_> {
             .and_then(agents::definition_model_kind)
             .filter(|_| !agents::runs_other_providers_models(&original.agent))
             .unwrap_or(&original.agent);
-        if fm.tier.is_none() && !self.scope.bases.contains(kind) {
-            return Err(DefinitionErr::new(
-                path,
-                format!(
-                    "seats {kind}, {}",
-                    super::missing_kind_base(self.scope.home, kind)
-                ),
-            ));
-        }
         fm.agent = if role.tier.is_some() {
             None
         } else if role.model.is_some() {
@@ -369,6 +360,20 @@ impl SeatLoader<'_> {
         let mut profile = seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
             DefinitionErr::new(path, format!("seat '{}' failed to resolve", role.agent))
         })?;
+        let kind = &profile.agent;
+        if agents::find_definition(kind)
+            .is_some_and(|definition| !definition.spec().launch.takes_system_prompt())
+        {
+            let handle = role.role.as_deref().unwrap_or(&role.agent);
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "team '{name}' role '{handle}' runs on {kind}, which takes no system prompt; \
+                     every seat carries the team's pipeline in its system prompt — select a \
+                     definition on a kind that takes a system prompt"
+                ),
+            ));
+        }
         let mut crafts: Vec<_> = original
             .append_system_prompt_files
             .iter()

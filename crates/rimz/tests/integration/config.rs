@@ -257,6 +257,82 @@ fn agents_validate_refuses_what_launch_refuses() {
 }
 
 #[test]
+fn agents_validate_and_explain_refuse_a_non_prompt_kind_base_until_deleted() {
+    let env = Env::new();
+    let base = env.rimz_home().join("agents/opencode.md");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: opencode",
+        "",
+    );
+    write_machine_file(&base, "---\ndescription: Base\n---\nBase.");
+    env.rimz()
+        .args(["agents", "validate"])
+        .assert()
+        .code(1)
+        .stdout(
+            contains("agents/opencode.md")
+                .and(contains("agents/worker.md"))
+                .and(contains("takes no system prompt"))
+                .and(contains("delete"))
+                .and(contains("system-prompt-file").not()),
+        );
+    for name in ["worker", "opencode"] {
+        env.rimz()
+            .args(["agents", "explain", name])
+            .assert()
+            .code(1)
+            .stderr(
+                contains(base.display().to_string())
+                    .and(contains("delete"))
+                    .and(contains("system-prompt-file").not()),
+            );
+    }
+    std::fs::remove_file(&base).unwrap();
+    env.rimz().args(["agents", "validate"]).assert().success();
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "opencode", 0);
+    let shell = crate::common::write_fake_login_shell(&env, "prompt-test-sh", &[]);
+    env.rimz()
+        .args(["agents", "explain", "worker"])
+        .env("SHELL", shell)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                agent_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .assert()
+        .success();
+}
+
+#[test]
+fn agents_validate_refuses_a_non_prompt_craft_without_create_advice() {
+    let env = Env::new();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: opencode",
+        "Craft.",
+    );
+    env.rimz()
+        .args(["agents", "validate"])
+        .assert()
+        .code(1)
+        .stdout(
+            contains("agents/worker.md")
+                .and(contains("craft body cannot be delivered"))
+                .and(contains("remove the body"))
+                .and(contains("create").not())
+                .and(contains("system-prompt-file").not()),
+        );
+}
+
+#[test]
 fn agents_validate_warns_only_for_explicit_sandbox_without_a_switch() {
     let env = Env::new();
     write_machine_file(

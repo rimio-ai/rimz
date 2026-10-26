@@ -277,6 +277,12 @@ impl LaunchSpec {
         })
     }
 
+    /// Whether the provider can receive a composed system prompt.
+    pub fn takes_system_prompt(self) -> bool {
+        self.preset_arg_matcher(PresetField::SystemPromptFile)
+            .is_some()
+    }
+
     /// The provider argv that turns fast mode on (empty for an extension), or
     /// the provider's alternative.
     pub fn fast_args(self) -> Result<Vec<String>, &'static str> {

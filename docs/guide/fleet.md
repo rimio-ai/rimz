@@ -259,7 +259,7 @@ The complete `rimz agents` surface is the [agent-control reference](../reference
 
 ## Profiles: shape an agent for one job
 
-A **profile** saves the shaping you would otherwise retype: model, reasoning effort, permission mode, tools, and an optional craft prompt. Profiles are Markdown files under `~/.rimz/agents/`, and each provider's profiles share one **kind base**, a file named after the kind that holds the system prompt they all inherit. Write the base first, as `~/.rimz/agents/claude.md`:
+A **profile** saves the shaping you would otherwise retype: model, reasoning effort, permission mode, tools, and an optional craft prompt. Profiles are Markdown files under `~/.rimz/agents/`. On a provider that takes a system prompt, its profiles share one **kind base**, a file named after the kind that holds the system prompt they all inherit. Write the base first, as `~/.rimz/agents/claude.md`:
 
 ```markdown
 ---
@@ -286,7 +286,7 @@ rimz agents validate          # check every definition on this machine
 rimz agents planner           # launch it
 ```
 
-This profile has no body of its own, so it runs on the base's prompt alone; give it one and the two compose, base first. The base file is not optional on a provider whose CLI takes a system prompt, which covers Claude, Codex, Pi, OMP, and Qwen. Without it, `rimz agents validate` fails, naming the file to write: `runs on claude, whose kind base is missing — create /home/me/.rimz/agents/claude.md with a nonempty body, the system prompt every claude definition starts from`. Edit a file to change future launches, and delete it to retire the profile. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults; a field the provider cannot express fails the launch before any pane opens instead of being dropped in silence.
+This profile has no body of its own, so it runs on the base's prompt alone; give it one and the two compose, base first. The base file is not optional on a provider whose CLI takes a system prompt, which covers Claude, Codex, Pi, OMP, Qwen, and MiniMax (appended to its own prompt). Without it, `rimz agents validate` fails, naming the file to write: `runs on claude, whose kind base is missing — create /home/me/.rimz/agents/claude.md with a nonempty body, the system prompt every claude definition starts from`. A provider without a system prompt takes neither a base nor a craft. Edit a file to change future launches, and delete it to retire the profile. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults; a field the provider cannot express fails the launch before any pane opens instead of being dropped in silence.
 
 **See what a profile will actually run.** With a bare CLI you can read the flags you typed; after a profile inherits a base and adds prompt fragments, that final command is harder to see. `rimz agents explain planner` prints the resolved command, settings, prompt, and scoped view without launching anything:
 
