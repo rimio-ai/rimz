@@ -38,9 +38,13 @@ pub(super) fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
 
 /// Whether `newer` proves that `older` no longer owns its session slot.
 pub(super) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
-    newer.kind == older.kind
-        && newer.agent_id != older.agent_id
-        && newer.last_activity > older.last_activity
+    if newer.kind != older.kind || newer.agent_id == older.agent_id {
+        return false;
+    }
+    if older.is_focused_pair(newer) && same_agent_instance(older, newer) {
+        return !older.is_asking() && newer.on_screen_at > older.on_screen_at;
+    }
+    newer.last_activity > older.last_activity
         && (older_yields_pane(older, newer)
             || cleared_conversation_supersedes(older, newer)
             || same_process_conversation_supersedes(older, newer)
@@ -59,11 +63,12 @@ fn compaction_continuation_supersedes(older: &AgentState, newer: &AgentState) ->
     newer.compacted_from.as_ref() == Some(&older.agent_id) && same_agent_instance(older, newer)
 }
 
-/// A provider that follows its latest conversation can prove an in-place
-/// session switch when both records name the same pane incarnation and agent
-/// process. The outer activity guard establishes which record is newer. An
-/// open owner remains authoritative because same-process child hooks can carry
-/// a distinct conversation ID while its turn is open.
+/// Without same-instance on-screen evidence, a provider that follows its
+/// latest conversation can prove an in-place session switch when both records
+/// name the same pane incarnation and agent process. The outer activity guard
+/// establishes which record is newer. An open owner remains authoritative
+/// because same-process child hooks can carry a distinct conversation ID while
+/// its turn is open.
 fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
     if older.holds_open_turn() {
         return false;
@@ -275,6 +280,34 @@ mod tests {
         newer.runtime_owner = Some(owner);
         newer.origin = newer_origin;
         (older, newer)
+    }
+
+    #[test]
+    fn focus_supersession_uses_stamps_only_within_one_instance() {
+        let mut actual = Vec::new();
+        for mismatch in ["none", "pid", "process-start", "pane", "pane-start", "kind"] {
+            let (mut older, mut newer) =
+                conversation_pair("opencode", AgentStatus::Running, Some(SessionOrigin::Fresh));
+            older.on_screen_at = Some(Timestamp::UNIX_EPOCH);
+            newer.on_screen_at = Some(newer.last_activity);
+            // Focus is stronger than activity only for this exact instance.
+            older.last_activity = newer.last_activity + std::time::Duration::from_secs(1);
+            match mismatch {
+                "pid" => newer.runtime_owner.as_mut().unwrap().pid += 1,
+                "process-start" => {
+                    newer.runtime_owner.as_mut().unwrap().process_start = Some("other".into())
+                }
+                "pane" => newer.pane.as_mut().unwrap().pane_id = PaneId::parse("tmux:%2").unwrap(),
+                "pane-start" => {
+                    older.pane.as_mut().unwrap().pane_process_start = Some(Timestamp::UNIX_EPOCH);
+                    newer.pane.as_mut().unwrap().pane_process_start = Some(newer.last_activity);
+                }
+                "kind" => newer.kind = AgentKind::new_unchecked("codex"),
+                _ => {}
+            }
+            actual.push(supersedes(&older, &newer));
+        }
+        assert_eq!(actual, vec![true, false, false, false, false, false]);
     }
 
     #[test]

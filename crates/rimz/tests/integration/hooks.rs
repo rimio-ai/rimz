@@ -1560,6 +1560,105 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
 }
 
 #[test]
+fn opencode_stamped_asks_still_record_edges() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (event, transcript_ask) in [("permission_ask", false), ("question_ask", true)] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        crate::common::wait::register_calling_agent(&env);
+        assert_hook_succeeded_neutral(
+            "claude",
+            env.run_hook(
+                "claude",
+                &json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session",
+                    "prompt": "work", "cwd": env.project_root})
+                .to_string(),
+            ),
+        );
+        let armed = env
+            .rimz()
+            .args([
+                "loop",
+                "add",
+                "waiting",
+                "--signal",
+                "agent.waiting",
+                "--wait",
+                "@planner",
+                "--match",
+                "session=ses-screen-ask",
+                "--once",
+            ])
+            .output()
+            .unwrap();
+        assert!(armed.status.success(), "{armed:?}");
+        let session = "ses-screen-ask";
+        assert_hook_succeeded_neutral(
+            "opencode",
+            env.run_hook(
+                "opencode",
+                &json!({
+                    "hook_event_name": event, "session_id": session, "on_screen": true,
+                    "title": "Allow bash?", "cwd": env.project_root,
+                    "questions": [{"question": "Allow bash?", "options": [{"label": "Yes"}]}]
+                })
+                .to_string(),
+            ),
+        );
+        let store = env.store();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let waiting = loop {
+            if store
+                .list_pending_messages()
+                .unwrap()
+                .iter()
+                .any(|message| message.text.contains("agent.waiting"))
+            {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let events = store.read_events().unwrap();
+        let at = events
+            .iter()
+            .find(|event| {
+                event.method == "agent.lifecycle" && event.params_value()["agent_id"] == session
+            })
+            .unwrap()
+            .timestamp;
+        let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+        let row = audit
+            .agents
+            .iter()
+            .find(|row| row.agent_id == session)
+            .unwrap();
+        let ask = rimz::transcript::read_all(store.paths())
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry.agent_id == session && entry.entry == rimz::transcript::TranscriptKind::Ask
+            });
+        assert!(
+            waiting,
+            "waiting subscriber did not deliver: {:?}; messages: {:?}",
+            env.rimz()
+                .args(["loop", "show", "waiting"])
+                .output()
+                .unwrap(),
+            store.list_messages().unwrap(),
+        );
+        actual.push((event, row.on_screen_at, ask, waiting));
+        expected.push((event, Some(at), transcript_ask, true));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn opencode_native_envelopes_record_the_database_for_history() {
     let env = Env::new();
     env.record(&env.project_root);

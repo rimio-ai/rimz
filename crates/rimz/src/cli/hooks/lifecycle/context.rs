@@ -162,6 +162,37 @@ pub(super) fn touch_agent_activity(
     }
 }
 
+pub(super) fn merge_observed_context(
+    store: &Store,
+    agent: &AgentDefinition,
+    decoded: &mut HookOutput,
+) {
+    let Some(context) = decoded.take_observed_context() else {
+        return;
+    };
+    let kind = agent.spec().kind;
+    match rimz::store::agent_context::merge_observed(
+        store.runtime_paths(),
+        kind,
+        context.agent_id.as_str(),
+        context.context,
+    ) {
+        Ok(true) => {
+            let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
+        }
+        Ok(false) => {}
+        Err(err) => {
+            warn!(
+                agent = kind,
+                session = %context.agent_id,
+                tags.operation = "agent.context_observed_merge",
+                error = &err as &dyn std::error::Error,
+                "lifecycle: failed to merge observed context",
+            );
+        }
+    }
+}
+
 pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let ContextSidecarInput {
         workspace,
@@ -208,29 +239,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
     }
 
-    if let Some(context) = decoded.take_observed_context() {
-        let kind = agent.spec().kind;
-        match rimz::store::agent_context::merge_observed(
-            store.runtime_paths(),
-            kind,
-            context.agent_id.as_str(),
-            context.context,
-        ) {
-            Ok(true) => {
-                let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
-            }
-            Ok(false) => {}
-            Err(err) => {
-                warn!(
-                    agent = kind,
-                    session = %context_agent_id,
-                    tags.operation = "agent.context_observed_merge",
-                    error = &err as &dyn std::error::Error,
-                    "lifecycle: failed to merge observed context",
-                );
-            }
-        }
-    }
+    merge_observed_context(store, agent, decoded);
 
     let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
     let locally_priced_cost_updated = {

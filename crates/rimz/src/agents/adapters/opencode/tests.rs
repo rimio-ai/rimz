@@ -459,6 +459,69 @@ fn install_blocker_refuses_only_old_opencode() {
 
 #[test]
 fn opencode_observes_lifecycle_enrichment_and_boundaries() {
+    let mut snapshots = Vec::new();
+    let mut expected = Vec::new();
+    for (event, signal) in [
+        ("client_idle", LifecycleSignal::Registered),
+        (
+            "client_running",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+    ] {
+        for stamp in [
+            Some(json!(true)),
+            Some(json!(false)),
+            Some(json!(null)),
+            None,
+        ] {
+            let mut payload = json!({
+                "session_id": "ses_1", "prompt": "not a submitted prompt", "plan_proposed": true
+            });
+            if let Some(stamp) = &stamp {
+                payload["on_screen"] = stamp.clone();
+            }
+            let output = hook_output(&OpencodeAdapter, event, &payload);
+            snapshots.push(output.lifecycle().map(|observation| {
+                (
+                    observation.signal.clone(),
+                    observation.state_snapshot,
+                    observation.on_screen,
+                    observation.prompt.clone(),
+                    output.final_message().map(ToOwned::to_owned),
+                )
+            }));
+            expected.push(Some((
+                signal.clone(),
+                Some(true),
+                (stamp == Some(json!(true))).then_some(true),
+                None,
+                None,
+            )));
+        }
+    }
+    let mut edges = Vec::new();
+    for event in OPENCODE_HOOKS {
+        let mut payload: Value = serde_json::from_str(event.test_payload).unwrap();
+        payload["on_screen"] = json!(true);
+        payload["state_snapshot"] = json!(true);
+        let output = hook_output(&OpencodeAdapter, event.event, &payload);
+        let observation = output.lifecycle().unwrap();
+        payload.as_object_mut().unwrap().remove("on_screen");
+        edges.push((
+            observation.on_screen,
+            observation.state_snapshot,
+            hook_lifecycle(&OpencodeAdapter, event.event, &payload).on_screen,
+        ));
+    }
+    assert_eq!(
+        (snapshots, edges),
+        (
+            expected,
+            vec![(Some(true), None, None); OPENCODE_HOOKS.len()]
+        ),
+        "only client arrivals are snapshots; every stamped edge keeps its meaning"
+    );
+
     let registered = hook_lifecycle(
         &OpencodeAdapter,
         "session_created",

@@ -519,6 +519,7 @@ fn parse_inline_config(
 impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parsed = payloads::parse_payload(payload);
+        let state_snapshot = matches!(event_name, "client_idle" | "client_running");
         let ask_kind = match event_name {
             "permission_ask" => Some(AskKind::Permission),
             "question_ask" => Some(AskKind::Question),
@@ -584,7 +585,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
             _ => None,
         });
         let signal = match event_name {
-            "session_created" => Some(LifecycleSignal::Registered),
+            "session_created" | "client_idle" => Some(LifecycleSignal::Registered),
             "permission_ask" => Some(LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
                 ask_id: None,
@@ -597,7 +598,9 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 detail: parsed.title.clone(),
                 native_key: None,
             }),
-            "chat_message" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
+            "chat_message" | "client_running" => {
+                Some(LifecycleSignal::TurnStarted { turn_id: None })
+            }
             "session_idle" if parsed.plan_proposed == Some(true) => {
                 Some(LifecycleSignal::AwaitingInput {
                     kind: AskKind::PlanApproval,
@@ -667,11 +670,15 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         };
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        observation.on_screen = (parsed.on_screen == Some(true)).then_some(true);
+        observation.state_snapshot = state_snapshot.then_some(true);
         observation.transcript_path = optional_payload_string(payload, &["transcript_path"])
             .or_else(|| database::newest_file().map(|path| path.to_string_lossy().into_owned()));
         observation.parent_agent_id = parent_agent_id;
-        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
+        if !state_snapshot {
+            observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
+            observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
+        }
         observation.launch.model = parsed.model.clone();
         observation.launch.effort = parsed.effort;
         observation.usage.context_window = parsed

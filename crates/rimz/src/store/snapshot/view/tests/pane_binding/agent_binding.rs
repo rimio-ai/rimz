@@ -1,6 +1,103 @@
 use super::*;
-use crate::agents::SessionOrigin;
+use crate::agents::{AgentContext, SessionOrigin};
 use crate::ids::{MuxName, PaneId};
+
+#[test]
+fn on_screen_owner_follows_focus_and_unstamped_asks() {
+    let mut actual = Vec::new();
+    for (a_status, b_status, a_stamp, b_stamp, interrupted) in [
+        (
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            Some(60),
+            Some(30),
+            false,
+        ),
+        (
+            AgentStatus::Waiting,
+            AgentStatus::Running,
+            None,
+            Some(30),
+            false,
+        ),
+        (
+            AgentStatus::Running,
+            AgentStatus::Running,
+            None,
+            Some(30),
+            false,
+        ),
+        (
+            AgentStatus::Waiting,
+            AgentStatus::Running,
+            Some(60),
+            Some(30),
+            true,
+        ),
+        (
+            AgentStatus::Waiting,
+            AgentStatus::Waiting,
+            Some(60),
+            Some(30),
+            false,
+        ),
+        (
+            AgentStatus::Waiting,
+            AgentStatus::Waiting,
+            Some(30),
+            Some(30),
+            false,
+        ),
+    ] {
+        let mut a = agent("opencode", "a", a_status, 1_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(1);
+        let mut b = agent("opencode", "b", b_status, 2_000)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(10);
+        for row in [&mut a, &mut b] {
+            row.runtime_owner = Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "client",
+                42,
+                Some("start".into()),
+            ));
+        }
+        a.on_screen_at = a_stamp.map(ago);
+        b.on_screen_at = b_stamp.map(ago);
+        if interrupted {
+            a.context = Some(AgentContext {
+                settle: Some(crate::agents::TurnSettle::new(
+                    epoch(),
+                    TurnSettleOutcome::Interrupted,
+                )),
+                ..AgentContext::new("opencode", epoch())
+            });
+        }
+        let mut snapshot = room(vec![a, b]);
+        snapshot.reap_stale_sessions();
+        let retained = snapshot
+            .agents
+            .iter()
+            .map(|row| row.agent_id.to_string())
+            .collect::<Vec<_>>();
+        let bound = snapshot.with_live_panes(vec![pane("%1", "opencode", "/repo/main")], None);
+        actual.push((rows(&bound)[0].id.clone(), retained));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            ("b".into(), vec!["b".into()]),
+            ("a".into(), vec!["a".into(), "b".into()]),
+            ("b".into(), vec!["b".into()]),
+            ("b".into(), vec!["b".into()]),
+            ("b".into(), vec!["a".into(), "b".into()]),
+            ("b".into(), vec!["a".into(), "b".into()]),
+        ]
+    );
+}
 
 #[test]
 fn live_panes_overlay_only_matching_agent_rows() {

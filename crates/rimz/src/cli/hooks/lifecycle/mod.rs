@@ -111,6 +111,7 @@ pub(super) fn handle_lifecycle_frame(
             )?;
             let derived = if let Some(recorded) = recorded.as_ref().filter(|recorded| {
                 recorded.receipt.side_conversation.is_none()
+                    && recorded.observation.state_snapshot != Some(true)
                     && recorded.observation.agent_id.is_some()
                     && recorded.observation.parent_agent_id.is_none()
             }) {
@@ -128,6 +129,15 @@ pub(super) fn handle_lifecycle_frame(
             Ok((released, recorded, derived))
         })?
     };
+    if let Some(recorded) = recorded.as_ref()
+        && recorded.observation.state_snapshot == Some(true)
+    {
+        merge_observed_context(store, agent, decoded);
+        if recorded.receipt.rotation_due {
+            spawn_auto_rotation(workspace);
+        }
+        return Ok(decoded.reply().clone());
+    }
     // The role index is read whole on each write, and this runs in a fresh child per frame, so
     // only a session new to this room or one (re)registering reaches it.
     let new_sessions = released

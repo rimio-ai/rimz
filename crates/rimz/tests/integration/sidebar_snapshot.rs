@@ -281,6 +281,8 @@ fn agent_birth_argv_returned_to_shell_renders_process_row() {
 fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
     env.record(&env.project_root);
     let obs = AgentLifecycleObservation {
+        on_screen: None,
+        state_snapshot: None,
         ask_queue: None,
         agent_id: Some(agent_id.into()),
         agent_name: None,

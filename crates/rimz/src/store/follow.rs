@@ -281,6 +281,24 @@ impl EventFollower {
             let kind = AgentKind::new_unchecked(envelope.source.clone());
             let key = (kind.clone(), agent_id.clone());
             let prior = self.states.get(&key);
+            if observation.state_snapshot == Some(true) {
+                let next = AgentState::snapshot_transition(
+                    prior.map(|state| &state.lifecycle),
+                    &observation.signal,
+                )
+                .next;
+                let state = self.states.entry(key.clone()).or_insert(FollowState {
+                    lifecycle: next,
+                    open_ask_key: None,
+                    started_turn_id: None,
+                    superseded_turn_id: None,
+                    interrupted_turn_id: None,
+                });
+                state.lifecycle = next;
+                state.open_ask_key = None;
+                self.ended.retain(|ended| ended != &key);
+                continue;
+            }
             let turn_ids = PriorTurnIds {
                 started: prior.and_then(|state| state.started_turn_id.as_deref()),
                 superseded: prior.and_then(|state| state.superseded_turn_id.as_deref()),
@@ -548,6 +566,137 @@ mod tests {
             panic!("lifecycle")
         };
         assert_eq!(event.status, crate::agents::AgentStatus::Idle);
+    }
+
+    #[test]
+    fn snapshots_update_live_and_replayed_state_without_emitting_edges_or_changing_turn_ids() {
+        use crate::agents::AgentStatus;
+
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for replay in [false, true] {
+            for (status, idle_status) in [
+                (None, AgentStatus::Idle),
+                (Some(AgentStatus::Idle), AgentStatus::Idle),
+                (Some(AgentStatus::Success), AgentStatus::Success),
+                (Some(AgentStatus::Failed), AgentStatus::Failed),
+                (Some(AgentStatus::Running), AgentStatus::Idle),
+                (Some(AgentStatus::Waiting), AgentStatus::Idle),
+            ] {
+                for (running, next_status) in [(false, idle_status), (true, AgentStatus::Running)] {
+                    let (_dir, store, paths) = fixture();
+                    if let Some(status) = status {
+                        for id in ["previous", "current"] {
+                            append(
+                                &store,
+                                LifecycleSignal::TurnStarted {
+                                    turn_id: Some(id.into()),
+                                },
+                            );
+                        }
+                        let signal = match status {
+                            AgentStatus::Idle => LifecycleSignal::Registered,
+                            AgentStatus::Success | AgentStatus::Failed => {
+                                LifecycleSignal::TurnEnded {
+                                    errored: status == AgentStatus::Failed,
+                                    parked_on_background: false,
+                                    turn_id: Some("current".into()),
+                                }
+                            }
+                            AgentStatus::Running => LifecycleSignal::Compacting,
+                            AgentStatus::Waiting => LifecycleSignal::AwaitingInput {
+                                kind: crate::agents::AskKind::Permission,
+                                ask_id: Some(crate::ids::AskId::new()),
+                                detail: None,
+                                native_key: Some("call".into()),
+                            },
+                            AgentStatus::Paused | AgentStatus::Sleeping => {
+                                unreachable!("fixture uses durable lifecycle statuses")
+                            }
+                        };
+                        append(&store, signal);
+                    }
+                    let mut follower = EventFollower::open(paths, replay).unwrap();
+                    follower.poll().unwrap();
+                    let key = (AgentKind::new_unchecked("claude"), "session-1".into());
+                    let prior = follower.states.get(&key).cloned();
+                    let ids = prior
+                        .as_ref()
+                        .map(|state| {
+                            (
+                                state.started_turn_id.clone(),
+                                state.superseded_turn_id.clone(),
+                                state.interrupted_turn_id.clone(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    let mut observation = crate::agents::AgentLifecycleObservation::new(
+                        Some("session-1".into()),
+                        if running {
+                            LifecycleSignal::TurnStarted { turn_id: None }
+                        } else {
+                            LifecycleSignal::Registered
+                        },
+                    );
+                    observation.state_snapshot = Some(true);
+                    store
+                        .append_agent_lifecycle(AgentLifecycleIntent {
+                            session_name: "room",
+                            agent_kind: key.0.clone(),
+                            event_name: "snapshot",
+                            observation: &observation,
+                            spawned_subagents: &[],
+                        })
+                        .unwrap();
+                    let batch = follower.poll().unwrap();
+                    let state = follower.states[&key].clone();
+                    append(
+                        &store,
+                        LifecycleSignal::ToolUsed {
+                            mutates: true,
+                            edits: false,
+                            name: Some("bash".into()),
+                            native_key: None,
+                            turn_id: Some("current".into()),
+                        },
+                    );
+                    let edges = follower.poll().unwrap().events;
+                    let FollowEvent::Lifecycle(edge) = &edges[0] else {
+                        panic!("lifecycle")
+                    };
+                    actual.push((
+                        replay,
+                        status,
+                        running,
+                        batch.events.len(),
+                        state.lifecycle.status,
+                        state.lifecycle.compacting,
+                        (
+                            state.started_turn_id,
+                            state.superseded_turn_id,
+                            state.interrupted_turn_id,
+                        ),
+                        state.open_ask_key,
+                        edge.prior_status,
+                    ));
+                    expected.push((
+                        replay,
+                        status,
+                        running,
+                        0,
+                        next_status,
+                        prior.is_some_and(|state| state.lifecycle.compacting),
+                        ids,
+                        None,
+                        Some(next_status),
+                    ));
+                }
+            }
+        }
+        assert_eq!(
+            actual, expected,
+            "snapshots update private state, never lifecycle edges"
+        );
     }
 
     #[test]

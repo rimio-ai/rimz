@@ -1,6 +1,281 @@
 use super::*;
 
 #[test]
+fn client_snapshots_fold_status_without_resetting_turn_evidence() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    let evidence = |row: &AgentState| {
+        let value = serde_json::to_value(row).unwrap();
+        [
+            "status",
+            "phase",
+            "turn_started_at",
+            "user_turn_started_at",
+            "turn_ended_at",
+            "last_tool_at",
+            "keepalive_since",
+            "started_turn_id",
+            "superseded_turn_id",
+            "interrupted_turn_id",
+            "compacting_since",
+            "compaction_count",
+            "compaction_retired",
+            "tool_calls",
+            "background_shells",
+            "registered_at",
+            "waiting_since",
+            "open_ask",
+            "ended_at",
+            "last_activity",
+            "on_screen_at",
+            "total_tokens",
+        ]
+        .map(|key| value[key].clone())
+    };
+    for status in [
+        None,
+        Some(AgentStatus::Idle),
+        Some(AgentStatus::Success),
+        Some(AgentStatus::Failed),
+        Some(AgentStatus::Running),
+        Some(AgentStatus::Waiting),
+    ] {
+        for running in [false, true] {
+            let prior = status.map(|status| {
+                let mut row = AgentState::seed(
+                    AgentKind::new_unchecked("opencode"),
+                    "session".into(),
+                    status,
+                    epoch(),
+                );
+                row.turn_started_at = Some(ago(20));
+                row.user_turn_started_at = Some(ago(30));
+                row.turn_ended_at = Some(ago(25));
+                row.last_tool_at = Some(ago(5));
+                row.keepalive_since = Some(ago(40));
+                row.started_turn_id = Some("current".into());
+                row.superseded_turn_id = Some("previous".into());
+                row.interrupted_turn_id = Some("interrupted".into());
+                row.compacting_since = Some(ago(2));
+                row.compaction_count = 3;
+                row.compaction_retired = true;
+                row.waiting_since = Some(ago(4));
+                row.open_ask = Some(crate::agents::OpenAsk {
+                    id: crate::ids::AskId::new(),
+                    kind: lifecycle::AskKind::Permission,
+                    detail: None,
+                    native_key: None,
+                    since: ago(4),
+                });
+                row.tool_calls.insert("bash".into(), 2);
+                row.background_shells.push(crate::agents::BackgroundShell {
+                    id: "shell".into(),
+                    command: Some("build".into()),
+                    description: None,
+                    started_at: ago(10),
+                });
+                row.ended_at = Some(ago(1));
+                row
+            });
+            let event = raw_lifecycle_at(
+                "opencode",
+                1,
+                json!({
+                    "agent_id": "session", "state_snapshot": true, "on_screen": true,
+                    "signal": {"signal": if running { "turn_started" } else { "registered" }},
+                    "total_tokens": 1234
+                }),
+            );
+            let states = reduce_agent_states_seeded(
+                prior
+                    .iter()
+                    .map(|row| ((row.kind.clone(), row.agent_id.clone()), row.clone()))
+                    .collect(),
+                std::slice::from_ref(&event),
+            );
+            let row = states.values().next().unwrap();
+            let opens =
+                running && !matches!(status, Some(AgentStatus::Running | AgentStatus::Waiting));
+            let next = if running {
+                AgentStatus::Running
+            } else {
+                match status {
+                    Some(AgentStatus::Success | AgentStatus::Failed) => status.unwrap(),
+                    _ => AgentStatus::Idle,
+                }
+            };
+            let mut wanted = prior.clone().unwrap_or_else(|| {
+                AgentState::seed(
+                    AgentKind::new_unchecked("opencode"),
+                    "session".into(),
+                    AgentStatus::Idle,
+                    event.timestamp,
+                )
+            });
+            if wanted.status != next {
+                wanted.phase = if running {
+                    TurnPhase::Reasoning
+                } else {
+                    TurnPhase::Idle
+                };
+            }
+            wanted.status = next;
+            if opens {
+                wanted.turn_started_at = Some(event.timestamp);
+            }
+            wanted.waiting_since = None;
+            wanted.open_ask = None;
+            wanted.ended_at = None;
+            wanted.last_activity = event.timestamp;
+            wanted.on_screen_at = Some(event.timestamp);
+            wanted.usage.total_tokens = Some(1234);
+            actual.push((status, running, evidence(row)));
+            expected.push((status, running, evidence(&wanted)));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn on_screen_stamp_survives_unstamped_events_and_never_follows_identity() {
+    let mut payload = launch_payload("session", "screen");
+    payload.launch_id = Some("launch".into());
+    payload.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+    payload.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "client",
+        42,
+        None,
+    ));
+    let mut launch = launch_event("opencode", payload);
+    launch.timestamp = epoch();
+    let mut events = vec![
+        launch,
+        raw_lifecycle_at(
+            "opencode",
+            0,
+            json!({
+                "agent_id": "session", "signal": {"signal": "turn_started"}, "on_screen": true,
+                "pane_id": "tmux:%1", "agent_pid": 42
+            }),
+        ),
+    ];
+    let stamp = events[0].timestamp;
+    let stamped = events.clone();
+    let mut stamps = Vec::new();
+    for (offset, signal, on_screen) in [
+        (1, "registered", json!(false)),
+        (2, "ended", json!(null)),
+        (3, "turn_started", json!(null)),
+    ] {
+        events.push(raw_lifecycle_at(
+            "opencode",
+            offset,
+            json!({
+                "agent_id": "session", "event_name": "ReapedSuperseded",
+                "signal": {"signal": signal}, "on_screen": on_screen
+            }),
+        ));
+        let rows = reduce_agent_states(&events);
+        let cached: AgentState =
+            serde_json::from_value(serde_json::to_value(&rows[0]).unwrap()).unwrap();
+        stamps.push(cached.on_screen_at);
+    }
+    for id in ["successor", "continuation"] {
+        events.push(raw_lifecycle_at(
+            "opencode",
+            4,
+            json!({
+                "agent_id": id, "signal": {"signal": "registered"},
+                "pane_id": "tmux:%1", "agent_pid": 42,
+                "compacted_from": if id == "continuation" { Some("session") } else { None }
+            }),
+        ));
+    }
+    let rows = reduce_agent_states(&events);
+    let successors: Vec<_> = rows
+        .iter()
+        .filter(|row| row.agent_id != "session")
+        .map(|row| (row.launch_id.as_deref(), row.on_screen_at))
+        .collect();
+    let mut old = serde_json::to_value(&rows[0]).unwrap();
+    old.as_object_mut().unwrap().remove("on_screen_at");
+    let old: AgentState = serde_json::from_value(old).unwrap();
+    assert_eq!(
+        (stamps, successors, old.on_screen_at),
+        (vec![Some(stamp); 3], vec![(Some("launch"), None); 2], None)
+    );
+
+    let mut payload = launch_payload("session", "screen");
+    payload.pane_id = Some(PaneId::parse("tmux:%2").unwrap());
+    payload.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "session",
+        43,
+        None,
+    ));
+    let moves = [
+        raw_lifecycle_at(
+            "opencode",
+            1,
+            json!({"agent_id": "session", "signal": {"signal": "registered"},
+                "pane_id": "tmux:%2", "agent_pid": 42}),
+        ),
+        raw_lifecycle_at(
+            "opencode",
+            1,
+            json!({"agent_id": "session", "signal": {"signal": "registered"},
+                "pane_id": "tmux:%1", "agent_pid": 43}),
+        ),
+        launch_event("opencode", payload),
+        attach_event("opencode", "session", None, "tmux:%2", None, 43),
+        EventEnvelope::session_rebirth(workspace(), "session"),
+    ];
+    let moved_stamps = moves.map(|event| {
+        let mut events = stamped.clone();
+        events.push(event);
+        reduce_agent_states(&events)[0].on_screen_at
+    });
+    assert_eq!(
+        moved_stamps, [None; 5],
+        "unstamped placement changes retire the old instance's on-screen claim"
+    );
+}
+
+#[test]
+fn stamped_real_edges_still_open_and_finish_a_turn() {
+    let events = [
+        raw_lifecycle_at(
+            "opencode",
+            0,
+            json!({"agent_id": "session", "on_screen": true,
+            "signal": {"signal": "turn_started"}, "prompt": "work"}),
+        ),
+        raw_lifecycle_at(
+            "opencode",
+            1,
+            json!({"agent_id": "session", "on_screen": true,
+            "signal": {"signal": "turn_ended", "errored": false, "parked_on_background": false}}),
+        ),
+    ];
+    let rows = reduce_agent_states(&events);
+    assert_eq!(
+        (
+            rows[0].status,
+            rows[0].turn_started_at,
+            rows[0].turn_ended_at,
+            rows[0].on_screen_at
+        ),
+        (
+            AgentStatus::Success,
+            Some(events[0].timestamp),
+            Some(events[1].timestamp),
+            Some(events[1].timestamp)
+        )
+    );
+}
+
+#[test]
 fn registered_prompted_child_is_silent_even_after_registration_clears_its_task() {
     for prompted in [false, true] {
         let mut payload = launch_payload("child", "still-silver");

@@ -415,7 +415,7 @@ mod tests {
         seat.phase = TurnPhase::Idle;
         let rows = [seat.clone(), member("judge", "auth", AgentStatus::Idle)];
         let audit = |prior: &AgentState, signal: LifecycleSignal, keepalive_prompt| {
-            let transition = AgentState::transition(Some(prior), &signal, keepalive_prompt);
+            let transition = AgentState::transition(Some(prior), &signal, keepalive_prompt, false);
             LifecycleEvent::new(
                 EventId::new(),
                 jiff::Timestamp::UNIX_EPOCH,

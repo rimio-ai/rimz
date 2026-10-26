@@ -1079,6 +1079,11 @@ pub struct AgentState {
     /// a rollup persisted before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+    /// Ingress time of this conversation's latest on-screen claim. Carried
+    /// within the same pane and agent-process incarnation, never inherited
+    /// from another conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_screen_at: Option<Timestamp>,
 }
 
 /// The live molt successor, following ended or failed intermediates in `agents`.
@@ -1296,6 +1301,7 @@ impl AgentState {
             last_seen: at,
             last_activity: at,
             registered_at: Some(at),
+            on_screen_at: None,
         }
     }
 
@@ -1459,17 +1465,60 @@ impl AgentState {
         }
     }
 
+    /// Current-state observations share this decision between the rollup and
+    /// the event follower, without taking an edge or closing compaction.
+    pub(crate) fn snapshot_transition(
+        prior: Option<&LifecycleState>,
+        signal: &LifecycleSignal,
+    ) -> Transition {
+        let mut next = prior.copied().unwrap_or(LifecycleState {
+            status: AgentStatus::Idle,
+            phase: TurnPhase::Idle,
+            compacting: false,
+        });
+        let prior_status = next.status;
+        next.status = match (signal, prior_status) {
+            (LifecycleSignal::TurnStarted { .. }, _) => AgentStatus::Running,
+            (LifecycleSignal::Registered, AgentStatus::Running | AgentStatus::Waiting) => {
+                AgentStatus::Idle
+            }
+            _ => prior_status,
+        };
+        if next.status != prior_status {
+            next.phase = if next.status == AgentStatus::Running {
+                TurnPhase::Reasoning
+            } else {
+                TurnPhase::Idle
+            };
+        }
+        Transition {
+            next,
+            kind: TransitionKind::Normal,
+            compaction_closed: false,
+            waiting_cleared: prior_status == AgentStatus::Waiting
+                && next.status != AgentStatus::Waiting,
+            opened_turn: next.status == AgentStatus::Running
+                && !matches!(prior_status, AgentStatus::Running | AgentStatus::Waiting),
+            ping: None,
+        }
+    }
+
     /// The lifecycle step both the writer and the fold take. A ping-only turn
     /// (opened from rest by a prompt that is only cache-keepalive pings) is no
     /// work of the agent's: its open and its close are no-ops for the lifecycle,
     /// so every audit row and derived signal sees the agent exactly as it was.
     /// `keepalive_prompt` says the signal's prompt is made only of keepalive
-    /// sections, as the store classifies it.
+    /// sections, as the store classifies it. `state_snapshot` reports current
+    /// state without taking an edge or closing a compaction bracket.
     pub(crate) fn transition(
         prior: Option<&Self>,
         signal: &LifecycleSignal,
         keepalive_prompt: bool,
+        state_snapshot: bool,
     ) -> Transition {
+        if state_snapshot {
+            return Self::snapshot_transition(prior.map(Self::lifecycle).as_ref(), signal);
+        }
         let stepped = lifecycle::step(
             prior.map(Self::lifecycle).as_ref(),
             prior
@@ -1667,8 +1716,22 @@ impl AgentState {
         }
     }
 
-    /// Order co-resident roots for pane ownership: open turns first, adapter
-    /// policy among open pairs, then latest activity among rested pairs.
+    pub(crate) fn is_asking(&self) -> bool {
+        self.status == AgentStatus::Waiting && self.holds_open_turn()
+    }
+
+    pub(crate) fn is_focused_pair(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && (self.on_screen_at.is_some() || other.on_screen_at.is_some())
+            && super::spec_by_kind(self.kind.as_str()).is_some_and(|definition| {
+                definition.capabilities.same_pane_session
+                    == super::SamePaneSessionPolicy::FollowLatest
+            })
+    }
+
+    /// Order co-resident roots for pane ownership: focused FollowLatest pairs
+    /// prefer asks, then the later on-screen stamp. Otherwise open turns lead,
+    /// with adapter policy among open pairs and activity among rested pairs.
     /// Registration and session id break the remaining ties deterministically.
     pub(crate) fn compare_same_pane_owner(&self, other: &Self) -> Ordering {
         let follows_latest = self.kind == other.kind
@@ -1676,6 +1739,15 @@ impl AgentState {
                 definition.capabilities.same_pane_session
                     == super::SamePaneSessionPolicy::FollowLatest
             });
+        if self.is_focused_pair(other) {
+            let focus_order = other
+                .is_asking()
+                .cmp(&self.is_asking())
+                .then_with(|| other.on_screen_at.cmp(&self.on_screen_at));
+            if focus_order != Ordering::Equal {
+                return focus_order;
+            }
+        }
         let open_turn_order = other.holds_open_turn().cmp(&self.holds_open_turn());
         if open_turn_order != Ordering::Equal {
             return open_turn_order;

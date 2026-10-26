@@ -38,6 +38,119 @@ pub(super) fn observation(signal: LifecycleSignal) -> AgentLifecycleObservation 
 }
 
 #[test]
+fn snapshot_replay_and_cacheless_fold_agree_on_the_transition() {
+    let (_dir, store) = test_store();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    let mut last_stamp = None;
+    for (index, (signal, snapshot, status, opened, cleared)) in [
+        (
+            LifecycleSignal::TurnStarted { turn_id: None },
+            true,
+            AgentStatus::Running,
+            true,
+            false,
+        ),
+        (
+            LifecycleSignal::TurnStarted { turn_id: None },
+            true,
+            AgentStatus::Running,
+            false,
+            false,
+        ),
+        (
+            LifecycleSignal::AwaitingInput {
+                kind: lifecycle::AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            false,
+            AgentStatus::Waiting,
+            false,
+            false,
+        ),
+        (
+            LifecycleSignal::TurnStarted { turn_id: None },
+            true,
+            AgentStatus::Running,
+            false,
+            true,
+        ),
+        (
+            LifecycleSignal::Registered,
+            true,
+            AgentStatus::Idle,
+            false,
+            false,
+        ),
+        (
+            LifecycleSignal::Ended,
+            false,
+            AgentStatus::Idle,
+            false,
+            false,
+        ),
+        (
+            LifecycleSignal::Registered,
+            true,
+            AgentStatus::Idle,
+            false,
+            false,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut observation = observation(signal);
+        observation.state_snapshot = snapshot.then_some(true);
+        observation.on_screen = snapshot.then_some(true);
+        observation.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+        observation.agent_pid = Some(std::process::id());
+        let at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(index as i64);
+        let receipt = store
+            .for_hook_ingress(EventId::new(), at)
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("opencode"),
+                event_name: "fixture",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        let events = store.read_events().unwrap();
+        let replay = Store::recover_hook_lifecycle(events.last().unwrap()).unwrap();
+        let transition = receipt.transition.unwrap();
+        let replay = replay.transition.unwrap();
+        assert_eq!(
+            (
+                transition.next,
+                transition.opened_turn,
+                transition.waiting_cleared
+            ),
+            (replay.next, replay.opened_turn, replay.waiting_cleared)
+        );
+        std::fs::remove_file(&store.paths().rollup_cache).ok();
+        let cold = Store::open(store.paths().clone(), store.runtime_paths().clone()).unwrap();
+        let rows = cold.runtime_projection(crate::RuntimeScope::Audit).unwrap();
+        let row = &rows.agents[0];
+        actual.push((
+            transition.next.status,
+            transition.opened_turn,
+            transition.waiting_cleared,
+            row.status,
+            row.ended_at.is_some(),
+            row.on_screen_at,
+        ));
+        if snapshot {
+            last_stamp = Some(at);
+        }
+        expected.push((status, opened, cleared, status, index == 5, last_stamp));
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn hook_transaction_hides_all_events_until_the_batch_commits() {
     let (_dir, store) = test_store();
     let scoped = store.for_hook_ingress(EventId::new(), jiff::Timestamp::now());

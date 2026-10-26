@@ -255,6 +255,95 @@ fn next_event(recv: &mpsc::Receiver<std::io::Result<String>>) -> LifecycleEvent 
 }
 
 #[test]
+fn events_follow_omits_snapshots_in_replay_and_live_output() {
+    use rimz::agents::AgentStatus;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let record = |signal, snapshot: bool| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some("snapshot-session".into()), signal);
+        observation.state_snapshot = snapshot.then_some(true);
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("opencode"),
+                event_name: "IntegrationEvent",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    };
+    let start = LifecycleSignal::TurnStarted {
+        turn_id: Some("work".into()),
+    };
+    let end = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: Some("work".into()),
+    };
+    record(start.clone(), false);
+    record(end.clone(), false);
+    record(LifecycleSignal::Registered, true);
+    record(LifecycleSignal::TurnStarted { turn_id: None }, true);
+    record(end.clone(), false);
+    let mut child = env
+        .rimz()
+        .args(["events", "follow", "--replay"])
+        .env("RIMZ_EVENTS_POLL_MS", "5")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, recv) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut events = (0..3).map(|_| next_event(&recv)).collect::<Vec<_>>();
+    let next_start = LifecycleSignal::TurnStarted {
+        turn_id: Some("next".into()),
+    };
+    record(LifecycleSignal::Registered, true);
+    record(next_start.clone(), false);
+    events.push(next_event(&recv));
+    let tool = LifecycleSignal::ToolUsed {
+        mutates: true,
+        edits: false,
+        name: Some("bash".into()),
+        native_key: None,
+        turn_id: Some("next".into()),
+    };
+    record(LifecycleSignal::TurnStarted { turn_id: None }, true);
+    record(tool.clone(), false);
+    events.push(next_event(&recv));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    reader.join().unwrap();
+    assert_eq!(
+        events
+            .into_iter()
+            .map(|event| (event.signal, event.prior_status, event.status))
+            .collect::<Vec<_>>(),
+        vec![
+            (start, None, AgentStatus::Running),
+            (
+                end.clone(),
+                Some(AgentStatus::Running),
+                AgentStatus::Success
+            ),
+            (end, Some(AgentStatus::Running), AgentStatus::Success),
+            (next_start, Some(AgentStatus::Success), AgentStatus::Running),
+            (tool, Some(AgentStatus::Running), AgentStatus::Running),
+        ]
+    );
+}
+
+#[test]
 fn events_list_filters_bounds_and_shares_follow_signal_lines() {
     let env = Env::new();
     env.record(&env.project_root);

@@ -140,25 +140,14 @@ impl SidebarSnapshot {
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
     /// rollup only; the append-only event log is untouched, so it complements
-    /// the workspace-level `rimz gc`. Three rules, all safe for the
-    /// one-pane-one-row invariant:
+    /// the workspace-level `rimz gc`. Shared supersession collapses replacements;
+    /// same-instance on-screen switches protect open asks. Without focus
+    /// evidence, the fallback proofs keep concurrent owners and persistent
+    /// forks that have not yielded their slot.
     ///
-    /// (a) a **pidless** session past `session_death::GHOST_SESSION_TTL_SECS` — it never
-    ///     captured a pid, so process liveness can never reap it, yet it has
-    ///     not reported in hours. A recent pidless session (a just-launched
-    ///     agent) is kept.
-    /// (b) an older session **superseded** by a strictly-newer same-kind
-    ///     session that *relaunched* in its pane — a provably different process
-    ///     (`session_death::older_yields_pane`) — or, for two paneless remnants, its
-    ///     `(worktree_path, worktree_branch)`. This collapses relaunch-in-place
-    ///     and shared-pid ghosts to the newest while never dropping a concurrent
-    ///     agent that owns its own pane, nor a persistent in-process fork that
-    ///     shares the primary's live process.
-    /// (c) an older **fresh-lineage** conversation superseded by a strictly-newer
-    ///     fresh-lineage conversation of the same kind on the same stamped pane.
-    ///     Codex `/clear` / `/new` changes the session id inside one terminal
-    ///     process, so owner pids cannot prove a relaunch. A fork carries
-    ///     `Forked` lineage and survives; unknown lineage keeps both sessions.
+    /// Ownerless sessions past `session_death::GHOST_SESSION_TTL_SECS` also
+    /// leave: process liveness cannot reap them, yet they have not reported in
+    /// hours. Recent ownerless sessions are kept.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
         retain_unsuperseded(Arc::make_mut(&mut self.agents), session_death::supersedes);

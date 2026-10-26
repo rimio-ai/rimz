@@ -7,7 +7,7 @@ native agent event
   │  the adapter normalizes it                                   adapter.md
   ▼
 AgentLifecycleObservation ──► one Store lifecycle transaction    store.md
-  │  replay folds each signal through step()                     this page
+  │  replay folds observations through AgentState::transition    this page
   ▼
 AgentState, one per (kind, agent_id)
   │  live panes bind instances to sessions                       instances.md
@@ -46,7 +46,7 @@ The statuses rank by a base weight, most attention-hungry first ([`status_weight
 
 `waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
 
-The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reasoning`, `acting`, or `parked` while the status is `running`, and `idle` for every other status. `step` enforces that rule on every transition, so a resting row with a live phase cannot exist in the rollup. [Turn phase](#turn-phase) covers how it moves.
+The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reasoning`, `acting`, or `parked` while the status is `running`, and `idle` for every other status. `AgentState::transition` enforces that rule for snapshots and real edges, so a resting row with a live phase cannot exist in the rollup. [Turn phase](#turn-phase) covers how it moves.
 
 ## The rollup
 
@@ -62,22 +62,23 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | launch | `launch_id`, `prior_launch_ids`, `launch_warnings`, `profile`, `login`, `record`, `tier`, `mode`, `isolation`, `role`, `team`, `workflow`, `channel`, `checkout`, `launch_group`, `launch_ordinal`, `launch_depth`, `launched_by` | Set from launch parameters, then carried. The fields with their own rule follow the table. |
 | registration | `account_key`, `transcript_path` | Replaced whenever an event carries a value, otherwise carried. The event projection strips both from root events that do not establish identity (`transcript_path` also survives on `turn_ended`), so in practice a registration sets them. |
 | placement | `pane`, `runtime_owner` | Replaced by the event's pane stamp and owner. A bare stamp naming the same pane keeps the richer prior stamp, and a daemon owner never displaces the session's own agent-process owner. |
+| on-screen conversation | `on_screen_at` | An observation with `on_screen: true` replaces it with that event's ingress timestamp. With absent, null, or false, a placement change clears it: [`same_agent_instance`](../../../crates/rimz/src/store/session_death.rs) compares the prior and projected pane and runtime owner. Same-instance events and reaper ends keep it. It survives rotation and cache reload and is never inherited through launch or compaction identity. Old records read it as `None`. Only ownership reads it; it stays off the card projection. |
 | process location | `worktree_path`, `worktree_branch`, `worktree_branches` | An identity-establishing event, or one with no event name, sets the path when it carries one. Any other event keeps the prior path and fills it only when none is stored. A branch is accepted only when the event's path is absent or equals the resulting path. `worktree_branch` is the latest accepted branch, and `worktree_branches` accumulates every one. |
 | set-once | `first_prompt` | The first prompt that is neither blank nor a harness control turn, then stable. `AgentState::observe_prompt` owns this rule. |
 | activity | `status`, `phase`, `last_activity`, `ended_at`, and a root's `task` | Replaced by every event. An event that omits `task` clears it, because an idle agent has no task. Every event except `ended` clears `ended_at`. |
 | carry-forward | `model`, `effort`, `usage` (`context_pct`, `context_window`, `total_tokens`), `prompt`, `description`, `recent_prompts`, `origin`, `compacted_from`, `budget` | Replaced when an event carries a value. A missing value never resets it. `recent_prompts` keeps the newest 16, each cut to its first 512 characters. |
-| background shells | `background_shells` | Carried forward, then extended, replaced, or trimmed by the event's `BackgroundShellReport`. A shell already listed keeps its first `started_at`. `ended` and `registered` clear the list before the report applies. See [parked turns](#turn-endings-and-parked-turns). |
+| background shells | `background_shells` | Carried forward, then extended, replaced, or trimmed by the event's `BackgroundShellReport`. A shell already listed keeps its first `started_at`. `ended` and a real `registered` edge clear the list before the report applies; a state snapshot preserves it. See [parked turns](#turn-endings-and-parked-turns). |
 | retired at a compaction | `usage`'s current-window figures (`context_pct`, `total_tokens`, the input split, `output_tokens`), `retired_context_tokens`, `compaction_retired` | A completed compaction drops the carried figures and records their occupancy ([the compaction bracket](#the-compaction-bracket)). `usage.context_window` and `usage.run_total_tokens` stay carry-forward. |
 | counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
 | turn boundaries | `turn_started_at`, `user_turn_started_at`, `keepalive_since`, `turn_ended_at`, `ping_turn`, `pinged_at` | Advanced by the signals in [the edge table](#edges), otherwise carried. Registration carries `turn_ended_at` unchanged. A ping-only turn moves only `ping_turn`, `pinged_at`, and `keepalive_since` ([keepalive pings](#keepalive-pings)). `pinged_at` survives registration, and a rebind to a different session clears it. |
 | open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
 | queued asks | `queued_asks` | Edited by the event's `ask_queue` and cleared when the row lands outside `running` and `waiting` ([waiting and asks](#waiting-and-asks)). |
 | turn identity | `started_turn_id`, `superseded_turn_id` | A `turn_started` whose id differs from `started_turn_id` replaces it (an id-less start clears it) and moves the replaced id, when there is one, into `superseded_turn_id`. A repeated start for the same id, and every other signal, carry both. |
-| compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful close the bracket section names, and cleared only by `turn_started`. |
+| compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful close the bracket section names, and cleared only by a real `turn_started`. |
 
 Five launch fields carry a rule of their own. `workflow` keeps the attempt reference across native attach and turn events. `checkout` keeps the lane path when an empty-dir launch runs the process somewhere else. A launch id that a later event replaces moves into `prior_launch_ids`, which is carried and inherited like `launch_id`. `record` keeps the launch's verbatim model, effort, and agent base whatever model the provider reports later, and a record-carrying attach replaces `record` and `tier` and overlays a present `mode`. Each `agent.launch_warnings` event replaces `launch_warnings`, with an empty list after a clean launch, and a same-instance successor conversation inherits them ([instances.md](./instances.md#launch-identity-across-conversations)).
 
-These lifetimes describe durable state. The [carryover read path](../store.md#the-read-path) keeps only a bounded first-line `first_prompt` label on ended carried rows in memory, and an explicit full-agent read restores their other prompt and pane-command text.
+These lifetimes describe durable state. [State snapshots](#state-snapshots) preserve edge-owned evidence, apart from clearing a stale wait and stamping an unknown turn start. The [carryover read path](../store.md#the-read-path) keeps only a bounded first-line `first_prompt` label on ended carried rows in memory, and an explicit full-agent read restores their other prompt and pane-command text.
 
 Five of these rules need their reason stated:
 
@@ -99,7 +100,7 @@ While a ping is open, a turn report carrying the id of a real turn the row knows
 
 ## The state machine
 
-One pure, total function, [`step`](../../../crates/rimz/src/agents/lifecycle.rs), folds a signal onto the prior `LifecycleState` and is the only home for transitions. Roots and subagents share it. The reducer calls it on replay, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store returns the transition in its receipt, so hook ingestion can log anomalies without re-reading state. Every `agent.lifecycle` event carries its signal explicitly, and a payload without one folds to nothing.
+The shared [`AgentState::transition`](../../../crates/rimz/src/agents/state.rs) decision folds observations onto the prior `LifecycleState`: real edges use the pure, total [`step`](../../../crates/rimz/src/agents/lifecycle.rs), with separate snapshot and keepalive rules. Roots and subagents share it. The reducer calls it on replay, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store persists that transition for drainer recovery and returns it in its receipt, so hook ingestion can log anomalies without re-reading state. Every `agent.lifecycle` event carries its signal explicitly, and a payload without one folds to nothing.
 
 Store does not append every observation. An unnamed `tool_used` that neither mutates nor edits is proof of work only. The writer appends it only when it is child-owned or its transition closes a compaction bracket, clears a wait, or reconciles a stale status ([`store/writer/lifecycle.rs`](../../../crates/rimz/src/store/writer/lifecycle.rs)). A named `tool_used` is always appended, and replay counts it into `tool_calls`.
 
@@ -117,7 +118,22 @@ clean end, bg work    running stays running in the parked phase; display shows s
 ended                 running or waiting ──► failed (a reaped end rests at idle); resting statuses hold
 ```
 
+### State snapshots
+
+An observation with `state_snapshot: true` reports current state, not an edge. OpenCode's `client_idle` carries `registered`, and `client_running` carries `turn_started`, both without a submitted prompt. No new lifecycle signal variant is needed.
+
+| Prior status | Idle snapshot | Running snapshot |
+| --- | --- | --- |
+| first sight | `idle` | `running`, with the unknown turn start stamped at arrival |
+| `idle`, `success`, `failed` | unchanged | `running`, with the turn start stamped at arrival |
+| `running` | `idle`, without a turn end | unchanged, every clock kept |
+| `waiting` | `idle`, wait cleared | `running`, wait cleared, same turn |
+
+Snapshots update activity, usage, model and title, stamp on-screen ownership when claimed, and clear `ended_at`. They preserve registration, turn ids, user-turn clocks, keepalive, counters, background shells and compaction state. They carry no pending ask. Hook coordination records and merges their observed context, then returns before every edge consumer, on first apply and drainer replay: no `agent.started`, `agent.waiting` or `agent.ended` signal, team reaction, role registration, sent-message acknowledgement, idle-stop withdrawal, active-time or tool-clock update, transcript entry, run settlement, reactor or local cost refresh. Rotation still runs when due. The snapshot branch does not run the workspace-wide ended-session delivery sweep; the next ordinary lifecycle hook does.
+
 ### Edges
+
+This table applies to real edges, not the state snapshots above.
 
 | Signal | Status | Also |
 | --- | --- | --- |
@@ -217,7 +233,7 @@ Every turn boundary rests the phase: `turn_ended`, `turn_interrupted`, `subagent
 
 Compaction is a transient head over the status. `compacting` stamps `compacting_since` and holds the prior status and phase, so the sidebar pulses the compaction head over whatever the agent was doing. The one status it changes is `waiting`, which moves to `running`. A compaction runs only after the native prompt releases the pane, so the open proves the ask is gone, including a prompt dismissed with Esc that no hook reports. Without this edge a stale `?` would win the [lead cell](../../interface/sidebar.md#reading-the-glyphs) and the card would paint an ask the agent no longer holds.
 
-The session's next signal closes the bracket, with two exceptions. Another `compacting` keeps it open, and so does a signal `step` rejects before it folds anything: a `lost` marker, a [late turn report](#late-turn-reports), or an `ask_resolved` that does not close the wait. `step` reports the close as [`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs), and the rollup increments `compaction_count` once per bracket that did not close as failed. The card shows the count as `↻ N` on its stats line, which the selected or held card carries, and every engaged card under `expanded` density. The projection expires the head 90 seconds after `compacting_since` (`COMPACTING_WINDOW_SECS`), so a crash mid-compaction cannot pulse forever.
+The session's next real lifecycle signal closes the bracket, with two exceptions. Another `compacting` keeps it open, and so does a signal `step` rejects before it folds anything: a `lost` marker, a [late turn report](#late-turn-reports), or an `ask_resolved` that does not close the wait. `step` reports the close as [`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs), and the rollup increments `compaction_count` once per bracket that did not close as failed. The card shows the count as `↻ N` on its stats line, which the selected or held card carries, and every engaged card under `expanded` density. The projection expires the head 90 seconds after `compacting_since` (`COMPACTING_WINDOW_SECS`), so a crash mid-compaction cannot pulse forever.
 
 `compaction_ended` is the explicit close, and its trigger decides where the agent lands:
 
@@ -241,7 +257,7 @@ A bracket that did not close as failed retires the usage measured before it. So 
 
 Retirement happens in `assemble_agent_state`. It drops the carried current-window figures before it merges the closing event's usage, and records the occupancy they held (the input split when known, else `total_tokens`) as `retired_context_tokens`. A provider with no fresh figure re-reads the same transcript record at and after the close. So an event whose usage has the retired occupancy contributes none of its current-window figures, on the closing event and on every later one. Any other reading merges as usual, and the retired value stands until the next completed compaction retires a known reading.
 
-One provider can report one compaction's end more than once (Claude sends `PostCompact` and a compact `SessionStart`). The later end finds the bracket already closed and the row carrying the post-compaction figure. `compaction_retired` marks a row whose usage a compaction has retired with only compaction ends folded since. A successful end on such a row retires nothing, and any other signal clears the mark.
+One provider can report one compaction's end more than once (Claude sends `PostCompact` and a compact `SessionStart`). The later end finds the bracket already closed and the row carrying the post-compaction figure. `compaction_retired` marks a row whose usage a compaction has retired with only compaction ends or state snapshots folded since. A successful end on such a row retires nothing, and any other real lifecycle signal clears the mark.
 
 The context sidecar gets the same treatment where it is joined on: `AgentState::attach_context` clears the current-window fields of a sidecar whose `used_tokens()` equals the retired value, and leaves the file as written. The card therefore shows the provider's post-compaction figure where one exists and an empty meter otherwise. `occupied_context_tokens()` is unknown to the compaction policies until a fresh reading arrives. The cost of the rule is that a genuine later reading landing on exactly the retired count reads as unknown until the next call.
 
@@ -270,9 +286,9 @@ A provider can fork a resumed session to a new id. When it forks a root's sessio
 
 [`LifecycleEvent`](../../../crates/rimz/src/agents/lifecycle/event.rs) is the versioned public projection of one durable transition: event and workspace identity, agent lineage, the complete signal, the prior status, the resulting status and phase, the transition classification, and the compaction-closed and waiting-cleared facts. Store builds it at the same commit that appends `agent.lifecycle`, so an append that lifecycle policy suppresses produces no envelope, and a derived subagent append produces its own envelope in log order.
 
-Hook ingestion dispatches envelopes through a static reactor table. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action. Queued-message nudges, terminal run waits, and ended-agent message archival are reactors. They are latency paths and re-check durable state before acting.
+Hook ingestion dispatches real-edge envelopes through a static reactor table; state snapshots bypass it. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action. Queued-message nudges, terminal run waits, and ended-agent message archival are reactors. They are latency paths and re-check durable state before acting.
 
-[`rimz events follow`](../../reference/cli/events.md) reads the same vocabulary. The read-only [`store::follow`](../../../crates/rimz/src/store/follow.rs) follower folds `step` over the durable log and emits one envelope per conforming lifecycle record. It starts from a rollup seed at the live edge, or under `--replay` from empty state at the start of the current log generation, and drains a rotated tail before it reads the new active log.
+[`rimz events follow`](../../reference/cli/events.md) reads the same vocabulary. The read-only [`store::follow`](../../../crates/rimz/src/store/follow.rs) follower folds real edges through `step` and emits one envelope per conforming real lifecycle record. State snapshots emit nothing, but update its private state through [`AgentState::snapshot_transition`](../../../crates/rimz/src/agents/state.rs), the same decision `AgentState::transition` calls. They preserve turn ids and compaction and clear the open ask, so the next real edge reports the updated prior status. The follower starts from a rollup seed at the live edge, or under `--replay` from empty state at the start of the current log generation, and drains a rotated tail before it reads the new active log.
 
 ## Displayed status
 
