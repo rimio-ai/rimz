@@ -32,12 +32,13 @@ The `envelope` helper stamps these fields on every event, then adds the event's 
 | `cwd` | `ctx.sessionManager.getCwd()`, else `ctx.cwd` |
 | `model` | `ctx.model.id` |
 | `fast` | whether the extension would request priority for `ctx.model` now; absent without a model ([Fast mode](#fast-mode)) |
+| `provider` | the latest non-empty provider named by `session_start` (`ctx.model.provider`), `model_select` (`ev.model.provider`), or a turn's assistant message (`provider`); an id in the `auth.json` key space |
 | `effort` | `pi.getThinkingLevel()`, `off` through `max` |
 | `session_name` | the latest `/name` title, from `session_info_changed` or hydration |
 | `context_pct`, `context_window`, `total_tokens` | `ctx.getContextUsage()`, with the percentage and the token count rounded |
 | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens` | the latest assistant call's usage |
 | `total_cost_usd` | the extension's running session cost ([Cost accrual](#cost-accrual)) |
-| `rate_limits` | the windows captured from the latest `after_provider_response` ([Account and balance](#account-and-balance)) |
+| `rate_limits` | the windows captured from the latest `after_provider_response`, only while the envelope's `provider` matches their header family's provider ([Account and balance](#account-and-balance)) |
 
 The synthetic `subagent_started` and `subagent_stopped` events skip this set. `feedSubagent` sends only `hook_event_name`, the parent `session_id`, `cwd`, and the lineage fields.
 
@@ -230,7 +231,7 @@ Unlike launch reminders, fast stays in `process.env`: each in-process session an
 
 ## Context and transcript
 
-Pi's live context needs no transcript read (`transcript_tail_context: false`). `decode_hook` copies `model`, `effort`, the context gauge, and the token split onto each lifecycle observation. `pi_observed_context`, which `observe_context` also calls, builds an `AgentContext` from the same envelope: `session_name`, `model_id`, `effort`, `tokens` (window, used percentage, and the latest call's split), `cost`, and the rate-limit windows. It sets `cost` only for a total above zero, and returns nothing for an envelope that carries none of these fields.
+Pi's live context needs no transcript read (`transcript_tail_context: false`). `decode_hook` copies `model`, `effort`, the context gauge, and the token split onto each lifecycle observation. `pi_observed_context`, which `observe_context` also calls, builds an `AgentContext` from the same envelope: `session_name`, `model_id`, `sub_provider` (the envelope's `provider`), `effort`, `tokens` (window, used percentage, and the latest call's split), `cost`, and the rate-limit windows. It sets `cost` only for a total above zero, and returns nothing for an envelope that carries none of these fields. A provider-only envelope is context evidence. A changed `sub_provider` clears the sidecar's old rate-limit windows unless the same observation supplies replacements; an unchanged or absent provider alone leaves them intact. A virtual model selection can therefore be reported before an assistant message names the physical provider.
 
 The extension pushes a value change immediately on `model_select`, `thinking_level_select`, `session_info_changed`, `turn_end`, and `after_provider_response`. `message_update` fires per streaming delta, so `pushMessageUpdate` feeds it at most once per second per session, and only when the rounded gauge or the running cost differs from the last push. A change inside the second is sent by a trailing timer.
 
@@ -290,7 +291,7 @@ The extension also captures windows from `after_provider_response` headers. For 
 | `x-codex-primary`, `anthropic-ratelimit-unified-primary`, `-5h`, `-five-hour` | 300 minutes |
 | `x-codex-secondary`, `anthropic-ratelimit-unified-secondary`, `-7d`, `-seven-day` | 10080 minutes |
 
-A response with any such window replaces the captured set, and every later envelope carries it. `PiRateLimitWindow::to_domain` publishes each window as `WindowSource::BestEffort`.
+A response with any such window replaces the captured set, tagged by its header family: `x-codex-*` is `openai-codex`, and `anthropic-ratelimit-unified-*` is `anthropic`. Headers do not change the envelope's `provider`; only events that name a provider do. Windows ride only on envelopes whose provider matches that tag. When a router switches providers, its new windows wait until an assistant message names the matching physical provider at `turn_end`. `PiRateLimitWindow::to_domain` publishes each window as `WindowSource::BestEffort`.
 
 ## Cost
 

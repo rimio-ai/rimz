@@ -103,6 +103,9 @@ pub struct AgentContext {
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_display_name: Option<String>,
+    /// Backing provider credential key last reported by a delegated session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// The provider's live fast-mode reading; absent until observed.
@@ -206,6 +209,7 @@ impl Default for AgentContext {
             session_preview: None,
             model_id: None,
             model_display_name: None,
+            sub_provider: None,
             effort: None,
             fast: None,
             thinking_enabled: None,

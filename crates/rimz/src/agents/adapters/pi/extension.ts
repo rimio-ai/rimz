@@ -158,7 +158,9 @@ export default function rimz(pi) {
   let childParentId;
   let childStopFed = false;
   let childFedLabel;
+  let latestProvider;
   let latestWindows = [];
+  let latestWindowsProvider;
 
   const recordUsage = (id, usage) => {
     if (!id || usage == null) return;
@@ -240,9 +242,11 @@ export default function rimz(pi) {
   const updateWindows = (headers) => {
     const map = headerMap(headers);
     const capturedAt = nowSec();
-    const candidates = [
+    const codexWindows = [
       windowFromHeaders(map, "x-codex-primary", 300, capturedAt),
       windowFromHeaders(map, "x-codex-secondary", 10080, capturedAt),
+    ].filter(Boolean);
+    const anthropicWindows = [
       windowFromHeaders(map, "anthropic-ratelimit-unified-primary", 300, capturedAt),
       windowFromHeaders(map, "anthropic-ratelimit-unified-secondary", 10080, capturedAt),
       windowFromHeaders(map, "anthropic-ratelimit-unified-5h", 300, capturedAt),
@@ -250,7 +254,11 @@ export default function rimz(pi) {
       windowFromHeaders(map, "anthropic-ratelimit-unified-five-hour", 300, capturedAt),
       windowFromHeaders(map, "anthropic-ratelimit-unified-seven-day", 10080, capturedAt),
     ].filter(Boolean);
-    if (candidates.length > 0) latestWindows = candidates;
+    const candidates = codexWindows.length > 0 ? codexWindows : anthropicWindows;
+    if (candidates.length > 0) {
+      latestWindows = candidates;
+      latestWindowsProvider = codexWindows.length > 0 ? "openai-codex" : "anthropic";
+    }
   };
 
   const thinkingLevel = () => {
@@ -283,6 +291,7 @@ export default function rimz(pi) {
       cwd: ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd,
       model: ctx?.model?.id,
       fast: ctx?.model == null ? undefined : requestsFast(ctx),
+      provider: latestProvider,
       effort: thinkingLevel(),
       session_name: nameBySession.get(id),
       context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
@@ -290,7 +299,8 @@ export default function rimz(pi) {
       total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
       total_cost_usd: totalSessionCost(id),
       ...usageFields(id),
-      rate_limits: latestWindows.length > 0 ? latestWindows : undefined,
+      rate_limits: latestProvider && latestProvider === latestWindowsProvider &&
+        latestWindows.length > 0 ? latestWindows : undefined,
       ...fields,
     };
   };
@@ -404,6 +414,7 @@ export default function rimz(pi) {
   };
 
   pi.on("session_start", (ev, ctx) => {
+    latestProvider = text(ctx?.model?.provider) ?? latestProvider;
     refreshSessionCosts(ctx, true);
     const id = sessionId(ctx);
     const parentId = text(globalThis[PRIMARY_SESSION]?.id) ??
@@ -437,6 +448,11 @@ export default function rimz(pi) {
     // The prompt's last assistant message carries the turn verdict and usage.
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
     const last = messages.filter((m) => m?.role === "assistant").at(-1);
+    for (const message of messages) {
+      if (message?.role === "assistant") {
+        latestProvider = text(message.provider) ?? latestProvider;
+      }
+    }
     recordUsage(sessionId(ctx), last?.usage);
     const fields = {
       stop_reason: last?.stopReason,
@@ -475,6 +491,7 @@ export default function rimz(pi) {
     verdictBySession.delete(id);
   });
   pi.on("turn_end", (ev, ctx) => {
+    latestProvider = text(ev?.message?.provider) ?? latestProvider;
     const id = sessionId(ctx);
     const usage = ev?.message?.usage;
     recordUsage(id, usage);
@@ -558,7 +575,10 @@ export default function rimz(pi) {
       // See ui_prompt_start.
     }
   });
-  pi.on("model_select", (ev, ctx) => feed("model_select", ctx, { model: ev?.model?.id }));
+  pi.on("model_select", (ev, ctx) => {
+    latestProvider = text(ev?.model?.provider) ?? latestProvider;
+    feed("model_select", ctx, { model: ev?.model?.id });
+  });
   pi.on("thinking_level_select", (ev, ctx) =>
     feed("thinking_level_select", ctx, { effort: ev?.level }),
   );
@@ -601,7 +621,9 @@ export default function rimz(pi) {
     if (messagePush?.timer) clearTimeout(messagePush.timer);
     messagePushBySession.delete(id);
     latestWindows = [];
+    latestWindowsProvider = undefined;
     feed("session_shutdown", ctx, { reason: ev?.reason });
+    latestProvider = undefined;
   });
 
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the

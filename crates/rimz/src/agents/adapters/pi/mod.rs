@@ -784,6 +784,7 @@ impl crate::agents::capabilities::SpendingCapability for PiAdapter {
 fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextObservation> {
     let parsed = payloads::parse_payload(payload);
     let agent_id = parsed.session_id.clone()?;
+    let sub_provider = parsed.provider.as_deref().and_then(non_empty_trimmed);
     let current_usage = pi_current_usage(&parsed);
     let tokens = {
         let usage = AgentTokenUsage {
@@ -813,6 +814,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextOb
         .collect::<Vec<_>>();
     let rate_limits = (!windows.is_empty()).then_some(AgentRateLimits { windows });
     if parsed.model.is_none()
+        && sub_provider.is_none()
         && parsed.session_name.is_none()
         && parsed.effort.is_none()
         && tokens.is_none()
@@ -824,6 +826,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<super::ContextOb
     let context = AgentContext {
         session_name: parsed.session_name,
         model_id: parsed.model,
+        sub_provider,
         effort: parsed.effort,
         fast: parsed.fast,
         cost,

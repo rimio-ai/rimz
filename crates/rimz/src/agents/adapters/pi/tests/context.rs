@@ -30,6 +30,7 @@ fn observed_context_keeps_fast_readings_distinct_from_older_envelopes() {
 fn observed_context_projects_the_extension_envelope() {
     let context = normalized_context(json!({
         "model": "gpt-5.5",
+        "provider": "openai-codex",
         "session_name": "Parser cleanup",
         "effort": "high",
         "context_pct": 42,
@@ -61,6 +62,7 @@ fn observed_context_projects_the_extension_envelope() {
           "source": "pi",
           "session_name": "Parser cleanup",
           "model_id": "gpt-5.5",
+          "sub_provider": "openai-codex",
           "effort": "high",
           "cost": {
             "total_cost_usd": 0.125
@@ -94,6 +96,19 @@ fn observed_context_projects_the_extension_envelope() {
           "observed_at": "2023-11-14T22:13:20Z"
         }
         "###);
+}
+
+#[test]
+fn provider_only_payload_is_a_context_observation() {
+    let payload = json!({"session_id": "sess-1", "provider": "anthropic"});
+    let decoded = decode("model_select", &payload);
+    let context = decoded.observed_context().expect("provider-only context");
+    assert_eq!(context.context.sub_provider.as_deref(), Some("anthropic"));
+    assert_eq!(signal("model_select", &payload), None);
+    assert_eq!(
+        normalized_context(payload).unwrap().sub_provider.as_deref(),
+        Some("anthropic"),
+    );
 }
 
 #[test]

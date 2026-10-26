@@ -379,6 +379,78 @@ if (hasNativeSettled) {{
   dialogHandlers.get("ui_prompt_end")({{ reason: "close", kind: "select" }}, dialogCtx);
 }}
 
+delete globalThis[Symbol.for("rimz.pi.primary-session")];
+delete process.env.RIMZ_PI_PARENT_SESSION;
+const {{ pi: providerPi, handlers: providerHandlers }} = makePi();
+const providerCtx = {{
+  sessionManager: {{ getSessionId: () => "sess-providers", getCwd: () => "/repo" }},
+  model: {{ id: "gpt-5", provider: "openai-codex" }},
+}};
+rimz(providerPi);
+providerHandlers.get("session_start")({{ reason: "launch" }}, providerCtx);
+providerHandlers.get("before_provider_request")({{ payload: {{}} }}, providerCtx);
+providerHandlers.get("after_provider_response")({{
+  headers: {{ "x-codex-primary-used-percent": "11" }},
+}}, providerCtx);
+providerHandlers.get("turn_end")({{
+  message: {{ role: "assistant", provider: "openai-codex" }},
+}}, providerCtx);
+providerHandlers.get("model_select")({{
+  model: {{ id: "virtual-model", provider: "virtual" }},
+}}, providerCtx);
+providerHandlers.get("thinking_level_select")({{ level: "high" }}, providerCtx);
+providerHandlers.get("before_provider_request")({{ payload: {{}} }}, providerCtx);
+providerHandlers.get("after_provider_response")({{
+  headers: {{ "anthropic-ratelimit-unified-primary-used-percent": "22" }},
+}}, providerCtx);
+providerHandlers.get("turn_end")({{
+  message: {{ role: "assistant", provider: "anthropic" }},
+}}, providerCtx);
+providerHandlers.get("agent_end")({{
+  messages: [
+    {{ role: "assistant", provider: "anthropic" }},
+    {{ role: "assistant", provider: "openai-codex", stopReason: "stop" }},
+  ],
+}}, providerCtx);
+providerHandlers.get("model_select")({{ model: {{ id: "gpt-5", provider: "" }} }}, providerCtx);
+
+delete globalThis[Symbol.for("rimz.pi.primary-session")];
+delete process.env.RIMZ_PI_PARENT_SESSION;
+const {{ pi: routerPi, handlers: routerHandlers }} = makePi();
+const routerCtx = {{
+  sessionManager: {{ getSessionId: () => "sess-router", getCwd: () => "/repo" }},
+  model: {{ id: "routed-model", provider: "router" }},
+}};
+const routerTurns = [
+  ["anthropic", "anthropic-ratelimit-unified-primary", 31],
+  ["openai-codex", "x-codex-primary", 62],
+  ["anthropic", "anthropic-ratelimit-unified-primary", 33],
+];
+rimz(routerPi);
+routerHandlers.get("session_start")({{ reason: "launch" }}, routerCtx);
+for (const [index, [provider, prefix, used]] of routerTurns.entries()) {{
+  routerHandlers.get("before_provider_request")({{ payload: {{}} }}, routerCtx);
+  routerHandlers.get("after_provider_response")({{
+    headers: {{ [`${{prefix}}-used-percent`]: String(used) }},
+  }}, routerCtx);
+  routerHandlers.get("turn_end")({{
+    message: {{ role: "assistant", provider, usage: {{ output: index + 1 }} }},
+  }}, routerCtx);
+}}
+
+delete globalThis[Symbol.for("rimz.pi.primary-session")];
+delete process.env.RIMZ_PI_PARENT_SESSION;
+const {{ pi: unknownPi, handlers: unknownHandlers }} = makePi();
+const unknownCtx = {{
+  sessionManager: {{ getSessionId: () => "sess-unknown", getCwd: () => "/repo" }},
+  model: {{ provider: "" }},
+}};
+rimz(unknownPi);
+unknownHandlers.get("session_start")({{ reason: "launch" }}, unknownCtx);
+unknownHandlers.get("after_provider_response")({{
+  headers: {{ "x-codex-primary-used-percent": "33" }},
+}}, unknownCtx);
+
 const readPayloads = async () => {{
   try {{
     const text = await fs.readFile({}, "utf8");
@@ -389,7 +461,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 30 : 24;
+const expectedPayloads = hasNativeSettled ? 48 : 42;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -491,6 +563,60 @@ const subprocessStop = childStops.find((child) => child.subagent_id === "sess-su
 if (subprocessStart?.session_id !== "env-parent" || subprocessStart.subagent_label !== "reviewer" ||
     subprocessStop?.errored !== false) {{
   throw new Error(`subprocess child self-identification was ${{JSON.stringify({{ subprocessStart, subprocessStop }})}}`);
+}}
+const providerPayloads = payloads.filter((payload) => payload.session_id === "sess-providers");
+const providerEvent = (name) => providerPayloads.find((p) => p.hook_event_name === name);
+const providerErrors = [];
+const expectProvider = (name, payload, provider, used) => {{
+  if (payload?.provider !== provider ||
+      (used == null ? "rate_limits" in (payload ?? {{}}) :
+        payload?.rate_limits?.[0]?.used_percentage !== used)) {{
+    providerErrors.push(`${{name}}: ${{JSON.stringify(payload)}}`);
+  }}
+}};
+expectProvider("session start", providerEvent("session_start"), "openai-codex");
+const responsePayloads = providerPayloads.filter((p) =>
+  p.hook_event_name === "after_provider_response");
+expectProvider("Codex response",
+  responsePayloads.find((p) => p.rate_limits?.[0]?.used_percentage === 11), "openai-codex", 11);
+const virtualSelection = providerPayloads.find((p) =>
+  p.hook_event_name === "model_select" && p.model === "virtual-model");
+expectProvider("model selection", virtualSelection, "virtual");
+expectProvider("later envelope", providerEvent("thinking_level_select"), "virtual");
+expectProvider("physical turn", providerPayloads.find((p) =>
+  p.hook_event_name === "turn_end" && p.provider === "anthropic"), "anthropic", 22);
+expectProvider("Anthropic response before the provider is named", responsePayloads.find((p) =>
+  p.provider === "virtual"), "virtual");
+expectProvider("assistant verdict", providerEvent(boundaryEvent), "openai-codex");
+const emptySelection = providerPayloads.find((p) =>
+  p.hook_event_name === "model_select" && p.model !== "virtual-model");
+expectProvider("empty selection preserves provider", emptySelection, "openai-codex");
+const routerPayloads = payloads.filter((p) => p.session_id === "sess-router");
+expectProvider("virtual router session", routerPayloads.find((p) =>
+  p.hook_event_name === "session_start"), "router");
+for (const payload of routerPayloads) {{
+  for (const window of payload.rate_limits ?? []) {{
+    const turn = routerTurns.find(([, , used]) => used === window.used_percentage);
+    if (!turn || payload.provider !== turn[0]) {{
+      providerErrors.push(`router window under the wrong provider: ${{JSON.stringify(payload)}}`);
+    }}
+  }}
+}}
+for (const [index, [provider, , used]] of routerTurns.entries()) {{
+  expectProvider(`router turn ${{index + 1}}`, routerPayloads.find((p) =>
+    p.hook_event_name === "turn_end" && p.output_tokens === index + 1), provider, used);
+  const previousProvider = index === 0 ? "router" : routerTurns[index - 1][0];
+  const response = routerPayloads.find((p) => p.hook_event_name === "after_provider_response" &&
+    (index === 0 ? p.output_tokens === undefined : p.output_tokens === index));
+  expectProvider(`router response ${{index + 1}} awaits a named provider`, response, previousProvider);
+}}
+const unknownPayloads = payloads.filter((payload) => payload.session_id === "sess-unknown");
+if (unknownPayloads.length !== 2 ||
+    unknownPayloads.some((p) => "provider" in p || "rate_limits" in p)) {{
+  providerErrors.push(`unknown provider: ${{JSON.stringify(unknownPayloads)}}`);
+}}
+if (providerErrors.length > 0) {{
+  throw new Error(`provider wire failures:\n${{providerErrors.join("\n")}}`);
 }}
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
