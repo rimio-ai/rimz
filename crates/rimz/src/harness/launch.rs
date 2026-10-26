@@ -245,6 +245,12 @@ pub enum AgentProcessCompileErr {
 type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 
 #[derive(Clone, PartialEq, Eq)]
+enum ProcessWrapping {
+    LoginShell,
+    Direct,
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
     pub(super) env_warnings: Vec<String>,
@@ -263,9 +269,24 @@ pub struct CompiledAgentProcess {
     pub unset: BTreeSet<String>,
     /// The one shell every wrapper and the PATH probe of this launch run under.
     shell: Option<PathBuf>,
+    wrapping: ProcessWrapping,
+    session_step_argv: Vec<String>,
 }
 
 impl CompiledAgentProcess {
+    pub(super) fn rebuild_argv(&mut self) {
+        let argv = self
+            .session_step_argv
+            .iter()
+            .chain(&self.provider_argv)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.argv = match self.wrapping {
+            ProcessWrapping::LoginShell => self.login_shell_argv(&argv),
+            ProcessWrapping::Direct => argv,
+        };
+    }
+
     /// Keep mount-planning inputs identical in the final provider environment.
     pub(super) fn pin_env(&mut self, pins: BTreeMap<String, crate::sandbox::EnvPin>) {
         for (key, pin) in pins {
@@ -280,10 +301,7 @@ impl CompiledAgentProcess {
                 }
             }
         }
-        // Finalized account stages have already moved provider_argv into argv.
-        if !self.provider_argv.is_empty() {
-            self.argv = self.login_shell_argv(&self.provider_argv);
-        }
+        self.rebuild_argv();
     }
 
     pub(super) fn login_shell_argv(&self, agent_argv: &[String]) -> Vec<String> {
@@ -1193,8 +1211,10 @@ fn compile_agent_process_with_extra_env(
         reminder,
         unset,
         shell,
+        wrapping: ProcessWrapping::LoginShell,
+        session_step_argv: Vec::new(),
     };
-    process.argv = process.login_shell_argv(&process.provider_argv);
+    process.rebuild_argv();
     Ok(process)
 }
 
@@ -1329,7 +1349,7 @@ pub fn compile_managed_agent_process(
 
 /// Compile the serialized wrapper stage for a proven managed provider binding.
 /// Pending stages re-enter through the login shell once; finalized stages
-/// execute raw provider argv after the adapter verifies the effective binding.
+/// execute the prepared command without a shell after verifying the binding.
 /// `reminders` controls model identity, team context, and subagent policy text.
 pub(super) fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
@@ -1350,7 +1370,7 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
-    let process = compile_agent_process_with_extra_env(
+    let mut process = compile_agent_process_with_extra_env(
         crate::config::Isolation::ambient(extra_env)
             .is_some_and(|isolation| !isolation.is_scoped())
             .then_some(runtime),
@@ -1360,6 +1380,8 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
         extra_env,
         reminders,
     )?;
+    process.session_step_argv = model_session_step_argv(request, rimz_bin);
+    process.rebuild_argv();
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
@@ -1380,6 +1402,51 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
         None
     };
     finalize_agent_process_stage(process, request, managed_launch.as_ref(), rimz_bin, runtime)
+}
+
+fn model_session_step_argv(request: &ExecRequest, rimz_bin: &Path) -> Vec<String> {
+    if request.headless.is_some()
+        || matches!(
+            request.provider_account,
+            ProviderAccountState::Pending { .. }
+        )
+    {
+        return Vec::new();
+    }
+    if !crate::agents::spec_by_kind(request.kind.as_str())
+        .is_some_and(|spec| spec.launch.model_session_step)
+    {
+        return Vec::new();
+    }
+    let Some(model) = request
+        .identity
+        .params
+        .model
+        .as_deref()
+        .filter(|model| !model.is_empty())
+    else {
+        return Vec::new();
+    };
+    let session = match &request.action {
+        ExecAction::Launch { .. } => None,
+        ExecAction::Resume { session_id, .. } if request.identity.resume_model_override => {
+            Some(session_id)
+        }
+        _ => return Vec::new(),
+    };
+    let mut argv = vec![
+        rimz_bin.display().to_string(),
+        "agents".into(),
+        "session-step".into(),
+        request.kind.to_string(),
+        "--model".into(),
+        model.to_owned(),
+    ];
+    if let Some(session) = session {
+        argv.extend(["--session".into(), session.clone()]);
+    }
+    argv.push("--".into());
+    argv
 }
 
 fn finalize_agent_process_stage(
@@ -1413,7 +1480,8 @@ fn finalize_agent_process_stage(
                 return Err(AgentProcessStageErr::FinalizedProviderMismatch);
             }
             let mut process = process;
-            process.argv = std::mem::take(&mut process.provider_argv);
+            process.wrapping = ProcessWrapping::Direct;
+            process.rebuild_argv();
             Ok(AgentProcessStage::Ready(process))
         }
     }

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "session_step_tests.rs"]
+mod session_step;
+
 #[test]
 fn compiler_refuses_only_the_kind_with_an_unsupported_budget() {
     if std::env::var_os("RIMZ_TEST_COMPILE_BUDGET_HOME").is_none() {
@@ -3008,6 +3011,7 @@ fn provider_account_stage_validates_and_reenters_once() {
     else {
         panic!("pending binding must re-enter");
     };
+    assert!(!argv.iter().any(|arg| arg == "session-step"));
     let artifact = prompt_artifacts
         .into_iter()
         .next()
@@ -3093,7 +3097,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         panic!("finalized launch is ready");
     };
     assert_eq!(finalized.argv, raw);
-    assert!(finalized.provider_argv.is_empty());
+    assert_eq!(finalized.provider_argv, raw);
     finalized.pin_env(BTreeMap::from([
         (
             "TMPDIR".to_owned(),
@@ -3215,6 +3219,8 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         reminder: String::new(),
         unset: BTreeSet::new(),
         shell: Some(PathBuf::from("/bin/sh")),
+        wrapping: ProcessWrapping::LoginShell,
+        session_step_argv: Vec::new(),
     };
 
     let report_argv = redact_env_tokens(&wrapped, |key| process.secret_keys.contains(key));
