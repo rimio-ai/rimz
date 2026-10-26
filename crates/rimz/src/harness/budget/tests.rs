@@ -29,8 +29,229 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
         assert_eq!(spec.window, window);
         assert_eq!(spec.to_string(), display);
     }
-    for raw in ["", "$", "+5", "-1", "NaN", "5/week", "1/day/nope"] {
+    for raw in [
+        "",
+        "$",
+        "+5",
+        "-1",
+        "NaN",
+        "5/week",
+        "10/month",
+        "1/day/nope",
+    ] {
         assert!(raw.parse::<BudgetSpec>().is_err(), "{raw}");
+    }
+}
+
+#[test]
+fn account_cap_resolution_keeps_window_and_named_override_precedence() {
+    let (_dir, runtime) = split_shared_roots();
+    let config = accounts_config(
+        "[accounts.budget]\nclaude = '100/month'\n[accounts.claude.work]\nhistory = 'standalone'\nbudget = '20/day'\n[accounts.claude.shared]\nbudget = '999/day'\n",
+    );
+    let catalog = account_catalog(&config);
+    let default = DailyBudgetScope::account(&catalog, &"claude@default".parse().unwrap());
+    let shared = DailyBudgetScope::account(&catalog, &"claude@shared".parse().unwrap());
+    let work = DailyBudgetScope::account(&catalog, &"claude@work".parse().unwrap());
+    let mut ledger = DailyBudgetLedger::default();
+    let mut caps = vec![
+        default.effective_cap(&ledger, &config, &runtime),
+        shared.effective_cap(&ledger, &config, &runtime),
+        work.effective_cap(&ledger, &config, &runtime),
+    ];
+    ledger.override_spec = Some(BudgetSpec {
+        cap_usd: 30.0,
+        window: BudgetWindow::Month,
+    });
+    caps.push(work.effective_cap(&ledger, &config, &runtime));
+    ledger.raised_cap_usd = Some(35.0);
+    caps.push(work.effective_cap(&ledger, &config, &runtime));
+    ledger.disabled = true;
+    caps.push(work.effective_cap(&ledger, &config, &runtime));
+    assert_eq!(
+        caps,
+        vec![
+            Some(BudgetSpec {
+                cap_usd: 100.0,
+                window: BudgetWindow::Month
+            }),
+            Some(BudgetSpec {
+                cap_usd: 100.0,
+                window: BudgetWindow::Month
+            }),
+            Some(BudgetSpec {
+                cap_usd: 20.0,
+                window: BudgetWindow::Day
+            }),
+            Some(BudgetSpec {
+                cap_usd: 30.0,
+                window: BudgetWindow::Month
+            }),
+            Some(BudgetSpec {
+                cap_usd: 35.0,
+                window: BudgetWindow::Month
+            }),
+            None,
+        ]
+    );
+}
+
+fn publish_account_metering(runtime: &RuntimePaths, readings: &[(&str, Option<bool>)]) {
+    use crate::agents::account::{AccountsCache, ProviderRecord};
+    let cache = AccountsCache {
+        logins: readings
+            .iter()
+            .map(|(key, metered)| {
+                (
+                    key.parse().unwrap(),
+                    ProviderRecord {
+                        probed_at_ms: 0,
+                        ok: true,
+                        inputs_stamp: None,
+                        account: Some(crate::agents::AgentAccount {
+                            metered: *metered,
+                            ..Default::default()
+                        }),
+                        login: None,
+                        probe_error: None,
+                        profile: None,
+                    },
+                )
+            })
+            .collect(),
+    };
+    write_temp_then_rename_cache(&runtime.shared_accounts_path(), &cache).unwrap();
+}
+
+#[test]
+fn monthly_applicability_exempts_subscription_pools_but_not_cold_or_daily_caps() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, utc_month_start_secs, write_provider_spending_cache,
+    };
+    let now: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
+    let mut actual = Vec::new();
+    for (window, standalone, readings) in [
+        ("month", true, vec![("claude@work", Some(false))]),
+        ("month", true, vec![]),
+        ("month", true, vec![("claude@work", Some(true))]),
+        (
+            "month",
+            false,
+            vec![("claude@default", Some(true)), ("claude@work", Some(false))],
+        ),
+        ("day", true, vec![("claude@work", Some(true))]),
+    ] {
+        let (_dir, runtime) = split_shared_roots();
+        let config = accounts_config(&format!(
+            "timezone = 'UTC'\n[accounts.budget]\nclaude = '5/{window}'\n[accounts.claude.work]\nhistory = '{}'\n",
+            if standalone { "standalone" } else { "shared" },
+        ));
+        publish_account_metering(&runtime, &readings);
+        let mut state = agent(0.0, AgentStatus::Running, Some(now));
+        state.login = Some("work".parse().unwrap());
+        let scope = DailyBudgetScope::account(&account_catalog(&config), &state.login_key());
+        let pool = scope.account_login().unwrap().clone();
+        let spend = SpendWindow {
+            usd: 6.0,
+            ..Default::default()
+        };
+        write_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+            &ProviderSpendingCache {
+                day_cutoff_secs: local_day_cutoff_secs(now, &TimeZone::UTC).unwrap(),
+                day_by_login: [(pool.clone(), spend.clone())].into(),
+                month_cutoff_secs: utc_month_start_secs(now.as_second() as u64).unwrap(),
+                month_by_login: [(pool, spend)].into(),
+                ..Default::default()
+            },
+        );
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![state], now);
+        enforce(&snapshot, &runtime, None, &config);
+        project_parks(&mut snapshot, &runtime, None, &config);
+        actual.push(
+            snapshot.agents[0]
+                .budget_park
+                .as_ref()
+                .map(|park| park.window),
+        );
+    }
+    assert_eq!(
+        actual,
+        vec![
+            Some(BudgetWindow::Month),
+            Some(BudgetWindow::Month),
+            None,
+            None,
+            Some(BudgetWindow::Day)
+        ]
+    );
+}
+
+#[test]
+fn exhausted_month_pool_agrees_in_enforcement_launch_gate_and_tier_routing() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, utc_month_start_secs, write_provider_spending_cache,
+    };
+    let (_dir, runtime) = split_shared_roots();
+    let config =
+        accounts_config("timezone = 'Asia/Tokyo'\n[accounts.budget]\nclaude = '5/month'\n");
+    let now: Timestamp = "2026-10-31T23:00:00Z".parse().unwrap();
+    let state = state_paths(&runtime);
+    let agent = agent(0.0, AgentStatus::Running, Some(now));
+    let key = agent.login_key();
+    let scope = DailyBudgetScope::Account(key.clone());
+    write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &ProviderSpendingCache {
+            day_cutoff_secs: local_day_cutoff_secs(now, &config.time_zone()).unwrap(),
+            month_cutoff_secs: utc_month_start_secs(now.as_second() as u64).unwrap(),
+            month_by_login: [(
+                key.clone(),
+                SpendWindow {
+                    usd: 6.0,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        },
+    );
+    let snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], now);
+    enforce(&snapshot, &runtime, None, &config);
+    assert!(
+        scope.read_ledger(&runtime, Some(&state)).parked.is_some(),
+        "month spend, not today's empty spend, must park"
+    );
+    let reason =
+        scope_gate(&runtime, &state, Some(&key), &config, now).expect("month launch refusal");
+    assert!(
+        reason.contains("account budget exhausted ($6.00 of $5.00/month)"),
+        "{reason}"
+    );
+    let availability =
+        crate::harness::plan::LaunchAvailability::read(&runtime, &state, &config, now);
+    let reason = availability
+        .unavailable("claude", "sonnet")
+        .expect("month tier skip");
+    let json = serde_json::to_value(reason).unwrap();
+    assert_eq!(json["reason"], "daily_cap");
+    assert_eq!(json["window"], "month");
+}
+
+#[test]
+fn month_park_reset_is_utc_and_independent_of_history_zone() {
+    let zone = crate::config::resolve_time_zone(Some("Asia/Tokyo"));
+    for (stamp, reset) in [
+        ("2026-10-31T23:59:59Z", "2026-11-01T00:00:00Z"),
+        ("2026-12-31T12:00:00Z", "2027-01-01T00:00:00Z"),
+        ("2028-02-29T12:00:00Z", "2028-03-01T00:00:00Z"),
+    ] {
+        assert_eq!(
+            park_reset_at(BudgetWindow::Month, stamp.parse().unwrap(), &zone),
+            Some(reset.parse().unwrap())
+        );
     }
 }
 
@@ -128,6 +349,7 @@ fn spend_summary_uses_ledger_cap_window_and_park_projection() {
         scope: BudgetScope::Fleet,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     let spend = agent_budget_spend(&runtime, &state, None);
     let cap = spend.cap.expect("park cap");
@@ -307,6 +529,7 @@ fn turn_budget_clears_midnight_auto_continue_parks() {
             &state.agent_id,
             Timestamp::from_second(86_400).expect("deadline"),
             state.last_activity,
+            BudgetWindow::Day,
         );
     };
 
@@ -542,6 +765,73 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
     assert!(projected["running"]);
     assert!(projected["interrupted-idle"]);
     assert!(!projected["interrupted-waiting"]);
+}
+
+#[test]
+fn fleet_park_projection_keeps_live_spend_parks_until_enforcement() {
+    use crate::agents::spending::{
+        SpendWindow, WorkspaceSpendingCache, write_workspace_spending_cache,
+    };
+
+    let config: MachineConfig =
+        toml::from_str("timezone = 'UTC'\n[harness]\nbudget = '50/day'\n").unwrap();
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
+    let cutoff = local_day_cutoff_secs(now, &config.time_zone()).unwrap();
+    for (epoch, settled, live, displayed_spend, exhausted) in [
+        (Some(cutoff), 49.0, Some(51.0), 50.0, true),
+        (Some(cutoff - 86400), 49.0, Some(51.0), 50.0, false),
+        (Some(cutoff - 86400), 51.0, Some(49.0), 51.0, true),
+        (None, 49.0, None, 50.0, false),
+    ] {
+        let (_dir, runtime) = split_shared_roots();
+        runtime.ensure_dirs().unwrap();
+        write_workspace_spending_cache(
+            &runtime.workspace_spending_path("scope"),
+            &WorkspaceSpendingCache {
+                scope_hash: "scope".into(),
+                day: SpendWindow {
+                    usd: settled,
+                    ..Default::default()
+                },
+                day_cutoff_secs: cutoff,
+                ..Default::default()
+            },
+        );
+        DailyBudgetScope::Fleet
+            .merge_park(
+                &runtime,
+                Some(BudgetParkStamp {
+                    at_cost: 50.0,
+                    at: now,
+                }),
+            )
+            .unwrap();
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![agent(2.0, AgentStatus::Running, Some(now))],
+            now,
+        );
+        snapshot.fleet_day_spend_usd = live;
+        snapshot.fleet_day_spend_epoch_secs = epoch;
+
+        project_parks(&mut snapshot, &runtime, None, &config);
+        assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Paused);
+        assert_eq!(
+            snapshot.agents[0]
+                .budget_park
+                .as_ref()
+                .map(|park| (park.scope, park.spend_usd)),
+            Some((BudgetScope::Fleet, displayed_spend)),
+        );
+        enforce(&snapshot, &runtime, None, &config);
+        assert_eq!(
+            DailyBudgetScope::Fleet
+                .read_ledger(&runtime, None)
+                .parked
+                .is_some(),
+            exhausted,
+        );
+    }
 }
 
 #[test]
@@ -879,6 +1169,7 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
         scope: BudgetScope::Fleet,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     };
     assert_eq!(fleet_label.label(), "fleet budget: $25.50 of $25.00/day");
     assert_eq!(
@@ -937,6 +1228,7 @@ fn fleet_choices_use_explicit_state_without_opening_a_store() {
 #[test]
 fn scope_ledgers_allow_runtime_absolute_caps_but_raises_need_a_base() {
     use BudgetCapSource::{Cleared, Config, None as Unset, Override, Raised};
+    let (_dir, runtime) = split_shared_roots();
     let configured: MachineConfig =
         toml::from_str("[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"10/day\"\n")
             .unwrap();
@@ -982,12 +1274,12 @@ fn scope_ledgers_allow_runtime_absolute_caps_but_raises_need_a_base() {
                 ..Default::default()
             };
             assert_eq!(
-                scope.effective_cap_usd(&ledger, config),
+                scope.effective_cap_usd(&ledger, config, &runtime),
                 expected,
                 "{scope:?}: {ledger:?}"
             );
             assert_eq!(
-                scope.cap_source(&ledger, config),
+                scope.cap_source(&ledger, config, &runtime),
                 source,
                 "{scope:?}: {ledger:?}"
             );
@@ -997,6 +1289,7 @@ fn scope_ledgers_allow_runtime_absolute_caps_but_raises_need_a_base() {
 
 #[test]
 fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
+    let (_dir, runtime) = split_shared_roots();
     let kind = AgentKind::new_unchecked("antigravity");
     let config: MachineConfig =
         toml::from_str("[accounts.budget]\nantigravity = \"50/day\"\n").expect("config");
@@ -1010,8 +1303,11 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
         ..Default::default()
     };
     let scope = DailyBudgetScope::Account(LoginKey::default_for(kind));
-    assert_eq!(scope.effective_cap_usd(&ledger, &config), None);
-    assert_eq!(scope.cap_source(&ledger, &config), BudgetCapSource::None);
+    assert_eq!(scope.effective_cap_usd(&ledger, &config, &runtime), None);
+    assert_eq!(
+        scope.cap_source(&ledger, &config, &runtime),
+        BudgetCapSource::None
+    );
 }
 
 #[test]
@@ -1300,7 +1596,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             now,
             &Default::default()
         ),
-        Some((12.0, 10.0))
+        Some((12.0, "10/day".parse().unwrap()))
     );
     assert!(
         scope

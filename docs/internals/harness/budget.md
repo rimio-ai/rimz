@@ -6,7 +6,7 @@
 
 A budget is a dollar cap RimZ enforces itself, at a scale the provider has no concept of: this agent, this turn, this room, this login. Crossing one **parks** the agent: RimZ presses Esc in its pane, stamps the park in a ledger, and leaves everything else alone. The provider CLI keeps running and the session files stay where the provider put them. A supervised turn run is the one exception: the park ends its run as `budget_exceeded`, and a blocking run launched without `--keep` then closes the agent's pane ([scripting.md](./scripting.md)). A staying workflow step's session run stays open, and the step stays with the user ([workflow.md § How an attempt ends](./workflow.md#how-an-attempt-ends)).
 
-The engine reads spend that already exists. Agents write transcripts, the spending walk prices them, and the walk publishes per-room and per-history-pool local-day tallies ([spending.md § What reads the totals](../agents/spending.md#what-reads-the-totals)). Budgets compare those figures against caps and turn a crossing into a stop.
+The engine reads spend that already exists. Agents write transcripts, the spending walk prices them, and the walk publishes per-room and per-history-pool local-day tallies, plus UTC-month totals per pool ([spending.md § What reads the totals](../agents/spending.md#what-reads-the-totals)). Budgets compare those figures against caps and turn a crossing into a stop.
 
 Whether an agent is parked is answered by its ledger, never by its pane. The Esc keypress only makes the park visible to the agent. If the keypress fails, the ledger still says parked and a later tick interrupts again, so correctness never depends on the keypress landing.
 
@@ -21,22 +21,25 @@ Four scopes live in this module, and the sidebar producer evaluates them togethe
 | Agent | one agent session | launch identity: `--budget`, a profile, or a team role | session, or `/day` | `evaluate` |
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `evaluate_turn_scope` |
 | Room fleet | every agent under one project root | machine config `harness.budget`, or `rimz budget` | `/day` only | `evaluate_daily_scope` |
-| Provider account | one history pool, across every room that runs on it | machine config `[accounts.budget].<kind>` for each pool of the kind, or `rimz budget --account` for one pool | `/day` only | `evaluate_daily_scope` |
+| Provider account | one history pool, across every room that runs on it | machine config `[accounts.budget].<kind>`, a standalone named account's `budget`, or `rimz budget --account` for one pool | `/day`, or `/month` for API-key billing | `evaluate_daily_scope` |
 | Loop task | one task's scheduled runs | the task's `--budget-per-day` | `/day` only | `run_log::daily_budget_gate` ([loops.md § One fire](./loops.md#one-fire)) |
 
 A history pool is `default` together with every shared account of a kind, or one standalone account on its own. `DailyBudgetScope::account` maps a login to its pool through `LoginCatalog::pool`, so a cap, a ledger, and the agents it binds always agree on the pool.
 
-Enforcement treats the scopes independently: the first cap crossed parks the agent. The displayed park picks one scope, in the order agent, turn, fleet, account (`project_parks`), so a card names the narrowest reason.
+Enforcement treats the scopes independently: the first cap crossed parks the agent. The displayed park picks one scope, in the order agent, turn, fleet, account (`project_parks`), so a card names the narrowest reason. A time-windowed park's `resets_at` is the latest reset among its binding time-windowed caps: an account month cap cannot be resumed by a fleet day reset. Session and turn parks keep their existing non-clocked behavior.
 
-Every cap parses through [`BudgetSpec`](../../../crates/rimz/src/harness/budget.rs): a finite, non-negative dollar amount with an optional `$` prefix and `/day` suffix, such as `5`, `$4.50`, or `20/day`. A leading `+` is rejected, because a raise is a CLI verb and not a value. Machine config wraps the grammar in cents-backed types in `config/harness.rs`:
+The enrich-only `BudgetPark.reset_window` identifies a later binding window when it differs from the displayed park. It is not serialized; producer projection rebuilds it before auto-continue chooses the day or month reset reason.
+
+Caps take finite, non-negative dollar amounts with an optional `$` prefix. A leading `+` is rejected, because a raise is a CLI verb and not a value. [`BudgetSpec`](../../../crates/rimz/src/harness/budget.rs) keeps the agent grammar; machine config uses cents-backed types in `config/harness.rs` and `config/accounts.rs`:
 
 | Type | Accepts | Used by |
 | --- | --- | --- |
 | `BudgetSpec` | a bare amount (`BudgetWindow::Session`) or a `/day` amount (`BudgetWindow::Day`) | `--budget`, profile and role budgets, `rimz agents budget` |
-| `DayCap` | a `/day` amount only | `harness.budget`, `[accounts.budget]`, absolute `rimz budget` values |
+| `DayCap` | a `/day` amount only | `harness.budget`, absolute fleet `rimz budget` values |
+| `AccountCap` | a `/day` or `/month` amount | `[accounts.budget]`, standalone named-account `budget` |
 | `TurnCap` | a bare amount only | `harness.turn_budget` |
 
-`BudgetWindow::Turn` exists only on projected turn parks: the parser has no `/turn` form. A `/day` window uses local dates in the configured `timezone`. The window, scope, and park vocabulary (`BudgetWindow`, `BudgetScope`, `BudgetPark`) lives in [`agents/state.rs`](../../../crates/rimz/src/agents/state.rs), so the read side can use it without the engine.
+`BudgetWindow::Turn` exists only on projected turn parks: the parser has no `/turn` form. `BudgetWindow::Month` belongs to account caps only; the agent grammar still refuses `/month`. A `/day` window uses local dates in the configured `timezone`; `/month` starts at 00:00 UTC on the 1st, independent of that zone. The window, scope, and park vocabulary (`BudgetWindow`, `BudgetScope`, `BudgetPark`) lives in [`agents/state.rs`](../../../crates/rimz/src/agents/state.rs), so the read side can use it without the engine.
 
 ## Where a cap comes from
 
@@ -44,12 +47,13 @@ An agent cap enters through launch identity and is then owned by its ledger. `le
 
 The turn cap is read straight from machine config on every tick. It has no launch flag, profile field, runtime override, raise, clear, or waiver. Removing the key drops every turn entry on the next tick.
 
-The two daily scopes combine a configured default with a runtime ledger, and `DailyBudgetScope::effective_cap_usd` resolves them in this order:
+The fleet and account scopes combine a configured default with a runtime ledger, and `DailyBudgetScope::effective_cap` resolves a number and window in this order:
 
 1. A cleared ledger (`disabled`) disables the scope. Config edits do not re-arm it. Only a later absolute cap does.
-2. An account scope applies no cap at all unless its provider reports authoritative account-level dollar history. The eligibility rule and its rejection paths are [providers.md § Daily dollar caps](../agents/providers.md#daily-dollar-caps).
-3. The base is the ledger's absolute `override_spec` when present, and the configured cap otherwise. With no base, no cap applies.
-4. A raise in `raised_cap_usd` replaces the base with its frozen total.
+2. An account scope applies no cap at all unless its provider reports authoritative account-level dollar history. The eligibility rule and its rejection paths are [providers.md § Account dollar caps](../agents/providers.md#account-dollar-caps).
+3. The base is the ledger's absolute `override_spec`, then a standalone named account's `budget`, then the kind's `[accounts.budget]` entry (or `harness.budget` for the fleet). Shared accounts read only the kind layer; an invalid shared-account `budget` is ignored by lenient readers and refused at launch. With no base, no cap applies.
+4. A raise in `raised_cap_usd` replaces the base's amount with its frozen total, keeping its window until set or cleared.
+5. A month cap resolves to no cap when any member of its pool reads `metered == Some(true)` in `accounts.json`. Missing or failed readings do not disable it. Day caps do not consult subscription status. The same predicate supplies the room-start warning, naming the cap key, pool, subscription member, and provider's own spending limit.
 
 So a runtime absolute cap arms a scope that config leaves unset, and it outlives the removal of the config key: `off` is what lifts it. A raise needs a base: a raise made over a configured cap goes inert when that key is removed, and the scope reads `none`.
 
@@ -57,7 +61,7 @@ So a runtime absolute cap arms a scope that config leaves unset, and it outlives
 
 | Source | Means |
 | --- | --- |
-| `none` | no cap applies: no base, an ineligible account, or a raise whose configured base was removed |
+| `none` | no cap applies: no base, an ineligible account, a `/month` cap on a subscription pool, or a raise whose configured base was removed |
 | `config` | the configured cap applies unchanged |
 | `override` | a runtime absolute `/day` cap replaces any configured default |
 | `raised` | a `+AMOUNT` raise applies, as its frozen total over the base |
@@ -72,14 +76,16 @@ Each scope reads a different figure.
 | Agent, session window | `total_cost_usd`: the card's cumulative cost, admitted only when its coverage `contributes_to_live_spend()` and the value is finite and non-negative ([spending.md § Live cost coverage](../agents/spending.md#live-cost-coverage)) |
 | Agent, `/day` window | the same cumulative cost minus the ledger's `day_baseline` |
 | Turn | the same cumulative cost minus the `baseline_cost_usd` stamped when the turn started |
-| Room fleet | the workspace spending cache's local-day total, with the live overlay (`sidebar/refresh/live_spend.rs::apply_live_day_spend`) added, so costs the walk has not flushed yet still count |
-| Provider account | the machine-shared provider spending cache's `day_by_login` entry for the agent's pool: `claude@default` for a shared `claude@work`, the account's own key for a standalone one. A missing entry reads as zero, never as the kind-wide total |
+| Room fleet | the workspace spending cache's local-day total, with the live overlay (`crates/rimz/src/sidebar/refresh/live_spend.rs::apply_live_day_spend`) added, so costs the walk has not flushed yet still count |
+| Provider account | the machine-shared provider spending cache's `day_by_login` or `month_by_login` entry, matching the cap's window, for the agent's pool: `claude@default` for a shared `claude@work`, the account's own key for a standalone one. A missing entry reads as zero, never as the kind-wide total |
 
 The `/day` baseline is stamped on the first evaluation of a local date and re-stamped when the date changes. One long-lived session therefore measures each calendar day separately while the provider's counter keeps climbing.
 
 A turn entry is keyed by the agent and holds the `turn_started_at` it was stamped for. When the agent's `turn_started_at` changes, `evaluate_turn_scope` replaces the entry before comparing: the baseline moves to the current cost, and the old park and interrupt throttle go with it. The first tick of a new turn therefore reads zero, even when the prior turn ended over cap. An agent with no `turn_started_at` loses its entry.
 
 Both daily reads are guarded against the wrong day. Each compares the cache's `day_cutoff_secs` with the local-day start computed from `now`, and a cache stamped for another day contributes nothing. A stale cache therefore holds a cap open instead of parking the fleet on yesterday's total.
+
+The month reader likewise accepts only an equal `month_cutoff_secs`, computed by the same UTC-month helper as the walk. Publication v23 expires at the UTC month turn even when the history zone has not reached midnight. Between the turn and the next walk there is no month reading, so enforcement lifts the old park rather than carrying last month's spend forward. UTC-day compaction preserves exact month boundaries.
 
 ## The ledgers on disk
 
@@ -126,7 +132,7 @@ spend vs cap  ──────┼── under cap ─────────�
 
 `Under` is restorative. Clearing the park stamp and throttle means that raising a cap above current spend un-parks the agent on the next tick, with no separate reset path. A `/day` rollover goes further: it clears the park, the throttle, and the waiver together with the baseline.
 
-The two daily scopes run a smaller fold, `evaluate_daily_scope`, once per tick per scope: a cap, a spend, and a park stamp, with no waiver. Scope evaluation first drops a park stamped before the current local day, so an already-exhausted new day gets a fresh stamp instead of inheriting an expired reset. Their waivers are per agent instead, kept in `budget.scopes.json` by `evaluate_scope_waiver`, so one person answering one agent does not un-park the whole fleet. Both waivers decide through the same `waiver_step`.
+The fleet and account scopes run a smaller fold, `evaluate_daily_scope`, once per tick per scope: a cap, a spend, and a park stamp, with no waiver. Scope evaluation first drops a park stamped before the current window (local day or UTC month), so an already-exhausted new window gets a fresh stamp instead of inheriting an expired reset. The pre-enforcement projection may fire one continue at that turn before this re-stamp, but never every retry interval while the new window is exhausted. Their waivers are per agent instead, kept in `budget.scopes.json` by `evaluate_scope_waiver`, so one person answering one agent does not un-park the whole fleet. Both waivers decide through the same `waiver_step`.
 
 The turn scope runs `evaluate_turn_scope` per root agent, after the rebase in [Where the spend comes from](#where-the-spend-comes-from). An at-or-over reading parks, with no waiver. The next human prompt starts a new turn and clears the park through that rebase. A teammate-triggered turn meets the same cap, while message delivery gates keep background and agent-to-agent traffic from reopening a `Paused` agent ([messaging.md](./messaging.md#status-lifecycle)).
 
@@ -146,7 +152,7 @@ Programmatic entry points ignore the waiver: see [the fail-fast gate](#the-fail-
 
 1. Evaluate. One agent verdict from the agent's own ledger, one turn verdict from its `budget.scopes.json` entry, and one scope verdict: the first parked daily scope that binds it (the fleet, then its own pool), combined with its scope waiver.
 2. Classify. When every verdict is under or disabled, the agent's budget auto-continue record is cleared and the walk moves on. When none parks (a waiver is running), nothing else happens.
-3. Arm the day reset. A daily scope park, or a parked `/day` agent cap, arms a budget auto-continue record with the end of the park's window as its deadline, provided `pause_applies` holds for the agent. For daily scopes, that is the local midnight after the park's stamp, not after the current pass. Every other park clears the record, including a turn-only park, whose reset is a prompt. The `Budget` park class is [providers.md § Auto-continue](../agents/providers.md#auto-continue).
+3. Arm the window reset. A time-windowed scope park, or a parked `/day` agent cap, arms a budget auto-continue record with the latest binding window end as its deadline, provided `pause_applies` holds for the agent. `park_reset_at` anchors day resets on the park's local day and month resets on the next UTC 1st after its stamp, never on the current pass. Every other park clears the record, including a turn-only park, whose reset is a prompt. The budget park classes are [providers.md § Auto-continue](../agents/providers.md#auto-continue).
 4. Interrupt. A `Running` agent with a live bound pane gets the detached `rimz agents budget-park` helper, unless an interrupt for one of its current parks was sent within `INTERRUPT_RETRY_SECS` (120 seconds). An agent that keeps running past a park is interrupted again every two minutes. The agent ledger is written before the spawn, so the helper can read the park stamp, and the throttle stamps are set only when the helper spawns.
 5. Persist. A changed agent ledger is written back, each changed daily park is merged into its scope ledger, and a changed `budget.scopes.json` is rewritten.
 
@@ -162,13 +168,13 @@ The cost the helper records is the agent's own (`total_cost_usd`, falling back t
 
 Which agents a park touches is one predicate, `pause_applies`: an agent that is `Running`, or one this park already interrupted that is not `Waiting`. Agents at rest keep their lifecycle status, and a waiting agent keeps its ask visible until the answered turn runs again. A cap interrupts spending, not conversation.
 
-On the read side, `project_parks` (called from `sidebar/enrich.rs`) stamps an `agents::state::BudgetPark` onto each agent from the ledgers, in the display order from [The scopes](#the-scopes). A turn park is projected only while `harness.turn_budget` is set, and a daily scope park only when `pause_applies` holds and no scope waiver is running. That projection is what makes [`effective_status()`](../agents/model.md#displayed-status) report `Paused`, which message delivery gates read ([messaging.md](./messaging.md#status-lifecycle)). `project_budget_views` fills the cockpit and provider-dashboard cap rows from the same ledgers.
+On the read side, `project_parks` (called from `sidebar/enrich.rs`) stamps an `agents::state::BudgetPark` onto each agent from the ledgers, in the display order from [The scopes](#the-scopes). A turn park is projected only while `harness.turn_budget` is set, and a time-windowed scope park only when `pause_applies` holds and no scope waiver is running. An account park whose reset is still ahead is omitted when known spend is below the effective cap; unknown spend keeps it, and a due park stays projected so its continue can fire. This skip is account-only because projection runs before live fleet spend is applied; enforcement clears a lifted fleet park in the same pass. That projection is what makes [`effective_status()`](../agents/model.md#displayed-status) report `Paused`, which message delivery gates read ([messaging.md](./messaging.md#status-lifecycle)). `project_budget_views` fills the cockpit and provider-dashboard cap rows from the same ledgers.
 
 ## The fail-fast gate
 
 Interactive work gets a park and a waiver. Automation gets a refusal before it starts.
 
-[`scope_gate`](../../../crates/rimz/src/harness/budget.rs) checks the fleet ledger, then the caller's account pool ledger, against the same local-day caches, and returns a reason string or nothing. It consults no waiver, spawns nothing, and touches no pane. One extra rule covers cache lag: when a scope's park stamp is from the current local day, the gate takes the greater of the cached spend and the spend at the park. A lagging cache therefore cannot reopen a scope that already parked today.
+[`scope_gate`](../../../crates/rimz/src/harness/budget.rs) checks the fleet ledger, then the caller's account pool ledger, against the cap's local-day or UTC-month cache, and returns a reason string or nothing. It consults no waiver, spawns nothing, and touches no pane. One extra rule covers cache lag: when a scope's park stamp is from the current window, the gate takes the greater of the cached spend and the spend at the park. A lagging cache therefore cannot reopen a scope that already parked in that window. Tier routing reads the same exhaustion decision; its durable `DailyCap` reason keeps that variant name and adds optional `window: "month"`, omitted for day caps so older event readers retain the event.
 
 | Caller | On a refusal |
 | --- | --- |
@@ -209,5 +215,5 @@ Neither command checks who calls it, so an agent shell can raise or clear a cap 
 
 - [budget.md](../../guide/budget.md): the user-facing model, the five scopes, and what a park means in practice.
 - [spending.md](../agents/spending.md): the spend caches and cost coverage.
-- [providers.md](../agents/providers.md#daily-dollar-caps): account cap eligibility and the budget auto-continue class.
+- [providers.md](../agents/providers.md#account-dollar-caps): account cap eligibility and the budget auto-continue class.
 - [messaging.md](./messaging.md): delivery gates, the `automated` flag, and the message sender kinds.

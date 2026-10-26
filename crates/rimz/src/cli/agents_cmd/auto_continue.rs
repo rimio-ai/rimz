@@ -4,7 +4,7 @@
 //! The producer decides *which* agent and *when* (`sidebar::enrich`
 //! auto-continue, opt-in via `[resume] auto_continue*`); this helper performs the
 //! side effect the sidebar's read-only import graph must not: it queues or
-//! redelivers a resume-gated message through the shared delivery pipeline.
+//! redelivers a harness-gated message through the shared delivery pipeline.
 //! Best-effort by contract — it inherits the producer's frame-validated target,
 //! so a vanished pane leaves a message error instead of a false resume audit.
 
@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::message::synthetic::{self, SyntheticMessage};
-use rimz::store::message::{DeliveryGate, MessageSender};
+use rimz::store::message::MessageSender;
 use rimz::store::snapshot::find_agent;
 use rimz::store::writer::DeliveryFailureDisposition;
 
@@ -45,6 +45,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         .context("auto-continue target pane is no longer bound to the agent")?;
 
     let reason = format!("resume delivery gate closed ({})", request.reason);
+    let gate = request.delivery_gate();
     let (message_id, outcome) = match request.message_id {
         Some(message_id) => {
             let outcome = synthetic::attempt_now(
@@ -59,11 +60,6 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             (message_id, outcome)
         }
         None => {
-            let gate = if request.reason == "budget_day_reset" {
-                DeliveryGate::Done
-            } else {
-                DeliveryGate::Resume
-            };
             let message = SyntheticMessage {
                 agent,
                 text: text.to_owned(),

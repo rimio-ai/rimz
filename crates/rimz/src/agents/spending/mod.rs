@@ -54,7 +54,7 @@ use aggregate::{
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
-    local_day_index, local_day_start_secs,
+    local_day_index, local_day_start_secs, utc_month_start_secs,
 };
 pub(crate) use aggregate::{NO_BURST_CUTOFF, SESSION_GAP_SECS, live_session_keys, origin_path};
 #[cfg(test)]
@@ -131,6 +131,8 @@ pub struct SpendingWalkResult {
     pub provider_day: BTreeMap<String, SpendWindow>,
     pub login_day: BTreeMap<LoginKey, SpendWindow>,
     pub day_cutoff_secs: u64,
+    pub login_month: BTreeMap<LoginKey, SpendWindow>,
+    pub month_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
     pub chart: ChartSpend,
     pub timezone: String,

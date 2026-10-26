@@ -38,13 +38,15 @@
 
 [accounts]
 [accounts.budget]
-# Local-calendar-day caps shared by every room: one per provider across
-# `default` and its shared accounts, one per standalone account. Values
-# require /day and wired authoritative account-spend history; quota bars and
-# estimates do not qualify. Unsupported kinds refuse config edits and room
-# start.
+# Dollar caps shared by every room: one per provider across `default` and
+# its shared accounts, one per standalone account, whose own `budget` key
+# overrides this one. Values end in /day (local calendar day) or /month (UTC
+# calendar month, API-key billing only: a pool with a subscription member is
+# exempt) and need wired authoritative account-spend history; quota bars and
+# estimates do not qualify. Unsupported kinds refuse config edits and
+# launches; room start warns.
 ## claude = "100/day"
-## codex = "100/day"
+## codex = "300/month"
 
 [accounts.usage_limit_usd]
 # Display-only monthly USD ceilings for the extra/API usage bar. These are not

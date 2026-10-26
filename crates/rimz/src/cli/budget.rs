@@ -70,6 +70,9 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let scope = requested.as_ref().map_or(DailyBudgetScope::Fleet, |key| {
         DailyBudgetScope::account(&catalog, key)
     });
+    if let Some(key) = requested.as_ref() {
+        config.accounts.validate_budget_for_login(key)?;
+    }
     let fleet_spend =
         matches!(scope, DailyBudgetScope::Fleet).then(|| live_fleet_spend(&ctx, &config, now));
     if args.value.is_none() {
@@ -192,7 +195,8 @@ fn mutate_scope(
         }
         raw if raw.starts_with('+') => {
             let current = scope
-                .effective_cap_usd(&ledger, config)
+                .standing_cap(&ledger, config)
+                .map(|cap| cap.cap_usd)
                 .with_context(|| scope.raise_unavailable_message())?;
             ledger.raised_cap_usd = Some(checked_raise(current, parse_raise(raw)?)?);
             ledger.disabled = false;
@@ -242,8 +246,8 @@ impl ScopeReport {
         let pool = scope.account_login();
         Self {
             scope: pool.map_or_else(|| "fleet".to_owned(), ToString::to_string),
-            cap_usd: scope.effective_cap_usd(&ledger, config),
-            source: scope.cap_source(&ledger, config).to_string(),
+            cap_usd: scope.effective_cap_usd(&ledger, config, runtime),
+            source: scope.cap_source(&ledger, config, runtime).to_string(),
             spend_usd,
             parked: ledger.parked.is_some(),
             members: pool.map(|pool| {
@@ -383,10 +387,8 @@ fn inspect(
     }
     if requested.is_none() {
         let mut stderr = crate::cli::render::err();
-        for kind in config.accounts.budget.keys() {
-            if let Err(detail) = rimz::config::AccountsConfig::validate_budget_kind(kind) {
-                writeln!(stderr, "rimz: warning: {detail}")?;
-            }
+        for (_, detail) in config.accounts.budget_errors() {
+            writeln!(stderr, "rimz: warning: {detail}")?;
         }
     }
     Ok(())

@@ -956,9 +956,12 @@ fn compile_agent_process_with_extra_env(
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
     let machine = crate::config::MachineConfig::load_lenient();
-    if machine.accounts.budget(kind).is_some() {
-        crate::config::AccountsConfig::validate_budget_kind(kind)?;
-    }
+    machine
+        .accounts
+        .validate_budget_for_login(&crate::ids::LoginKey::new(
+            request.kind.clone(),
+            request.identity.params.login.clone().unwrap_or_default(),
+        ))?;
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
         AgentProcessCompileErr::UnknownAgent {
             kind: kind.to_owned(),

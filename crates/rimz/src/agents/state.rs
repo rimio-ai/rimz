@@ -68,6 +68,7 @@ pub enum BudgetWindow {
     Session,
     Turn,
     Day,
+    Month,
 }
 
 impl BudgetWindow {
@@ -76,6 +77,7 @@ impl BudgetWindow {
             Self::Session => "session",
             Self::Turn => "turn",
             Self::Day => "day",
+            Self::Month => "month",
         }
     }
 
@@ -84,6 +86,7 @@ impl BudgetWindow {
             BudgetWindow::Session => "",
             BudgetWindow::Turn => "/turn",
             BudgetWindow::Day => "/day",
+            BudgetWindow::Month => "/month",
         };
         format!("${spend_usd:.2} of ${cap_usd:.2}{suffix}")
     }
@@ -112,6 +115,9 @@ pub struct BudgetPark {
     pub account_kind: Option<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<Timestamp>,
+    /// Enrich-only window of a later binding reset, when it differs from this park's window.
+    #[serde(skip)]
+    pub reset_window: Option<BudgetWindow>,
 }
 
 impl BudgetPark {

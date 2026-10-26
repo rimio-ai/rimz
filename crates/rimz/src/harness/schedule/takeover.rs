@@ -337,6 +337,7 @@ mod tests {
             scope: crate::agents::BudgetScope::Agent,
             account_kind: None,
             resets_at: None,
+            reset_window: None,
         });
         assert_eq!(paused.effective_status(), AgentStatus::Paused);
         let mut compacting = agent("a", AgentStatus::Idle, "/repo/wt");

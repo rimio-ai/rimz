@@ -603,6 +603,7 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: Some(ts(5_000)),
+        reset_window: None,
     });
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
@@ -722,82 +723,6 @@ fn daily_scope_snapshot(
     (config, snapshot)
 }
 
-#[test]
-fn account_day_budget_reset_reaches_every_room_but_an_early_raise_does_not() {
-    use crate::agents::spending::{read_provider_spending_cache, write_provider_spending_cache};
-    use crate::harness::budget::{DailyBudgetScope, enforce, project_parks};
-
-    let parked_at: Timestamp = "2026-06-02T03:59:00Z".parse().expect("parked");
-    let reset: Timestamp = "2026-06-02T04:00:00Z".parse().expect("local midnight");
-    for raised in [false, true] {
-        let (dir, room_a) = temp_runtime();
-        let room_b = RuntimePaths::under(
-            WorkspaceId::from_project_root(&dir.path().join("other-room")),
-            dir.path(),
-        )
-        .expect("second room");
-        room_b.ensure_dirs().expect("second room dirs");
-        let scope = DailyBudgetScope::Account("claude@default".parse().expect("pool"));
-        let (mut config, mut snapshot_a) =
-            daily_scope_snapshot(&room_a, &scope, parked_at, parked_at, 6.0);
-        let (_, mut snapshot_b) = daily_scope_snapshot(&room_b, &scope, parked_at, parked_at, 6.0);
-        for (runtime, snapshot) in [(&room_a, &mut snapshot_a), (&room_b, &mut snapshot_b)] {
-            project_parks(snapshot, runtime, None, &config);
-            resume_parked(
-                snapshot,
-                runtime,
-                &crate::agents::RoomLoginSet::native(),
-                &config.resume,
-                &[],
-            );
-            assert_eq!(read_park(&park_path(runtime)).unwrap().last_nudge_at, None);
-        }
-
-        let now = if raised {
-            config
-                .accounts
-                .budget
-                .insert("claude".into(), "10/day".parse().expect("raised cap"));
-            ts(parked_at.as_second() + 1)
-        } else {
-            let mut provider =
-                read_provider_spending_cache(&room_a.shared_provider_spending_path());
-            provider.day_cutoff_secs = reset.as_second() as u64;
-            provider.day_by_login.clear();
-            write_provider_spending_cache(&room_a.shared_provider_spending_path(), &provider);
-            reset
-        };
-        snapshot_a.now = now;
-        snapshot_b.now = now;
-        project_parks(&mut snapshot_a, &room_a, None, &config);
-        resume_parked(
-            &snapshot_a,
-            &room_a,
-            &crate::agents::RoomLoginSet::native(),
-            &config.resume,
-            &[],
-        );
-        let first_nudge = read_park(&park_path(&room_a)).and_then(|record| record.last_nudge_at);
-        enforce(&snapshot_a, &room_a, None, &config);
-        assert!(scope.read_ledger(&room_b, None).parked.is_none());
-        project_parks(&mut snapshot_b, &room_b, None, &config);
-        assert!(snapshot_b.agents[0].budget_park.is_none());
-        resume_parked(
-            &snapshot_b,
-            &room_b,
-            &crate::agents::RoomLoginSet::native(),
-            &config.resume,
-            &[],
-        );
-        let second_nudge = read_park(&park_path(&room_b)).and_then(|record| record.last_nudge_at);
-        let expected = (!raised).then_some(now);
-        assert_eq!((first_nudge, second_nudge), (expected, expected));
-        if raised {
-            assert!(read_park(&park_path(&room_b)).is_none());
-        }
-    }
-}
-
 fn daily_scope_resumes_at_window_turn(scope: crate::harness::budget::DailyBudgetScope) {
     let (_dir, runtime) = temp_runtime();
     let parked_at: Timestamp = "2026-06-02T03:59:00Z".parse().expect("parked");
@@ -832,6 +757,328 @@ fn account_day_budget_resumes_at_stamped_window_end() {
     daily_scope_resumes_at_window_turn(crate::harness::budget::DailyBudgetScope::Account(
         "claude@default".parse().expect("pool"),
     ));
+}
+
+#[test]
+fn account_day_budget_reset_reaches_every_room_but_an_early_raise_does_not() {
+    account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
+        crate::agents::BudgetWindow::Day,
+    );
+}
+
+#[test]
+fn account_month_budget_reset_reaches_every_room_but_an_early_raise_does_not() {
+    account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
+        crate::agents::BudgetWindow::Month,
+    );
+}
+
+fn account_budget_reset_reaches_every_room_but_an_early_raise_does_not(
+    window: crate::agents::BudgetWindow,
+) {
+    use crate::agents::spending::{read_provider_spending_cache, write_provider_spending_cache};
+    use crate::harness::budget::{DailyBudgetScope, enforce, project_parks};
+
+    let (parked_at, reset, raised_cap) = match window {
+        crate::agents::BudgetWindow::Day => {
+            ("2026-06-02T03:59:00Z", "2026-06-02T04:00:00Z", "10/day")
+        }
+        crate::agents::BudgetWindow::Month => {
+            ("2026-10-31T23:59:00Z", "2026-11-01T00:00:00Z", "10/month")
+        }
+        _ => unreachable!("only account day and month caps are tested"),
+    };
+    let parked_at: Timestamp = parked_at.parse().expect("parked");
+    let reset: Timestamp = reset.parse().expect("window reset");
+    for raised in [false, true] {
+        let (dir, room_a) = temp_runtime();
+        let room_b = RuntimePaths::under(
+            WorkspaceId::from_project_root(&dir.path().join("other-room")),
+            dir.path(),
+        )
+        .expect("second room");
+        room_b.ensure_dirs().expect("second room dirs");
+        let scope = DailyBudgetScope::Account("claude@default".parse().expect("pool"));
+        let setup = |runtime: &RuntimePaths| {
+            if window == crate::agents::BudgetWindow::Month {
+                monthly_scope_snapshot(runtime, parked_at, parked_at, true)
+            } else {
+                daily_scope_snapshot(runtime, &scope, parked_at, parked_at, 6.0)
+            }
+        };
+        let (mut config, mut snapshot_a) = setup(&room_a);
+        let (_, mut snapshot_b) = setup(&room_b);
+        for (runtime, snapshot) in [(&room_a, &mut snapshot_a), (&room_b, &mut snapshot_b)] {
+            project_parks(snapshot, runtime, None, &config);
+            resume_parked(
+                snapshot,
+                runtime,
+                &crate::agents::RoomLoginSet::native(),
+                &config.resume,
+                &[],
+            );
+            assert_eq!(read_park(&park_path(runtime)).unwrap().last_nudge_at, None);
+        }
+
+        let now = if raised {
+            config
+                .accounts
+                .budget
+                .insert("claude".into(), raised_cap.parse().expect("raised cap"));
+            ts(parked_at.as_second() + 1)
+        } else {
+            let mut provider =
+                read_provider_spending_cache(&room_a.shared_provider_spending_path());
+            provider.day_cutoff_secs = reset.as_second() as u64;
+            provider.day_by_login.clear();
+            provider.month_cutoff_secs = reset.as_second() as u64;
+            provider.month_by_login.clear();
+            write_provider_spending_cache(&room_a.shared_provider_spending_path(), &provider);
+            reset
+        };
+        snapshot_a.now = now;
+        snapshot_b.now = now;
+        project_parks(&mut snapshot_a, &room_a, None, &config);
+        resume_parked(
+            &snapshot_a,
+            &room_a,
+            &crate::agents::RoomLoginSet::native(),
+            &config.resume,
+            &[],
+        );
+        let first_nudge = read_park(&park_path(&room_a)).and_then(|record| record.last_nudge_at);
+        enforce(&snapshot_a, &room_a, None, &config);
+        assert!(scope.read_ledger(&room_b, None).parked.is_none());
+        project_parks(&mut snapshot_b, &room_b, None, &config);
+        assert!(snapshot_b.agents[0].budget_park.is_none());
+        resume_parked(
+            &snapshot_b,
+            &room_b,
+            &crate::agents::RoomLoginSet::native(),
+            &config.resume,
+            &[],
+        );
+        let second_nudge = read_park(&park_path(&room_b)).and_then(|record| record.last_nudge_at);
+        let expected = (!raised).then_some(now);
+        assert_eq!((first_nudge, second_nudge), (expected, expected));
+        if raised {
+            assert!(read_park(&park_path(&room_b)).is_none());
+        }
+    }
+}
+
+fn monthly_scope_snapshot(
+    runtime: &RuntimePaths,
+    parked_at: Timestamp,
+    now: Timestamp,
+    current_publication: bool,
+) -> (crate::config::MachineConfig, SidebarSnapshot) {
+    use crate::agents::spending::{
+        read_provider_spending_cache, utc_month_start_secs, write_provider_spending_cache,
+    };
+    let scope =
+        crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
+    let (mut config, snapshot) = daily_scope_snapshot(runtime, &scope, parked_at, now, 6.0);
+    config.timezone = Some("Asia/Tokyo".into());
+    config
+        .accounts
+        .budget
+        .insert("claude".into(), "5/month".parse().unwrap());
+    let mut provider = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    provider.day_cutoff_secs = now
+        .to_zoned(config.time_zone())
+        .start_of_day()
+        .unwrap()
+        .timestamp()
+        .as_second() as u64;
+    provider.month_by_login = provider.day_by_login.clone();
+    provider.month_cutoff_secs =
+        utc_month_start_secs(if current_publication { now } else { parked_at }.as_second() as u64)
+            .unwrap();
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    (config, snapshot)
+}
+
+#[test]
+fn month_turn_fires_continue_before_stale_publication_lifts_the_park() {
+    let (_dir, runtime) = temp_runtime();
+    let parked_at: Timestamp = "2026-10-31T23:59:00Z".parse().unwrap();
+    let now: Timestamp = "2026-11-01T00:00:05Z".parse().unwrap();
+    let (config, mut snapshot) = monthly_scope_snapshot(&runtime, parked_at, now, false);
+    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config.resume,
+        &[],
+    );
+    let record = read_park(&park_path(&runtime)).expect("month resume record");
+    assert_eq!(record.last_nudge_at, Some(now));
+    assert_eq!(record.kind.reason(), "budget_month_reset");
+    crate::harness::budget::enforce(&snapshot, &runtime, None, &config);
+    assert_eq!(read_park(&park_path(&runtime)), None);
+    let scope =
+        crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
+    assert!(scope.read_ledger(&runtime, None).parked.is_none());
+}
+
+#[test]
+fn exhausted_new_month_restamps_and_fires_at_most_once() {
+    let (_dir, runtime) = temp_runtime();
+    let parked_at: Timestamp = "2026-10-31T23:59:00Z".parse().unwrap();
+    let now: Timestamp = "2026-11-01T00:00:05Z".parse().unwrap();
+    let (config, mut snapshot) = monthly_scope_snapshot(&runtime, parked_at, now, true);
+    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config.resume,
+        &[],
+    );
+    crate::harness::budget::enforce(&snapshot, &runtime, None, &config);
+    let scope =
+        crate::harness::budget::DailyBudgetScope::Account("claude@default".parse().unwrap());
+    let stamp = scope.read_ledger(&runtime, None).parked.unwrap().at;
+    snapshot.now = ts(now.as_second() + 121);
+    crate::harness::budget::project_parks(&mut snapshot, &runtime, None, &config);
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config.resume,
+        &[],
+    );
+    let reset = snapshot.agents[0].budget_park.as_ref().unwrap().resets_at;
+    let record = read_park(&park_path(&runtime)).unwrap();
+    assert_eq!(
+        (stamp, reset, record.last_nudge_at, record.retries),
+        (
+            now,
+            Some("2026-12-01T00:00:00Z".parse().unwrap()),
+            Some(now),
+            1
+        )
+    );
+}
+
+#[test]
+fn binding_month_cap_delays_fleet_day_resume_until_the_last_reset() {
+    use crate::disk::atomic::write_temp_then_rename_cache;
+    use crate::harness::budget::{BudgetParkStamp, enforce, project_parks};
+    let (_dir, runtime) = temp_runtime();
+    let parked_at: Timestamp = "2026-10-31T14:59:00Z".parse().unwrap();
+    let day_reset: Timestamp = "2026-10-31T15:00:00Z".parse().unwrap();
+    let month_reset: Timestamp = "2026-11-01T00:00:00Z".parse().unwrap();
+    let (mut config, mut snapshot) = monthly_scope_snapshot(&runtime, parked_at, parked_at, true);
+    config.harness.budget = Some("5/day".parse().unwrap());
+    snapshot.fleet_day_spend_epoch_secs = Some(
+        parked_at
+            .to_zoned(config.time_zone())
+            .start_of_day()
+            .unwrap()
+            .timestamp()
+            .as_second() as u64,
+    );
+    write_temp_then_rename_cache(
+        &runtime.lane_path("budget.fleet-park.json"),
+        &Some(BudgetParkStamp {
+            at: parked_at,
+            at_cost: 6.0,
+        }),
+    )
+    .unwrap();
+    enforce(&snapshot, &runtime, None, &config);
+    snapshot.now = day_reset;
+    project_parks(&mut snapshot, &runtime, None, &config);
+    let park = snapshot.agents[0].budget_park.as_ref().unwrap();
+    assert_eq!(park.scope, crate::agents::BudgetScope::Fleet);
+    assert_eq!(park.resets_at, Some(month_reset));
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config.resume,
+        &[],
+    );
+    let record = read_park(&park_path(&runtime)).unwrap();
+    assert_eq!(record.last_nudge_at, None);
+    snapshot.now = month_reset;
+    project_parks(&mut snapshot, &runtime, None, &config);
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config.resume,
+        &[],
+    );
+    let record = read_park(&park_path(&runtime)).unwrap();
+    assert_eq!(record.last_nudge_at, Some(month_reset));
+    assert_eq!(record.kind.reason(), "budget_month_reset");
+}
+
+#[test]
+fn raised_month_cap_does_not_swallow_a_fleet_day_reset() {
+    use crate::agents::spending::{read_provider_spending_cache, write_provider_spending_cache};
+    use crate::harness::budget::{BudgetParkStamp, enforce, project_parks};
+
+    let parked_at: Timestamp = "2026-10-31T14:59:00Z".parse().unwrap();
+    let day_reset: Timestamp = "2026-10-31T15:00:00Z".parse().unwrap();
+    let month_reset: Timestamp = "2026-11-01T00:00:00Z".parse().unwrap();
+    for stale in [false, true] {
+        let (_dir, runtime) = temp_runtime();
+        let (mut config, mut snapshot) =
+            monthly_scope_snapshot(&runtime, parked_at, parked_at, true);
+        config.harness.budget = Some("5/day".parse().unwrap());
+        snapshot.fleet_day_spend_epoch_secs = Some(
+            parked_at
+                .to_zoned(config.time_zone())
+                .start_of_day()
+                .unwrap()
+                .timestamp()
+                .as_second() as u64,
+        );
+        write_temp_then_rename_cache(
+            &runtime.lane_path("budget.fleet-park.json"),
+            &Some(BudgetParkStamp {
+                at: parked_at,
+                at_cost: 6.0,
+            }),
+        )
+        .unwrap();
+        enforce(&snapshot, &runtime, None, &config);
+        config
+            .accounts
+            .budget
+            .insert("claude".into(), "10/month".parse().unwrap());
+        snapshot.now = day_reset;
+        snapshot.fleet_day_spend_epoch_secs = Some(day_reset.as_second() as u64);
+        snapshot.fleet_day_spend_usd = Some(0.25);
+        if stale {
+            let mut provider =
+                read_provider_spending_cache(&runtime.shared_provider_spending_path());
+            provider.month_cutoff_secs = 0;
+            write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+        }
+        project_parks(&mut snapshot, &runtime, None, &config);
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config.resume,
+            &[],
+        );
+        let record = read_park(&park_path(&runtime)).unwrap();
+        enforce(&snapshot, &runtime, None, &config);
+        let park = snapshot.agents[0].budget_park.as_ref().unwrap();
+        assert_eq!(record.last_nudge_at, (!stale).then_some(day_reset));
+        assert_eq!(park.scope, crate::agents::BudgetScope::Fleet);
+        assert_eq!(
+            park.resets_at,
+            Some(if stale { month_reset } else { day_reset })
+        );
+    }
 }
 
 #[test]

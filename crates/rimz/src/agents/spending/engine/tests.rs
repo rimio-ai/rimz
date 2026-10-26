@@ -27,6 +27,7 @@ fn provider_freshness_expires_at_local_midnight_inside_ttl() {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms: midnight - 1,
         day_cutoff_secs: midnight / 1000 - 86_400,
+        month_cutoff_secs: super::super::utc_month_start_secs(midnight / 1000).unwrap(),
         timezone: "Asia/Shanghai".into(),
         chart: crate::agents::spending::ChartSpend {
             today: super::super::local_day_index(midnight / 1000 - 1, Some("Asia/Shanghai"))
@@ -69,6 +70,7 @@ fn provider_freshness_uses_the_published_history_day_across_zones() {
         refreshed_at_ms: now_ms,
         day_cutoff_secs: super::super::local_day_start_secs(now_ms / 1000, Some("Asia/Shanghai"))
             .unwrap(),
+        month_cutoff_secs: super::super::utc_month_start_secs(now_ms / 1000).unwrap(),
         timezone: "UTC".into(),
         chart: crate::agents::spending::ChartSpend {
             today: super::super::local_day_index(now_ms / 1000, Some("UTC")).unwrap(),
@@ -418,6 +420,7 @@ fn fresh_shared_publish_returns_without_walking() {
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
             day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None).unwrap(),
+            month_cutoff_secs: super::super::utc_month_start_secs(published_at / 1000).unwrap(),
             timezone: "UTC".into(),
             chart: crate::agents::spending::ChartSpend {
                 today: (published_at / 86_400_000) as i64,
@@ -461,6 +464,8 @@ fn shared_spending_lock_serves_the_elected_publish_to_a_contender() {
                 &ProviderSpendingCache {
                     refreshed_at_ms: published_at,
                     day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None)
+                        .unwrap(),
+                    month_cutoff_secs: super::super::utc_month_start_secs(published_at / 1000)
                         .unwrap(),
                     timezone: "UTC".into(),
                     chart: crate::agents::spending::ChartSpend {
@@ -518,6 +523,7 @@ fn produce_local_serves_published_within_grace() {
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
             day_cutoff_secs: super::super::local_day_start_secs(now_ms / 1000, None).unwrap(),
+            month_cutoff_secs: super::super::utc_month_start_secs(now_ms / 1000).unwrap(),
             timezone: "UTC".into(),
             chart: crate::agents::spending::ChartSpend {
                 today: (now_ms / 86_400_000) as i64,

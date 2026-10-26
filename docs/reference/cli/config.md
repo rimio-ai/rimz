@@ -111,7 +111,9 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.idle_compact` | `off` or a token floor such as `100k` (default); see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every provider prompt-cache lifetime and `harness.cache_keepalive_max`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.keep_warm_min_ttl` | `off` or a duration such as `15m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
-| `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |
+| `harness.budget` | an amount ending in `/day` |
+| `accounts.budget.<kind>` | an amount ending in `/day` or `/month`; monthly caps count API-key billing, not subscriptions |
+| `accounts.<kind>.<name>.budget` | an amount ending in `/day` or `/month`, overriding the kind cap; requires `history = "standalone"` |
 | `accounts.use.<kind>` | an account name or `default`; declaration is checked when a room resolves that provider's account for start or launch, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use), which preflights a named account before selecting it. The container and deeper paths are not settable. |
 | `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
 | `accounts.<kind>.<name>.label` | A display-only string following the [account label rules](./accounts.md#kinds-names-and-homes). `set` validates it and declares the account when `<name>` is not yet declared, so check the name; clear with `rimz accounts add <kind> <name> --label ''`. |

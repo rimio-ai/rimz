@@ -6,7 +6,8 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use unicode_width::UnicodeWidthStr;
 
-use super::harness::DayCap;
+use crate::agents::BudgetWindow;
+use crate::harness::budget::BudgetSpec;
 use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -19,6 +20,97 @@ pub enum AccountBudgetConfigError {
         "unsupported `accounts.budget.{kind}`; remove it because {kind} has no durable account-spend source with authoritative account-level dollars"
     )]
     Unsupported { kind: String },
+    #[error(
+        "`accounts.{kind}.{name}.budget` needs `history = \"standalone\"`: a shared account's spend is counted with {kind}@default; use `[accounts.budget].{kind}` for a shared-pool cap"
+    )]
+    SharedHistory { kind: String, name: LoginName },
+}
+
+/// An account dollar cap, measured over a local day or a UTC calendar month.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccountCap {
+    cents: u64,
+    window: BudgetWindow,
+}
+
+impl AccountCap {
+    pub(crate) fn as_usd(self) -> f64 {
+        self.cents as f64 / 100.0
+    }
+
+    pub fn as_spec(self) -> BudgetSpec {
+        BudgetSpec {
+            cap_usd: self.as_usd(),
+            window: self.window,
+        }
+    }
+}
+
+impl std::str::FromStr for AccountCap {
+    type Err = AccountCapParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let raw = raw.trim();
+        let (amount, window) = if let Some(amount) = raw.strip_suffix("/day") {
+            (amount, BudgetWindow::Day)
+        } else if let Some(amount) = raw.strip_suffix("/month") {
+            (amount, BudgetWindow::Month)
+        } else {
+            return Err(AccountCapParseError::WindowRequired(raw.to_owned()));
+        };
+        let spec = amount
+            .parse::<BudgetSpec>()
+            .map_err(|_| AccountCapParseError::InvalidAmount(raw.to_owned()))?;
+        if spec.window != BudgetWindow::Session {
+            return Err(AccountCapParseError::WindowRequired(raw.to_owned()));
+        }
+        let cents = (spec.cap_usd * 100.0).round();
+        if cents > u64::MAX as f64 {
+            return Err(AccountCapParseError::TooLarge(raw.to_owned()));
+        }
+        Ok(Self {
+            cents: cents as u64,
+            window,
+        })
+    }
+}
+
+impl fmt::Display for AccountCap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dollars = self.cents / 100;
+        let cents = self.cents % 100;
+        if cents == 0 {
+            write!(f, "{dollars}/{}", self.window.label())
+        } else {
+            write!(f, "{dollars}.{cents:02}/{}", self.window.label())
+        }
+    }
+}
+
+impl Serialize for AccountCap {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountCap {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AccountCapParseError {
+    #[error(
+        "invalid account budget `{0}`; use a non-negative dollar amount ending in `/day` or `/month`, such as `50/day` or `300/month`"
+    )]
+    InvalidAmount(String),
+    #[error("account budget `{0}` must end in `/day` or `/month`; use `50/day` or `300/month`")]
+    WindowRequired(String),
+    #[error("account budget `{0}` is too large")]
+    TooLarge(String),
 }
 
 /// Provider-account enrichment preferences.
@@ -28,10 +120,10 @@ pub struct AccountsConfig {
     /// Machine account selections for new rooms, below explicit and project selections.
     #[serde(rename = "use", skip_serializing_if = "BTreeMap::is_empty")]
     pub use_accounts: RoomLogins,
-    /// Local-calendar-day dollar caps by provider kind, shared across rooms and
+    /// Day or month dollar caps by provider kind, shared across rooms and
     /// applied once per history pool of the kind.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub budget: BTreeMap<String, DayCap>,
+    pub budget: BTreeMap<String, AccountCap>,
     /// Display-only monthly USD ceiling by provider kind. It scales the
     /// extra/API usage bar when no provider limit is available; it is not a
     /// provider-enforced spending limit.
@@ -63,6 +155,9 @@ pub struct NamedAccount {
     /// Absent means shared; only `standalone` is written back.
     #[serde(default, skip_serializing_if = "AccountHistory::is_shared")]
     pub history: AccountHistory,
+    /// Overrides the kind cap only when this account has standalone history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<AccountCap>,
 }
 
 /// A display label's broken rule, independent of account usability.
@@ -176,7 +271,7 @@ impl AccountsConfig {
         warnings
     }
 
-    pub fn budget(&self, kind: &str) -> Option<DayCap> {
+    pub fn budget(&self, kind: &str) -> Option<AccountCap> {
         self.budget.get(kind).copied()
     }
 
@@ -209,9 +304,59 @@ impl AccountsConfig {
     }
 
     pub fn validate_budgets(&self) -> Result<(), AccountBudgetConfigError> {
-        self.budget
-            .keys()
-            .try_for_each(|kind| Self::validate_budget_kind(kind))
+        self.budget_errors()
+            .into_iter()
+            .next()
+            .map_or(Ok(()), |(_, error)| Err(error))
+    }
+
+    pub fn budget_errors(&self) -> Vec<(String, AccountBudgetConfigError)> {
+        let mut errors = Vec::new();
+        for kind in self.budget.keys() {
+            if let Err(error) = Self::validate_budget_kind(kind) {
+                errors.push((format!("accounts.budget.{kind}"), error));
+            }
+        }
+        for kind in crate::agents::known_kinds() {
+            let Some(accounts) = self.named(&AgentKind::new_unchecked(kind)) else {
+                continue;
+            };
+            for (name, account) in accounts {
+                if account.budget.is_some()
+                    && let Err(error) = self.validate_budget_for_login(&LoginKey {
+                        kind: AgentKind::new_unchecked(kind),
+                        name: name.clone(),
+                    })
+                {
+                    errors.push((format!("accounts.{kind}.{name}.budget"), error));
+                }
+            }
+        }
+        errors
+    }
+
+    pub fn validate_budget_for_login(
+        &self,
+        login: &LoginKey,
+    ) -> Result<(), AccountBudgetConfigError> {
+        let kind = login.kind.as_str();
+        if self.budget.contains_key(kind) {
+            Self::validate_budget_kind(kind)?;
+        }
+        if let Some(account) = self
+            .named(&login.kind)
+            .and_then(|accounts| accounts.get(&login.name))
+            && account.budget.is_some()
+        {
+            Self::validate_budget_kind(kind)?;
+            if account.history != AccountHistory::Standalone {
+                return Err(AccountBudgetConfigError::SharedHistory {
+                    kind: kind.to_owned(),
+                    name: login.name.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn validate_budget_kind(kind: &str) -> Result<(), AccountBudgetConfigError> {
@@ -319,6 +464,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn account_month_caps_and_standalone_overrides_round_trip() {
+        let parsed = toml::from_str::<AccountsConfig>(
+            "[budget]\npi = '100/month'\n[claude.work]\nhistory = 'standalone'\nbudget = '25/day'\n[codex.work]\nhistory = 'standalone'\nbudget = '$30.50/month'\n",
+        );
+        assert!(
+            parsed.is_ok(),
+            "account day/month caps must parse: {parsed:?}"
+        );
+        let config = parsed.unwrap();
+        assert_eq!(config.validate_budgets(), Ok(()));
+        let value = toml::Value::try_from(&config).unwrap();
+        assert_eq!(value["budget"]["pi"].as_str(), Some("100/month"));
+        assert_eq!(value["claude"]["work"]["budget"].as_str(), Some("25/day"));
+        assert_eq!(
+            value["codex"]["work"]["budget"].as_str(),
+            Some("30.50/month")
+        );
+        assert_eq!(
+            toml::from_str::<AccountsConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+    }
+
+    #[test]
+    fn shared_account_budget_refuses_with_pool_and_standalone_fix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        for window in ["day", "month"] {
+            std::fs::write(
+                &path,
+                format!("[accounts.claude.work]\nbudget = '25/{window}'\n"),
+            )
+            .unwrap();
+            let error = crate::config::MachineConfig::load_from(&path, root.path()).unwrap_err();
+            let error = error.to_string();
+            assert!(
+                error.contains("accounts.claude.work.budget")
+                    && error.contains("history = \"standalone\"")
+                    && error.contains("claude@default")
+                    && error.contains("[accounts.budget].claude"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn account_labels_parse_and_unset_labels_stay_absent() {
         let parsed = toml::from_str::<AccountsConfig>("[codex.team]\nlabel = 'work'\n");
         assert!(parsed.is_ok(), "a string label must parse: {parsed:?}");
@@ -397,8 +588,8 @@ mod tests {
             "#,
         )
         .expect("parse account budgets");
-        assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
-        assert_eq!(config.budget("codex").map(DayCap::as_usd), Some(25.5));
+        assert_eq!(config.budget("claude").map(AccountCap::as_usd), Some(100.0));
+        assert_eq!(config.budget("codex").map(AccountCap::as_usd), Some(25.5));
         let rendered = toml::to_string(&config).expect("serialize accounts");
         assert!(rendered.contains("claude = \"100/day\""), "{rendered}");
         assert!(
@@ -473,7 +664,7 @@ mod tests {
             config,
         );
         assert!(config.named(&AgentKind::new_unchecked("grok")).is_none());
-        assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
+        assert_eq!(config.budget("claude").map(AccountCap::as_usd), Some(100.0));
         let serialized = toml::Value::try_from(&config).unwrap();
         assert_eq!(
             serialized

@@ -321,11 +321,16 @@ fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
     use rimz::ids::AgentSessionId;
     use rimz::store::event::EventEnvelope;
 
-    for (scope, args) in [
-        (DailyBudgetScope::Fleet, vec!["budget"]),
+    for (scope, args, raise_hint) in [
+        (
+            DailyBudgetScope::Fleet,
+            vec!["budget"],
+            "set an absolute `/day` cap first",
+        ),
         (
             DailyBudgetScope::Account(LoginKey::default_for(AgentKind::new_unchecked("claude"))),
             vec!["budget", "--account", "claude"],
+            "set an absolute `/day` or `/month` cap first",
         ),
     ] {
         let env = Env::new();
@@ -365,7 +370,7 @@ fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
             .args(["+10", "--no-continue"])
             .assert()
             .failure()
-            .stderr(contains("set an absolute `/day` cap first"));
+            .stderr(contains(raise_hint));
         // At zero dollars, a zero cap meets the boundary exactly, without a clock-sensitive transcript fixture.
         env.rimz()
             .args(&args)

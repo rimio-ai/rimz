@@ -1869,6 +1869,62 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
 }
 
 #[test]
+fn config_account_month_caps_edit_round_trip_and_refuse_shared_history() {
+    let env = Env::new();
+    env.rimz()
+        .args(["config", "set", "accounts.budget.pi", "100/month"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["config", "get", "accounts.budget.pi"])
+        .assert()
+        .success()
+        .stdout(contains("100/month"));
+    env.rimz()
+        .args(["config", "set", "accounts.budget.pi", "+5/month"])
+        .assert()
+        .failure()
+        .stderr(
+            contains(
+                "invalid account budget `+5/month`; use a non-negative dollar amount ending in `/day` or `/month`, such as `50/day` or `300/month`",
+            )
+            .and(contains("`20/day`").not()),
+        );
+    env.rimz()
+        .args(["config", "set", "accounts.claude.work.budget", "300/month"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("accounts.claude.work.budget")
+                .and(contains("history = \"standalone\""))
+                .and(contains("claude@default"))
+                .and(contains("[accounts.budget].claude")),
+        );
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.work.history",
+            "standalone",
+        ])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["config", "set", "accounts.claude.work.budget", "300/month"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["config", "get", "accounts.claude.work.budget"])
+        .assert()
+        .success()
+        .stdout(contains("300/month"));
+    env.rimz()
+        .args(["config", "set", "harness.budget", "100/month"])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add() {
     let env = Env::new();
     env.record(&env.project_root);

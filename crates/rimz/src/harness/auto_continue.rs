@@ -16,7 +16,7 @@
 //! - **Fire.** Once the window reset deadline or retry backoff is due and the
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
-//!   delivers a resume-gated message record.
+//!   delivers a gated message record (Done for budget resets, Resume otherwise).
 //! - **Clear.** A rate-limit or overload record whose activity advanced is held while the reply is unclassified (Running or Failed with no displayed error), even before the resume message becomes visible. With a matching resume message, no root tool timestamp strictly after resume enqueue and at or after the provider turn start (when known) identifies a bare reply. A tool reopening the turn may equal its start, but an enqueue-time tie does not prove post-nudge work. A same-class limit or overload reply then carries the activity baseline forward, preserving the attempt anchor and retry state. An observed tool meeting those boundaries earns a fresh allowance even if another limit follows; text-only work still counts as a reply. A settled status with no marker or a delivered message with no turn start clears the record. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
@@ -103,6 +103,15 @@ pub struct AutoContinueRequest {
     pub label: Option<String>,
 }
 
+impl AutoContinueRequest {
+    pub fn delivery_gate(&self) -> DeliveryGate {
+        match self.reason.as_str() {
+            "budget_day_reset" | "budget_month_reset" => DeliveryGate::Done,
+            _ => DeliveryGate::Resume,
+        }
+    }
+}
+
 /// A durable record of one park: written while the park is fresh, read after its
 /// class-specific resume condition is due. It outlives the per-session context
 /// the park was first seen through, so a resume survives both an expired context
@@ -143,6 +152,28 @@ enum ParkKind {
     Budget {
         deadline: Timestamp,
     },
+    BudgetMonth {
+        deadline: Timestamp,
+    },
+}
+
+impl ParkKind {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::RateLimit { .. } => "rate_limit_window_reset",
+            Self::Overloaded { .. } => "overloaded_backoff_retry",
+            Self::Budget { .. } => "budget_day_reset",
+            Self::BudgetMonth { .. } => "budget_month_reset",
+        }
+    }
+
+    fn budget(deadline: Timestamp, window: crate::agents::BudgetWindow) -> Self {
+        if window == crate::agents::BudgetWindow::Month {
+            Self::BudgetMonth { deadline }
+        } else {
+            Self::Budget { deadline }
+        }
+    }
 }
 
 /// How a parked root agent's turn may resume.
@@ -229,14 +260,22 @@ pub(crate) fn resume_parked(
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
         if let Some(park) = agent.budget_park.as_ref() {
             if let Some(deadline) = park.resets_at {
-                arm_park(&path, ParkKind::Budget { deadline }, agent.last_activity);
+                arm_park(
+                    &path,
+                    ParkKind::budget(deadline, park.reset_window.unwrap_or(park.window)),
+                    agent.last_activity,
+                );
                 fire_if_due(agent, &path, ctx);
             }
             continue;
         }
-        if read_park(&path).is_some_and(
-            |record| matches!(record.kind, ParkKind::Budget { deadline } if now >= deadline),
-        ) {
+        if read_park(&path).is_some_and(|record| {
+            matches!(
+                record.kind,
+                ParkKind::Budget { deadline } | ParkKind::BudgetMonth { deadline }
+                    if now >= deadline
+            )
+        }) {
             fire_if_due(agent, &path, ctx);
             continue;
         }
@@ -405,7 +444,10 @@ fn same_park_class(left: &ParkKind, right: &ParkKind) -> bool {
         (left, right),
         (ParkKind::RateLimit { .. }, ParkKind::RateLimit { .. })
             | (ParkKind::Overloaded { .. }, ParkKind::Overloaded { .. })
-            | (ParkKind::Budget { .. }, ParkKind::Budget { .. })
+            | (
+                ParkKind::Budget { .. } | ParkKind::BudgetMonth { .. },
+                ParkKind::Budget { .. } | ParkKind::BudgetMonth { .. }
+            )
     )
 }
 
@@ -449,11 +491,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         } else {
             None
         };
-    let reason = match &record.kind {
-        ParkKind::RateLimit { .. } => "rate_limit_window_reset",
-        ParkKind::Overloaded { .. } => "overloaded_backoff_retry",
-        ParkKind::Budget { .. } => "budget_day_reset",
-    };
+    let reason = record.kind.reason();
     if ctx.text.is_empty() {
         return;
     }
@@ -515,7 +553,9 @@ fn nudged_record(mut record: ParkRecord, now: Timestamp) -> ParkRecord {
 /// evidenced-attempt cap.
 fn nudge_due(record: &ParkRecord, attempts: u32, now: Timestamp, config: &ResumeConfig) -> bool {
     match &record.kind {
-        ParkKind::RateLimit { deadline } | ParkKind::Budget { deadline } => {
+        ParkKind::RateLimit { deadline }
+        | ParkKind::Budget { deadline }
+        | ParkKind::BudgetMonth { deadline } => {
             if attempts >= config.auto_continue_max_retries {
                 return false;
             }
@@ -683,17 +723,23 @@ pub(super) fn arm_budget_park(
     agent_id: &AgentSessionId,
     deadline: Timestamp,
     last_activity: Timestamp,
+    window: crate::agents::BudgetWindow,
 ) {
     arm_park(
         &park_record_path(runtime, kind, agent_id),
-        ParkKind::Budget { deadline },
+        ParkKind::budget(deadline, window),
         last_activity,
     );
 }
 
 pub fn clear_budget_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &AgentSessionId) {
     let path = park_record_path(runtime, kind, agent_id);
-    if read_park(&path).is_some_and(|record| matches!(record.kind, ParkKind::Budget { .. })) {
+    if read_park(&path).is_some_and(|record| {
+        matches!(
+            record.kind,
+            ParkKind::Budget { .. } | ParkKind::BudgetMonth { .. }
+        )
+    }) {
         remove_park(&path);
     }
 }
@@ -704,12 +750,16 @@ pub(crate) fn budget_park_armed(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> bool {
-    read_park(&park_record_path(runtime, kind, agent_id))
-        .is_some_and(|record| matches!(record.kind, ParkKind::Budget { .. }))
+    read_park(&park_record_path(runtime, kind, agent_id)).is_some_and(|record| {
+        matches!(
+            record.kind,
+            ParkKind::Budget { .. } | ParkKind::BudgetMonth { .. }
+        )
+    })
 }
 
 /// Spawn the detached, fresh-stdio helper that queues or redelivers the
-/// resume-gated message. Best-effort: a spawn failure is logged without
+/// gated message. Best-effort: a spawn failure is logged without
 /// consuming an attempt; a spawned helper that dies before queueing is still
 /// paced by the durable nudge stamp.
 fn spawn_auto_continue(

@@ -1,8 +1,8 @@
 //! Agent-turn, agent-session, room-fleet, and provider-account dollar caps.
 //!
 //! Launch identity carries agent [`BudgetSpec`]s; machine config supplies the
-//! per-turn, local-day fleet, and account caps. The sidebar producer evaluates
-//! durable transcript spend plus live card costs, writes cache-class scope
+//! per-turn, local-day fleet, and day/month account caps. The sidebar producer
+//! evaluates durable transcript spend plus live card costs, writes cache-class scope
 //! ledgers, and spawns the hidden `agents budget-park` helper when a running
 //! turn crosses a cap. The helper owns the pane interrupt and supervised-run
 //! transition; this module stays safe in the sidebar's read-only store import
@@ -82,6 +82,7 @@ impl fmt::Display for BudgetSpec {
             BudgetWindow::Session => {}
             BudgetWindow::Turn => f.write_str("/turn")?,
             BudgetWindow::Day => f.write_str("/day")?,
+            BudgetWindow::Month => f.write_str("/month")?,
         }
         Ok(())
     }
@@ -109,7 +110,7 @@ pub struct BudgetParkStamp {
     pub at: Timestamp,
 }
 
-/// One workspace-fleet or provider-account daily budget scope. An account
+/// One workspace-fleet or provider-account time-windowed budget scope. An account
 /// scope is keyed by history pool: build it with [`DailyBudgetScope::account`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DailyBudgetScope {
@@ -117,7 +118,7 @@ pub enum DailyBudgetScope {
     Account(LoginKey),
 }
 
-/// Runtime override and park state shared by daily budget scopes.
+/// Runtime override and park state shared by fleet and account budget scopes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DailyBudgetLedger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,11 +138,35 @@ impl DailyBudgetScope {
         Self::Account(catalog.pool(login))
     }
 
+    pub fn effective_cap(
+        &self,
+        ledger: &DailyBudgetLedger,
+        config: &MachineConfig,
+        runtime: &RuntimePaths,
+    ) -> Option<BudgetSpec> {
+        let cap = self.standing_cap(ledger, config)?;
+        self.subscription_member(cap.window, config, runtime)
+            .is_none()
+            .then_some(cap)
+    }
+
     pub fn effective_cap_usd(
         &self,
         ledger: &DailyBudgetLedger,
         config: &MachineConfig,
+        runtime: &RuntimePaths,
     ) -> Option<f64> {
+        self.effective_cap(ledger, config, runtime)
+            .map(|cap| cap.cap_usd)
+    }
+
+    /// Stored cap before the subscription exemption, so raises can adjust a
+    /// monthly cap even while it does not count against a subscription.
+    pub fn standing_cap(
+        &self,
+        ledger: &DailyBudgetLedger,
+        config: &MachineConfig,
+    ) -> Option<BudgetSpec> {
         if ledger.disabled {
             return None;
         }
@@ -150,21 +175,22 @@ impl DailyBudgetScope {
                 .has_authoritative_account_spend()
                 .then_some(())?;
         }
-        let base = ledger
+        let mut cap = ledger
             .override_spec
-            .map(|spec| spec.cap_usd)
-            .or_else(|| self.configured_cap_usd(config))?;
-        Some(ledger.raised_cap_usd.unwrap_or(base))
+            .or_else(|| self.configured_cap(config))?;
+        cap.cap_usd = ledger.raised_cap_usd.unwrap_or(cap.cap_usd);
+        Some(cap)
     }
 
     pub fn cap_source(
         &self,
         ledger: &DailyBudgetLedger,
         config: &MachineConfig,
+        runtime: &RuntimePaths,
     ) -> BudgetCapSource {
         if ledger.disabled {
             BudgetCapSource::Cleared
-        } else if self.effective_cap_usd(ledger, config).is_none() {
+        } else if self.effective_cap(ledger, config, runtime).is_none() {
             BudgetCapSource::None
         } else if ledger.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
@@ -175,17 +201,83 @@ impl DailyBudgetScope {
         }
     }
 
-    fn configured_cap_usd(&self, config: &MachineConfig) -> Option<f64> {
+    fn configured_cap(&self, config: &MachineConfig) -> Option<BudgetSpec> {
         match self {
-            Self::Fleet => config.harness.budget.map(|cap| cap.as_usd()),
-            Self::Account(key) => {
-                let kind = &key.kind;
+            Self::Fleet => config.harness.budget.map(|cap| cap.as_spec()),
+            Self::Account(key) => self.named_cap(config).or_else(|| {
                 config
                     .accounts
-                    .budget(kind.as_str())
-                    .map(|cap| cap.as_usd())
-            }
+                    .budget(key.kind.as_str())
+                    .map(|cap| cap.as_spec())
+            }),
         }
+    }
+
+    fn named_cap(&self, config: &MachineConfig) -> Option<BudgetSpec> {
+        let key = self.account_login()?;
+        if key.name.is_default() {
+            return None;
+        }
+        config
+            .accounts
+            .named(&key.kind)?
+            .get(&key.name)
+            .filter(|account| account.history == crate::config::AccountHistory::Standalone)?
+            .budget
+            .map(|cap| cap.as_spec())
+    }
+
+    fn subscription_member(
+        &self,
+        window: BudgetWindow,
+        config: &MachineConfig,
+        runtime: &RuntimePaths,
+    ) -> Option<LoginKey> {
+        if window != BudgetWindow::Month {
+            return None;
+        }
+        let pool = self.account_login()?;
+        let catalog = account_catalog(config);
+        let accounts = crate::agents::account::read_accounts_cache(&runtime.shared_accounts_path());
+        catalog
+            .all()
+            .map(|login| login.key())
+            .chain(std::iter::once(pool.clone()))
+            .filter(|key| catalog.pool(key) == *pool)
+            .find(|key| {
+                accounts
+                    .logins
+                    .get(key)
+                    .and_then(|record| record.account.as_ref())
+                    .is_some_and(|account| account.metered == Some(true))
+            })
+    }
+
+    pub fn subscription_warning(
+        &self,
+        ledger: &DailyBudgetLedger,
+        config: &MachineConfig,
+        runtime: &RuntimePaths,
+    ) -> Option<(String, String)> {
+        let cap = self.standing_cap(ledger, config)?;
+        let member = self.subscription_member(cap.window, config, runtime)?;
+        let pool = self.account_login()?;
+        let setting = if ledger.override_spec.is_some() {
+            format!("runtime override (`rimz budget --account {pool}`)")
+        } else if self.named_cap(config).is_some() {
+            format!("accounts.{}.{}.budget", pool.kind, pool.name)
+        } else {
+            format!("accounts.budget.{}", pool.kind)
+        };
+        let limit = match pool.kind.as_str() {
+            "claude" => "the extra-usage limit in Claude's settings",
+            "codex" => "Codex prepaid credits",
+            _ => "the provider's own spending limit",
+        };
+        let message = format!(
+            "{setting}: monthly budget for pool {pool} does not apply because {member} reads as a subscription; a monthly budget counts API-key billing only and will never park this account; use {limit} instead"
+        );
+        Some((setting, message))
     }
 
     pub fn apply_absolute(&self, ledger: &mut DailyBudgetLedger, cap: BudgetSpec) {
@@ -222,14 +314,14 @@ impl DailyBudgetScope {
                     .to_owned()
             }
             Self::Account(key) => format!(
-                "cannot raise a cleared or unset {} account budget; set an absolute `/day` cap first",
+                "cannot raise a cleared or unset {} account budget; set an absolute `/day` or `/month` cap first",
                 key.kind
             ),
         }
     }
 
-    fn exhausted_reason(&self, spend_usd: f64, cap_usd: f64) -> String {
-        let spend = BudgetWindow::Day.fmt_spend(spend_usd, cap_usd);
+    fn exhausted_reason(&self, spend_usd: f64, cap: BudgetSpec) -> String {
+        let spend = cap.window.fmt_spend(spend_usd, cap.cap_usd);
         match self {
             Self::Fleet => {
                 format!("fleet budget exhausted ({spend}); use `rimz budget` to raise or clear it")
@@ -252,12 +344,32 @@ impl DailyBudgetScope {
         now: Timestamp,
         provider: Option<&crate::agents::spending::ProviderSpendingCache>,
     ) -> f64 {
-        let cutoff = local_day_cutoff_secs(now, &config.time_zone());
-        match self {
-            Self::Fleet => current_workspace_day(runtime, cutoff).unwrap_or_default(),
-            Self::Account(key) => provider
-                .and_then(|provider| login_day_usd(provider, cutoff, key))
-                .unwrap_or_default(),
+        self.spend_usd(runtime, config, now, provider, BudgetWindow::Day)
+            .unwrap_or_default()
+    }
+
+    pub fn spend_usd(
+        &self,
+        runtime: &RuntimePaths,
+        config: &MachineConfig,
+        now: Timestamp,
+        provider: Option<&crate::agents::spending::ProviderSpendingCache>,
+        window: BudgetWindow,
+    ) -> Option<f64> {
+        let cutoff = window_cutoff_secs(window, now, &config.time_zone());
+        match (self, window) {
+            (Self::Fleet, BudgetWindow::Day) => current_workspace_day(runtime, cutoff),
+            (Self::Account(key), BudgetWindow::Day) => login_day_usd(provider?, cutoff, key),
+            (Self::Account(key), BudgetWindow::Month) => {
+                let provider = provider?;
+                (Some(provider.month_cutoff_secs) == cutoff).then(|| {
+                    provider
+                        .month_by_login
+                        .get(key)
+                        .map_or(0.0, |month| month.usd)
+                })
+            }
+            _ => None,
         }
     }
 
@@ -496,7 +608,8 @@ impl BudgetLedger {
 
     pub fn spend_usd(&self, total_cost_usd: f64) -> f64 {
         match self.spec.window {
-            BudgetWindow::Session | BudgetWindow::Turn => total_cost_usd,
+            // Agent grammar never yields a turn or month cap.
+            BudgetWindow::Session | BudgetWindow::Turn | BudgetWindow::Month => total_cost_usd,
             BudgetWindow::Day => (total_cost_usd
                 - self
                     .day_baseline
@@ -625,7 +738,8 @@ fn evaluate(
     };
     let total = total_cost_usd(agent).unwrap_or(0.0);
     let spend_usd = match ledger.spec.window {
-        BudgetWindow::Session | BudgetWindow::Turn => total,
+        // Agent grammar never yields a turn or month cap.
+        BudgetWindow::Session | BudgetWindow::Turn | BudgetWindow::Month => total,
         BudgetWindow::Day => {
             let date = now.to_zoned(zone.clone()).date();
             match ledger.day_baseline.as_mut() {
@@ -694,45 +808,42 @@ pub(crate) fn project_parks(
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
     );
-    let day_cutoff = local_day_cutoff_secs(now, &zone);
     let catalog = account_catalog(config);
     let mut accounts = BTreeMap::new();
     for agent in std::sync::Arc::make_mut(&mut snapshot.agents) {
-        agent.budget_park = ledger_for_agent(runtime, agent)
+        let agent_park = ledger_for_agent(runtime, agent)
             .and_then(|ledger| agent_scope_park(agent, &ledger, now, &zone));
-        if agent.budget_park.is_some() {
-            continue;
-        }
-        if let Some(cap) = config.harness.turn_budget
-            && let Some(entry) = scope_state.turn.get(&scope_agent_key(agent))
+        let turn_park = config.harness.turn_budget.and_then(|cap| {
+            turn_scope_park(
+                agent,
+                scope_state.turn.get(&scope_agent_key(agent))?,
+                cap.as_usd(),
+            )
+        });
+        let mut parks = [agent_park, turn_park, None, None];
+        if !active_scope_waiver(agent, &scope_state)
+            && pause_applies(agent, scope_interrupted(&scope_state, agent))
         {
-            agent.budget_park = turn_scope_park(agent, entry, cap.as_usd());
+            parks[2] = daily_scope_park(&fleet_scope, &fleet, runtime, config, &provider, now);
+            let scope = DailyBudgetScope::account(&catalog, &agent.login_key());
+            let account = accounts
+                .entry(scope.clone())
+                .or_insert_with(|| scope.read_ledger(runtime, state));
+            parks[3] = daily_scope_park(&scope, account, runtime, config, &provider, now);
         }
-        if agent.budget_park.is_some() || active_scope_waiver(agent, &scope_state) {
-            continue;
+        let reset = parks
+            .iter()
+            .flatten()
+            .filter_map(|park| Some((park.resets_at?, park.window)))
+            .max_by_key(|(at, _)| *at);
+        agent.budget_park = parks.into_iter().flatten().next();
+        if let Some(park) = agent.budget_park.as_mut()
+            && park.resets_at.is_some()
+            && let Some((at, window)) = reset
+        {
+            park.resets_at = Some(at);
+            park.reset_window = (window != park.window).then_some(window);
         }
-        if !pause_applies(agent, scope_interrupted(&scope_state, agent)) {
-            continue;
-        }
-        if let Some(park) = daily_scope_park(
-            &fleet_scope,
-            &fleet,
-            runtime,
-            config,
-            &provider,
-            day_cutoff,
-            &zone,
-        ) {
-            agent.budget_park = Some(park);
-            continue;
-        }
-        let scope = DailyBudgetScope::account(&catalog, &agent.login_key());
-        let account = accounts
-            .entry(scope.clone())
-            .or_insert_with(|| scope.read_ledger(runtime, state));
-        agent.budget_park = daily_scope_park(
-            &scope, account, runtime, config, &provider, day_cutoff, &zone,
-        );
     }
 }
 
@@ -752,6 +863,7 @@ fn turn_scope_park(agent: &AgentState, entry: &TurnScopeEntry, cap_usd: f64) -> 
         scope: BudgetScope::Turn,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     })
 }
 
@@ -776,9 +888,11 @@ fn agent_scope_park(
         at: parked.at,
         scope: BudgetScope::Agent,
         account_kind: None,
+        // Agent grammar never yields Turn or Month; only Day has a reset.
         resets_at: (ledger.spec.window == BudgetWindow::Day)
             .then(|| ledger_day_reset(ledger, now, zone))
             .flatten(),
+        reset_window: None,
     })
 }
 
@@ -788,28 +902,32 @@ fn daily_scope_park(
     runtime: &RuntimePaths,
     config: &MachineConfig,
     provider: &crate::agents::spending::ProviderSpendingCache,
-    day_cutoff: Option<u64>,
-    zone: &TimeZone,
+    now: Timestamp,
 ) -> Option<BudgetPark> {
     let parked = ledger.parked.as_ref()?;
-    let cap_usd = scope.effective_cap_usd(ledger, config)?;
-    let spend = match scope {
-        DailyBudgetScope::Fleet => current_workspace_day(runtime, day_cutoff),
-        DailyBudgetScope::Account(key) => login_day_usd(provider, day_cutoff, key),
-    };
+    let cap = scope.effective_cap(ledger, config, runtime)?;
+    let spend = scope.spend_usd(runtime, config, now, Some(provider), cap.window);
+    let resets_at = park_reset_at(cap.window, parked.at, &config.time_zone());
+    if matches!(scope, DailyBudgetScope::Account(_))
+        && resets_at.is_some_and(|reset| now < reset)
+        && spend.is_some_and(|spend| spend < cap.cap_usd)
+    {
+        return None;
+    }
     let spend_usd = spend.map_or(parked.at_cost, |spend| spend.max(parked.at_cost));
     let (park_scope, account_kind) = match scope {
         DailyBudgetScope::Fleet => (BudgetScope::Fleet, None),
         DailyBudgetScope::Account(key) => (BudgetScope::Account, Some(key.kind.clone())),
     };
     Some(BudgetPark {
-        cap_usd,
+        cap_usd: cap.cap_usd,
         spend_usd,
-        window: BudgetWindow::Day,
+        window: cap.window,
         at: parked.at,
         scope: park_scope,
         account_kind,
-        resets_at: park_reset_at(BudgetWindow::Day, parked.at, zone),
+        resets_at,
+        reset_window: None,
     })
 }
 
@@ -874,6 +992,7 @@ pub(crate) fn enforce(
 
 struct DailyScopeVerdict {
     scope: DailyBudgetScope,
+    window: BudgetWindow,
     ledger: DailyBudgetLedger,
     parked_before: Option<BudgetParkStamp>,
     verdict: BudgetVerdict,
@@ -892,9 +1011,10 @@ fn evaluate_scopes(
     now: Timestamp,
     day_cutoff: Option<u64>,
 ) -> ScopeVerdicts {
-    let cutoff = local_day_start(now, &config.time_zone());
-    let in_current_window =
-        |parked: &BudgetParkStamp| cutoff.is_none_or(|cutoff| parked.at >= cutoff);
+    let in_current_window = |parked: &BudgetParkStamp, window| {
+        window_cutoff_secs(window, now, &config.time_zone())
+            .is_none_or(|cutoff| parked.at.as_second() >= cutoff as i64)
+    };
     let fleet_spend = if snapshot.fleet_day_spend_epoch_secs == day_cutoff {
         snapshot.fleet_day_spend_usd.unwrap_or_default()
     } else {
@@ -903,9 +1023,16 @@ fn evaluate_scopes(
     let fleet_scope = DailyBudgetScope::Fleet;
     let mut fleet = fleet_scope.read_ledger(runtime, state);
     let fleet_parked_before = fleet.parked.clone();
-    fleet.parked = fleet.parked.filter(in_current_window);
-    let fleet_cap = fleet_scope.effective_cap_usd(&fleet, config);
-    let fleet_verdict = evaluate_daily_scope(&mut fleet.parked, fleet_cap, fleet_spend, now);
+    fleet.parked = fleet
+        .parked
+        .filter(|park| in_current_window(park, BudgetWindow::Day));
+    let fleet_cap = fleet_scope.effective_cap(&fleet, config, runtime);
+    let fleet_verdict = evaluate_daily_scope(
+        &mut fleet.parked,
+        fleet_cap.map(|cap| cap.cap_usd),
+        fleet_spend,
+        now,
+    );
 
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
@@ -919,6 +1046,7 @@ fn evaluate_scopes(
         .collect::<BTreeSet<_>>();
     let mut daily = vec![DailyScopeVerdict {
         scope: fleet_scope,
+        window: BudgetWindow::Day,
         ledger: fleet,
         parked_before: fleet_parked_before,
         verdict: fleet_verdict,
@@ -926,15 +1054,17 @@ fn evaluate_scopes(
     for scope in account_scopes {
         let mut ledger = scope.read_ledger(runtime, state);
         let parked_before = ledger.parked.clone();
-        ledger.parked = ledger.parked.filter(in_current_window);
-        let cap = scope.effective_cap_usd(&ledger, config);
+        let cap = scope.effective_cap(&ledger, config, runtime);
+        let window = cap.map_or(BudgetWindow::Day, |cap| cap.window);
+        ledger.parked = ledger.parked.filter(|park| in_current_window(park, window));
         let spend = scope
-            .account_login()
-            .and_then(|pool| login_day_usd(&provider, day_cutoff, pool))
+            .spend_usd(runtime, config, now, Some(&provider), window)
             .unwrap_or_default();
-        let verdict = evaluate_daily_scope(&mut ledger.parked, cap, spend, now);
+        let verdict =
+            evaluate_daily_scope(&mut ledger.parked, cap.map(|cap| cap.cap_usd), spend, now);
         daily.push(DailyScopeVerdict {
             scope,
+            window,
             ledger,
             parked_before,
             verdict,
@@ -1056,19 +1186,37 @@ fn update_auto_continue(
         && ledger.is_some_and(|ledger| ledger.last_interrupt_at.is_some()))
         || (classification.scope_parked && scope_interrupted(ctx.scope_state, agent));
     if daily_park && pause_applies(agent, interrupted) {
-        let deadline = if classification.scope_parked {
-            binding_scope_park(ctx.scopes, &agent.login_key())
-                .and_then(|at| park_reset_at(BudgetWindow::Day, at, ctx.zone))
-        } else {
-            ledger.and_then(|ledger| ledger_day_reset(ledger, ctx.now, ctx.zone))
-        };
-        if let Some(deadline) = deadline {
+        let account = DailyBudgetScope::account(&ctx.scopes.catalog, &agent.login_key());
+        let scope_resets = ctx
+            .scopes
+            .daily
+            .iter()
+            .filter(|daily| {
+                classification.scope_parked
+                    && (daily.scope == DailyBudgetScope::Fleet || daily.scope == account)
+                    && matches!(daily.verdict, BudgetVerdict::Park { .. })
+            })
+            .filter_map(|daily| {
+                let stamp = daily.ledger.parked.as_ref()?.at;
+                let deadline = park_reset_at(daily.window, stamp, ctx.zone)?;
+                Some((deadline, daily.window))
+            });
+        let agent_reset = ledger
+            .filter(|ledger| classification.agent_parked && ledger.spec.window == BudgetWindow::Day)
+            .and_then(|ledger| ledger_day_reset(ledger, ctx.now, ctx.zone))
+            .map(|at| (at, BudgetWindow::Day));
+        if let Some((deadline, window)) = agent_reset
+            .into_iter()
+            .chain(scope_resets)
+            .max_by_key(|(at, _)| *at)
+        {
             crate::harness::auto_continue::arm_budget_park(
                 ctx.runtime,
                 &agent.kind,
                 &agent.agent_id,
                 deadline,
                 agent.last_activity,
+                window,
             );
         }
     } else {
@@ -1336,6 +1484,17 @@ fn park_reset_at(window: BudgetWindow, parked_at: Timestamp, zone: &TimeZone) ->
             .start_of_day()
             .ok()
             .map(|zoned| zoned.timestamp()),
+        BudgetWindow::Month => {
+            let start = crate::agents::spending::utc_month_start_secs(
+                parked_at.as_second().try_into().ok()?,
+            )?;
+            Timestamp::from_second(start as i64)
+                .ok()?
+                .to_zoned(TimeZone::UTC)
+                .checked_add(jiff::Span::new().months(1))
+                .ok()
+                .map(|zoned| zoned.timestamp())
+        }
         BudgetWindow::Session | BudgetWindow::Turn => None,
     }
 }
@@ -1349,6 +1508,16 @@ fn local_day_start(now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
 
 fn local_day_cutoff_secs(now: Timestamp, zone: &TimeZone) -> Option<u64> {
     local_day_start(now, zone).map(|stamp| stamp.as_second().max(0) as u64)
+}
+
+fn window_cutoff_secs(window: BudgetWindow, now: Timestamp, zone: &TimeZone) -> Option<u64> {
+    match window {
+        BudgetWindow::Day => local_day_cutoff_secs(now, zone),
+        BudgetWindow::Month => {
+            crate::agents::spending::utc_month_start_secs(now.as_second().try_into().ok()?)
+        }
+        BudgetWindow::Session | BudgetWindow::Turn => None,
+    }
 }
 
 /// The catalog account scopes are pooled by; an account config that does not
@@ -1408,7 +1577,7 @@ pub(crate) fn project_budget_views(
     let fleet_scope = DailyBudgetScope::Fleet;
     let fleet = fleet_scope.read_ledger(runtime, state);
     snapshot.fleet_budget = fleet_scope
-        .effective_cap_usd(&fleet, config)
+        .effective_cap_usd(&fleet, config, runtime)
         .map(|cap_usd| {
             let spend_usd = snapshot.fleet_day_spend_usd.unwrap_or_default();
             crate::store::snapshot::DailyBudgetView {
@@ -1427,17 +1596,21 @@ pub(crate) fn project_budget_views(
         }
         let scope = DailyBudgetScope::account(&catalog, &key);
         let ledger = scope.read_ledger(runtime, state);
-        panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
-            let spend_usd = scope
-                .account_login()
-                .and_then(|pool| login_day_usd(provider, cutoff, pool))
-                .unwrap_or_default();
-            crate::store::snapshot::DailyBudgetView {
-                cap_usd,
-                spend_usd,
-                parked: ledger.parked.is_some() && spend_usd >= cap_usd,
-            }
-        });
+        panel.day_budget = scope
+            .effective_cap(&ledger, config, runtime)
+            .filter(|cap| cap.window == BudgetWindow::Day)
+            .map(|cap| {
+                let cap_usd = cap.cap_usd;
+                let spend_usd = scope
+                    .account_login()
+                    .and_then(|pool| login_day_usd(provider, cutoff, pool))
+                    .unwrap_or_default();
+                crate::store::snapshot::DailyBudgetView {
+                    cap_usd,
+                    spend_usd,
+                    parked: ledger.parked.is_some() && spend_usd >= cap_usd,
+                }
+            });
     }
 }
 
@@ -1471,24 +1644,22 @@ impl DailyBudgetScope {
         config: &MachineConfig,
         now: Timestamp,
         provider: &crate::agents::spending::ProviderSpendingCache,
-    ) -> Option<(f64, f64)> {
+    ) -> Option<(f64, BudgetSpec)> {
         let zone = config.time_zone();
-        let cutoff = local_day_start(now, &zone)?;
-        let cutoff_secs = local_day_cutoff_secs(now, &zone)?;
         let ledger = self.read_ledger(runtime, Some(state));
-        let cap = self.effective_cap_usd(&ledger, config)?;
-        let mut spend = match self {
-            DailyBudgetScope::Fleet => {
-                current_workspace_day(runtime, Some(cutoff_secs)).unwrap_or_default()
-            }
-            DailyBudgetScope::Account(key) => {
-                login_day_usd(provider, Some(cutoff_secs), key).unwrap_or_default()
-            }
-        };
-        if let Some(parked) = ledger.parked.as_ref().filter(|parked| parked.at >= cutoff) {
+        let cap = self.effective_cap(&ledger, config, runtime)?;
+        let cutoff = window_cutoff_secs(cap.window, now, &zone)?;
+        let mut spend = self
+            .spend_usd(runtime, config, now, Some(provider), cap.window)
+            .unwrap_or_default();
+        if let Some(parked) = ledger
+            .parked
+            .as_ref()
+            .filter(|parked| parked.at.as_second() >= cutoff as i64)
+        {
             spend = spend.max(parked.at_cost);
         }
-        (spend >= cap).then_some((spend, cap))
+        (spend >= cap.cap_usd).then_some((spend, cap))
     }
 }
 

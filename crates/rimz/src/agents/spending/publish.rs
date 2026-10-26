@@ -42,7 +42,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 // v21: team-role tallies split from solo agent profiles, with active-time and message
 // effort windows.
 // v22: bounded daily and weekly model-dollar chart cells.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 22;
+// v23: UTC-calendar-month spend per history pool for account monthly caps.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 23;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -86,6 +87,12 @@ pub struct ProviderSpendingCache {
     /// readers compare it with their own midnight, not with the history zone.
     #[serde(default)]
     pub day_cutoff_secs: u64,
+    /// UTC-calendar-month spend by history pool, independent of the headline.
+    #[serde(default)]
+    pub month_by_login: BTreeMap<crate::ids::LoginKey, SpendWindow>,
+    /// 00:00 UTC on the first day of the walk's month.
+    #[serde(default)]
+    pub month_cutoff_secs: u64,
     /// Named history zone for day keys and publication freshness; UTC when the
     /// configured/system zone has no IANA name.
     #[serde(default)]
@@ -117,6 +124,8 @@ impl ProviderSpendingCache {
             day_by_provider: result.provider_day.clone(),
             day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,
+            month_by_login: result.login_month.clone(),
+            month_cutoff_secs: result.month_cutoff_secs,
             days: result.days.clone(),
             chart: result.chart.clone(),
             timezone: result.timezone.clone(),
@@ -144,12 +153,14 @@ impl ProviderSpendingCache {
 
     /// Whether the published walk is no older than `max_age` and from today in
     /// its history zone. The history day belongs to aggregation, not completion,
-    /// so crossing that zone's midnight expires it at once. Saturating age keeps
-    /// a backwards clock within that day fresh rather than re-walking every tick.
+    /// so crossing that zone's midnight or the UTC month turn expires it at once.
+    /// Saturating age keeps a backwards clock within that day fresh rather than
+    /// re-walking every tick.
     pub(crate) fn is_fresh_within(&self, now_ms: u64, max_age: Duration) -> bool {
         self.is_current_version()
             && now_ms.saturating_sub(self.refreshed_at_ms) <= max_age.as_millis() as u64
             && self.is_from_today(now_ms / 1000)
+            && super::utc_month_start_secs(now_ms / 1000) == Some(self.month_cutoff_secs)
     }
 }
 

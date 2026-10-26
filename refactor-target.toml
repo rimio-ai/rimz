@@ -273,7 +273,8 @@ upward-dependencies = ["address"]
 # LaunchSpec::takes_system_prompt shares prompt support with validation and launch (+1).
 # LaunchSpec::supports_preset admits session-applied models at the definition gate (+1).
 # SessionStepRequest, SessionStepRefusal, SESSION_STEP_REFUSED and the capability carry pre-exec checks (+4).
-surface-budget = 1152
+# BudgetWindow::Month shares the account cap window with enforcement, routing and projections (+1).
+surface-budget = 1153
 
 [[verdict]]
 kind = "item"
@@ -610,7 +611,8 @@ path = "crates/rimz/src/agents/spending"
 # ChartSpend carries bounded model dollars across the publication/stats seam (+1).
 # SharedName shares model and tool names across public spending rows (+1).
 # ToolCounts exposes compact, canonical counts on public spending rows (+1).
-surface-budget = 109
+# utc_month_start_secs shares the walk and budget reader's UTC cutoff (+1).
+surface-budget = 110
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -701,7 +703,8 @@ upward-dependencies = [
 # AccountLabelError, validate_label, label, label_warnings, provider_title share display-only account labels (+5).
 # ConfigEditor::check_named_account_update shares account-rerun edit preflight with the CLI (+1).
 # skill_is_callable shares profile skill callability with launch reminders and validation (+1).
-surface-budget = 212
+# AccountCap, its parser error/accessors, and budget validation reach config and launch (+6).
+surface-budget = 218
 
 [[verdict]]
 kind = "item"
@@ -949,6 +952,11 @@ reason = "Stats computes today in the publication's timezone using the same civi
 kind = "item"
 key = "agents::spending::aggregate::local_day_start_secs"
 reason = "Shared local-midnight convention is reachable for spending consumers independently of their configuration."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::aggregate::utc_month_start_secs"
+reason = "Account monthly caps and the spending walk must use the same UTC-calendar-month cutoff."
 
 [[verdict]]
 kind = "item"
@@ -1246,7 +1254,8 @@ path = "crates/rimz/src/harness"
 # LaunchFinalizeWarning::take_cell_notices shares restart warning conversion (+1).
 # FloorOutcome tells the GC CLI a paused or busy pressure pass from a completed one (+1).
 # ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
-surface-budget = 996
+# Account cap resolution, standing raises, window spend and subscription warnings serve CLI/room; auto-continue owns the delivery gate (+5).
+surface-budget = 1001
 
 [[verdict]]
 kind = "item"
@@ -7730,6 +7739,16 @@ reason = "Pass 24a: named by the binary crate's test modules and fixtures throug
 kind = "item"
 key = "config::accounts::AccountBudgetConfigError"
 reason = "Pass 24a: named by the binary crate's test modules through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountCap"
+reason = "Account-only day/month grammar is shared by configuration, budget enforcement and the budget CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountCapParseError"
+reason = "Typed parse failure of AccountCap, shared with config editing and the budget CLI."
 
 [[verdict]]
 kind = "item"

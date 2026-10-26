@@ -2,6 +2,58 @@ use super::*;
 use jiff::Timestamp;
 
 #[test]
+fn utc_month_publication_counts_raw_and_compacted_pool_spend() {
+    let second = |s: &str| s.parse::<Timestamp>().unwrap().as_second() as u64;
+    let path = PathBuf::from("/x/month.jsonl");
+    let mut previous = cached_entry(second("2026-09-30T23:59:59Z"), 40.0, "previous");
+    previous.rolled = true;
+    let mut first = cached_entry(second("2026-10-01T23:59:59Z"), 3.0, "first");
+    first.rolled = true;
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &path,
+            vec![
+                previous,
+                first,
+                cached_entry(second("2026-10-26T10:00:00Z"), 2.0, "raw"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(claude_adapter(), path)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let now = second("2026-10-26T12:00:00Z");
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: now,
+            spec: &HeadlineSpec {
+                timezone: Some("Asia/Tokyo".into()),
+                ..Default::default()
+            },
+        },
+        None,
+    );
+    let publication =
+        serde_json::to_value(ProviderSpendingCache::from_walk(&result, now * 1000)).unwrap();
+    assert_eq!(publication["month_by_login"]["claude@default"]["usd"], 5.0);
+    assert_eq!(
+        publication["month_by_login"]["claude@default"]["sessions"],
+        2
+    );
+    assert_eq!(
+        publication["month_cutoff_secs"],
+        second("2026-10-01T00:00:00Z")
+    );
+    assert_eq!(publication["month_by_login"].as_object().unwrap().len(), 1);
+    assert_eq!(publication["version"], 23);
+}
+
+#[test]
 fn session_start_is_machine_wide_and_independent_of_headline_mode() {
     let path = PathBuf::from("/x/session.jsonl");
     let files = vec![spending_file(claude_adapter(), path.clone())];

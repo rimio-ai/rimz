@@ -148,6 +148,8 @@ pub enum TierSkipReason {
     DailyCap {
         spend_usd: serde_json::Number,
         cap_usd: serde_json::Number,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<super::BudgetWindow>,
     },
 }
 
@@ -157,8 +159,17 @@ impl std::fmt::Display for TierSkipReason {
             Self::LoggedOut => f.write_str("logged out"),
             Self::Exhausted { until: Some(until) } => write!(f, "exhausted until {until}"),
             Self::Exhausted { until: None } => f.write_str("exhausted"),
-            Self::DailyCap { spend_usd, cap_usd } => {
-                write!(f, "daily cap: ${spend_usd} of ${cap_usd}")
+            Self::DailyCap {
+                spend_usd,
+                cap_usd,
+                window,
+            } => {
+                let label = if *window == Some(super::BudgetWindow::Month) {
+                    "monthly"
+                } else {
+                    "daily"
+                };
+                write!(f, "{label} cap: ${spend_usd} of ${cap_usd}")
             }
         }
     }

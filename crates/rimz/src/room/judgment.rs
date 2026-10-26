@@ -2,7 +2,7 @@
 
 use crate::ResolvedWorkspace;
 use crate::config::definitions::{DefinitionCause, DefinitionErr};
-use crate::config::{AccountsConfig, ConfigErr, MachineConfig, TmuxConfig};
+use crate::config::{ConfigErr, MachineConfig, TmuxConfig};
 use crate::harness::hibernate::Admission;
 use crate::ids::{AgentKind, MuxName};
 use crate::remote_control::{HostLoginEnvs, ReadinessSnapshot};
@@ -114,21 +114,30 @@ pub(super) fn judge(
             format!("{error}; fix or remove the manifest, then run `rimz agents register --check`"),
         );
     }
-    for kind in machine.accounts.budget.keys() {
-        if let Err(error) = AccountsConfig::validate_budget_kind(kind) {
-            warn(format!("accounts.budget.{kind}"), error.to_string());
-        }
+    for (setting, error) in machine.accounts.budget_errors() {
+        warn(setting, error.to_string());
     }
     for (setting, message) in machine.accounts.label_warnings() {
         warn(setting, message);
     }
-    let (_, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
+    let (catalog, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
     let mut account_warnings = BTreeMap::new();
     for (kind, error) in &declarations {
         warn(format!("accounts.{kind}"), error.to_string());
         account_warnings.insert(kind.clone(), format!("accounts.{kind}"));
     }
     let state = crate::StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = crate::RuntimePaths::for_state(&state)?;
+    let scopes: BTreeSet<_> = catalog
+        .all()
+        .map(|login| crate::harness::budget::DailyBudgetScope::account(&catalog, &login.key()))
+        .collect();
+    for scope in scopes {
+        let ledger = scope.read_ledger(&runtime, Some(&state));
+        if let Some((setting, message)) = scope.subscription_warning(&ledger, machine, &runtime) {
+            warn(setting, message);
+        }
+    }
     let logins = crate::agents::room_accounts(
         &state.workspace_record,
         Some(&workspace.project_root),
@@ -510,6 +519,84 @@ mod tests {
                 .iter()
                 .any(|entry| entry.setting == "mux.default"
                     && entry.message.contains("this room uses tmux"))
+        );
+    }
+
+    #[test]
+    fn judgment_warns_for_shared_account_budget_and_subscription_month_cap() {
+        if std::env::var_os("RIMZ_TEST_JUDGMENT_BUDGET_HOME").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "room::judgment::tests::judgment_warns_for_shared_account_budget_and_subscription_month_cap",
+                    "--nocapture",
+                ])
+                .env("RIMZ_HOME", home.path())
+                .env("RIMZ_TEST_JUDGMENT_BUDGET_HOME", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
+        let machine = MachineConfig {
+            accounts: toml::from_str(
+                "[budget]\nclaude = '10/month'\n[claude.work]\nbudget = '5/day'\n",
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let state = crate::StatePaths::for_project_root(&workspace.project_root).unwrap();
+        let runtime = crate::RuntimePaths::for_state(&state).unwrap();
+        let record = crate::agents::account::ProviderRecord {
+            probed_at_ms: 0,
+            ok: true,
+            inputs_stamp: None,
+            account: Some(crate::agents::AgentAccount {
+                metered: Some(true),
+                ..Default::default()
+            }),
+            login: None,
+            probe_error: None,
+            profile: None,
+        };
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_accounts_path(),
+            &crate::agents::account::AccountsCache {
+                logins: [("claude@default".parse().unwrap(), record)].into(),
+            },
+        )
+        .unwrap();
+        let admission = crate::harness::hibernate::admit(&machine.agents.hibernate).unwrap();
+        let judgment = judge(&machine, &workspace, MuxName::Tmux, &admission, false).unwrap();
+        let warnings: BTreeMap<_, _> = judgment
+            .skipped
+            .iter()
+            .map(|entry| (entry.setting.as_str(), entry.message.as_str()))
+            .collect();
+        assert!(
+            warnings
+                .get("accounts.claude.work.budget")
+                .is_some_and(|text| text.contains("history = \"standalone\"")
+                    && text.contains("claude@default")
+                    && text.contains("[accounts.budget].claude")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .get("accounts.budget.claude")
+                .is_some_and(|text| text.contains("claude@default")
+                    && text.contains("subscription")
+                    && text.contains("API-key billing only")
+                    && text.contains("will never park")
+                    && text.contains("extra-usage limit")),
+            "{warnings:?}"
         );
     }
 

@@ -147,7 +147,7 @@ The sidebar's provider dashboard shows one block per provider, for the account t
 
 An account can stay logged in while its subscription no longer allows access. The [dashboard](./sidebar.md#the-provider-dashboard) and `rimz accounts` show a lapse. The overview's `PLAN` reads `lapsed` unless an installation or setup problem takes precedence. Without a setup problem, the problem line reads `plan lapsed: no Claude access` for Claude; otherwise it keeps the setup repair. The lapse problem names the account's product, so a delegated Pi login reads `no Pi access`. This is separate from a logged-out account or missing hooks, and does not change launch setup checks. API-key and Claude Console accounts never show a plan lapse: running out of API credit fails the agent's turn with Claude's own message instead.
 
-A daily cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
+A day or month cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
 
 ```toml
 [accounts.budget]
@@ -155,6 +155,8 @@ claude = "100/day"
 ```
 
 With `work` shared, a room on `work` parks when `default` and the shared accounts have spent $100 between them today. Declare `work` with `history = "standalone"` and it parks on its own $100, whatever `default` has spent. A raise or clear made while `work` was standalone stays with that account and does not follow it into the shared cap: once `work` is shared again, the next `rimz gc` drops it. The caps and what lifts a park are in [budgets](./budget.md#cap-the-room-and-the-account).
+
+Set `budget = "300/month"` inside `[accounts.claude.work]` or `[accounts.codex.work]` to override that account's kind cap. It requires `history = "standalone"`; `/day` works there too. A month runs from 00:00 UTC on the 1st and counts API-key billing only. A shared pool containing a subscription is exempt as a whole, so isolate an API-key account from subscription history. RimZ cannot see spend from other machines; the provider console's spending cap remains the hard backstop.
 
 `rimz stats` and the spend totals read the provider's own home and every standalone account home, so your spend history covers all of them whichever room you are standing in. `default` and the shared accounts of a provider are one history, so they are one spend figure: a shared account's dashboard block shows that shared spend beside the account's own plan, limits, and credits.
 

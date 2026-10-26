@@ -1012,6 +1012,14 @@ fn plan_recovery(
                 error.to_string(),
             ));
         }
+        if let Ok(login) = logins.login(kind, &machine.accounts)
+            && let Err(error) = machine.accounts.validate_budget_for_login(&login.key())
+        {
+            return Some((
+                ResumeSkipReason::ConfigurationUnavailable,
+                error.to_string(),
+            ));
+        }
         let error = health.entry(kind.clone()).or_insert_with(|| {
             logins
                 .login(kind, &machine.accounts)

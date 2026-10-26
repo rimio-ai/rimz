@@ -302,11 +302,11 @@ fn account_budget_validation_is_typed_and_lenient_load_preserves_preflight_detai
     ));
     let lenient = load_lenient_no_fragments(&config_path);
     assert_eq!(
-        lenient.accounts.budget("claude").map(DayCap::as_usd),
+        lenient.accounts.budget("claude").map(AccountCap::as_usd),
         Some(100.0)
     );
     assert_eq!(
-        lenient.accounts.budget("cursor").map(DayCap::as_usd),
+        lenient.accounts.budget("cursor").map(AccountCap::as_usd),
         Some(50.0)
     );
 }
@@ -321,7 +321,7 @@ fn core_parse_accepts_supported_budget_and_cursor_display_limit() {
 
     let config = load_no_fragments(&config_path).expect("valid account config");
     assert_eq!(
-        config.accounts.budget("claude").map(DayCap::as_usd),
+        config.accounts.budget("claude").map(AccountCap::as_usd),
         Some(100.0)
     );
     assert_eq!(config.accounts.usage_limit("cursor"), Some(25.0));
@@ -1144,7 +1144,7 @@ fn account_budgets_validate_strictly_without_erasing_lenient_preflight_detail() 
         let path = write(&dir, &text);
         let lenient = load_lenient_no_fragments(&path);
         assert_eq!(
-            lenient.accounts.budget(kind).map(DayCap::as_usd),
+            lenient.accounts.budget(kind).map(AccountCap::as_usd),
             Some(50.0)
         );
     }

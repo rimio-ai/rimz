@@ -1183,7 +1183,7 @@ fn is_unknown_get_shape(path: &[String]) -> bool {
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "use" && path.len() > 3)
-        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && !matches!(field.as_str(), "home" | "history" | "label"))
+        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && !matches!(field.as_str(), "home" | "history" | "label" | "budget"))
         || matches!(path, [root, child, _, _, _, ..] if root == "accounts" && is_named_account_kind(child))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(
@@ -1307,6 +1307,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_harness_prompt_cache_ttl_edit(path)
         || is_harness_cache_keepalive_max_edit(path)
         || is_daily_budget_edit(path)
+        || is_account_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
         || is_gc_duration_edit(path)
@@ -1378,6 +1379,16 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             invalid_value!("{} must be a string ending in `/day`", path.join("."));
         };
         raw.parse::<super::DayCap>()
+            .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
+    }
+    if is_account_budget_edit(path) {
+        let Some(raw) = value.as_str() else {
+            invalid_value!(
+                "{} must be a string ending in `/day` or `/month`",
+                path.join(".")
+            );
+        };
+        raw.parse::<super::AccountCap>()
             .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
     }
     if is_turn_budget_edit(path) {
@@ -1511,7 +1522,11 @@ fn is_harness_flip_compact_edit(path: &[String]) -> bool {
 
 fn is_daily_budget_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "budget")
-        || matches!(path, [root, child, _] if root == "accounts" && child == "budget")
+}
+
+fn is_account_budget_edit(path: &[String]) -> bool {
+    matches!(path, [root, child, _] if root == "accounts" && child == "budget")
+        || matches!(path, [root, kind, _, field] if root == "accounts" && is_named_account_kind(kind) && field == "budget")
 }
 
 fn is_turn_budget_edit(path: &[String]) -> bool {
