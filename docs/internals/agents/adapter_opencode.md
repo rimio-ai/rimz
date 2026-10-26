@@ -1,6 +1,6 @@
 # OpenCode adapter
 
-This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, based on OpenCode 2.0.27 with versioned updates, and the model-selection server at 2.1.4 are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
+This page maps OpenCode 2 onto RimZ's types: the plugins RimZ installs, the events they forward, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, based on OpenCode 2.0.27 with versioned updates, the 2.1.4 client API, and the 2.1.4 model-selection server, is in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
 
 RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` declares a 2.0.0 floor through `min_version`. RimZ authors the whole wire: an in-process TypeScript plugin flattens OpenCode's hooks and bus events into a snake_case envelope that RimZ owns. A payload drift is therefore a RimZ bug in the plugin, never an upstream one.
 
@@ -9,7 +9,8 @@ RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs:
 | File | Owns |
 | --- | --- |
 | `crates/rimz/src/agents/adapters/opencode/mod.rs` | The `static AgentSpec` (`OPENCODE_DESCRIPTOR`), the declared coverage, the hook catalog (`OPENCODE_HOOKS`), `decode_hook`, the managed install, system-prompt delivery and native delegation denial in one env hook, and `context_window_for` |
-| `crates/rimz/src/agents/adapters/opencode/plugin.ts` | The plugin RimZ installs: activation, root and child classification, the event mapping, the gauge, launch reminders, and cleanup |
+| `crates/rimz/src/agents/adapters/opencode/index.ts` | The server half: activation, root and child classification, the event mapping, the gauge, launch reminders, and cleanup |
+| `crates/rimz/src/agents/adapters/opencode/tui.ts` | The shared-service client half: route and tab sampling, snapshots, native events and asks, usage hydration, and serialized feeds |
 | `crates/rimz/src/agents/adapters/opencode/payloads.rs` | `OpencodeHookPayload`, the typed envelope, and its tolerant parse |
 | `crates/rimz/src/agents/adapters/opencode/database.rs` | Database discovery, the logical stat, read-only SQLite access, and credential loading |
 | `crates/rimz/src/agents/adapters/opencode/account.rs` | The OpenCode `Config` for the shared delegated-account probes |
@@ -24,16 +25,17 @@ Only the registry reaches `OpencodeAdapter`. The modules above stay private to t
 
 ### Install
 
-The plugin is a whole file that RimZ writes, through `ManagedSource` (`OPENCODE_MANAGED_SOURCE` in `mod.rs`). It installs at `RIMZ_OPENCODE_PLUGIN` when that is set and nonempty, otherwise at `<config>/opencode/plugin/rimz.ts`, where `<config>` is `XDG_CONFIG_HOME` or `~/.config` (`crates/rimz/src/agents/adapters/opencode/mod.rs::opencode_plugin_path`). The path resolves from the process environment, not the login environment. The file's first line carries the `_rimz_managed` marker, and ownership follows the marker:
+The bundle contains `index.ts` and `tui.ts`, with no package manifest. `RIMZ_OPENCODE_PLUGIN`, when nonempty, names the bundle directory, otherwise `<config>/opencode/plugins/rimz`, where `<config>` is `XDG_CONFIG_HOME` or `~/.config`. Paths resolve from the process environment, not the login environment. Each file's first line carries `_rimz_managed`; ownership follows that marker:
 
-- Install and reinstall replace a marked file byte for byte.
-- Install and preview refuse to overwrite an unmarked file, which the user owns.
-- Uninstall removes only a marked file.
-- The source is declared upgradeable, so setup offers a consented refresh when the marked file differs from the copy embedded in the build.
+- Install preflights both targets and the legacy path before writing changed files atomically. Unmarked files and symlinked targets or bundle directories refuse with their paths.
+- With no override, install removes a marked legacy `<config>/opencode/plugin/rimz.ts`, which otherwise shadows the new server half. An unmarked legacy file refuses with a move-aside fix. Preview shows both sources and the legacy removal.
+- Installed means both files are marked and no legacy file shadows them. A stale, partial, or legacy-only owned install offers a refresh; doctor reports a partial or legacy-only install as missing.
+- Uninstall removes only marked files and removes the bundle directory only if empty. Foreign siblings survive. The override never modifies the default install.
+- Wiring inputs include both files, the legacy path when applicable, and the bundle directory, so admission notices creation, deletion, and replacement.
 
 `OpencodeManagedIntegration::install_blocker` refuses install and preview when the located `opencode` reports a version below the floor (see [Launch and resume](#launch-and-resume)).
 
-### Activation
+### Server activation
 
 OpenCode calls the plugin's `setup(ctx)` from its default export, `{ id: "rimz", setup }`. Setup does nothing unless `RIMZ_WORKSPACE_ID` is nonempty, the process argv carries no `--service` (see [Process identity](#process-identity)), and an executable `rimz` resolves (`RIMZ_BIN`, otherwise the first `rimz` on `PATH`). A second setup on the same context returns the same activation, from a `WeakMap` keyed by context. Each activation keeps its own session, child, model, agent, form, and gauge maps. It registers the session `prompt` and `context` hooks and the tool `execute.after` hook, and it consumes `ctx.event.subscribe`.
 
@@ -47,9 +49,35 @@ Cleanup runs when OpenCode disposes the activation. It aborts the subscription, 
 
 RimZ launches OpenCode with `--standalone`, so the TUI starts a private `opencode serve` child that inherits the pane environment, and the plugin runs in that child ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-plugins-and-runtime)). The plugin sets `RIMZ_AGENT_PID` to its own `process.ppid` in each feed child, which names the TUI. `crates/rimz/src/cli/hooks/owner.rs::attach_agent_owner` stamps that pid, with its process-start token, as the session's `RuntimeOwner`, which feeds the reaper and every same-instance proof ([instances.md](./instances.md#session-death)). Before the first hook, a fresh RimZ launch records the exec wrapper as the owner (`crates/rimz/src/cli/agents_cmd/exec.rs::attach_own_launch_pane`), and the first hook replaces it with the TUI. A resume attaches the provider pid it spawned before any hook fires ([instances.md](./instances.md#binding-a-session), step 2).
 
-The plugin stands down in OpenCode's shared background service, the `opencode serve --service` process that every plain `opencode` (neither `--standalone` nor `--server`) on the machine connects to. The first client to find no service spawns it with that client's environment ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-plugins-and-runtime)). A service first started from a room pane therefore carries that room's `RIMZ_WORKSPACE_ID` and that pane's id for its whole life, and an active plugin there would report every client's conversations in its directory onto that one pane. Setup returns early when `process.argv` holds `--service`; the private `serve --stdio --port 0` child of a `--standalone` TUI keeps the plugin. The CLI builds the service command itself, so the guard misses only a service an embedder starts through `@opencode/client` with a command that drops `--service`. Process detection still recognizes both `opencode` and `bun` (`process_names`).
+The server half stands down in OpenCode's shared background service, `opencode serve --service`. The first client to find no service spawns it with that client's environment ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-plugins-and-runtime)). That environment cannot identify subsequent clients, so only the client half reports their conversations. The private `serve --stdio --port 0` child of a standalone TUI keeps the server half. Process detection recognizes both `opencode` and `bun` (`process_names`).
+
+### Client activation
+
+`crates/rimz/src/agents/adapters/opencode/tui.ts` activates only with `RIMZ_WORKSPACE_ID`, an executable RimZ, and `service.restart` in `ctx.keymap.commands()`, read after app initialization. Explicit `--standalone` is inert. Until that command appears, the client subscribes to no events and reads no session data. A 200 ms sampler follows `ui.router.current()` and exact session IDs from `ui.tabs.list()`. Session maps are evicted when a session is neither selected, tabbed, nor holding a forwarded ask; per-step maps clear on departure and step completion.
+
+Each feed carries the TUI's own `process.pid`, its pane and room environment, and empty inherited launch-identity values: every `RIMZ_AGENT_*` except the overwritten PID, hook owner kind, run, workflow, team, launch group/ordinal, runtime environment, and loop task. Feeds are awaited one at a time. After waiting for an earlier feed, the client rechecks the route before stamping; a stale queued snapshot is dropped. A deletion end keeps the stamp of the session last reported on screen even after the route has left it.
+
+Activation, session selection, and reconnect synchronize the selected session and its permission and form lists. A failed state read sends nothing and retries on the next sample. After bounded usage hydration, a bounded `client.session.active()` read gets the server's status rather than the asynchronously hydrated cache. The route is checked again: an unseen pending ask sends its stamped ask, an already-forwarded ask sends nothing, otherwise current status sends `client_idle` or `client_running`. These are state snapshots, not lifecycle edges ([model.md](./model.md)).
+
+Background tabs forward asks and replies, unstamped. A forwarded request remains tracked after its tab closes, and its reply needs no cached session info. Replies normalize form answers in field order and forward the next pending ask. At activation and on `server.connected`, a sweep covers every tab and forwarded session except the one arrival covers. Each session gets a bounded sync of permissions and forms; the first pending unforwarded ask goes out unstamped. The sweep sends no snapshot except to clear a vanished forwarded background ask, preserving reconnect reconciliation without inventing a reply.
+
+Deletion is handled before cache lookup, because upstream has already evicted the session. Deleting the session last reported on screen sends a stamped `session_ended`; deleting a session with a forwarded ask sends an unstamped end. Other deletions stay silent. Navigation, the home route, tab close, and cleanup alone send no end. Cleanup unsubscribes and drains feeds for at most 1.5 seconds; process liveness hides a dead client's rows.
 
 ## Events
+
+The following table describes the server half. The client uses the same wire for the selected conversation, stamping `on_screen: true`, with these differences:
+
+| Client event | Wire |
+| --- | --- |
+| Arrival or reconnect, no pending ask | `client_idle` or `client_running`, with `state_snapshot` set by decode |
+| Activation or reconnect, unseen pending background ask | `permission_ask` or `question_ask`, unstamped; already-forwarded asks are not repeated |
+| `session.inbox.enqueued`, user item only | `chat_message`, with `item.payload.text` |
+| `session.execution.started` | `client_running` |
+| `session.tool.success` or `failed` | `tool_after`; name joined from `session.tool.input.started` by message/tool ID, else cached tool content; unresolved names omitted |
+| `session.deleted`, session last reported on screen or holding a forwarded ask | `session_ended`, stamped for the former and unstamped for a background asker; other deletions send nothing |
+| Navigation or cleanup | None |
+
+The client remembers step usage, model and agent selections without an envelope, forwards renames, execution terminals and compaction as below, and forwards permissions/forms and replies for the selected conversation or exact background tabs. It never emits child lineage; a child first seen on screen reports under its own native ID as a root.
 
 | OpenCode event or hook | Wire event | RimZ effect |
 | --- | --- | --- |
@@ -81,7 +109,7 @@ The plugin stands down in OpenCode's shared background service, the `opencode se
 
 Registration is lazy (`registers_lazily`). Without a requested model, a fresh OpenCode TUI creates its session at the first prompt, so `session.created` and `session_created` arrive only then ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment)). With a requested model, the [session step](#model-selection) creates the session before the TUI starts; its first `chat_message` adopts the card, since the TUI did not create that session and emits no creation event for it. Until the first prompt the pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds). Restarting before that prompt starts fresh again, leaving an empty OpenCode session behind.
 
-`/new` registers a new root inside the same process. The adapter declares `SamePaneSessionPolicy::FollowLatest`, so pane and card ownership follow the latest root ([instances.md](./instances.md#same-pane-ownership)). The older root is collapsed by the in-place-switch rule of [supersession](./instances.md#supersession). The fresh-conversation rule never applies, because the wire does not say how a root was created and RimZ records no `Fresh` origin for it.
+The adapter declares `SamePaneSessionPolicy::FollowLatest`. A plain client's card follows the on-screen conversation, even when the previous conversation is still running. A background ask takes ownership until answered, then the on-screen row takes it back without another envelope ([instances.md](./instances.md#same-pane-ownership)). Managed standalone launches retain unstamped latest-root succession. The fresh-conversation rule never applies, because the wire does not say how a root was created and RimZ records no `Fresh` origin for it.
 
 ### Subagents
 
@@ -193,6 +221,8 @@ The plugin's gauge is a per-session record of the model, its window, and the lat
 
 `ctx.session.get` refreshes the title, agent, and model at registration, at each prompt, and at each root execution boundary. The refresh runs in the background, so a slow lookup never holds a terminal envelope. The plugin never stores OpenCode's placeholder titles, `New session - ...` and `Child session - ...`. The version comes from `session.created` alone, because session lookup returns none.
 
+The client hydrates arrival usage from the newest nonzero assistant in the synced cache, otherwise `client.message.list` pages newest-first with limit 200. A short page is not terminal while it has a cursor; an empty page or absent next cursor is. Zero usage never wipes a measurement. Catalog matching uses provider plus model and the session's location; the numerator and input-window rule stay the same as the server half. Usage/catalog hydration gets about one second before status goes out without it; late enrichment rides the next envelope. No gauge-only lifecycle event is added.
+
 ## Transcript
 
 `crates/rimz/src/agents/adapters/opencode/transcript.rs::read_messages` reads `session_message` rows for one session id only, since every OpenCode agent on the machine shares the database. It takes a user row's `data.text` and the `text` entries of an assistant row's `data.content[]`. Reasoning, tool content, and other record types stay out. Full reads order by `time_created`, then `rowid`.
@@ -259,6 +289,12 @@ The spend cache stamps one origin per database file, either an origin override f
 ## Known gaps
 
 `rimz coverage --wiring` prints the declared integration grid.
+
+- Plain shared-service clients need OpenCode's 2.1.4 TUI API and `service.restart` command. Explicit `--server` clients remain silent; a renamed command makes the client half inert. A disabled service uses the server half instead.
+- The home route keeps the last conversation's card until that conversation is deleted, another is selected, or the process exits. One conversation open in two panes may hop between them.
+- A child already recorded with parent lineage cannot take the card; a child first seen through the plain client can.
+- A conversation left mid-turn is reaped and rests at Idle. Session-bound waits retire at the next real hook event. Plain clients have no messaging, adoption, wait, service-hibernation, or sidebar tab-switching promise; use managed launches for advanced workflows.
+- Off-screen turn cost lags until that conversation's next on-screen turn end. Equal focus stamps fall back to ordinary ownership order; a backward wall-clock step can delay takeover.
 
 - Native answering, background parking, background shells, and remote control are unsupported.
 - Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.

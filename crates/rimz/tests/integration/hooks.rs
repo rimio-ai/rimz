@@ -20,6 +20,7 @@ use crate::common::{
 
 mod drain;
 mod minimax;
+mod opencode;
 
 #[cfg(target_os = "linux")]
 #[test]

@@ -13,6 +13,8 @@ codex           # the stock Codex CLI
 
 The agent's card appears in the sidebar as its first hook fires. No `rimz` command sits in the path: the CLI runs with your flags, your config, and your session files, and the [reporting hooks](./setup.md#install-agent-hooks) you approved during setup tell RimZ what it is doing. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents RimZ drives, and what each one reports, is [agent support](../reference/agent-support.md).
 
+With OpenCode 2.1.4, a plain `opencode` connected to its shared service gets one card following the conversation on screen, with its title and usage. A background tab asking for permission or an answer takes the card until answered. Clicking still jumps to the pane; messaging and other advanced controls require a `rimz agents` launch.
+
 ## Why `rimz agents`
 
 A bare `claude` is a general-purpose agent, and most work is not general. A planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. Even the everyday default is worth shaping, and the stock CLI takes all of it through its own flags:

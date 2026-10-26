@@ -12,7 +12,8 @@ use predicates::str::contains;
 use crate::common::Env;
 
 const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/adapters/pi/extension.ts");
-const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/plugin.ts");
+const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/index.ts");
+const OPENCODE_TUI_SOURCE: &str = include_str!("../../src/agents/adapters/opencode/tui.ts");
 const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
 
 #[test]
@@ -635,10 +636,14 @@ fn seed_setup_agents(env: &Env) -> SetupAgentFiles {
         antigravity_hooks: env.home_root.join("agent-config/antigravity/hooks.json"),
         antigravity_settings: env.home_root.join("agent-config/antigravity/settings.json"),
         pi_extension: env.home_root.join("agent-config/pi/rimz.ts"),
-        opencode_plugin: env.home_root.join("agent-config/opencode/rimz.ts"),
+        opencode_plugin: env.home_root.join("agent-config/opencode/rimz"),
     };
-    for path in [&files.pi_extension, &files.opencode_plugin] {
-        write_machine_file(path, STALE_MANAGED_SOURCE);
+    for path in [
+        files.pi_extension.clone(),
+        files.opencode_plugin.join("index.ts"),
+        files.opencode_plugin.join("tui.ts"),
+    ] {
+        write_machine_file(&path, STALE_MANAGED_SOURCE);
     }
     files
 }
@@ -1183,7 +1188,11 @@ fn setup_without_tty_reports_and_writes_nothing() {
     assert!(!env.rimz_home().join("teams/consensus.md").exists());
     assert!(!files.antigravity_hooks.exists());
     assert!(!files.antigravity_settings.exists());
-    for path in [&files.pi_extension, &files.opencode_plugin] {
+    for path in [
+        files.pi_extension.clone(),
+        files.opencode_plugin.join("index.ts"),
+        files.opencode_plugin.join("tui.ts"),
+    ] {
         assert_eq!(
             std::fs::read(path).unwrap(),
             STALE_MANAGED_SOURCE.as_bytes()
@@ -1226,9 +1235,10 @@ fn setup_config_only_writes_default_config_without_hook_or_trust_side_effects() 
     let env = Env::new();
     let files = seed_setup_agents(&env);
     let pi_extension = env.home_root.join("setup-yes/pi/rimz.ts");
-    let opencode_plugin = env.home_root.join("setup-yes/opencode/rimz.ts");
+    let opencode_plugin = env.home_root.join("setup-yes/opencode/rimz");
     write_machine_file(&pi_extension, STALE_MANAGED_SOURCE);
-    write_machine_file(&opencode_plugin, STALE_MANAGED_SOURCE);
+    write_machine_file(&opencode_plugin.join("index.ts"), STALE_MANAGED_SOURCE);
+    write_machine_file(&opencode_plugin.join("tui.ts"), STALE_MANAGED_SOURCE);
     write_machine_file(
         &env.project_root.join(".rimz/config.toml"),
         "[harness]\nauto_continue = true\n",
@@ -1283,7 +1293,11 @@ fn setup_config_only_writes_default_config_without_hook_or_trust_side_effects() 
     assert!(theme_config_path(&env).exists());
     assert!(!legacy_agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
-    for path in [&pi_extension, &opencode_plugin] {
+    for path in [
+        pi_extension.clone(),
+        opencode_plugin.join("index.ts"),
+        opencode_plugin.join("tui.ts"),
+    ] {
         assert_eq!(
             std::fs::read(path).expect("read stale managed source"),
             STALE_MANAGED_SOURCE.as_bytes(),
@@ -1329,7 +1343,11 @@ fn setup_config_only_writes_default_config_without_hook_or_trust_side_effects() 
     );
     assert!(!files.antigravity_hooks.exists());
     assert!(!files.antigravity_settings.exists());
-    for path in [&pi_extension, &opencode_plugin] {
+    for path in [
+        pi_extension.clone(),
+        opencode_plugin.join("index.ts"),
+        opencode_plugin.join("tui.ts"),
+    ] {
         assert_eq!(
             std::fs::read(path).unwrap(),
             STALE_MANAGED_SOURCE.as_bytes()
@@ -1555,8 +1573,13 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
         PI_EXTENSION_SOURCE,
     );
     assert_eq!(
-        std::fs::read_to_string(&files.opencode_plugin).expect("read OpenCode plugin"),
+        std::fs::read_to_string(files.opencode_plugin.join("index.ts"))
+            .expect("read OpenCode plugin"),
         OPENCODE_PLUGIN_SOURCE,
+    );
+    assert_eq!(
+        std::fs::read_to_string(files.opencode_plugin.join("tui.ts")).unwrap(),
+        OPENCODE_TUI_SOURCE
     );
 }
 
@@ -1578,10 +1601,12 @@ fn setup_pty_decline_preserves_every_hook_candidate() {
         std::fs::read(&files.pi_extension).unwrap(),
         STALE_MANAGED_SOURCE.as_bytes()
     );
-    assert_eq!(
-        std::fs::read(&files.opencode_plugin).unwrap(),
-        STALE_MANAGED_SOURCE.as_bytes()
-    );
+    for name in ["index.ts", "tui.ts"] {
+        assert_eq!(
+            std::fs::read(files.opencode_plugin.join(name)).unwrap(),
+            STALE_MANAGED_SOURCE.as_bytes()
+        );
+    }
 }
 
 #[test]
