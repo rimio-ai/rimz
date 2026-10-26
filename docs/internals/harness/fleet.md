@@ -277,15 +277,18 @@ Keeping the prompt body out of the pane command keeps the multiplexer command sm
 
 A profile's system prompt is a base file plus ordered fragments. For a staged team role with a resolved base, composition is base → profile-chain fragments → role fragments → consensus → team-level `append-system-prompt-files`. `team_prompt.rs` owns the embedded `team_consensus.md` and the layer's derivation, and `spec` attaches it once per role cell at team compile, after rebasing. `consensus-file` replaces the embedded text, and team paths resolve relative to the declaring config file. A CLI `--append-system-prompt-file` override replaces only the profile and role fragments, and leaves the team layer in place.
 
-A team is staged when `stages` is nonempty or any role has `owns`. Unstaged teams and roles without a base get no default layer. An explicit `consensus-file` or a nonempty team `append-system-prompt-files` requires a staged team and a base on every role, and preparation refuses otherwise. `prompt_compose` normalizes trailing newlines and joins pieces with one blank line and one trailing newline. With fragments or a team layer, path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the private runtime root; with neither, they receive the user's resolved base path directly.
+A team is staged when `stages` is nonempty or any role has `owns`. Unstaged teams and roles without a base get no default layer. An explicit `consensus-file` or a nonempty team `append-system-prompt-files` requires a staged team and a base on every role, and preparation refuses otherwise. `prompt_compose` normalizes trailing newlines and joins pieces with one blank line and one trailing newline. With fragments, a team layer, or a text base, path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the private runtime root; otherwise they receive the user's resolved base path directly. OpenCode always receives the artifact, even for a lone file base, so a config reload reads the launched text rather than a since-edited source file.
+
+Selected delivery channels ([full support matrix](../../reference/agent-support.md#launch-prompt-replacement)):
 
 | Adapter | Channel |
 | --- | --- |
 | Claude, Codex | path in argv |
 | Qwen | path in `QWEN_SYSTEM_MD` |
-| Pi | text in `--system-prompt` |
+| Pi, OMP | text in `--system-prompt` |
+| OpenCode | artifact reference `{file:<path>}` in `OPENCODE_CONFIG_CONTENT` `agents.build.system` ([mapping and limits](../agents/adapter_opencode.md#launch-and-resume)) |
 
-The wrapper removes matching raw replacement argv before adding the materialized value, so the typed setting wins on fresh launch, restart, fork, resume, and rebirth. The artifact is regenerated idempotently on every one of those paths.
+For argv channels the wrapper removes matching raw replacement argv before adding the materialized value, so the typed setting wins on fresh launch, restart, fork, resume, and rebirth where supported. Env channels add no prompt argv; OpenCode's final env hook merges its artifact reference with other config edits. A planned artifact is regenerated idempotently on every launch action.
 
 #### Launch reminders
 

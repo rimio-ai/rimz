@@ -2,7 +2,7 @@
 
 This page mirrors the OpenCode surfaces an adapter binds to: plugins, native requests, events, HTTP, session storage, credentials, and the CLI environment. The reference is OpenCode 2 only. How RimZ maps upstream surfaces onto its own types, and which of them it wires, is in [adapter_opencode.md](../../internals/agents/adapter_opencode.md). An upstream refresh does not establish RimZ adapter compatibility with a new major version.
 
-**Current baseline.** OpenCode **2.0.27**, tag [`v2.0.27`](https://github.com/anomalyco/opencode/tree/v2.0.27), commit `1f4d07a4a519185955ae8ab2ea3607805509e386`, with npm `@opencode/cli`, `@opencode/plugin`, and `@opencode/client` 2.0.27. The CLI package was published 2026-10-12 at 04:15:00 UTC ([npm metadata](https://registry.npmjs.org/@opencode%2fcli)). Baseline checked 2026-10-12 against source, registry metadata, and docs. Check the package name as well as the version when refreshing: the legacy `opencode-ai`, `@opencode-ai/plugin`, and `@opencode-ai/sdk` packages do not describe these contracts.
+**Current baseline.** OpenCode **2.0.27**, tag [`v2.0.27`](https://github.com/anomalyco/opencode/tree/v2.0.27), commit `1f4d07a4a519185955ae8ab2ea3607805509e386`, with npm `@opencode/cli`, `@opencode/plugin`, and `@opencode/client` 2.0.27. The CLI package was published 2026-10-12 at 04:15:00 UTC ([npm metadata](https://registry.npmjs.org/@opencode%2fcli)). Baseline checked 2026-10-12 against source, registry metadata, and docs. System-prompt replacement, config substitution, and managed-settings precedence below were read at **2.1.4**; the replacement and inline-substitution route was also checked at **2.0.0**, and missing-file behavior at **2.0.0**, **2.0.29**, and **2.0.30**. Check the package name as well as the version when refreshing: the legacy `opencode-ai`, `@opencode-ai/plugin`, and `@opencode-ai/sdk` packages do not describe these contracts.
 
 ## Model-selection server (v2.1.4)
 
@@ -16,7 +16,7 @@ This section alone is pinned to [`v2.1.4`](https://github.com/anomalyco/opencode
 
 ## OpenCode 2 sources
 
-Source paths in the OpenCode 2 sections are under `packages/` at `v2.0.27`. Follow versioned source when the live documentation or JSON Schema describes a different release.
+Source paths in the OpenCode 2 sections are under `packages/` at `v2.0.27` unless another tag is linked. Follow versioned source when the live documentation or JSON Schema describes a different release.
 
 | Surface | Source |
 | --- | --- |
@@ -156,10 +156,21 @@ Session IDs must start with `ses` ([ID schema](https://github.com/anomalyco/open
 
 `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `XDG_STATE_HOME` relocate the corresponding OpenCode roots. `OPENCODE_CONFIG_DIR` replaces the config root (`util/src/global-roots.ts`, `roots`, [`util/src/global.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/util/src/global.ts), `layer`). Database overrides are described in [OpenCode 2 storage and credentials](#opencode-2-storage-and-credentials).
 
-`OPENCODE_CONFIG_CONTENT` is parsed as the last, highest-priority config document ([`core/src/config.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/core/src/config.ts)).
+`OPENCODE_CONFIG_CONTENT` loads after discovered user and project config documents, but is not the highest-priority document. Managed settings load afterward: the system directory overrides inline content, and macOS managed preferences outrank that directory ([`core/src/config.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config.ts), `load`).
 
 Since 2.0.6, `OPENCODE_CLI_CONFIG_CONTENT` supplies a separate inline CLI config object over `cli.json`. Unset or exactly `""` is absent. The loader accepts JSONC comments and trailing commas; a parse error, non-object root, or schema decode failure silently drops the whole inline value. Objects merge recursively, while arrays and other values replace the lower layer ([`cli/src/config/config.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/config/config.ts)).
 
 Since 2.0.13, `tabs.mode` accepts `"auto"`, `"on"`, or `"off"` ([`tui/src/config/index.tsx`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/tui/src/config/index.tsx)). Each layer normalizes legacy `tabs.enabled` to `mode` only when `mode` is absent, so an explicit `mode` wins ([`cli/src/config/schema.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/config/schema.ts)).
 
 To migrate from 1.19.0, run that legacy binary's `opencode upgrade --major` ([legacy upgrade command](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/cli/cmd/upgrade.ts)).
+
+### System prompts and config substitution
+
+`agents.<name>.system` supplies that agent's replacement system text. The config plugin copies `item.system` into `agent.system` ([`core/src/config/plugin/agent.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config/plugin/agent.ts), also present at [2.0.0](https://github.com/anomalyco/opencode/blob/v2.0.0/packages/core/src/config/plugin/agent.ts)). Each request's base transcript uses nonempty `agent.system` instead of `SessionSystemPrompt.make(...)`, then adds its initial project instructions; an empty string falls back to the built-in prompt ([`core/src/session/model-request.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/model-request.ts), `baseTranscript`). The selected agent comes from the session, falling back to the configured default, not necessarily `build` ([`core/src/session/context.ts`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/context.ts), `select`, and [`core/src/config/plugin/agent.ts`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config/plugin/agent.ts)).
+
+Inline `OPENCODE_CONFIG_CONTENT` goes through `ConfigVariable.substitute` before its JSONC parse ([`core/src/config.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config.ts), also present at [2.0.0](https://github.com/anomalyco/opencode/blob/v2.0.0/packages/core/src/config.ts)). Substitution first expands `{env:...}` over the raw config text, then matches `{file:...}` tokens with `/\{file:[^}]+\}/g`. A file token on a line whose preceding text, trimmed at the start, begins with `//` is skipped. Absolute paths are used as written, `~/` expands to the home, and relative paths resolve from the config directory (the location directory for inline content). File contents are trimmed and JSON-escaped into the config text, not re-scanned for either token form ([`core/src/config/variable.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config/variable.ts), `substitute` and `substituteFiles`).
+
+Config reloads on watched config-file changes and re-runs inline substitution, so a `{file:...}` target must remain readable after startup ([`core/src/config.ts`, 2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config.ts), `load` and `reload`). A missing or unreadable target differs by version:
+
+- **2.0.0 through 2.0.29:** the inline load fails with `bad file reference` ([2.0.0](https://github.com/anomalyco/opencode/blob/v2.0.0/packages/core/src/config/variable.ts), [2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/config/variable.ts)). At startup the server cannot load its config. A failed reload logs `failed to reload config` and keeps the previous config ([`core/src/config.ts`, 2.0.29](https://github.com/anomalyco/opencode/blob/v2.0.29/packages/core/src/config.ts), `reload`).
+- **From 2.0.30:** a missing or unreadable target warns and substitutes empty ([2.0.30](https://github.com/anomalyco/opencode/blob/v2.0.30/packages/core/src/config/variable.ts), [2.1.4](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/config/variable.ts)). An empty `agents.<name>.system` therefore selects the built-in prompt.
