@@ -13,7 +13,7 @@ use rimz::lsp::{
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Args)]
@@ -198,10 +198,15 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::List { all, json } => return list(all, json, globals),
         Command::Show { anchors, full } => {
             let context = query_context(globals)?;
+            let folder = query_folder(
+                &context.root,
+                std::env::current_dir().and_then(std::fs::canonicalize),
+            );
             let blocks = match check::show(
                 &anchors,
                 full,
                 &context.root,
+                &folder,
                 &context.entries,
                 &context.servers,
                 context.usage.as_ref(),
@@ -315,6 +320,10 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     context.validate_server(args.server.as_deref())?;
     let kind: String = serde_json::from_value(serde_json::to_value(verb)?)?;
     let root = &context.root;
+    let folder = query_folder(
+        root,
+        std::env::current_dir().and_then(std::fs::canonicalize),
+    );
     let multiple = args.targets.len() > 1;
     let mut failures = QueryFailures::default();
     let mut code = 0;
@@ -324,8 +333,9 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     for (index, target) in args.targets.iter().enumerate() {
         let result = (|| {
             let target = match query::Target::parse(verb, target) {
-                Ok(target) => target,
+                Ok(target) => target.resolve_path(root, &folder)?,
                 Err(rimz::lsp::LspErr::MissingColumn { path, line, .. }) => {
+                    let path = query::typed_path(root, &folder, &path)?;
                     let outline = query::select(
                         root,
                         context.entries.clone(),
@@ -511,9 +521,20 @@ impl QueryFailures {
     }
 }
 
+fn query_folder(root: &Path, cwd: std::io::Result<PathBuf>) -> PathBuf {
+    cwd.ok()
+        .and_then(|cwd| cwd.strip_prefix(root).ok().map(Path::to_owned))
+        .unwrap_or_default()
+}
+
 fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
     let mut entries = registry::read_entries()?;
-    let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
+    let cwd = std::fs::canonicalize(
+        globals
+            .root
+            .clone()
+            .map_or_else(std::env::current_dir, Ok)?,
+    )?;
     let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
     let root = registry::enclosing_checkout(&cwd, &entries)
         .unwrap_or(&workspace.worktree_root)

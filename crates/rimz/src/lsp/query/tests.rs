@@ -1,6 +1,150 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn typed_paths_prefer_the_current_folder_and_fold_inside_the_checkout() {
+    let checkout = tempfile::tempdir().unwrap();
+    let root = checkout.path();
+    std::fs::create_dir(root.join("src")).unwrap();
+    for file in ["lib.rs", "src/lib.rs", "root.rs"] {
+        std::fs::write(root.join(file), "").unwrap();
+    }
+    let outside = tempfile::tempdir().unwrap();
+    let absolute = outside.path().join("outside.rs");
+    std::fs::write(&absolute, "").unwrap();
+    let cases = [
+        ("src", Path::new("lib.rs"), PathBuf::from("src/lib.rs")),
+        ("src", Path::new("root.rs"), PathBuf::from("root.rs")),
+        ("src", Path::new("../lib.rs"), PathBuf::from("lib.rs")),
+        ("", Path::new("a/../lib.rs"), PathBuf::from("lib.rs")),
+        ("src", absolute.as_path(), absolute.clone()),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(folder, path, _)| typed_path(root, Path::new(folder), path).unwrap())
+        .collect();
+    assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+}
+
+#[test]
+fn typed_paths_report_each_distinct_reading_and_outside_paths() {
+    let root = Path::new("/checkout");
+    let cases = [
+        (
+            "src",
+            "gone.rs",
+            "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root",
+        ),
+        (
+            "",
+            "gone.rs",
+            "file not found: gone.rs; looked in checkout root: gone.rs; relative paths are read from the current folder, then the checkout root",
+        ),
+        (
+            "src",
+            "../gone.rs",
+            "file not found: ../gone.rs; looked in current folder: gone.rs; checkout root: leaves the checkout; relative paths are read from the current folder, then the checkout root",
+        ),
+        (
+            "src",
+            "../../gone.rs",
+            "file not found: ../../gone.rs; looked in current folder: leaves the checkout; relative paths are read from the current folder, then the checkout root",
+        ),
+        (
+            "src",
+            "/missing-rimz-lsp-file.rs",
+            "file not found: /missing-rimz-lsp-file.rs; looked in absolute path: /missing-rimz-lsp-file.rs",
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(folder, path, _)| {
+            typed_path(root, Path::new(folder), Path::new(path)).map_err(|error| error.to_string())
+        })
+        .collect();
+    assert_eq!(actual, cases.map(|(_, _, error)| Err(error.to_owned())));
+}
+
+#[test]
+fn typed_targets_rewrite_paths_but_preserve_the_symbol_grammar_and_suffix_fallback() {
+    let checkout = tempfile::tempdir().unwrap();
+    let root = checkout.path();
+    for folder in ["src", "with space"] {
+        std::fs::create_dir(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("lib.rs"), "").unwrap();
+    }
+    let position = Position {
+        line: 1,
+        character: 2,
+    };
+    let cases = [
+        (
+            "src",
+            Verb::Hover,
+            "lib.rs:2:3",
+            Target::Position {
+                path: "src/lib.rs".into(),
+                position,
+            },
+        ),
+        (
+            "src",
+            Verb::Symbols,
+            "lib.rs",
+            Target::File("src/lib.rs".into()),
+        ),
+        (
+            "src",
+            Verb::Def,
+            "lib.rs::Type::method",
+            Target::Symbol("src/lib.rs::Type::method".into()),
+        ),
+        (
+            "src",
+            Verb::Def,
+            "gone.rs::Type::method",
+            Target::Symbol("gone.rs::Type::method".into()),
+        ),
+        (
+            "with space",
+            Verb::Def,
+            "lib.rs::Type::method",
+            Target::Symbol("lib.rs::Type::method".into()),
+        ),
+        (
+            "src",
+            Verb::Def,
+            "Type::method",
+            Target::Symbol("Type::method".into()),
+        ),
+        ("src", Verb::Find, "lib.rs", Target::Find("lib.rs".into())),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(folder, verb, raw, _)| {
+            Target::parse(*verb, raw)
+                .unwrap()
+                .resolve_path(root, Path::new(folder))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(actual, cases.map(|(_, _, _, expected)| expected));
+}
+
+#[test]
+fn typed_position_and_file_misses_fail_before_server_selection() {
+    let actual: Vec<_> = [(Verb::Hover, "gone.rs:1:1"), (Verb::Symbols, "gone.rs")]
+        .map(|(verb, raw)| {
+            Target::parse(verb, raw)
+                .unwrap()
+                .resolve_path(Path::new("/checkout"), Path::new("src"))
+                .map_err(|error| error.to_string())
+        })
+        .into();
+    let expected = "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root";
+    assert_eq!(actual, [Err(expected.to_owned()), Err(expected.to_owned())]);
+}
+
 fn range() -> Value {
     json!({"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 6}})
 }

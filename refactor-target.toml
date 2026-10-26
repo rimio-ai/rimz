@@ -111,7 +111,8 @@ path = "crates/rimz/src/lsp"
 # share one room-scoped usage snapshot across CLI inspection (+7).
 # usage::Log::record shares outcome classification across verb and outline queries (+1).
 # retire, retire::run, and retire::Outcome expose one machine-wide reload pass and counts (+3).
-surface-budget = 107
+# query::typed_path and Target::resolve_path share typed input readings with the CLI (+2).
+surface-budget = 109
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -8436,6 +8437,11 @@ reason = "Queries, anchor checks, and source reads share the same per-server fai
 kind = "item"
 key = "lsp::query::missing_column"
 reason = "The CLI enriches a target error from an optional outline using the query renderer's kinds and names."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::typed_path"
+reason = "The CLI resolves column-less positions through the same typed-path readings as query targets and source reads."
 
 [[verdict]]
 kind = "item"

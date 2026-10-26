@@ -42,6 +42,17 @@ pub enum LspErr {
     #[error("language-server protocol: {0}")]
     Protocol(String),
     #[error(
+        "file not found: {path}; looked in {readings}{rule}",
+        path = path.display(),
+        rule = if path.is_absolute() { "" } else {
+            "; relative paths are read from the current folder, then the checkout root"
+        }
+    )]
+    MissingFile {
+        path: std::path::PathBuf,
+        readings: String,
+    },
+    #[error(
         "{path}:{line} has no column; {hint}",
         path = path.display(),
         hint = item.as_ref().map(|item| format!(

@@ -7,6 +7,7 @@ use super::protocol::{
     CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation, Symbols,
 };
 use super::{LspErr, NamedItem, Result};
+use crate::utils::path::normalize_path_lexical;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -89,6 +90,67 @@ impl Target {
             Self::Find(_) => None,
         }
     }
+
+    /// Resolve typed paths before server selection, retaining symbol suffix fallbacks.
+    pub fn resolve_path(self, root: &Path, folder: &Path) -> Result<Self> {
+        match self {
+            Self::Position { path, position } => Ok(Self::Position {
+                path: typed_path(root, folder, &path)?,
+                position,
+            }),
+            Self::File(path) => Ok(Self::File(typed_path(root, folder, &path)?)),
+            Self::Symbol(name) => {
+                if let Some((file, symbol)) = file_qualified(&name)
+                    && let Ok(path) = typed_path(root, folder, Path::new(file))
+                    && let Some(path) = path.to_str().filter(|path| is_file_head(path))
+                {
+                    return Ok(Self::Symbol(format!("{path}::{symbol}")));
+                }
+                Ok(Self::Symbol(name))
+            }
+            target => Ok(target),
+        }
+    }
+}
+
+/// Read a typed path from a checkout-relative folder, then the checkout root.
+/// Absolute paths retain their absolute reading, including outside the checkout.
+pub fn typed_path(root: &Path, folder: &Path, path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        if path.is_file() {
+            return Ok(path.to_owned());
+        }
+        return Err(LspErr::MissingFile {
+            path: path.to_owned(),
+            readings: format!("absolute path: {}", path.display()),
+        });
+    }
+    let mut candidates = Vec::new();
+    if !folder.as_os_str().is_empty() {
+        candidates.push((
+            "current folder",
+            normalize_path_lexical(&root.join(folder).join(path)),
+        ));
+    }
+    let candidate = normalize_path_lexical(&root.join(path));
+    if !candidates.iter().any(|(_, path)| path == &candidate) {
+        candidates.push(("checkout root", candidate));
+    }
+    let mut readings = Vec::new();
+    for (base, candidate) in candidates {
+        let Ok(relative) = candidate.strip_prefix(root) else {
+            readings.push(format!("{base}: leaves the checkout"));
+            continue;
+        };
+        if candidate.is_file() {
+            return Ok(relative.to_owned());
+        }
+        readings.push(format!("{base}: {}", relative.display()));
+    }
+    Err(LspErr::MissingFile {
+        path: path.to_owned(),
+        readings: readings.join("; "),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

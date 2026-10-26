@@ -3,6 +3,19 @@ use registry::{State, StopReason};
 use render::status::{self, StateRole};
 
 #[test]
+fn query_folder_uses_only_a_canonical_folder_inside_the_resolved_checkout() {
+    let root = Path::new("/checkout");
+    let actual = [
+        Ok(PathBuf::from("/checkout/src")),
+        Ok(PathBuf::from("/checkout")),
+        Ok(PathBuf::from("/other-checkout/src")),
+        Err(std::io::Error::other("deleted cwd")),
+    ]
+    .map(|cwd| query_folder(root, cwd));
+    assert_eq!(actual, ["src", "", "", ""].map(PathBuf::from));
+}
+
+#[test]
 fn checkout_labels_use_room_identity_and_linked_metadata_only() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

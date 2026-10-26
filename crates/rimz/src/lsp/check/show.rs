@@ -7,6 +7,7 @@ pub fn show(
     arguments: &[String],
     full: bool,
     root: &Path,
+    folder: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
     usage: Option<&super::super::usage::Log>,
@@ -29,7 +30,7 @@ pub fn show(
     for (argument, (anchor, position)) in arguments.iter().zip(anchors) {
         let line_target = is_line_target(&anchor);
         let needs_outline = anchor.symbol.is_some() || position.is_some() || line_target;
-        let (anchor, path, _) = match context.resolve(anchor) {
+        let (anchor, path) = match resolve_argument(&context, anchor, folder) {
             Ok(resolved) => resolved,
             Err(verdict) => {
                 let (status, code) = match verdict.status {
@@ -90,6 +91,32 @@ pub fn show(
         ));
     }
     Ok(blocks)
+}
+
+fn resolve_argument(
+    context: &Context<'_>,
+    anchor: Anchor,
+    folder: &Path,
+) -> Result<(Anchor, PathBuf), Box<Verdict>> {
+    if anchor.qualifier.is_some() || Path::new(&anchor.path).is_absolute() {
+        return context
+            .resolve(anchor)
+            .map(|(anchor, path, _)| (anchor, path));
+    }
+    let error = match query::typed_path(context.checkout, folder, Path::new(&anchor.path)) {
+        Ok(path) => return Ok((anchor, path)),
+        Err(error) => error,
+    };
+    let written = anchor.path.clone();
+    context
+        .resolve(anchor)
+        .map(|(anchor, path, _)| (anchor, path))
+        .map_err(|mut verdict| {
+            if verdict.status == Status::MissingPath {
+                verdict.detail = format!("{error}; no checkout file ends with {written}");
+            }
+            verdict
+        })
 }
 
 fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Position>)> {
@@ -296,6 +323,68 @@ mod tests {
         (1..=210).map(|n| format!("  line {n}\n")).collect()
     }
 
+    #[test]
+    fn show_folder_reading_wins_and_preserves_the_enclosing_line_target() {
+        let checkout = tempfile::tempdir().unwrap();
+        let root = checkout.path();
+        std::fs::create_dir(root.join("src")).unwrap();
+        for file in ["lib.rs", "src/lib.rs"] {
+            std::fs::write(root.join(file), source()).unwrap();
+        }
+        let context = Context {
+            checkout: root,
+            entries: &[],
+            servers: &BTreeMap::new(),
+            files: vec!["lib.rs".into(), "src/lib.rs".into()],
+            outlines: BTreeMap::new(),
+            failures: BTreeMap::new(),
+            usage: None,
+        };
+        let (anchor, position) = parse_argument("lib.rs:4").unwrap();
+        let (anchor, path) = resolve_argument(&context, anchor, Path::new("src")).unwrap();
+        assert_eq!(
+            render_item(&anchor, position, &path, &nodes(), &source(), false, false),
+            (
+                "src/lib.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n".into(),
+                0
+            )
+        );
+    }
+
+    #[test]
+    fn show_missing_folder_path_names_both_readings_and_the_suffix_fallback() {
+        let context = Context {
+            checkout: Path::new("/checkout"),
+            entries: &[],
+            servers: &BTreeMap::new(),
+            files: Vec::new(),
+            outlines: BTreeMap::new(),
+            failures: BTreeMap::new(),
+            usage: None,
+        };
+        let anchor = parse_argument("gone.rs:1-2").unwrap().0;
+        let error = resolve_argument(&context, anchor, Path::new("src"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            (error.status, error.detail),
+            (Status::MissingPath, "file not found: gone.rs; looked in current folder: src/gone.rs; checkout root: gone.rs; relative paths are read from the current folder, then the checkout root; no checkout file ends with gone.rs".into())
+        );
+        let outside = tempfile::tempdir().unwrap();
+        let path = outside.path().join("lib.rs");
+        std::fs::write(&path, "outside\n").unwrap();
+        let anchor = parse_argument(&format!("{}:1-1", path.display()))
+            .unwrap()
+            .0;
+        let error = resolve_argument(&context, anchor, Path::new("src"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            (error.status, error.detail),
+            (Status::MissingPath, "no matching checkout file".into())
+        );
+    }
+
     fn read(argument: &str, dirty: bool, full: bool) -> (String, i32) {
         let (anchor, position) = parse_argument(argument).unwrap();
         render_item(
@@ -432,6 +521,7 @@ mod tests {
             &["lib.rs:2".into(), "lib.rs:~2".into(), "lib.rs:2:1".into()],
             false,
             root.path(),
+            Path::new(""),
             &[],
             &servers,
             None,
@@ -620,6 +710,7 @@ mod tests {
                 &["src/lib.rs::Parent".into(), "not-an-anchor".into()],
                 false,
                 Path::new("/does-not-exist"),
+                Path::new(""),
                 &[],
                 &BTreeMap::new(),
                 None,
