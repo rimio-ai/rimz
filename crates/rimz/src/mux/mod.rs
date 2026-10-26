@@ -711,9 +711,9 @@ pub struct SplitPaneOptions {
     /// Explicit pane name so the backend keeps its launch identity while
     /// foreground children churn.
     pub title: Option<String>,
-    /// Close the pane when its command exits on Zellij, matching
-    /// `close_on_exit true` on layout-born managed panes. The tmux split backend
-    /// ignores this field; retention follows the user's `remain-on-exit`.
+    /// Close the pane when its command exits on either backend, regardless of
+    /// user retention. On tmux the printed pane is pinned to `remain-on-exit off`;
+    /// a failed pin only warns. `false` leaves retention unchanged.
     pub close_on_exit: bool,
     pub env: BTreeMap<String, String>,
     pub placement: SplitPlacement,
