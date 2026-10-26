@@ -287,7 +287,7 @@ fn reset_archives_records_and_clears_disposable_classes() {
     );
     assert!(
         !paths.skills_dir.exists(),
-        "soft reset clears handleless cached skill copies"
+        "soft reset clears cached skill copies"
     );
 
     let archives = archive_paths(&paths.events_archive_dir);

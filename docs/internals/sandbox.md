@@ -362,11 +362,11 @@ Metadata outside the subset makes the skill unpreparable, and [omissions and ref
 
 ### Rewritten skill copies
 
-Rewritten skills live in `owned/agents/<handle>/skills/<sha256>/` (`StatePaths::agent_skills_dir`). Launches without a handle use `cache/skills/<sha256>/`, which either reset clears and no age sweep touches. Copies sit outside the writable temp unit and are bound read-only at the skill destinations.
+Rewritten skills for every launch live in `cache/skills/<sha256>/` (`StatePaths::skills_dir`), shared by the room. Both resets clear it; no age sweep touches it. Copies sit outside the writable temp unit and are bound read-only at the skill destinations.
 
 `rewrite::digest` hashes the rewrite kind and, for each entry below the skill directory, its relative path, mode, file-or-directory flag, and bytes. A change to any of those produces a new copy. A change to the skill directory's own mode, to timestamps, or to a broken symlink inside it does not. `rewrite::apply` builds a copy in a temporary sibling and renames it into place. A target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
 
-Copies deduplicate within a handle. GC removes the owned directory `owned/agents/<handle>/` once both its newest modification time (the directory and its immediate children) and its newest row's end are seven days old, and never while that row's runtime owner is live. A directory with no row needs only the modification age ([store.md](./store.md#garbage-collection)). Teardown and soft reset keep it, and hard reset drops it. Handleless copies live with the room. Storage reports count both under the workspace state root.
+Copies deduplicate across the room. Per-handle `owned/agents/<handle>/skills/` folders left by older versions drain through [owned GC](./store.md#garbage-collection). Storage reports count copies under the workspace state root.
 
 ### Omissions and refusals
 

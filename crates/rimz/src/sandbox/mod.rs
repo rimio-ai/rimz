@@ -717,7 +717,7 @@ mod tests {
             checkout: None,
             read_only: Vec::new(),
             tmp_dir: unit,
-            skills_dir: &state().agent_skills_dir(Some("otter")),
+            skills_dir: &state().skills_dir,
             ssh_config_file: Path::new("/state/missing-ssh-config"),
             ssh_config_copies_dir: Path::new("/state/ssh-config-copies"),
             provider_home: None,

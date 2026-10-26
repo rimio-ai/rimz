@@ -566,13 +566,6 @@ impl StatePaths {
         remove_tree(&self.out_reader_dir(Some(handle)))
     }
 
-    pub(crate) fn agent_skills_dir(&self, handle: Option<&str>) -> PathBuf {
-        handle.map_or_else(
-            || self.skills_dir.clone(),
-            |handle| self.agents_dir.join(handle).join("skills"),
-        )
-    }
-
     /// Resolve classed files for readers that scan room roots without opening a store.
     pub(crate) fn class_path(root: &Path, class: Class, name: impl AsRef<Path>) -> PathBuf {
         class.path_under(root).join(name)

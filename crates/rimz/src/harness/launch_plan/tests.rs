@@ -44,6 +44,68 @@ fn compile_isolated_request(
 }
 
 #[test]
+fn named_launches_share_rewritten_skill_copies() {
+    let project = tempfile::tempdir().unwrap();
+    let home = project.path().join("home");
+    let skill = home.join("skills/commit");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: commit\ndescription: test\n---\nSkill.",
+    )
+    .unwrap();
+    let skill = skill.canonicalize().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([
+        ("HOME".into(), home.display().to_string()),
+        ("CLAUDE_CONFIG_DIR".into(), home.display().to_string()),
+        (
+            "RIMZ_AGENTS_HOME".into(),
+            project.path().join("agents").display().to_string(),
+        ),
+    ]);
+    let copies = ["otter", "fox"].map(|handle| {
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        request.identity.name = Some(handle.into());
+        request.skills = Some(Vec::new());
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            isolation: Isolation::Scoped,
+            bwrap: Some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        plan.sandbox
+            .unwrap()
+            .plan
+            .mounts
+            .into_iter()
+            .find_map(|mount| match mount {
+                sandbox::Mount::RoBind { source, target } if target == skill => Some(source),
+                _ => None,
+            })
+            .expect("unlisted skill binds a rewritten copy")
+    });
+    assert_eq!(copies[0], copies[1]);
+    assert_eq!(copies[0].parent(), Some(state.skills_dir.as_path()));
+}
+
+#[test]
 fn provider_sandbox_settings_and_warnings_follow_the_resolved_level() {
     let project = tempfile::tempdir().unwrap();
     for action in ["launch", "resume", "fork"] {
