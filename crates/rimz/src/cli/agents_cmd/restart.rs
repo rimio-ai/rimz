@@ -365,13 +365,12 @@ pub(super) fn restart_posture(
     let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     launch.block_set_failure()?;
     let profiles = launch.profiles_for_launch(agent.is_launched_child(), agent.profile.as_deref());
-    if agent
-        .profile
-        .as_deref()
-        .is_some_and(|name| !profiles.0.contains_key(name))
-    {
-        launch.block_failed_reference(agent.profile.as_deref(), None)?;
-    }
+    launch.block_failed_launch(
+        &agent.kind,
+        agent.profile.as_deref(),
+        agent.record.as_deref(),
+        profiles,
+    )?;
     let posture = member_posture(agent, profiles, &launch.teams);
     match &posture.degraded {
         Some(reason @ PostureDegrade::KindChanged { .. }) => {

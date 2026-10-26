@@ -654,18 +654,27 @@ fn block_failed_kind_bases(
     spec: Option<&str>,
     agent_override: Option<&str>,
 ) -> std::result::Result<(), crate::config::effective::EffectiveConfigErr> {
-    launch.block_failed_reference(
-        spec.filter(|name| {
-            let name = name.trim();
-            crate::agents::find_definition(name).is_some() && !profiles.0.contains_key(name)
-        }),
-        agent_override.filter(|name| !launch.profiles.0.contains_key(name.trim())),
-    )?;
-    for cell in layout
-        .agent_cells()
-        .filter(|cell| cell.launch.profile.is_none())
+    if let Some(name) = spec.map(str::trim).filter(|name| {
+        crate::agents::find_definition(name).is_some() || profiles.0.contains_key(*name)
+    }) {
+        launch.block_failed_profile(name, profiles)?;
+    }
+    if let Some(name) = agent_override {
+        launch.block_failed_profile(name, profiles)?;
+    }
+    let cell_profiles = if spec
+        .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
+        .is_some()
     {
-        launch.block_failed_reference(Some(cell.kind.as_str()), None)?;
+        &launch.profiles
+    } else {
+        profiles
+    };
+    for cell in layout.agent_cells() {
+        launch.block_failed_profile(
+            cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()),
+            cell_profiles,
+        )?;
     }
     Ok(())
 }

@@ -6,6 +6,58 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn failed_profile_gate_follows_the_supplied_table_without_replacing_resolution_errors() {
+    let root = tempdir().unwrap();
+    let mut launch = super::load_with_roots(
+        &MachineConfig::default(),
+        root.path(),
+        &root.path().join("home"),
+    )
+    .unwrap();
+    let detail = "/definitions/agents/claude.md: invalid frontmatter";
+    launch
+        .failed_definitions
+        .insert("claude".into(), detail.into());
+    let mut profiles = profiles([
+        ("worker", profile("claude", None)),
+        ("inherited", profile("worker", None)),
+        ("cycle", profile("cycle", None)),
+        ("typo", profile("never-defined", None)),
+    ]);
+    let names = [
+        " claude ",
+        "worker",
+        "inherited",
+        "cycle",
+        "typo",
+        "missing",
+    ];
+    let actual: Vec<_> = names
+        .map(|name| {
+            launch
+                .block_failed_profile(name, &profiles)
+                .err()
+                .map(|error| error.to_string())
+        })
+        .into();
+    profiles.0.insert("claude".into(), profile("claude", None));
+    for name in names {
+        launch.block_failed_profile(name, &profiles).unwrap();
+    }
+    assert_eq!(
+        actual,
+        [
+            Some(detail.to_owned()),
+            Some(detail.to_owned()),
+            Some(detail.to_owned()),
+            None,
+            None,
+            None
+        ]
+    );
+}
+
+#[test]
 fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     let root = tempdir().unwrap();
     std::fs::create_dir(root.path().join("agents")).unwrap();

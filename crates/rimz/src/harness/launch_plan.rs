@@ -206,7 +206,7 @@ pub enum LaunchPlanErr {
     Login(#[from] crate::agents::RoomLoginErr),
     #[error(transparent)]
     Preset(#[from] crate::agents::PresetErr),
-    /// A fresh launch of a profile whose definition failed to load.
+    /// A fresh launch whose selected profile or kind base failed to load.
     #[error("{0}")]
     DefinitionFailed(String),
     #[error(transparent)]
@@ -389,9 +389,12 @@ pub fn prepare_exec(
     }
 }
 
-/// The refusal for a fresh launch of a profile whose definition failed to load. Resume
+/// The refusal for a fresh launch whose selected profile or kind base failed to load. Resume
 /// and fork are left alone: lane resume degrades to a bare resume by design, and restart/fork
-/// refuse at the CLI. A trusted project profile that shadows the failed name launches normally.
+/// refuse at the CLI. A trusted project shadow passes when its chain avoids the failed entry.
+/// A child with a role whose profile `[agents.profiles]` also defines refuses only when that
+/// table refuses too: a direct team-seat child records its role but no team, so it cannot be
+/// told from an inline role, and its seat resolved in `[agents.profiles]`.
 fn definition_failure(
     request: &ExecRequest,
     machine: &crate::config::MachineConfig,
@@ -403,15 +406,28 @@ fn definition_failure(
     ) {
         return None;
     }
-    let profile = request.identity.params.profile.as_deref()?;
-    let shadowed = effective.is_some_and(|effective| {
-        effective.profiles.0.contains_key(profile)
-            || effective.subagent_profiles.0.contains_key(profile)
-    });
-    if shadowed {
-        return None;
+    let profile = request.identity.params.profile.as_deref();
+    let Some(effective) = effective else {
+        return machine.definition_failure_for(profile?);
+    };
+    let refusal = |profiles: &crate::config::ProfilesConfig| {
+        effective
+            .block_failed_launch(
+                &request.kind,
+                profile,
+                request.identity.params.record.as_deref(),
+                profiles,
+            )
+            .err()
+    };
+    let error = refusal(effective.profiles_for_launch(request.subagent, profile))?;
+    let maybe_seat = request.subagent
+        && request.identity.params.role.is_some()
+        && profile.is_some_and(|name| effective.profiles.0.contains_key(name));
+    if maybe_seat {
+        refusal(&effective.profiles)?;
     }
-    machine.definition_failure_for(profile)
+    Some(error.to_string())
 }
 
 pub(super) fn resolve_model(

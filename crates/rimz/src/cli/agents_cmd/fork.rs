@@ -84,15 +84,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     let effective = rimz::config::effective::load(&config, &workspace.project_root)?;
     effective.block_set_failure()?;
-    if seed
-        .launch
-        .profile
-        .as_deref()
-        .is_some_and(|name| !effective.profiles.0.contains_key(name))
-    {
-        effective.block_failed_reference(seed.launch.profile.as_deref(), None)?;
-    }
-    let posture = fork_posture(&seed, &effective.profiles)?;
+    let posture = fork_posture(&seed, &effective)?;
     if args.isolation.is_some() {
         seed.launch.isolation = args.isolation;
     }
@@ -299,7 +291,17 @@ fn fork_tab_names(seed: &ForkSeed, channel: Option<&str>) -> (String, String) {
 /// A fork stays on the source session's provider, so a profile that now
 /// resolves to a different provider refuses here. Every other degrade is
 /// carried on `degraded`; the caller prints it and the fork proceeds bare.
-fn fork_posture(seed: &ForkSeed, profiles: &rimz::config::ProfilesConfig) -> Result<ResumePosture> {
+fn fork_posture(
+    seed: &ForkSeed,
+    effective: &rimz::config::effective::LaunchAgents,
+) -> Result<ResumePosture> {
+    let profiles = &effective.profiles;
+    effective.block_failed_launch(
+        &seed.kind,
+        seed.launch.profile.as_deref(),
+        seed.launch.record.as_deref(),
+        profiles,
+    )?;
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
             record: seed.launch.record.as_deref(),
@@ -503,6 +505,56 @@ mod tests {
         toml::from_str(&format!("agent = {agent:?}")).expect("profile fixture")
     }
 
+    fn posture_with_profiles(seed: &ForkSeed, profiles: &ProfilesConfig) -> Result<ResumePosture> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles = profiles.clone();
+        let effective = rimz::config::effective::load_with_roots(
+            &machine,
+            dir.path(),
+            &dir.path().join("home"),
+        )
+        .unwrap();
+        super::fork_posture(seed, &effective)
+    }
+
+    #[test]
+    fn fork_posture_refuses_profiles_and_recorded_overrides_on_a_failed_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("agents")).unwrap();
+        std::fs::write(dir.path().join("agents/claude.md"), "invalid frontmatter").unwrap();
+        let mut machine = rimz::config::MachineConfig::parse_text(
+            &dir.path().join("config.toml"),
+            "",
+            dir.path(),
+        )
+        .unwrap();
+        machine.agents.profiles = profiles("worker", profile("claude"));
+        let effective = rimz::config::effective::load_with_roots(
+            &machine,
+            dir.path(),
+            &dir.path().join("home"),
+        )
+        .unwrap();
+        let direct = seed("claude", Some("worker"), None);
+        let mut bare = seed("claude", None, None);
+        bare.launch.record = Some(Box::default());
+        let mut overridden = seed("codex", None, None);
+        overridden.launch.record = Some(Box::new(rimz::agents::LaunchRecord {
+            agent: Some("worker".into()),
+            ..Default::default()
+        }));
+        let actual = [&direct, &bare, &overridden].map(|seed| {
+            super::fork_posture(seed, &effective)
+                .err()
+                .map(|error| error.to_string())
+        });
+        assert_eq!(
+            Vec::from(actual),
+            vec![machine.definition_failure_for("claude"); 3]
+        );
+    }
+
     #[test]
     fn fork_posture_replays_full_profile_argv() {
         let prompt = tempfile::NamedTempFile::new().expect("temp prompt file");
@@ -519,8 +571,8 @@ mod tests {
             },
         );
 
-        let posture =
-            fork_posture(&seed("claude", Some("planner"), None), &profiles).expect("posture");
+        let posture = posture_with_profiles(&seed("claude", Some("planner"), None), &profiles)
+            .expect("posture");
 
         assert_eq!(
             posture.launch.args,
@@ -551,7 +603,7 @@ mod tests {
     fn fork_posture_refuses_provider_change() {
         let profiles = profiles("planner", profile("codex"));
 
-        let err = fork_posture(&seed("claude", Some("planner"), None), &profiles)
+        let err = posture_with_profiles(&seed("claude", Some("planner"), None), &profiles)
             .expect_err("provider change");
 
         assert!(
@@ -580,8 +632,8 @@ mod tests {
     fn fork_posture_degrades_missing_profile_to_bare() {
         let seed = seed("claude", Some("retired"), Some(PermissionMode::Yolo));
 
-        let posture =
-            fork_posture(&seed, &ProfilesConfig::default()).expect("bare degraded posture");
+        let posture = posture_with_profiles(&seed, &ProfilesConfig::default())
+            .expect("bare degraded posture");
 
         assert_eq!(posture.launch.args, vec!["--dangerously-skip-permissions"]);
         assert!(matches!(
@@ -594,7 +646,8 @@ mod tests {
     fn fork_posture_keeps_bare_source_permission_argv() {
         let seed = seed("claude", None, Some(PermissionMode::Yolo));
 
-        let posture = fork_posture(&seed, &ProfilesConfig::default()).expect("bare posture");
+        let posture =
+            posture_with_profiles(&seed, &ProfilesConfig::default()).expect("bare posture");
 
         assert_eq!(posture.launch.args, vec!["--dangerously-skip-permissions"]);
         assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));

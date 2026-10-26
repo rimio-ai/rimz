@@ -1534,14 +1534,134 @@ fn failed_kind_bases_refuse_bare_cells_overrides_and_loop_resolution() {
             .map(|error| error.to_string()),
     );
     assert_eq!(actual, vec![machine.definition_failure_for("amp"); 12],);
-    super::resolve_launch(
+    assert_eq!(
+        super::resolve_launch(
+            &launch,
+            ProfileScope::Agents,
+            &machine.agents.commands,
+            Some("legacy"),
+            None,
+        )
+        .unwrap_err()
+        .to_string(),
+        machine.definition_failure_for("amp").unwrap()
+    );
+}
+
+#[test]
+fn failed_kind_bases_refuse_project_profile_chains_in_each_launch_shape() {
+    use crate::config::effective::ProfileScope;
+
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["agents", "subagents", "teams", ".rimz"] {
+        std::fs::create_dir(root.path().join(directory)).unwrap();
+    }
+    for path in ["agents/claude.md", "subagents/amp.md", "teams/good-crew.md"] {
+        std::fs::write(root.path().join(path), "invalid frontmatter").unwrap();
+    }
+    let machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let config = "\
+[profiles.myprof]
+agent = 'claude'
+[profiles.inherited]
+agent = 'myprof'
+[profiles.no-base]
+agent = 'codex'
+[profiles.other-failure]
+agent = 'amp'
+[subagents.profiles.myprof]
+agent = 'codex'
+[subagents.profiles.child]
+agent = 'claude'
+[agents.teams.crew]
+roles = [{role = 'worker', profile = 'myprof'}]
+[agents.teams.good-crew]
+roles = [{role = 'worker', profile = 'no-base'}]
+";
+    std::fs::write(root.path().join(".rimz/config.toml"), config).unwrap();
+    crate::trust::grant_with_roots(root.path(), &root.path().join("config-home")).unwrap();
+    let launch = effective_launch(&machine, root.path());
+    let cases = [
+        (ProfileScope::Agents, Some("myprof"), None),
+        (ProfileScope::Agents, Some("inherited"), None),
+        (ProfileScope::Agents, Some("myprof"), Some("codex")),
+        (ProfileScope::Agents, Some("codex"), Some("myprof")),
+        (ProfileScope::Agents, Some("myprof,term"), None),
+        (ProfileScope::Agents, Some("codex,term"), Some("myprof")),
+        (ProfileScope::Agents, None, Some("myprof")),
+        (ProfileScope::Subagents, Some("child"), None),
+        (ProfileScope::Subagents, Some("child-fast"), None),
+        (ProfileScope::Subagents, Some("child"), Some("codex")),
+        (ProfileScope::Subagents, Some("codex"), Some("child")),
+        (ProfileScope::Subagents, Some("myprof"), Some("child")),
+        (ProfileScope::Agents, Some("crew"), None),
+        (ProfileScope::Agents, Some("crew.worker"), None),
+        (ProfileScope::Agents, Some("crew"), Some("codex")),
+        (ProfileScope::Subagents, Some("crew"), None),
+        (ProfileScope::Subagents, Some("crew.worker"), None),
+        (ProfileScope::Subagents, Some("crew.worker"), Some("codex")),
+    ];
+    let mut actual: Vec<_> = cases
+        .into_iter()
+        .map(|(scope, spec, agent_override)| {
+            super::resolve_launch(
+                &launch,
+                scope,
+                &machine.agents.commands,
+                spec,
+                agent_override,
+            )
+            .err()
+            .map(|error| error.to_string())
+        })
+        .collect();
+    actual.push(
+        resolve_single_agent_spec("myprof", &launch, &machine.agents.commands)
+            .err()
+            .map(|error| error.to_string()),
+    );
+    let expected = vec![machine.definition_failure_for("claude"); actual.len()];
+    for (scope, spec) in [
+        (ProfileScope::Agents, "no-base"),
+        (ProfileScope::Subagents, "myprof"),
+        (ProfileScope::Agents, "good-crew"),
+        (ProfileScope::Subagents, "good-crew.worker"),
+    ] {
+        super::resolve_launch(&launch, scope, &machine.agents.commands, Some(spec), None).unwrap();
+    }
+    let other_failure = resolve_launch(
         &launch,
-        ProfileScope::Agents,
         &machine.agents.commands,
-        Some("legacy"),
+        Some("other-failure"),
         None,
     )
-    .expect("implicit TOML kind chains keep their existing behavior");
+    .err()
+    .map(|error| error.to_string());
+
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        format!(
+            "{config}\n[profiles.claude]\nagent = 'claude'\n\
+                 [subagents.profiles.claude]\nagent = 'claude'\n"
+        ),
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(root.path(), &root.path().join("config-home")).unwrap();
+    let shadowed = effective_launch(&machine, root.path());
+    for (scope, spec) in [
+        (ProfileScope::Agents, "claude"),
+        (ProfileScope::Agents, "myprof"),
+        (ProfileScope::Agents, "inherited"),
+        (ProfileScope::Agents, "crew.worker"),
+        (ProfileScope::Subagents, "claude"),
+        (ProfileScope::Subagents, "child"),
+    ] {
+        super::resolve_launch(&shadowed, scope, &machine.agents.commands, Some(spec), None)
+            .unwrap();
+    }
+    assert_eq!(actual, expected, "{cases:?}");
+    assert_eq!(other_failure, machine.definition_failure_for("amp"));
 }
 
 #[test]
