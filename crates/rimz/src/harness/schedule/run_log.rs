@@ -572,6 +572,16 @@ pub struct HeardSummary {
 }
 
 impl TaskHistory {
+    pub fn is_retired_one_off(&self) -> bool {
+        !self.fires.is_empty()
+            && self
+                .records
+                .iter()
+                .fold(None, last_kind_after)
+                .map(|(_, kind)| kind)
+                == Some(super::TaskKind::OneOff)
+    }
+
     fn split(mut records: Vec<LoopRunRecord>, armed_at: Option<Timestamp>) -> Self {
         records.retain(|record| armed_at.is_none_or(|at| record.at >= at));
         let mut fires = Vec::new();
@@ -747,6 +757,16 @@ pub(super) fn daily_budget_gate(
     )
 }
 
+fn last_kind_after(
+    previous: Option<(Timestamp, super::TaskKind)>,
+    record: &LoopRunRecord,
+) -> Option<(Timestamp, super::TaskKind)> {
+    match record.kind {
+        Some(kind) if previous.is_none_or(|(at, _)| record.at >= at) => Some((record.at, kind)),
+        _ => previous,
+    }
+}
+
 fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
     let entry = stats.entry(record.task.clone()).or_insert(LoopRunStats {
         runs: 0,
@@ -756,11 +776,7 @@ fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, 
         acting: None,
         heard: None,
     });
-    if let Some(kind) = record.kind
-        && entry.last_kind.is_none_or(|(at, _)| record.at >= at)
-    {
-        entry.last_kind = Some((record.at, kind));
-    }
+    entry.last_kind = last_kind_after(entry.last_kind, &record);
     if record.result == LoopRunResult::SignalSkipped {
         if let Some(heard) = HeardSignal::of(&record) {
             entry.heard = Some(heard);
