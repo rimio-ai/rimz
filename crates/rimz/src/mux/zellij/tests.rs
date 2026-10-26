@@ -804,6 +804,27 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn open_sidebar_leaves_uninspectable_live_room_untouched() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+exit 0
+"#,
+    );
+
+    let opened = room
+        .backend(&shim)
+        .with_health_probe_timeout_for_test(Duration::from_millis(50))
+        .open_sidebar(&room.sidebar_options(120), None);
+
+    assert!(opened.is_err(), "{opened:?}");
+    assert_eq!(command_count(&shim_log(&temp), "delete-session"), 0);
+}
+
+#[cfg(unix)]
+#[test]
 fn live_session_native_probe_accepts_success_before_deadline() {
     let room = TestRoom::new();
     let (temp, shim) = zellij_shim(
