@@ -13,6 +13,19 @@ pub struct SentryConfig {
     /// Sentry DSN. Empty or unset disables reporting.
     pub dsn: Option<String>,
     /// Deployment environment tag (e.g. `dev`, `production`). Defaults to
-    /// `production` when unset.
+    /// `production` for release builds and `development` for other profiles.
     pub environment: Option<String>,
+}
+
+#[cfg(feature = "sentry")]
+impl SentryConfig {
+    pub(crate) fn load_lenient(path: &std::path::Path) -> Self {
+        super::recover_parsed(
+            path,
+            super::parse_core_text_collecting,
+            &mut super::ConfigNotices::default(),
+        )
+        .value
+        .sentry
+    }
 }

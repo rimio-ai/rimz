@@ -641,6 +641,11 @@ surface-budget = 212
 
 [[verdict]]
 kind = "item"
+key = "config::sentry::SentryConfig::load_lenient"
+reason = "Reporting startup reads the core file with whole-file leniency without building or memoizing machine config."
+
+[[verdict]]
+kind = "item"
 key = "config::skills::skill_is_callable"
 reason = "Launch reminders, native LSP denial and definition validation share one profile skill gate."
 
