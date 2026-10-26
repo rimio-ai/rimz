@@ -1,7 +1,7 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet store rows.
 
-use crate::agents::{Entitlement, ExtraCredits, RateLimitWindow};
+use crate::agents::{BudgetWindow, Entitlement, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
@@ -1098,16 +1098,22 @@ fn provider_stats_row(
     let left = provider_stats_left_spans(theme, headline, detail);
     let (label, style) = panel
         .day_budget
-        .as_ref()
-        .filter(|budget| budget.parked)
+        .map(|budget| (budget, BudgetWindow::Day))
+        .or_else(|| {
+            panel
+                .month_budget
+                .map(|budget| (budget, BudgetWindow::Month))
+        })
+        .filter(|(budget, _)| budget.parked)
         .map_or_else(
             || (dollars2(headline.usd), theme.money_style(Modifier::BOLD)),
-            |budget| {
+            |(budget, window)| {
                 (
                     format!(
-                        "{} of {}/day",
+                        "{} of {}/{}",
                         dollars2(budget.spend_usd),
-                        dollars_cap(budget.cap_usd)
+                        dollars_cap(budget.cap_usd),
+                        window.label()
                     ),
                     theme.alarm(Modifier::BOLD),
                 )

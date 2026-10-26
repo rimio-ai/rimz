@@ -36,7 +36,7 @@ Caps take finite, non-negative dollar amounts with an optional `$` prefix. A lea
 | --- | --- | --- |
 | `BudgetSpec` | a bare amount (`BudgetWindow::Session`) or a `/day` amount (`BudgetWindow::Day`) | `--budget`, profile and role budgets, `rimz agents budget` |
 | `DayCap` | a `/day` amount only | `harness.budget`, absolute fleet `rimz budget` values |
-| `AccountCap` | a `/day` or `/month` amount | `[accounts.budget]`, standalone named-account `budget` |
+| `AccountCap` | a `/day` or `/month` amount | `[accounts.budget]`, standalone named-account `budget`, absolute `rimz budget --account` values |
 | `TurnCap` | a bare amount only | `harness.turn_budget` |
 
 `BudgetWindow::Turn` exists only on projected turn parks: the parser has no `/turn` form. `BudgetWindow::Month` belongs to account caps only; the agent grammar still refuses `/month`. A `/day` window uses local dates in the configured `timezone`; `/month` starts at 00:00 UTC on the 1st, independent of that zone. The window, scope, and park vocabulary (`BudgetWindow`, `BudgetScope`, `BudgetPark`) lives in [`agents/state.rs`](../../../crates/rimz/src/agents/state.rs), so the read side can use it without the engine.
@@ -63,7 +63,7 @@ So a runtime absolute cap arms a scope that config leaves unset, and it outlives
 | --- | --- |
 | `none` | no cap applies: no base, an ineligible account, a `/month` cap on a subscription pool, or a raise whose configured base was removed |
 | `config` | the configured cap applies unchanged |
-| `override` | a runtime absolute `/day` cap replaces any configured default |
+| `override` | a runtime absolute cap replaces any configured default and its window |
 | `raised` | a `+AMOUNT` raise applies, as its frozen total over the base |
 | `cleared` | a runtime `off` or `clear` disables the scope |
 
@@ -197,12 +197,13 @@ Two commands write the ledgers, and neither edits a config file. Every mutation 
 - Every mutation also clears the throttle and the waiver.
 - The report prints source `override` for both absolute and relative edits, since the ledger does not record which one it was.
 
-[`rimz budget`](../../../crates/rimz/src/cli/budget.rs) inspects or sets a daily scope: the fleet by default, or one pool with `--account`. `--account claude` resolves to this room's `claude` account, and `--account claude@work` names one declared account. Either way the command acts on that account's pool.
+[`rimz budget`](../../../crates/rimz/src/cli/budget.rs) inspects or sets a time-windowed scope: the daily fleet by default, or one day or month pool with `--account`. `--account claude` resolves to this room's `claude` account, and `--account claude@work` names one declared account. Either way the command acts on that account's pool.
 
-- An absolute value must be `/day` and can arm an unconfigured scope.
-- `+AMOUNT` requires an effective cap.
+- An absolute value must be `/day` for the fleet, or `/day` or `/month` for an account, and can arm an unconfigured scope.
+- `+AMOUNT` requires a standing cap and keeps its window, including on a subscription-exempt month cap. Both window suffixes on the delta are refused.
 - `off` and `clear` disable the scope.
 - With no `--account`, the report adds a table of every eligible pool with an effective cap or a source other than `none`, so runtime-only caps and cleared pools show.
+- Subscription warnings come from the same scope predicate as applicability and print before exempt pools are filtered out. Reports read spend through the scope's window-aware reader; uncapped scopes keep local-day spend.
 - When `harness.turn_budget` is set, the report prints a read-only turn cap line with source `config`.
 
 Neither command checks who calls it, so an agent shell can raise or clear a cap the same way a person can. Both expose structured facts with `--json`, and the [CLI reference](../../reference/cli/budget.md) owns the report fields.

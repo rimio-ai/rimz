@@ -140,6 +140,7 @@ fn merged(reports: &[ProviderReport]) -> Vec<AccountRow> {
             version: report.version.clone(),
             spending: report.spending.clone(),
             day_budget: report.day_budget,
+            month_budget: report.month_budget,
             installed: report.installed,
             legacy_spend_step: report.spend_step,
         })
@@ -238,6 +239,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         active_sessions: 0,
         spending: None,
         day_budget: None,
+        month_budget: None,
         extra_credits: None,
         reset_credits: None,
         redeem_forecast: None,
@@ -1938,6 +1940,40 @@ fn protocol_fixture(
         provider.spending.as_deref().cloned().unwrap(),
     );
     (accounts, provider, spending)
+}
+
+#[test]
+fn month_budget_survives_account_and_legacy_reports_and_text_detail() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let mut provider = panel("claude");
+    provider.month_budget = Some(DailyBudgetView {
+        cap_usd: 10.0,
+        spend_usd: 12.0,
+        parked: true,
+    });
+    let reports = assemble_reports(
+        &default_logins(),
+        &AccountsCache::default(),
+        default_panels(vec![provider]),
+        &ProviderSpendingCache::default(),
+        Some("claude"),
+    );
+    let rows = merged(&reports);
+    let legacy = rows[0].legacy(&AccountStanding::unread(&MachineConfig::default()), false);
+    for json in [
+        serde_json::to_value(&rows[0]).unwrap(),
+        serde_json::to_value(&legacy).unwrap(),
+    ] {
+        assert_eq!(json["day_budget"], serde_json::Value::Null);
+        assert_eq!(
+            json["month_budget"],
+            serde_json::json!({"cap_usd":10.0, "spend_usd":12.0, "parked":true})
+        );
+    }
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.contains("$12.00 of $10.00/month · parked"), "{text}");
 }
 
 #[test]

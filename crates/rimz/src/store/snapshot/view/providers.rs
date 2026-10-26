@@ -208,6 +208,7 @@ impl SidebarSnapshot {
                     active_sessions,
                     spending: spending.map(std::sync::Arc::new),
                     day_budget: None,
+                    month_budget: None,
                     extra_credits: None,
                     reset_credits: None,
                     redeem_forecast: None,

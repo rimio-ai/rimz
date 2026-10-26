@@ -26,7 +26,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [events.md](./cli/events.md) | `rimz events`: listing recent signals, following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: comparing provider plans, usage, launch health, and account details; declaring, selecting, and removing accounts; redeeming Claude or Codex reset credits. |
 | [stats.md](./cli/stats.md) | `rimz stats`: the machine-wide token and dollar panel, cache freshness, the held dashboard, JSON fields, and the assist timeline. |
-| [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps, and what a cap blocks. |
+| [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing agent, room and provider-account dollar caps, and what a cap blocks. |
 | [worktree.md](./cli/worktree.md) | `rimz worktree`: creating, checking out a pull request, listing, entering, landing, removing, and sweeping RimZ-owned Git worktrees. |
 | [loop.md](./cli/loop.md) | `rimz loop`: clock, signal, and watch tasks; project tasks; waits and checks; budgets, the surplus gate, and strikes; run forensics; and the timer. |
 | [workflow.md](./cli/workflow.md) | `rimz workflow`: starting, listing, showing, canceling, resuming, and validating workflow runs; the waiting line, park reasons, workflow loop tasks, and the JSON shapes. |

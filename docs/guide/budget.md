@@ -48,7 +48,7 @@ In a supervised `-p` run the park is also the run's ending: the run records `bud
 
 ### Cap every turn
 
-`harness.turn_budget` bounds the dollars one agent can spend between the start and end of one turn, independently of the agent's session cap and the daily room and account caps:
+`harness.turn_budget` bounds the dollars one agent can spend between the start and end of one turn, independently of the agent's session cap, the room's daily cap, and account dollar caps:
 
 ```sh
 rimz config set harness.turn_budget 3
@@ -95,9 +95,10 @@ rimz budget 30/day                 # replace the room cap
 rimz budget +10                    # add headroom
 rimz budget off                    # disable it; `clear` is an alias
 rimz budget +25 --account claude   # the same verbs against this room's claude account
+rimz budget --account claude@api 300/month # set a monthly API-key cap
 ```
 
-The report puts today's spend beside the cap, says whether the scope is parked, and gives the commands to raise or lift it. With no cap it gives the command to set one. The account table includes runtime-only caps and lifted pools, not just config defaults. An account report names the login you asked for, the pool it shares, and the other members, so you can see which accounts an edit affects.
+The report puts today's or this UTC month's spend beside the cap, says whether the scope is parked, and gives the commands to raise or lift it. With no cap it gives the command to set one. The account table includes runtime-only caps and lifted pools, not just config defaults. An account report names the login you asked for, the pool it shares, and the other members, so you can see which accounts an edit affects. A subscription-exempt month cap warns on stderr, even when the uncapped pool is omitted from the table; setting or raising it still succeeds.
 
 For scripts, add `--json` to either budget command. Dollar amounts are numbers, unknown agent spend is null, and account scopes carry the pool and all its members. The [budget reference](../reference/cli/budget.md) lists the fields.
 

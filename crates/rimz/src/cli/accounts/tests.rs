@@ -136,6 +136,7 @@ fn merged_json_retains_launch_health_and_adds_provider_facts() {
             "version",
             "spending",
             "day_budget",
+            "month_budget",
         ] {
             assert!(row.get(key).is_some(), "missing {key}: {row}");
         }

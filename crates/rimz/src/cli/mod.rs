@@ -646,7 +646,7 @@ enum Subcmd {
     /// A named account is a separate provider home a room launches into.
     #[command(name = "accounts")]
     Logins(accounts::AccountsArgs),
-    /// Inspect or change room and provider-account daily dollar caps.
+    /// Inspect or change room and provider-account dollar caps.
     Budget(budget::BudgetArgs),
     /// Preview the bundled provider-dashboard pets.
     ///

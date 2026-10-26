@@ -1573,7 +1573,6 @@ pub(crate) fn project_budget_views(
     logins: &RoomLoginSet,
 ) {
     let now = snapshot.now;
-    let cutoff = local_day_cutoff_secs(now, &config.time_zone());
     let fleet_scope = DailyBudgetScope::Fleet;
     let fleet = fleet_scope.read_ledger(runtime, state);
     snapshot.fleet_budget = fleet_scope
@@ -1590,27 +1589,37 @@ pub(crate) fn project_budget_views(
     let catalog = account_catalog(config);
     for panel in &mut snapshot.providers {
         panel.day_budget = None;
+        panel.month_budget = None;
         let key = panel.login_key();
         if !in_use.contains(&key) {
             continue;
         }
         let scope = DailyBudgetScope::account(&catalog, &key);
         let ledger = scope.read_ledger(runtime, state);
-        panel.day_budget = scope
-            .effective_cap(&ledger, config, runtime)
-            .filter(|cap| cap.window == BudgetWindow::Day)
-            .map(|cap| {
-                let cap_usd = cap.cap_usd;
-                let spend_usd = scope
-                    .account_login()
-                    .and_then(|pool| login_day_usd(provider, cutoff, pool))
-                    .unwrap_or_default();
-                crate::store::snapshot::DailyBudgetView {
-                    cap_usd,
-                    spend_usd,
-                    parked: ledger.parked.is_some() && spend_usd >= cap_usd,
+        let Some(cap) = scope.effective_cap(&ledger, config, runtime) else {
+            continue;
+        };
+        let spend = scope.spend_usd(runtime, config, now, Some(provider), cap.window);
+        let spend_usd = spend.unwrap_or_default();
+        let view = crate::store::snapshot::DailyBudgetView {
+            cap_usd: cap.cap_usd,
+            spend_usd,
+            parked: ledger.parked.is_some() && spend_usd >= cap.cap_usd,
+        };
+        match cap.window {
+            BudgetWindow::Day => panel.day_budget = Some(view),
+            BudgetWindow::Month => {
+                panel.month_budget = Some(view);
+                if !panel.metered {
+                    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+                        spend,
+                        None,
+                        Some(cap.cap_usd),
+                    ));
                 }
-            });
+            }
+            BudgetWindow::Session | BudgetWindow::Turn => {}
+        }
     }
 }
 

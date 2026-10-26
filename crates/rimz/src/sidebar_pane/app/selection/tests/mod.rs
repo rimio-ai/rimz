@@ -309,6 +309,7 @@ fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
         active_sessions: 0,
         spending: None,
         day_budget: None,
+        month_budget: None,
         extra_credits: None,
         reset_credits: None,
         redeem_forecast: None,

@@ -737,6 +737,7 @@ fn provider_panel(
             .into(),
         ),
         day_budget: None,
+        month_budget: None,
         extra_credits: None,
         reset_credits: None,
         redeem_forecast: None,

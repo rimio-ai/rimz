@@ -95,6 +95,7 @@ expression: json
       "spend_usd": 8.1,
       "parked": false
     },
+    "month_budget": null,
     "agents": null,
     "active": false,
     "default_for": []

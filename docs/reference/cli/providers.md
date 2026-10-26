@@ -33,7 +33,8 @@ Flags follow the accounts command. The alias retains cached login records within
 | `reset_credits` | `{"count": N, "effect": …}` plus `soonest_expiry` and the sorted `expiries` array when known. `effect` says what redeeming a credit does to the window's reset: `"restarts_window"` (Codex: the reset moves a full window from the redemption) or `"keeps_schedule"` (Claude: the reset stays where it was). |
 | `spend_step` | Always a value: `subscription`, `paid_credit`, `reset_credit`, or `spent`, as the [accounts JSON contract](./accounts.md#json-output) defines them. Defaults to `subscription` without a reading. |
 | `spending` | The history pool's spend projection; `null` when no tally is recorded. |
-| `day_budget` | `{"cap_usd", "spend_usd", "parked"}` for the account's daily cap, where `spend_usd` is spend since local midnight. |
+| `day_budget` | `{"cap_usd", "spend_usd", "parked"}` for the account's daily cap, where `spend_usd` is spend since local midnight; `null` without a day cap. |
+| `month_budget` | The same shape for a counting monthly cap, with spend since 00:00 UTC on the 1st; `null` otherwise, including subscription-exempt pools. |
 | `agents` | Cross-room count for this account, or `null` when rooms cannot be inventoried. Replaces the former session-count field. |
 | `active` | `true` on this room's active account; false outside a room. |
 | `default_for` | The layers the account is the default for: any of `this_room` (a room pin only), `this_project`, `new_rooms`, or an empty array. |
@@ -45,7 +46,7 @@ Keys inside `windows`, `extra_credits.known`, and `reset_credits` are left out w
 ## See also
 
 - [Accounts CLI](./accounts.md): the replacement command, human output, freshness rules, and merged JSON contract.
-- [Budget CLI](./budget.md): set and inspect the daily caps behind `budget`.
+- [Budget CLI](./budget.md): set and inspect the day or month caps behind `budget`.
 - [Stats CLI](./stats.md): machine-wide token and dollar history, and the command that publishes spend.
 - [Token Insight guide](../../guide/insight.md#per-account-the-provider-dashboard): the same account picture in the sidebar.
 - [Providers internals](../../internals/agents/providers.md): probes, window fusion, caches, and refresh cadences.

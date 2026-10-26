@@ -1,4 +1,4 @@
-//! Inspect and change room-fleet or provider-account daily dollar caps.
+//! Inspect and change room-fleet or provider-account dollar caps.
 
 use std::io::Write;
 use std::str::FromStr;
@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::{Ctx, GlobalFlags};
 use rimz::agents::{BudgetWindow, LoginCatalog, RoomLoginSet};
-use rimz::config::{DayCap, MachineConfig};
+use rimz::config::{AccountCap, DayCap, MachineConfig};
 use rimz::harness::budget::{BudgetSpec, DailyBudgetScope, read_scope_state, scope_interrupted};
 use rimz::ids::{AgentKind, LoginKey};
 use rimz::message::synthetic::SyntheticMessage;
@@ -18,7 +18,8 @@ use rimz::store::message::{DeliveryGate, MessageSender};
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
-    /// New `/day` cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
+    /// New `/day` cap (`/month` with `--account`), `+AMOUNT`, or `off`/`clear`;
+    /// omit to inspect.
     value: Option<String>,
     /// Target a provider's room default or an explicit kind@name instead of the fleet.
     #[arg(long, value_name = "KIND[@NAME]")]
@@ -168,14 +169,14 @@ fn validate_kind(raw: &str) -> Result<AgentKind> {
 }
 
 fn parse_raise(raw: &str) -> Result<f64> {
+    if raw.contains('/') {
+        bail!("a relative budget raise uses `+AMOUNT`, without `/day` or `/month`");
+    }
     let delta = raw
         .strip_prefix('+')
         .expect("caller checked prefix")
         .parse::<BudgetSpec>()
         .map_err(|err| anyhow::anyhow!("invalid budget raise `{raw}`: {err}"))?;
-    if delta.window != BudgetWindow::Session {
-        bail!("a relative budget raise uses `+AMOUNT`, without `/day`");
-    }
     Ok(delta.cap_usd)
 }
 
@@ -202,7 +203,17 @@ fn mutate_scope(
             ledger.disabled = false;
         }
         raw => {
-            scope.apply_absolute(&mut ledger, parse_day_cap(raw)?.as_spec());
+            let cap = match scope {
+                DailyBudgetScope::Fleet if raw.ends_with("/month") => {
+                    bail!("a fleet cap is `/day` only; `/month` applies with `--account`");
+                }
+                DailyBudgetScope::Fleet => parse_day_cap(raw)?.as_spec(),
+                DailyBudgetScope::Account(_) => raw
+                    .parse::<AccountCap>()
+                    .with_context(|| format!("invalid account budget value `{raw}`"))?
+                    .as_spec(),
+            };
+            scope.apply_absolute(&mut ledger, cap);
         }
     }
     ledger.parked = None;
@@ -224,6 +235,7 @@ fn parse_day_cap(raw: &str) -> Result<DayCap> {
 struct ScopeReport {
     scope: String,
     cap_usd: Option<f64>,
+    window: Option<BudgetWindow>,
     source: String,
     spend_usd: f64,
     parked: bool,
@@ -231,6 +243,8 @@ struct ScopeReport {
     members: Option<Vec<LoginKey>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     requested: Option<LoginKey>,
+    #[serde(skip)]
+    subscription_warning: Option<String>,
 }
 
 impl ScopeReport {
@@ -240,15 +254,17 @@ impl ScopeReport {
         state: &rimz::StatePaths,
         config: &MachineConfig,
         catalog: &LoginCatalog,
-        spend_usd: f64,
+        spend: impl FnOnce(BudgetWindow) -> f64,
     ) -> Self {
         let ledger = scope.read_ledger(runtime, Some(state));
+        let cap = scope.effective_cap(&ledger, config, runtime);
         let pool = scope.account_login();
         Self {
             scope: pool.map_or_else(|| "fleet".to_owned(), ToString::to_string),
-            cap_usd: scope.effective_cap_usd(&ledger, config, runtime),
+            cap_usd: cap.map(|cap| cap.cap_usd),
+            window: cap.map(|cap| cap.window),
             source: scope.cap_source(&ledger, config, runtime).to_string(),
-            spend_usd,
+            spend_usd: spend(cap.map_or(BudgetWindow::Day, |cap| cap.window)),
             parked: ledger.parked.is_some(),
             members: pool.map(|pool| {
                 catalog
@@ -258,17 +274,31 @@ impl ScopeReport {
                     .collect()
             }),
             requested: None,
+            subscription_warning: scope
+                .subscription_warning(&ledger, config, runtime)
+                .map(|(_, warning)| warning),
         }
     }
 
     fn write(&self, out: &mut impl Write, command: &str) -> std::io::Result<()> {
         let Some(cap) = self.cap_usd else {
+            if self.members.is_some() {
+                return writeln!(
+                    out,
+                    "no cap · set one: {command} 50/day or {command} 300/month"
+                );
+            }
             return writeln!(out, "no daily cap · set one: {command} 50/day");
+        };
+        let period = if self.window == Some(BudgetWindow::Month) {
+            "this month"
+        } else {
+            "today"
         };
         let park = if self.parked { "parked" } else { "not parked" };
         writeln!(
             out,
-            "${:.2} of ${cap:.2} today · {park} · source {} · raise: {command} +10 · lift: {command} off",
+            "${:.2} of ${cap:.2} {period} · {park} · source {} · raise: {command} +10 · lift: {command} off",
             self.spend_usd, self.source
         )
     }
@@ -295,15 +325,20 @@ fn inspect(
         &runtime.shared_provider_spending_path(),
     );
     let read = |scope: &DailyBudgetScope| {
-        let spend = if matches!(scope, DailyBudgetScope::Fleet) {
-            fleet_spend
-        } else {
-            None
-        }
-        .unwrap_or_else(|| scope.day_spend_usd(runtime, config, now, Some(&provider)));
-        ScopeReport::read(scope, runtime, state, config, &catalog, spend)
+        ScopeReport::read(scope, runtime, state, config, &catalog, |window| {
+            if matches!(scope, DailyBudgetScope::Fleet) {
+                fleet_spend
+            } else {
+                None
+            }
+            .unwrap_or_else(|| {
+                scope
+                    .spend_usd(runtime, config, now, Some(&provider), window)
+                    .unwrap_or_default()
+            })
+        })
     };
-    let report = if let Some(key) = requested {
+    let mut report = if let Some(key) = requested {
         let mut account = read(&DailyBudgetScope::account(&catalog, key));
         account.requested = Some(key.clone());
         BudgetReport {
@@ -327,14 +362,21 @@ fn inspect(
             .collect();
         BudgetReport {
             fleet: Some(fleet),
-            accounts: scopes
-                .iter()
-                .map(read)
-                .filter(|scope| scope.cap_usd.is_some() || scope.source != "none")
-                .collect(),
+            accounts: scopes.iter().map(read).collect(),
             turn_cap_usd: config.harness.turn_budget.map(|cap| cap.as_usd()),
         }
     };
+    let mut stderr = crate::cli::render::err();
+    for account in &report.accounts {
+        if let Some(warning) = &account.subscription_warning {
+            writeln!(stderr, "rimz: warning: {warning}")?;
+        }
+    }
+    if requested.is_none() {
+        report
+            .accounts
+            .retain(|scope| scope.cap_usd.is_some() || scope.source != "none");
+    }
     if args.json {
         crate::cli::render::json(&report)?;
     } else {
@@ -376,7 +418,7 @@ fn inspect(
             for account in &report.accounts {
                 table.row([
                     crate::cli::render::cell(&account.scope),
-                    crate::cli::render::cell(cap_label(account.cap_usd)),
+                    crate::cli::render::cell(cap_label(account.cap_usd, account.window)),
                     crate::cli::render::cell(&account.source),
                     crate::cli::render::cell(format!("${:.2}", account.spend_usd)),
                     crate::cli::render::cell(if account.parked { "yes" } else { "no" }),
@@ -394,8 +436,11 @@ fn inspect(
     Ok(())
 }
 
-fn cap_label(cap: Option<f64>) -> String {
-    cap.map_or_else(|| "none".to_owned(), |cap| format!("${cap:.2}/day"))
+fn cap_label(cap: Option<f64>, window: Option<BudgetWindow>) -> String {
+    cap.zip(window).map_or_else(
+        || "none".to_owned(),
+        |(cap_usd, window)| BudgetSpec { cap_usd, window }.to_string(),
+    )
 }
 
 fn checked_raise(current: f64, delta: f64) -> Result<f64> {

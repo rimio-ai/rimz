@@ -213,7 +213,7 @@ Forge terms read the existing room cache only: explain does not keep a selected 
 
 ### The account pin
 
-Without `--account`, each fire takes the room's current account for the agent's provider: its pin, else the trusted project default, else the live machine default, else `default`. Pinning, unpinning, or changing a default the room follows moves the task with the room. `--account <NAME>` holds the task on one [named account](./accounts.md) whatever the room selects: the fire launches on it, and its hooks preflight, daily caps, surplus gate, and window triggers read it. `--account default` pins the provider's own home.
+Without `--account`, each fire takes the room's current account for the agent's provider: its pin, else the trusted project default, else the live machine default, else `default`. Pinning, unpinning, or changing a default the room follows moves the task with the room. `--account <NAME>` holds the task on one [named account](./accounts.md) whatever the room selects: the fire launches on it, and its hooks preflight, dollar caps, surplus gate, and window triggers read it. `--account default` pins the provider's own home.
 
 The flag takes a bare name, where `rimz start --account` takes `KIND@NAME`: a task has one agent, so the provider is the one its `--agent` spec resolves to. Add refuses a name that provider does not declare, a provider without named accounts, and an account whose home is missing or unhooked, each with the `rimz accounts` fix. The row stores the name alone as `account`. A pinned task uses the provider and model resolved from its definition, without availability-based tier fallback. Unpinned tasks retain availability-based routing.
 
@@ -424,7 +424,7 @@ A fire records `budget skipped` from any of three sources:
 | Source | Applies to |
 | --- | --- |
 | The task's own `--budget-per-day` | `--agent` |
-| A room or account daily cap ([what a cap blocks](./budget.md#what-a-cap-blocks)) | `--agent`, `--wait` |
+| A room's daily cap or account's day or month cap ([what a cap blocks](./budget.md#what-a-cap-blocks)) | `--agent`, `--wait` |
 | An exhausted Qwen 5-hour, 7-day, or 30-day quota window on the task's account | `--agent` |
 
 The room, account, and quota caps are checked again when the agent launches and between verify attempts. A Qwen skip names the Alibaba region, window, usage, and reset.

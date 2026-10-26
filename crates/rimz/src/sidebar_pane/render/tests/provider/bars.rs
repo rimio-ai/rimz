@@ -1207,6 +1207,38 @@ fn api_key_provider_shows_budget_left_or_unlimited_full_bar() {
 }
 
 #[test]
+fn api_month_budget_drains_and_names_a_parked_month_in_the_headline() {
+    let theme = Theme::fixed(false);
+    let mut panels = two_provider_panels();
+    let panel = &mut panels[0];
+    panel.metered = false;
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(6.0),
+        None,
+        Some(10.0),
+    ));
+    let rows = metered_bar_rows(&theme, panel);
+    let text = rows[0].to_string();
+    assert!(text.contains("$4"), "{text}");
+    let track = budget_track(&rows[0]);
+    assert!(track.contains('▰') && track.contains('▱'), "{text}");
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(9.0),
+        None,
+        Some(10.0),
+    ));
+    let rows = metered_bar_rows(&theme, panel);
+    assert!(budget_track(&rows[0]).matches('▰').count() < track.matches('▰').count());
+    panel.month_budget = Some(crate::store::snapshot::DailyBudgetView {
+        cap_usd: 10.0,
+        spend_usd: 10.25,
+        parked: true,
+    });
+    let rendered = Dashboard::stacked(&theme, &panels[..1]).text();
+    assert!(rendered.contains("$10.25 of $10/month"), "{rendered}");
+}
+
+#[test]
 fn antigravity_metered_unknown_and_quota_rows_never_render_as_api() {
     let theme = Theme::fixed(true);
     let mut panel = provider_panel("antigravity", "Antigravity", 33, true, false, None);
