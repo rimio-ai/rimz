@@ -11,6 +11,40 @@ use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 use super::*;
 
 #[test]
+fn usage_refresh_claims_every_metered_alternate_independently_of_selection() {
+    let mut results = Vec::new();
+    for top_metered in [false, true] {
+        let (_dir, runtime) = account_usage_runtime();
+        let mut top = provider_panel("pi", Vec::new());
+        top.metered = top_metered;
+        top.sub_provider = Some("openai-codex".to_owned());
+        top.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+        let mut alternate = provider_panel("pi", Vec::new());
+        alternate.sub_provider = Some("anthropic".to_owned());
+        alternate.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+        top.alternates.push(alternate);
+        let snapshot = snapshot_with_panels(runtime.workspace_id.clone(), vec![top]);
+        let mut spawned = Vec::new();
+        for _ in 0..2 {
+            refresh_account_usage_with(
+                &snapshot,
+                &runtime,
+                &RoomLoginSet::native(),
+                |_, _, _, provider| {
+                    spawned.push(provider.unwrap().to_owned());
+                    true
+                },
+            );
+        }
+        results.push(spawned);
+    }
+    assert_eq!(
+        results,
+        [vec!["anthropic"], vec!["openai-codex", "anthropic"]]
+    );
+}
+
+#[test]
 fn usage_claim_and_spawn_pin_the_panel_credential_instead_of_the_account_default() {
     let (_dir, runtime) = account_usage_runtime();
     let scope = ProviderAccountScope::sub_provider("anthropic", "oauth");

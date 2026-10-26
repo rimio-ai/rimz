@@ -128,6 +128,8 @@ impl<'a> Dashboard<'a> {
             theme: self.theme,
             providers: self.providers,
             active_provider: self.active.as_ref(),
+            selected_sub_provider: None,
+            last_sub_providers: &Default::default(),
             mode: self.mode,
             fleet_tally: self.fleet,
             pet: self.pet,
@@ -718,6 +720,7 @@ fn provider_panel(
         plan: Some("Claude Max".to_owned()),
         metered,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: if remote_control {
             crate::store::snapshot::RemoteControlBadge::Healthy
         } else {

@@ -2,7 +2,7 @@
 
 A coding agent runs against a provider account: a login, on a plan, that may or may not be metered. Its balance has two tiers: included subscription windows that refill on their own clocks, and paid usage beyond them. This page owns how RimZ learns those facts, fuses them across sessions and sources, caches them across rooms, and acts on them (parking, auto-redeem, auto-continue). Transcript spend and the token price table are [spending.md](./spending.md).
 
-The facts flow from sources, through shared caches, into one provider panel per login, and the dashboard shows the room's current login per kind:
+The facts flow from sources, through shared caches, into one top-level provider panel per login, with Pi credential alternates inside it. The dashboard shows the room's current login per kind:
 
 ```text
 sources                                    user-scoped caches
@@ -111,7 +111,9 @@ The optional profile state keeps the last attempt time and the last answer's opa
 | `Current` | the room's current login per kind (`RoomLoginSet::current_keys`). A kind whose current login does not resolve gets no panel | the snapshot every renderer paints, and `provider_panels_from_caches`, the `rimz accounts` fold |
 | `InUse` | every in-use login (`keys_in_use`), ignoring `provider_list`, `max_provider_blocks`, and `provider_tabs` | only the producer's scoped fold in `refresh_heavy_lanes`, so fusion, account usage, credits, and auto-redeem act on every login in use, including providers hidden from the dashboard |
 
-`rimz accounts` still lists every account, because it folds once per account under a selection naming that account. For `Current`, ordering, `max_provider_blocks`, and the tab decision run over the selected panels, so a hidden login takes no slot. The dashboard tab follows the selected card by kind, since the displayed snapshot carries one panel per kind.
+`rimz accounts` still lists every account, because it folds once per account under a selection naming that account. For `Current`, ordering, `max_provider_blocks`, and the tab decision run over the selected panels, so a hidden login takes no slot. The dashboard tab follows the selected card by kind, since the displayed snapshot carries one top-level panel per kind. In either scope, each other backing provider a Pi root session reports adds an `alternates` panel when the probed account's `credentials` inventory is non-empty, never another tab or stacked block. A missing or older account record has no alternates until a new-build probe supplies that inventory. Each alternate takes its credential facts from the inventory, or the unlabeled, unmetered API-key rule for an unlisted provider; it keeps the top level's stats and spend, and never nests alternates. Window projection, credits, and usage claims visit all of them, regardless of selection.
+
+The renderer chooses a block's credential from the selected card of that kind when its `context.sub_provider` matches the top level or an alternate, then this view's remembered credential while still available, then the top level. Reconciliation remembers a credential only while that first rule matches. The memory survives a card stopping; once its credential leaves the panel, it no longer overrides the top level. A card running an older extension without a provider report uses the same fallback. `rimz accounts show` and `sidebar snapshot --json` use the top-level classification without selection; the snapshot JSON also carries the alternates. `sidebar frame` uses its first-row selection through the same renderer rule.
 
 A login in either scope earns a panel when it has a live session, or when its probed account is metered, has a non-empty `account_id`, or has recorded spend in the past year. Spend alone never creates a panel for a provider with no probed account, and a credentials-only unmetered account stays hidden until its first recorded session. An agent launched through an elevation wrapper as another uid stays out of every panel: its credentials live under that user's home, so the sidebar shows it as a flagged process row.
 
@@ -125,7 +127,8 @@ Each panel field has one source:
 | `version` | the newest version among the login's session contexts and the probed account, by [`newest_version`](../../../crates/rimz/src/agents/version.rs): a string that parses as a numeric `CliVersion` outranks one that does not, the greater `CliVersion` wins, and the greater string breaks what remains, so the answer does not depend on which session reported last |
 | `metered`, `account_scope`, `sub_provider` | the same account. `sub_provider` names the backing credential when known. A missing `metered` is inferred true when live windows exist or a keyed session owns the panel, except that an undecided account is unmetered |
 | `undecided` | the account is provisional and has no `sub_provider`. It has no plan label, windows, or budget row, and claims no usage read |
-| `account_key` | the newest-registered keyed session, by `registered_at` then session id |
+| `alternates` | other reported Pi credentials, each a whole panel with its own credential facts, windows, credits, and entitlement but the same whole-login stats and spend |
+| `account_key` | the newest-registered keyed admitted session, by `registered_at` then session id. An alternate takes its probed credential's owner without borrowing another session's |
 | `windows` | `fresh_windows` over the admitted sessions, then fused with cache ([Window fusion](#window-fusion)), cleared on an unmetered panel |
 | `window_placeholders` | the spec's `expected_windows`, painted as empty tracks before the first reading |
 | `extra_credits`, `reset_credits` | the `credits.json` entry, or a local API spend projection |
@@ -137,7 +140,7 @@ A color override keeps the catalog's tint runs, while an `ascii_art` override pa
 
 ### Which sessions speak for a panel
 
-Live windows are partitioned by [birth account key](./model.md#the-rollup) before fusion, so a session registered under another login contributes no usage to the account the panel shows. The panel admits every session carrying its `account_key` plus every keyless session, and excludes sessions with a different key. A panel whose sessions are all keyless stays keyless and excludes nothing. `plan` and `version` ignore this partition: `plan` comes from the freshest context, `version` from the newest version any of the login's sessions reports. The keyed `metered` inference keeps cached authoritative windows attached while a newly registered session has not reported its first window.
+Pi live windows first join the panel whose `sub_provider` matches the session's report; a session without a report joins only the top level. Within each credential, live windows are partitioned by [birth account key](./model.md#the-rollup) before fusion, so a session registered under another login contributes no usage to the account the panel shows. The panel admits every session carrying its `account_key` plus every keyless session, and excludes sessions with a different key. A keyless panel excludes no admitted session by owner. `plan` and `version` ignore the owner partition: the top-level plan comes from the freshest context or account probe, an alternate's from its probed credential, and the version from the newest version any of the login's sessions reports. The keyed `metered` inference keeps cached authoritative windows attached while a newly registered session has not reported its first window.
 
 ### Paid and API rows
 

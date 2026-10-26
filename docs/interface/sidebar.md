@@ -662,7 +662,7 @@ Expanding the group restores the pipeline line. The order of cards and groups fo
 
 ## The provider dashboard
 
-Provider budgets belong to an account, and every session of that provider shares them, so they sit in a fixed panel at the bottom instead of on the cards. Each provider gets one block, for the account the room launches under; sessions still running on another account count toward none. A provider whose account has metered budgets or recorded usage keeps its block even when none of its sessions runs in this room, and RimZ refreshes its budgets between turns.
+Provider budgets belong to an account, so they sit in a fixed panel at the bottom instead of on the cards. Each provider gets one block, for the account the room launches under; sessions still running on another account count toward none. Pi can use several backing credentials under that account: its block follows the selected Pi card's credential, in tabs and in stacked mode, while sessions, tokens, and spend stay whole-account. Without a Pi card reporting a known credential selected, it holds this view's last selected credential while available, then uses the provider found by the account check. If nothing is known yet, the header and stats remain without a plan or budget row. A provider whose account has metered budgets or recorded usage keeps its block even when none of its sessions runs in this room, and RimZ refreshes its budgets between turns.
 
 ```
  ─── Claude ──── Codex ────────────────────────────────
@@ -673,7 +673,7 @@ Provider budgets belong to an account, and every session of that provider shares
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h
 ```
 
-With `provider_tabs = "auto"` (the default), two providers stack and three or more share the panel under a tab rail, one block at a time. The active tab follows the selected card's provider, and falls to the first tab for a process row. `←`, `→`, or a click picks a tab by hand until you select a card of another provider. Under `NO_COLOR` the active tab is marked `┤ Claude ├`. `[theme.display]` sets tabs or stacking with `provider_tabs`, the providers and their order with `provider_list`, and the most stacked blocks with `max_provider_blocks`, 3 by default ([theming: display](../guide/theme.md#display)). By default providers with sessions in this room come first, then the recently used, then the recently logged in.
+With `provider_tabs = "auto"` (the default), two providers stack and three or more share the panel under a tab rail, one block at a time. The active tab follows the selected card's provider, holds the last agent's provider for a process row, and falls to the first tab only when neither is available. `←`, `→`, or a click picks a tab by hand until you select a card of another provider. Under `NO_COLOR` the active tab is marked `┤ Claude ├`. `[theme.display]` sets tabs or stacking with `provider_tabs`, the providers and their order with `provider_list`, and the most stacked blocks with `max_provider_blocks`, 3 by default ([theming: display](../guide/theme.md#display)). By default providers with sessions in this room come first, then the recently used, then the recently logged in.
 
 | line | shows |
 |------|-------|

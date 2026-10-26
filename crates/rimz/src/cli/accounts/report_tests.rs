@@ -238,6 +238,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         plan: Some("Claude Max".to_owned()),
         metered: true,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: RemoteControlBadge::Hidden,
         active_sessions: 0,
         spending: None,

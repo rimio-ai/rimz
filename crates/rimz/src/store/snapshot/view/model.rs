@@ -136,11 +136,9 @@ pub enum RemoteControlBadge {
     OffForRun,
 }
 
-/// One provider's aggregate dashboard block, pinned to the bottom of the
-/// sidebar. Account-scoped: every session of one agent kind folds into one
-/// block — summed spend and tokens, plus the freshest session's plan, version,
-/// and rate-limit windows — so the budgets render once per account, never per
-/// row.
+/// One login's aggregate dashboard block, pinned to the sidebar bottom. Pi
+/// carries alternate backing credentials inside the block; the renderer picks
+/// their plan and budgets while spend and tokens stay whole-login.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarProviderPanel {
     pub kind: String,
@@ -183,6 +181,11 @@ pub struct SidebarProviderPanel {
     /// No backing credential is known yet; show neither plan nor budget bars.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub undecided: bool,
+    /// Other reported backing credentials, with shared stats and no nesting. A
+    /// write to the panel after the fold goes through `for_each_credential_mut`,
+    /// so the alternates keep the shared fields equal to the top level's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<SidebarProviderPanel>,
     /// Visibility and managed-server health for the `⇅ rc` flag.
     #[serde(default)]
     pub remote_control: RemoteControlBadge,
@@ -222,6 +225,17 @@ pub struct SidebarProviderPanel {
 }
 
 impl SidebarProviderPanel {
+    pub(crate) fn for_sub_provider(&self, provider: &str) -> Option<&Self> {
+        std::iter::once(self)
+            .chain(&self.alternates)
+            .find(|panel| panel.sub_provider.as_deref() == Some(provider))
+    }
+
+    pub(crate) fn for_each_credential_mut(&mut self, mut update: impl FnMut(&mut Self)) {
+        update(self);
+        self.alternates.iter_mut().for_each(update);
+    }
+
     pub(crate) fn login_key(&self) -> crate::ids::LoginKey {
         crate::ids::LoginKey {
             kind: crate::ids::AgentKind::new_unchecked(&self.kind),

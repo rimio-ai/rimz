@@ -78,6 +78,7 @@ pub(crate) fn provider_panel(
         plan: None,
         metered: true,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: Default::default(),
         active_sessions: 0,
         spending: None,

@@ -80,7 +80,7 @@ To read one agent instead of the room, [`rimz agents show`](./fleet.md#manage-a-
 
 ### Per account: the provider dashboard
 
-Pinned to the bottom of the sidebar is one block per provider, because a plan's limits belong to the login that every session of that provider shares, not to any single agent. A block names the account and plan, that provider's spend, and the account's budget bars.
+Pinned to the bottom of the sidebar is one block per provider for the room's current account, not a budget row on every card. A block names the account and plan, that provider's spend, and the account's budget bars. Pi's plan and bars follow the selected Pi card's backing credential, or hold the last selected credential while available before falling back to the provider found by the account check. The stats row stays whole-account even when Pi sessions use different credentials.
 
 Banked reset credits tell you whether another allowance is available before you pause work. A Codex or Claude account with credits shows `↻ N` in its block header, plus the nearest expiry when it is within a week ([drawing](../interface/sidebar.md#the-provider-dashboard)); [`rimz accounts show <kind>`](../reference/cli/accounts.md#show) lists the credits and expiry dates too. Claude calls these limit resets: [redeem one by hand](./accounts.md#redeem-a-reset-credit-by-hand) from RimZ, or use claude.ai or Claude Desktop under Settings > Usage. A confirmed RimZ reset refreshes the shared balance immediately; a redemption elsewhere follows within about five minutes. Claude Code must be recent enough for Anthropic to report them. Codex additionally supports [auto-redeem](./loops.md#auto-redeem).
 

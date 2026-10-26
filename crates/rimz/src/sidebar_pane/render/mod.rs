@@ -347,10 +347,10 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &ViewState) -> bool
 
 /// The provider kind the dashboard's tab focus derives from the selection: the
 /// selected row's agent kind (agent rows carry the kind in `SidebarRow::name`),
-/// or `None` for a process row or an empty room — the caller falls back to the
-/// first tab. Reads the same filtered universe `selected_index` is an ordinal
-/// of, so the dashboard's follow-the-selection stays honest under a make-up
-/// filter.
+/// or `None` for a process row or an empty room — the caller holds the last
+/// agent kind while available, then falls back to the first tab. Reads the same
+/// filtered universe that `selected_index` is an ordinal of, so the dashboard
+/// follows selection honestly under a make-up filter.
 pub(in crate::sidebar_pane) fn selected_agent_kind(
     snapshot: &SidebarSnapshot,
     ui: &ViewState,
@@ -358,6 +358,17 @@ pub(in crate::sidebar_pane) fn selected_agent_kind(
     selected_row(snapshot, ui)
         .filter(|row| row.is_agent())
         .map(|row| crate::ids::AgentKind::new_unchecked(&row.name))
+}
+
+/// The selected agent card's kind and the backing credential it last reported:
+/// the provider block's first choice, and the credential the view remembers.
+pub(in crate::sidebar_pane) fn selected_sub_provider<'a>(
+    snapshot: &'a SidebarSnapshot,
+    ui: &ViewState,
+) -> Option<(crate::ids::AgentKind, &'a str)> {
+    let row = selected_row(snapshot, ui)?;
+    let provider = row.as_agent()?.context.as_ref()?.sub_provider.as_deref()?;
+    Some((crate::ids::AgentKind::new_unchecked(&row.name), provider))
 }
 
 pub(in crate::sidebar_pane) fn selected_pet_action(

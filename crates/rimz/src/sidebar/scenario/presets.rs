@@ -2502,6 +2502,7 @@ fn provider_panel(
         plan: plan.map(ToOwned::to_owned),
         metered,
         undecided: false,
+        alternates: Vec::new(),
         remote_control: if remote_control {
             RemoteControlBadge::Healthy
         } else {
