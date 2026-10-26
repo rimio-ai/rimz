@@ -101,6 +101,7 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
             rimz_build: None,
             pins: Default::default(),
             remote_control_off: Default::default(),
+            agent_shell: None,
             skipped: Vec::new(),
             updated_at: jiff::Timestamp::now(),
         },

@@ -3592,15 +3592,14 @@ fn agent_shell_validation_refuses_what_the_wrapper_cannot_run_under() {
         assert_eq!(
             err.to_string(),
             format!(
-                "[agents] shell = \"{}\" {reason}; set it to the absolute path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config",
+                "[agents] shell = \"{}\" {reason}; set it to the name or full path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config",
                 shell.display()
             )
         );
         let blocker = crate::blocker::Blocker::from(err);
         assert!(
             blocker.fixes.iter().any(|fix| {
-                fix.command.as_deref()
-                    == Some("rimz config set agents.shell \"$(command -v bash)\"")
+                fix.command.as_deref() == Some("rimz config set agents.shell bash")
                     && fix.surface == crate::blocker::Surface::Plain
             }),
             "{blocker:?}"
@@ -3609,6 +3608,173 @@ fn agent_shell_validation_refuses_what_the_wrapper_cannot_run_under() {
     for name in ["bash", "fish"] {
         validate_agent_shell(&shell_file(dir.path(), name)).expect("accepted shell");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_shell_resolution_keeps_the_path_hit_and_honors_matching_room_lookups() {
+    use crate::workspace::record::AgentShell;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let bash = shell_file(&bin, "bash");
+    std::fs::set_permissions(&bash, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let linked = dir.path().join("linked");
+    symlink(&bin, &linked).unwrap();
+    let saved = AgentShell {
+        name: "bash".into(),
+        path: bash.clone(),
+    };
+    let other = AgentShell {
+        name: "zsh".into(),
+        path: "/missing/zsh".into(),
+    };
+    let cases = [
+        (None, Some(linked.as_os_str()), linked.join("bash"), false),
+        (Some(&saved), None, bash.clone(), true),
+        (
+            Some(&other),
+            Some(linked.as_os_str()),
+            linked.join("bash"),
+            false,
+        ),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(saved, path, _, _)| {
+            let resolved =
+                resolve_agent_shell_with(Path::new("bash"), *saved, *path, Some(dir.path()));
+            (
+                resolved.path.map_err(|error| error.to_string()),
+                resolved.saved,
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(_, _, path, saved)| (Ok(path.clone()), *saved))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        ShellFamily::from_shell(&linked.join("bash")),
+        ShellFamily::Bash
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_shell_resolution_names_each_refusal_and_its_fix() {
+    use crate::workspace::record::AgentShell;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for name in ["bash", "nologin", "false", "tcsh"] {
+        let shell = shell_file(&bin, name);
+        std::fs::set_permissions(shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let saved = AgentShell {
+        name: "bash".into(),
+        path: dir.path().join("gone/bash"),
+    };
+    let cases = [
+        (
+            PathBuf::from("bin/bash"),
+            None,
+            "is a relative path".to_owned(),
+        ),
+        (
+            PathBuf::from("./bash"),
+            None,
+            "is a relative path".to_owned(),
+        ),
+        (
+            PathBuf::from("~/bin/bash"),
+            None,
+            "is a relative path".to_owned(),
+        ),
+        (
+            PathBuf::from("unknown-shell"),
+            None,
+            "is not on PATH".to_owned(),
+        ),
+        (PathBuf::from("nologin"), None, "disables logins".to_owned()),
+        (PathBuf::from("false"), None, "disables logins".to_owned()),
+        (
+            PathBuf::from("tcsh"),
+            None,
+            "is a csh-family shell".to_owned(),
+        ),
+        (bin.join("missing"), None, "does not exist".to_owned()),
+    ];
+    let actual = cases
+        .iter()
+        .map(|(shell, saved, _)| {
+            resolve_agent_shell_with(shell, *saved, Some(bin.as_os_str()), Some(dir.path()))
+                .path
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Vec<_>>();
+    let fix = concat!(
+        "set it to the name or full path of an installed bash, zsh, fish or sh-family shell, ",
+        "or remove the line from the per-machine config"
+    );
+    let expected = cases
+        .iter()
+        .map(|(shell, _, reason)| {
+            Err(format!(
+                "[agents] shell = \"{}\" {reason}; {fix}",
+                shell.display()
+            ))
+        })
+        .collect::<Vec<Result<PathBuf, String>>>();
+    assert_eq!(actual, expected);
+    let absolute = bin.join("bash");
+    let fallback = [Some(bin.as_os_str()), None].map(|path| {
+        let resolved =
+            resolve_agent_shell_with(Path::new("bash"), Some(&saved), path, Some(dir.path()));
+        (resolved.path.map_err(|error| error.reason), resolved.saved)
+    });
+    assert_eq!(
+        fallback,
+        [
+            (Ok(absolute.clone()), false),
+            (Err("is not on PATH".into()), false),
+        ]
+    );
+    assert_eq!(
+        resolve_agent_shell_with(&absolute, Some(&saved), None, Some(dir.path()))
+            .path
+            .unwrap(),
+        absolute
+    );
+}
+
+#[test]
+fn saved_agent_shell_carries_the_wrapper_env_and_reminder() {
+    let project = tempfile::tempdir().unwrap();
+    let bash = shell_file(project.path(), "bash");
+    let paths = crate::disk::paths::StatePaths::for_project_root(project.path()).unwrap();
+    let workspace = crate::WorkspaceResolver::resolve(project.path(), None).unwrap();
+    let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
+    record.agent_shell = Some(crate::workspace::record::AgentShell {
+        name: "bash".into(),
+        path: bash.clone(),
+    });
+    crate::workspace::record::write(&paths, &record).unwrap();
+    let result = compile_under_agent_shell(project.path(), Some("bash".into()));
+    assert!(result.is_ok(), "{result:?}");
+    let process = result.unwrap();
+    assert_eq!(process.env["SHELL"], bash.display().to_string());
+    assert_eq!(
+        process.env[ENV_CLAUDE_CODE_SHELL],
+        bash.display().to_string()
+    );
+    assert_eq!(process.argv[0], bash.display().to_string());
+    assert!(process.reminder.contains("- shell: bash\n"));
 }
 
 #[test]

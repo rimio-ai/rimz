@@ -10,11 +10,12 @@ pub mod teardown;
 use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
+use crate::harness::launch::AgentShellPersistence;
 use crate::harness::rebirth::RebirthPlan;
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
@@ -176,6 +177,8 @@ pub struct RoomContext {
     runtime: RuntimePaths,
     birth_owner: BirthOwner,
     birth_logins: Option<crate::ids::RoomLogins>,
+    birth_agent_shell: OnceLock<Option<crate::harness::launch::AgentShellResolution>>,
+    agent_shell_persistence: AgentShellPersistence,
     birth_admission: Option<birth::BirthAdmission>,
 }
 
@@ -303,6 +306,8 @@ impl RoomContext {
             runtime,
             birth_owner: BirthOwner::Preserve,
             birth_logins: None,
+            birth_agent_shell: OnceLock::new(),
+            agent_shell_persistence: AgentShellPersistence::Room,
             birth_admission: None,
         })
     }
@@ -321,16 +326,49 @@ impl RoomContext {
         Ok(())
     }
 
-    fn record_remote_control_off(
+    fn birth_agent_shell(&self) -> Option<&crate::harness::launch::AgentShellResolution> {
+        self.birth_agent_shell
+            .get_or_init(|| {
+                self.machine_config
+                    .agents
+                    .shell
+                    .as_deref()
+                    .map(|shell| crate::harness::launch::resolve_agent_shell(shell, None))
+            })
+            .as_ref()
+    }
+
+    /// Select whether this birth saves its lookup, without changing judgment or recovery.
+    pub fn with_agent_shell_persistence(mut self, persistence: AgentShellPersistence) -> Self {
+        self.agent_shell_persistence = persistence;
+        self
+    }
+
+    fn record_birth_settings(
         &self,
         off: std::collections::BTreeSet<crate::ids::AgentKind>,
     ) -> Result<()> {
         let paths = StatePaths::for_project_root(&self.workspace.project_root)
             .context("preparing store paths")?;
         let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
+        let agent_shell = self
+            .birth_agent_shell()
+            .filter(|_| self.agent_shell_persistence == AgentShellPersistence::Room)
+            .filter(|shell| shell.is_bare_name())
+            .and_then(|shell| {
+                shell
+                    .path
+                    .as_ref()
+                    .ok()
+                    .filter(|path| path.to_str().is_some())
+                    .map(|path| record::AgentShell {
+                        name: shell.name.clone(),
+                        path: path.clone(),
+                    })
+            });
         store
-            .set_remote_control_off(&self.workspace, off)
-            .context("recording skipped remote-control hosts")?;
+            .set_room_birth_settings(&self.workspace, off, agent_shell)
+            .context("recording room birth settings")?;
         Ok(())
     }
 
@@ -411,6 +449,7 @@ impl RoomContext {
             &self.workspace.project_root,
             &self.machine_config,
             logins.as_ref(),
+            self.birth_agent_shell(),
             disabled,
         )
     }
@@ -705,6 +744,7 @@ mod tests {
             rimz_build: None,
             pins: Default::default(),
             remote_control_off: Default::default(),
+            agent_shell: None,
             skipped: Vec::new(),
             updated_at: jiff::Timestamp::now(),
         };

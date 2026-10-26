@@ -165,6 +165,7 @@ pub struct SupervisedRunRequest {
     /// child.
     pub subagent: bool,
     pub force_new_tab: bool,
+    pub agent_shell_persistence: crate::harness::launch::AgentShellPersistence,
     pub permission_mode: Option<PermissionMode>,
     /// The launch's `--isolation` override; a subagent without one inherits
     /// its parent's.
@@ -224,6 +225,7 @@ impl SupervisedRunRequest {
             self_cleanup_on_completion: false,
             subagent: false,
             force_new_tab: false,
+            agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
             permission_mode,
             isolation: None,
             agent: None,

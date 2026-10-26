@@ -84,6 +84,7 @@ pub(super) struct FreshLaunch {
     pub(super) cleanup_worktree: bool,
     pub(super) inherit_cwd: bool,
     pub(super) force_new_tab: bool,
+    pub(super) agent_shell_persistence: crate::harness::launch::AgentShellPersistence,
     pub(super) room: Option<Arc<RoomContext>>,
     pub(super) recovery: crate::room::AttendedRecovery,
     pub(super) entry: RoomEntry,
@@ -175,7 +176,8 @@ fn execute_fresh(
             fresh.context.machine.clone(),
             mux,
             crate::room::RoomSizing::Birth,
-        )?;
+        )?
+        .with_agent_shell_persistence(fresh.agent_shell_persistence);
         if let Some(reason) = budget_gate(&fresh, false) {
             return Ok(LaunchOutcome::BudgetExceeded { reason });
         }

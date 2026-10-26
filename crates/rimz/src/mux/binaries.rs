@@ -4,7 +4,6 @@
 //! `/proc` tells which executable live servers use on Linux, and every miss
 //! degrades to an absent row rather than blocking doctor.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ids::MuxName;
@@ -35,7 +34,7 @@ pub struct ServerBinary {
 
 pub fn scan(mux: MuxName) -> BinaryScan {
     let (program, version_args) = program_version_args(mux);
-    let installs = dedupe_by_canonical(path_candidates(program))
+    let installs = crate::proc::path_copies(program.as_ref(), None)
         .into_iter()
         .map(|(path, canonical)| BinaryInstall {
             version: version_for(&path, version_args),
@@ -59,26 +58,6 @@ fn program_version_args(mux: MuxName) -> (&'static str, &'static [&'static str])
         MuxName::Zellij => ("zellij", &["--version"]),
         MuxName::Tmux => ("tmux", &["-V"]),
     }
-}
-
-fn path_candidates(program: &str) -> Vec<(PathBuf, PathBuf)> {
-    which::which_all(program)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|path| path.canonicalize().ok().map(|canonical| (path, canonical)))
-        .collect()
-}
-
-fn dedupe_by_canonical(candidates: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for (path, canonical) in candidates {
-        if seen.insert(canonical.clone()) {
-            out.push((path, canonical));
-        }
-    }
-    out
 }
 
 fn version_for(path: &Path, args: &[&str]) -> Option<String> {
@@ -159,28 +138,6 @@ mod tests {
             real_uid: uid,
             cmdline: cmdline.to_owned(),
         }
-    }
-
-    #[test]
-    fn dedupe_collapses_canonical_duplicates_and_preserves_order() {
-        let installs = dedupe_by_canonical(vec![
-            ("/path/first/zellij".into(), "/real/zellij".into()),
-            ("/path/second/zellij".into(), "/real/zellij".into()),
-            ("/path/third/zellij".into(), "/other/zellij".into()),
-        ]);
-        assert_eq!(
-            installs,
-            vec![
-                (
-                    PathBuf::from("/path/first/zellij"),
-                    PathBuf::from("/real/zellij")
-                ),
-                (
-                    PathBuf::from("/path/third/zellij"),
-                    PathBuf::from("/other/zellij")
-                ),
-            ]
-        );
     }
 
     #[test]

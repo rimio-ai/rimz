@@ -48,6 +48,13 @@ pub struct SkippedSetting {
     pub message: String,
 }
 
+/// A bare agent-shell name and the PATH hit saved for one room session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentShell {
+    pub name: PathBuf,
+    pub path: PathBuf,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "WorkspaceRecordRead")]
 pub struct WorkspaceRecord {
@@ -89,6 +96,10 @@ pub struct WorkspaceRecord {
     /// sets it and `rimz reset` clears it.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub remote_control_off: BTreeSet<AgentKind>,
+    /// Successful bare-name lookup taken before this session's panes start.
+    /// Re-records keep it; a new session replaces it and reset clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_shell: Option<AgentShell>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<SkippedSetting>,
     pub updated_at: Timestamp,
@@ -115,6 +126,8 @@ struct WorkspaceRecordRead {
     logins: Option<serde_json::Value>,
     #[serde(default)]
     remote_control_off: BTreeSet<AgentKind>,
+    #[serde(default)]
+    agent_shell: Option<AgentShell>,
     #[serde(default)]
     skipped: Vec<SkippedSetting>,
     updated_at: Timestamp,
@@ -146,6 +159,7 @@ impl TryFrom<WorkspaceRecordRead> for WorkspaceRecord {
             rimz_build: record.rimz_build,
             pins,
             remote_control_off: record.remote_control_off,
+            agent_shell: record.agent_shell,
             skipped: record.skipped,
             updated_at: record.updated_at,
         })
@@ -175,6 +189,7 @@ impl WorkspaceRecord {
             rimz_build: None,
             pins: RoomLogins::new(),
             remote_control_off: BTreeSet::new(),
+            agent_shell: None,
             skipped: Vec::new(),
             updated_at: Timestamp::now(),
         }
@@ -296,6 +311,38 @@ mod tests {
         assert_eq!(loaded.rimz_bin, record.rimz_bin);
         assert_eq!(loaded.rimz_build, record.rimz_build);
         assert_eq!(loaded.pins, record.pins);
+    }
+
+    #[test]
+    fn agent_shell_round_trips_and_defaults_absent() {
+        let legacy = serde_json::json!({
+            "workspace_id": "ws_0123456789abcdef01234567",
+            "project_root": "/repo", "session_name": "rimz-repo",
+            "updated_at": "2024-01-01T00:00:00Z"
+        });
+        let mut record: WorkspaceRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(record.agent_shell, None);
+        assert!(
+            serde_json::to_value(&record)
+                .unwrap()
+                .get("agent_shell")
+                .is_none()
+        );
+        record.agent_shell = Some(AgentShell {
+            name: "bash".into(),
+            path: "/usr/bin/bash".into(),
+        });
+        let written = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            written["agent_shell"],
+            serde_json::json!({
+                "name": "bash", "path": "/usr/bin/bash"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<WorkspaceRecord>(written).unwrap(),
+            record
+        );
     }
 
     #[test]

@@ -33,6 +33,48 @@ fn rebirth_skips_an_invalid_shell_and_keeps_it_pending() {
 }
 
 #[test]
+fn rebirth_uses_the_pending_birth_shell_instead_of_the_previous_life() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
+    fixture.conversation("lost");
+    let workspace = crate::WorkspaceResolver::resolve(&fixture.project, None).unwrap();
+    let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
+    record.agent_shell = Some(crate::workspace::record::AgentShell {
+        name: "bash".into(),
+        path: root.path().join("gone/bash"),
+    });
+    crate::workspace::record::write(&fixture.paths, &record).unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.shell = Some("bash".into());
+    let birth_shell = crate::harness::launch::AgentShellResolution {
+        name: "bash".into(),
+        path: Ok("/bin/sh".into()),
+        saved: false,
+        missing_saved_path: None,
+    };
+    let plan = inspect_at(
+        fixture.paths.clone(),
+        fixture.runtime.clone(),
+        Some("boot-a".into()),
+        Vec::new(),
+        &fixture.project,
+        &machine,
+        None,
+        Some(&birth_shell),
+        &fixture.ambient,
+        false,
+        OWNER_EXIT_BOUND,
+    )
+    .unwrap();
+    assert_eq!(
+        plan.preview().pane_count(),
+        1,
+        "the coming birth has a working shell"
+    );
+    assert!(plan.preview().unresumable().is_empty());
+}
+
+#[test]
 fn rebirth_skips_an_unsupported_budget_and_keeps_it_pending() {
     let fixture = Fixture::new(&[]);
     crate::agents::find_definition("qwen")
@@ -621,6 +663,7 @@ impl Fixture {
             Vec::new(),
             &self.project,
             machine,
+            None,
             None,
             &self.ambient,
             disabled,
@@ -1851,6 +1894,7 @@ fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
                 &project,
                 &MachineConfig::default(),
                 None,
+                None,
                 &ambient,
                 false,
                 Duration::from_secs(60),
@@ -1896,6 +1940,7 @@ fn boundary_inspection_classes_an_owner_that_records_its_end_during_the_wait_as_
                 Vec::new(),
                 &project,
                 &MachineConfig::default(),
+                None,
                 None,
                 &ambient,
                 false,
@@ -2451,6 +2496,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
         vec![source.clone()],
         &fixture.project,
         &MachineConfig::default(),
+        None,
         None,
         &fixture.ambient,
         false,

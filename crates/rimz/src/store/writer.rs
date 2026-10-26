@@ -385,19 +385,20 @@ impl Store {
         })
     }
 
-    /// Replace the remote-control hosts this room runs without, as the attended
-    /// start that births the room chose. An empty set clears an earlier choice.
+    /// Replace settings chosen for a new session before any pane can launch.
     #[must_use = "durability barrier; check the result"]
-    pub fn set_remote_control_off(
+    pub fn set_room_birth_settings(
         &self,
         workspace: &ResolvedWorkspace,
         off: BTreeSet<AgentKind>,
+        agent_shell: Option<record::AgentShell>,
     ) -> Result<()> {
         self.commit(|txn| {
             let prior = record::read_optional(&txn.paths.workspace_record)?;
             let mut record =
                 workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
             record.remote_control_off = off;
+            record.agent_shell = agent_shell;
             record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -1080,6 +1081,7 @@ fn workspace_record_preserving_room_state(
     if let Some(prior) = prior {
         record.pins.clone_from(&prior.pins);
         record.skipped.clone_from(&prior.skipped);
+        record.agent_shell.clone_from(&prior.agent_shell);
         record
             .remote_control_off
             .clone_from(&prior.remote_control_off);

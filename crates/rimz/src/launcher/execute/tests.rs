@@ -95,6 +95,7 @@ impl Fixture {
                 cleanup_worktree: false,
                 inherit_cwd: true,
                 force_new_tab: true,
+                agent_shell_persistence: crate::harness::launch::AgentShellPersistence::Room,
                 room: Some(Arc::new(room)),
                 recovery: crate::room::AttendedRecovery::RequireExplicitReset,
                 entry: RoomEntry::Birth,

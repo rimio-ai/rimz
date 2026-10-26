@@ -119,6 +119,7 @@ enum RoomEntry<'a> {
         mux: MuxName,
         no_resume: bool,
         confirm_resume: bool,
+        agent_shell_persistence: rimz::harness::launch::AgentShellPersistence,
     },
     WebSession {
         record: &'a WorkspaceRecord,
@@ -276,7 +277,13 @@ pub(crate) fn ensure_workspace_room_for_web(
     confirm_resume: bool,
 ) -> Result<RoomContext> {
     preflight_web_engine()?;
-    ensure_workspace_room_detached(path, globals, no_resume, confirm_resume)
+    ensure_workspace_room_detached(
+        path,
+        globals,
+        no_resume,
+        confirm_resume,
+        rimz::harness::launch::AgentShellPersistence::Room,
+    )
 }
 
 pub(crate) fn ensure_workspace_room_detached(
@@ -284,6 +291,7 @@ pub(crate) fn ensure_workspace_room_detached(
     globals: &GlobalFlags,
     no_resume: bool,
     confirm_resume: bool,
+    agent_shell_persistence: rimz::harness::launch::AgentShellPersistence,
 ) -> Result<RoomContext> {
     let posture = StartPosture::detect();
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
@@ -297,6 +305,7 @@ pub(crate) fn ensure_workspace_room_detached(
             mux,
             no_resume,
             confirm_resume,
+            agent_shell_persistence,
         },
         globals,
         posture,
@@ -638,7 +647,14 @@ fn prepare_room(
             mux,
             Some(&requested),
             admission,
-        )?;
+        )?
+        .with_agent_shell_persistence(match &entry {
+            RoomEntry::StartDetached {
+                agent_shell_persistence,
+                ..
+            } => *agent_shell_persistence,
+            _ => rimz::harness::launch::AgentShellPersistence::Room,
+        });
         let cwd = match source {
             RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
             RoomBirthSource::Recorded(record) => record.project_root.clone(),

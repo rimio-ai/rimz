@@ -267,11 +267,12 @@ impl RoomContext {
                     self.backend.name(),
                     &hibernation,
                     pre_existed,
+                    (!pre_existed).then(|| self.birth_agent_shell()).flatten(),
                 )
             })
             .transpose()?;
         if !pre_existed && let Some(judgment) = &judgment {
-            self.record_remote_control_off(judgment.remote_control_off.clone())?;
+            self.record_birth_settings(judgment.remote_control_off.clone())?;
         }
 
         #[cfg(unix)]

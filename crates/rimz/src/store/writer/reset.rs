@@ -170,10 +170,12 @@ impl Store {
                     crate::workspace::record::read_optional(&paths.workspace_record)?
                 && !(record.pins.is_empty()
                     && record.remote_control_off.is_empty()
+                    && record.agent_shell.is_none()
                     && record.skipped.is_empty())
             {
                 record.pins.clear();
                 record.remote_control_off.clear();
+                record.agent_shell = None;
                 record.skipped.clear();
                 crate::workspace::record::write(paths, &record)?;
             }

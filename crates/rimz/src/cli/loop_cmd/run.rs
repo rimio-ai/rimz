@@ -4,6 +4,7 @@ use super::run_report::{
     RunSummary, write_check_trip_line, write_manual_verdict, write_run_summary,
 };
 use super::*;
+use rimz::harness::launch::AgentShellPersistence;
 use rimz::harness::schedule::takeover::{self, Takeover};
 use std::ops::ControlFlow;
 
@@ -189,7 +190,8 @@ pub(super) fn run_one(
     }
     let mut plan = fire.prepare(&mut |root| {
         if !entry.stay
-            && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
+            && (mode != LoopRunMode::Scheduled
+                || !matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)))
         {
             if !matches!(action, TaskAction::Spawn(_) | TaskAction::Workflow(_)) {
                 return Ok(());
@@ -208,7 +210,16 @@ pub(super) fn run_one(
         }
         let mut room_globals = globals.clone();
         room_globals.root = Some(root.to_path_buf());
-        crate::cli::room::ensure_workspace_room_detached(root, &room_globals, true, false)?;
+        crate::cli::room::ensure_workspace_room_detached(
+            root,
+            &room_globals,
+            true,
+            false,
+            match mode {
+                LoopRunMode::Scheduled => AgentShellPersistence::PerLaunch,
+                LoopRunMode::Manual => AgentShellPersistence::Room,
+            },
+        )?;
         Ok(())
     });
     if mode == LoopRunMode::Manual

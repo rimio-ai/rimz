@@ -1278,7 +1278,10 @@ path = "crates/rimz/src/harness"
 # FloorOutcome tells the GC CLI a paused or busy pressure pass from a completed one (+1).
 # ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
 # Account cap resolution, standing raises, window spend and subscription warnings serve CLI/room; auto-continue owns the delivery gate (+5).
-surface-budget = 1001
+# AgentShellResolution, its path/name views and resolve_agent_shell share room-scoped shells (+3).
+# AgentShellResolution::missing_saved_path explains the per-launch fallback in doctor (+1).
+# AgentShellPersistence carries the birth's shell-lookup save policy (+1).
+surface-budget = 1006
 
 [[verdict]]
 kind = "item"
@@ -2084,7 +2087,13 @@ upward-dependencies = [
 # TreeMemory adds swap to the existing status walk (+1).
 # process_group_has_env proves a reaped workflow leader's surviving group ownership (+1).
 # sole_agent_child and its proc re-export share candidate descent across both walks (+2).
-surface-budget = 143
+# path_copies shares distinct PATH installations with mux scans and shell diagnostics (+1).
+surface-budget = 144
+
+[[verdict]]
+kind = "item"
+key = "proc::path_copies"
+reason = "Mux scans and shell receipts/diagnostics share PATH order and canonical-file deduplication."
 
 [[verdict]]
 kind = "item"
@@ -2220,7 +2229,8 @@ upward-dependencies = [
 # Birth and reset share listed-session heartbeat-or-claim admission (+1).
 # Account-switch receipts count only rooms following the machine default (+1).
 # BirthAdmission and standalone admit_birth replace context admission across startup prompts (+1 net).
-surface-budget = 69
+# RoomContext::with_agent_shell_persistence carries typed birth intent (+1).
+surface-budget = 70
 
 [[verdict]]
 kind = "item"
@@ -2745,7 +2755,8 @@ path = "crates/rimz/src/workspace.rs"
 # Persisted hooks resolve through their captured environment (+1).
 # ResolvedWorkspace::at_launch_dir keeps the room pin while resolving launch trust (+1).
 # SkippedSetting carries the room's configuration warnings into CLI and sidebar readers (+1).
-surface-budget = 27
+# AgentShell carries the room-life bare-name shell lookup into launch and CLI readers (+1).
+surface-budget = 28
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -3209,7 +3220,25 @@ allowed-dependencies = [
 # `ExecRequest::launch_skills` shares child selection across host and scoped views (+1).
 # ExecRequest::callable_skills shares applied tools/list callability with launch inspection (+1).
 # CompiledAgentProcess::rebuild_argv preserves session steps across every argv rebuild (+1).
-surface-budget = 50
+# AgentShellResolution, its name/path views, and resolve_agent_shell share room-aware lookup (+4).
+# AgentShellResolution::missing_saved_path exposes the stale lookup without changing JSON (+1).
+# AgentShellPersistence selects room-scoped or per-launch shell lookups (+1).
+surface-budget = 56
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::AgentShellPersistence"
+reason = "Scheduled loop births suppress only saving the shell lookup, across both room birth paths."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::AgentShellResolution"
+reason = "Birth, launch, recovery and CLI diagnostics share the shell selection and validation outcome."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::resolve_agent_shell"
+reason = "CLI configuration and diagnostics use the same room-aware or fresh shell resolution as launches."
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
@@ -3266,6 +3295,8 @@ allowed-dependencies = [
     "harness::budget",
     # Locked rung claims and timeout settlement share the pure deadline policy.
     "harness::deadline",
+    # Supervised requests carry the birth's shell-lookup persistence policy.
+    "harness::launch",
     "harness::owed",
     # A loop spawn request carries its start-throttle turn to the launch commit.
     "harness::schedule::throttle",
@@ -5697,6 +5728,11 @@ reason = "Return alias of pub record::read, read_optional and write; atlas cavea
 kind = "item"
 key = "workspace::record::SkippedSetting"
 reason = "The durable room-warning schema is shared with command and sidebar readers."
+
+[[verdict]]
+kind = "item"
+key = "workspace::record::AgentShell"
+reason = "The room-life shell lookup is persisted by store and read by launch and CLI diagnostics."
 
 [[verdict]]
 kind = "item"
