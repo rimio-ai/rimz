@@ -79,6 +79,7 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 - The journey's hook-firing stub agent fires no lifecycle hook for pasted text, so a message it receives stays `Sent`, never `Delivered`. To prove receipt, fire the receiving turn with `env.run_installed_hook_in_pane` (`UserPromptSubmit` carrying the rendered message text, then `Stop`). Split panes shrink the target pane, so capture with scrollback when asserting on text that may have scrolled.
 - The journey `RoomHarness` is not a mux room: it runs one `rimz sidebar serve` on a PTY and stands in for the mux with a JSON pane list (`RIMZ_TEST_PANE_LIST`). The renderer has a synthetic owner absent from that list and a controlled watchdog. There is no client and no focused pane, and replayed hooks run under `Env.runtime_root` while the renderer has its own short runtime directory.
 - Time is deterministic: fixed-epoch fixtures, boundary-exact.
+- A fixture that orders files by mtime gives each file a distinct mtime in the order the test means; a tie settled by a secondary key (the path) passes for a reason the test does not assert.
 
 ## Multiplexer test doubles
 
