@@ -22,8 +22,7 @@ use nix::mount::{MsFlags, mount};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sched::{CloneFlags, setns};
 use nix::sys::socket::{ControlMessage, MsgFlags, sendmsg};
-use nix::sys::statvfs::{FsFlags, statvfs};
-use rustix::fs::inotify;
+use rustix::fs::{StatVfsMountFlags, inotify, statvfs};
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
 
 use super::{BindGuardErr, BindRestore};
@@ -458,8 +457,10 @@ fn restore_entry(path: &Path) -> nix::Result<()> {
         Err(error) => return Err(error),
         Ok(_) => {}
     }
-    let flags = statvfs(path)?.flags();
-    if flags.contains(FsFlags::ST_RDONLY) {
+    let flags = statvfs(path)
+        .map_err(|error| Errno::from_raw(error.raw_os_error()))?
+        .f_flag;
+    if flags.contains(StatVfsMountFlags::RDONLY) {
         return Ok(());
     }
     mount(
@@ -478,15 +479,17 @@ fn restore_entry(path: &Path) -> nix::Result<()> {
     )
 }
 
-fn remount_flags(flags: FsFlags) -> MsFlags {
+fn remount_flags(flags: StatVfsMountFlags) -> MsFlags {
+    // Linux statvfs uses ST_RELATIME (0x1000); rustix's raw backend exposes MS_RELATIME.
+    let relatime = StatVfsMountFlags::from_bits_retain(0x1000);
     let mut mount = MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY;
     for (st, ms) in [
-        (FsFlags::ST_NOSUID, MsFlags::MS_NOSUID),
-        (FsFlags::ST_NODEV, MsFlags::MS_NODEV),
-        (FsFlags::ST_NOEXEC, MsFlags::MS_NOEXEC),
-        (FsFlags::ST_NOATIME, MsFlags::MS_NOATIME),
-        (FsFlags::ST_NODIRATIME, MsFlags::MS_NODIRATIME),
-        (FsFlags::ST_RELATIME, MsFlags::MS_RELATIME),
+        (StatVfsMountFlags::NOSUID, MsFlags::MS_NOSUID),
+        (StatVfsMountFlags::NODEV, MsFlags::MS_NODEV),
+        (StatVfsMountFlags::NOEXEC, MsFlags::MS_NOEXEC),
+        (StatVfsMountFlags::NOATIME, MsFlags::MS_NOATIME),
+        (StatVfsMountFlags::NODIRATIME, MsFlags::MS_NODIRATIME),
+        (relatime, MsFlags::MS_RELATIME),
     ] {
         if flags.contains(st) {
             mount |= ms;
@@ -576,12 +579,15 @@ mod tests {
     #[test]
     fn remount_restates_restrictions_and_translates_relatime() {
         let keep = [
-            (FsFlags::ST_NOSUID, MsFlags::MS_NOSUID),
-            (FsFlags::ST_NODEV, MsFlags::MS_NODEV),
-            (FsFlags::ST_NOEXEC, MsFlags::MS_NOEXEC),
-            (FsFlags::ST_NOATIME, MsFlags::MS_NOATIME),
-            (FsFlags::ST_NODIRATIME, MsFlags::MS_NODIRATIME),
-            (FsFlags::ST_RELATIME, MsFlags::MS_RELATIME),
+            (StatVfsMountFlags::NOSUID, MsFlags::MS_NOSUID),
+            (StatVfsMountFlags::NODEV, MsFlags::MS_NODEV),
+            (StatVfsMountFlags::NOEXEC, MsFlags::MS_NOEXEC),
+            (StatVfsMountFlags::NOATIME, MsFlags::MS_NOATIME),
+            (StatVfsMountFlags::NODIRATIME, MsFlags::MS_NODIRATIME),
+            (
+                StatVfsMountFlags::from_bits_retain(0x1000),
+                MsFlags::MS_RELATIME,
+            ),
         ];
         let actual: Vec<_> = keep.iter().map(|(st, _)| remount_flags(*st)).collect();
         let required = MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY;
@@ -592,7 +598,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            remount_flags(FsFlags::ST_SYNCHRONOUS | FsFlags::ST_MANDLOCK),
+            remount_flags(StatVfsMountFlags::SYNCHRONOUS | StatVfsMountFlags::MANDLOCK),
             required
         );
     }

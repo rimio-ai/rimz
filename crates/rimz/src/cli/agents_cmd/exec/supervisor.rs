@@ -139,6 +139,10 @@ struct SavedTermios {
 impl SavedTermios {
     fn capture(terminal: &ProviderTerminal) -> Option<Self> {
         let raw: nix::libc::termios = terminal.saved.clone()?.into();
+        #[cfg(target_env = "musl")]
+        let (c_ispeed, c_ospeed) = (raw.__c_ispeed, raw.__c_ospeed);
+        #[cfg(not(target_env = "musl"))]
+        let (c_ispeed, c_ospeed) = (raw.c_ispeed, raw.c_ospeed);
         Some(Self {
             c_iflag: raw.c_iflag as u64,
             c_oflag: raw.c_oflag as u64,
@@ -147,8 +151,8 @@ impl SavedTermios {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             c_line: raw.c_line,
             c_cc: raw.c_cc.to_vec(),
-            c_ispeed: raw.c_ispeed as u64,
-            c_ospeed: raw.c_ospeed as u64,
+            c_ispeed: c_ispeed as u64,
+            c_ospeed: c_ospeed as u64,
         })
     }
 
@@ -178,10 +182,22 @@ impl SavedTermios {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             c_line: self.c_line,
             c_cc,
+            #[cfg(target_env = "musl")]
+            __c_ispeed: self
+                .c_ispeed
+                .try_into()
+                .context("invalid saved terminal c_ispeed")?,
+            #[cfg(target_env = "musl")]
+            __c_ospeed: self
+                .c_ospeed
+                .try_into()
+                .context("invalid saved terminal c_ospeed")?,
+            #[cfg(not(target_env = "musl"))]
             c_ispeed: self
                 .c_ispeed
                 .try_into()
                 .context("invalid saved terminal c_ispeed")?,
+            #[cfg(not(target_env = "musl"))]
             c_ospeed: self
                 .c_ospeed
                 .try_into()
