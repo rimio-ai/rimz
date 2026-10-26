@@ -594,6 +594,7 @@ mod tests {
             scope: crate::agents::BudgetScope::Agent,
             account_kind: None,
             resets_at: None,
+            reset_window: None,
         });
         assert!(!due(&parked));
 

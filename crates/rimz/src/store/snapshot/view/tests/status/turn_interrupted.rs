@@ -43,6 +43,7 @@ fn interrupted_native_ask_settles_waiting_to_idle() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
 
     let snapshot = room_with_agent_panes(vec![session]);

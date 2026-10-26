@@ -231,6 +231,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         crate::agents::TierSkipReason::DailyCap {
             spend_usd: 10.into(),
             cap_usd: 5.into(),
+            window: None,
         },
     ] {
         let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();

@@ -14,6 +14,7 @@ fn awaiting_input_outranks_derived_statuses() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
 
     let snapshot = room_with_agent_panes(vec![session]);

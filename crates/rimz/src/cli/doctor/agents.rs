@@ -851,6 +851,7 @@ mod tests {
             scope: Default::default(),
             account_kind: None,
             resets_at: None,
+            reset_window: None,
         });
         let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),

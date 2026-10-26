@@ -265,6 +265,7 @@ fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
             scope: crate::agents::BudgetScope::Agent,
             account_kind: None,
             resets_at: None,
+            reset_window: None,
         });
     });
     hold("compacting", Hold::Compacting, &|agent| {

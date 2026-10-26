@@ -3034,6 +3034,27 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
     )
     .expect("wake stamp json");
     assert!(wake.is_some_and(|wake| wake <= jiff::Timestamp::now()));
+
+    let request = rimz::harness::AutoContinueRequest {
+        reason: "budget_month_reset".to_owned(),
+        text: "month reset".to_owned(),
+        ..request
+    };
+    run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args(
+            rimz::child_process::agent_helper_argv("auto-continue", &request),
+        ),
+        "deferred month-reset auto-continue",
+    );
+    let pending = env
+        .store()
+        .list_pending_messages()
+        .expect("pending messages");
+    let message = pending
+        .iter()
+        .find(|message| message.text == "month reset")
+        .expect("month-reset message");
+    assert_eq!(message.gate, DeliveryGate::Done);
 }
 
 #[test]

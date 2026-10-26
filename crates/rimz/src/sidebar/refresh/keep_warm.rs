@@ -470,6 +470,7 @@ mod tests {
             scope: crate::agents::BudgetScope::Agent,
             account_kind: None,
             resets_at: None,
+            reset_window: None,
         });
         let ids = ["done-1", "parked-1", "held-1"];
         let mut snapshot = snapshot(

@@ -205,6 +205,7 @@ fn keepalive_excludes_non_sleepers_and_disabled_or_unsafe_seats() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     assert!(!should_keepalive(&changed, &config, None, ts(3540)));
     changed = agent.clone();
@@ -838,6 +839,7 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     assert_eq!(holding(&parked, &on), None);
     let mut asking = solo.clone();

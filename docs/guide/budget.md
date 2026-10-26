@@ -8,7 +8,7 @@ One word collision to clear first. The `5h` and `7d` bars on the provider dashbo
 
 ## One model, five scopes
 
-A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`. Five scopes share the same model:
+A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, or with `/month` on an account billed by API key. Five scopes share the same model:
 
 | Scope | Caps | Set with | Window |
 | --- | --- | --- | --- |
@@ -16,9 +16,9 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`. Five s
 | Turn | every agent turn in the room | `harness.turn_budget = "3"` | turn |
 | Loop task | one task's scheduled runs | `rimz loop add … --budget 5 --budget-per-day 20` | per run, per day |
 | Room | every agent under one project root, worktrees included | `harness.budget = "50/day"` | `/day` only |
-| Account | one provider's `default` and shared accounts together, or one standalone account; every room on them | `[accounts.budget] claude = "100/day"` | `/day` only |
+| Account | one provider's `default` and shared accounts together, or one standalone account; every room on them | `[accounts.budget] claude = "100/day"`, or a standalone account's `budget` | `/day`, or `/month` for API-key billing |
 
-A room or account `/day` window runs from local midnight in your configured [`timezone`](./configuration.md#sidebar-rendering). An agent's day window starts when its cap takes effect and restarts on the first check after midnight. Each scope is checked on its own, so the first cap crossed is the one that parks.
+A room or account `/day` window runs from local midnight in your configured [`timezone`](./configuration.md#sidebar-rendering). An account `/month` window starts at 00:00 UTC on the 1st. An agent's day window starts when its cap takes effect and restarts on the first check after midnight. Each scope is checked on its own, so the first cap crossed is the one that parks. When several time-windowed caps bind, automatic continue waits for the last reset; the card still names the usual highest-precedence scope.
 
 One limit stops a launch without being a dollar cap. Qwen's Alibaba Coding Plan quota belongs to the exact account rather than to the CLI, so an unattended launch on an account whose quota window is spent exits `125`, or records `budget skipped` on a loop task, before a pane exists. Launches you make by hand ignore it ([agent support](../reference/agent-support.md#qwen)).
 
@@ -71,7 +71,19 @@ rimz config set harness.budget 50/day              # this project's whole fleet
 rimz config set accounts.budget.claude 100/day     # claude's shared accounts together, every room on them
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap follows the provider's history: `default` and every shared [account](./accounts.md) of that provider spend against one cap and park together, and each standalone account has a cap of its own. Either way the spend is summed across every room running on those accounts, while each room parks only the panes it owns.
+Both keys live in your per-machine `config.toml`, run no command, and stay outside the project trust hash. The room cap requires `/day` and counts every agent under the project root, worktrees included. An account cap accepts `/day` or `/month` and follows the provider's history: `default` and every shared [account](./accounts.md) of that provider spend against one cap and park together, and each standalone account has a cap of its own. Either way the spend is summed across every room running on those accounts, while each room parks only the panes it owns.
+
+For a monthly API-key budget, give the account standalone history and its own cap, which wins over the provider default:
+
+```toml
+[accounts.claude.api]
+history = "standalone"
+budget = "300/month"
+```
+
+A per-account `budget` on shared history is refused: use the kind's `[accounts.budget]` cap for the shared pool instead. Monthly caps count API-key billing only, never subscription usage. If any member of a shared pool is a subscription, the monthly cap does not apply to that entire pool; separate the API-key account with standalone history. Room start warns when it can identify that subscription. A cold account reading does not switch the budget off. Daily account caps retain their existing subscription behavior.
+
+This is a local transcript budget, not the billing authority: usage from another machine is invisible, and the spend walk can lag a running turn. Keep the provider console's spending cap as the hard backstop. For subscription spending, use Claude's extra-usage limit, Codex prepaid credits, or the provider's own limit instead.
 
 An account cap also needs a complete dollar history for that provider on disk, which only some agents publish: Claude, Codex, Grok, Pi, and OpenCode do today. For any other agent, config edits and launches refuse the key outright rather than enforce against incomplete dollars. Room start warns instead. `rimz budget --account KIND` refuses only if the targeted kind is ineligible, ignoring other keys. Fleet reports omit ineligible kinds and print a warning on stderr for each key to remove; fleet adjustments still proceed.
 
@@ -89,7 +101,7 @@ The report puts today's spend beside the cap, says whether the scope is parked, 
 
 For scripts, add `--json` to either budget command. Dollar amounts are numbers, unknown agent spend is null, and account scopes carry the pool and all its members. The [budget reference](../reference/cli/budget.md) lists the fields.
 
-`source` says where the cap in force came from: `config` for the key you set, `override` for an absolute cap set through `rimz budget`, `raised` for a raise on a base cap, `cleared` after `off`, and `none` when no base cap is set.
+`source` says where the cap in force came from: `config` for the key you set, `override` for an absolute cap set through `rimz budget`, `raised` for a raise on a base cap, `cleared` after `off`, and `none` when no base cap is set or the cap is a `/month` cap on a subscription pool, which never applies.
 
 These commands never edit `config.toml`: the room cap stays with the room's records, and account caps stay in a shared pool ledger that survives reboot. Removing a configured default disarms a raise based on it, but an absolute cap set through `rimz budget` remains until you lift it with `off`. To change the standing default instead, change the config key.
 
@@ -109,7 +121,7 @@ Two honest limits. A cap stops the next spend, never the request already in flig
 
 - **A new turn does.** A turn-budget park reopens on the next human prompt, which starts a fresh per-turn baseline. Teammate-triggered turns meet the cap too, and agent-to-agent traffic does not reopen an existing park.
 - **You do.** A human message delivered after the park waives that agent's next turn, once; the waiver is consumed when the turn ends. Background and agent-to-agent deliveries stay parked, so a chatty team cannot spend through your cap.
-- **The day does.** A `/day` park reopens at the next local midnight, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt goes to the agents RimZ interrupted, never to agents that were already at rest.
+- **The window does.** A `/day` park reopens at local midnight; an account `/month` park at 00:00 UTC on the next 1st. With [auto-continue](./loops.md#keep-the-fleet-moving) on, the continue prompt waits for the last binding window to reset and goes to agents RimZ interrupted, never to agents that were already at rest.
 - **A raise does.** Raising or clearing a cap (`rimz agents budget @coder +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
 - **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125` and loop fires record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
 

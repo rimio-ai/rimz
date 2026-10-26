@@ -60,7 +60,8 @@ mod worktree;
 #[cfg(test)]
 pub(crate) use accounts::UsageLimitUsd;
 pub use accounts::{
-    AccountBudgetConfigError, AccountHistory, AccountLabelError, AccountsConfig, NamedAccount,
+    AccountBudgetConfigError, AccountCap, AccountCapParseError, AccountHistory, AccountLabelError,
+    AccountsConfig, NamedAccount,
 };
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
@@ -979,15 +980,11 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
     let mut errors = Vec::new();
     match load_optional(files.core_path(), parse_core_text) {
         Ok(Some(core)) => {
-            for kind in core.accounts.budget.keys() {
-                errors.extend(
-                    AccountsConfig::validate_budget_kind(kind)
-                        .err()
-                        .map(|source| ConfigErr::AccountBudget {
-                            path: files.core_path().to_path_buf(),
-                            source,
-                        }),
-                );
+            for (_, source) in core.accounts.budget_errors() {
+                errors.push(ConfigErr::AccountBudget {
+                    path: files.core_path().to_path_buf(),
+                    source,
+                });
             }
             errors.extend(
                 crate::agents::LoginCatalog::room_view(&core.accounts)

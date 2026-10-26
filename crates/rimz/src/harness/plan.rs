@@ -110,12 +110,17 @@ impl LaunchAvailability {
                 .exhausted(runtime, state, config, now, &provider)
                 && let (Some(spend_usd), Some(cap_usd)) = (
                     serde_json::Number::from_f64(spend),
-                    serde_json::Number::from_f64(cap),
+                    serde_json::Number::from_f64(cap.cap_usd),
                 )
             {
                 result.daily_caps.insert(
                     login.kind.clone(),
-                    TierSkipReason::DailyCap { spend_usd, cap_usd },
+                    TierSkipReason::DailyCap {
+                        spend_usd,
+                        cap_usd,
+                        window: (cap.window == crate::agents::BudgetWindow::Month)
+                            .then_some(cap.window),
+                    },
                 );
             }
         }

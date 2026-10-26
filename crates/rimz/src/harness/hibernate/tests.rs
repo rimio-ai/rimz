@@ -613,6 +613,7 @@ fn decision_rejects_each_busy_rollup_term_but_not_team_seats() {
                 scope: crate::agents::BudgetScope::Agent,
                 account_kind: None,
                 resets_at: None,
+                reset_window: None,
             })
         }),
     ];

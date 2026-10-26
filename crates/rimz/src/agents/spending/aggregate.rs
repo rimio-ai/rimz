@@ -248,6 +248,9 @@ pub(crate) fn aggregate_counted_rollups(
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
     let mut login_day = BTreeMap::<LoginKey, SpendWindow>::new();
     let mut login_day_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
+    let month_cutoff_secs = utc_month_start_secs(now_secs).unwrap_or_default();
+    let mut login_month = BTreeMap::<LoginKey, SpendWindow>::new();
+    let mut login_month_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
     // These collections only establish session uniqueness. Hashing avoids
     // repeatedly ordering transcript paths while the final public maps retain
     // their deterministic `BTreeMap` representation.
@@ -336,6 +339,16 @@ pub(crate) fn aggregate_counted_rollups(
                 .add(entry.cost_usd, entry);
             provider_day_sessions
                 .entry(provider.to_owned())
+                .or_default()
+                .insert(counted.session_key());
+        }
+        if entry.ts_secs >= month_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
+            login_month
+                .entry(counted.login().clone())
+                .or_default()
+                .add(entry.cost_usd, entry);
+            login_month_sessions
+                .entry(counted.login().clone())
                 .or_default()
                 .insert(counted.session_key());
         }
@@ -473,6 +486,10 @@ pub(crate) fn aggregate_counted_rollups(
         login_day.entry(login).or_default().sessions =
             sessions.len().try_into().unwrap_or(u32::MAX);
     }
+    for (login, sessions) in login_month_sessions {
+        login_month.entry(login).or_default().sessions =
+            sessions.len().try_into().unwrap_or(u32::MAX);
+    }
     if let Some(index) = history_roles {
         super::session_effort::fold(index, &mut roles, now_secs, history_day_cutoff);
     }
@@ -496,6 +513,8 @@ pub(crate) fn aggregate_counted_rollups(
         provider_day,
         login_day,
         day_cutoff_secs,
+        login_month,
+        month_cutoff_secs,
         days,
         chart,
         timezone,
@@ -1131,6 +1150,18 @@ pub fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
     let zone = crate::config::resolve_time_zone(tz);
     let start = now.to_zoned(zone).start_of_day().ok()?.timestamp();
     u64::try_from(start.as_second()).ok()
+}
+
+/// Epoch second of 00:00 UTC on the current month's first day.
+pub fn utc_month_start_secs(now_secs: u64) -> Option<u64> {
+    let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
+    let utc = now.to_zoned(jiff::tz::TimeZone::UTC);
+    let start = jiff::civil::Date::new(utc.year(), utc.month(), 1)
+        .ok()?
+        .at(0, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .ok()?;
+    u64::try_from(start.timestamp().as_second()).ok()
 }
 
 /// Local civil date expressed as days since 1970-01-01, for published history.

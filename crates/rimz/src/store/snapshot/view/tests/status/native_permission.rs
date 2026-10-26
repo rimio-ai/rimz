@@ -54,6 +54,7 @@ fn plan_proposal_outranks_budget_park_on_the_card() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
 
     let snapshot = room_with_agent_panes(vec![session]);

@@ -77,6 +77,7 @@ fn silent_child_excludes_rested_unprompted_and_nonworking_children() {
                     scope: BudgetScope::Agent,
                     account_kind: None,
                     resets_at: None,
+                    reset_window: None,
                 })
             }
             _ => {
@@ -1210,6 +1211,7 @@ fn budget_park_serializes_verbatim_in_persisted_state() {
         scope: BudgetScope::Account,
         account_kind: Some(AgentKind::new_unchecked("claude")),
         resets_at: Some(at),
+        reset_window: None,
     };
     agent.budget_park = Some(park.clone());
     assert_eq!(
@@ -1295,6 +1297,7 @@ fn waiting_and_interruption_outrank_a_budget_park() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     assert_eq!(waiting.effective_status(), AgentStatus::Waiting);
 
@@ -1422,6 +1425,7 @@ fn open_turn_predicate_follows_lifecycle_and_rest_certificates() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     assert!(!budget_parked.holds_open_turn());
 }
@@ -1493,6 +1497,7 @@ fn open_turn_and_effective_status_are_consistent() {
         scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     };
     for outcome in [
         TurnSettleOutcome::PlanProposed,
@@ -1620,6 +1625,7 @@ fn answered_waiting_admits_budget_parks() {
         scope: BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
+        reset_window: None,
     });
     assert_eq!(agent.effective_status(), AgentStatus::Paused);
     assert_eq!(

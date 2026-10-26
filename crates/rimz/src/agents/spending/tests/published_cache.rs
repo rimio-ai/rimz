@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn publication_expires_at_utc_month_turn_before_history_midnight() {
+    let second = |s: &str| s.parse::<jiff::Timestamp>().unwrap().as_second() as u64;
+    let before = second("2026-10-31T23:59:59Z");
+    let mut value = serde_json::to_value(ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: before * 1000,
+        timezone: "Asia/Tokyo".into(),
+        chart: ChartSpend {
+            today: local_day_index(before, Some("Asia/Tokyo")).unwrap(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    value["month_cutoff_secs"] = second("2026-10-01T00:00:00Z").into();
+    let cache: ProviderSpendingCache = serde_json::from_value(value).unwrap();
+    assert!(cache.is_fresh(before * 1000));
+    assert!(!cache.is_fresh((before + 2) * 1000));
+}
+
+#[test]
 fn publication_carries_session_start_and_accepts_an_older_writer() {
     let result = SpendingWalkResult {
         session_start_secs: Some(NOW_SECS - 100),
@@ -56,7 +77,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 22);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 23);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();

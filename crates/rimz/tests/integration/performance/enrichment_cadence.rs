@@ -119,6 +119,8 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
                 None,
             )
             .unwrap(),
+            month_cutoff_secs: rimz::agents::spending::utc_month_start_secs(unix_now_ms() / 1000)
+                .unwrap(),
             timezone: "UTC".into(),
             chart: rimz::agents::spending::ChartSpend {
                 today: (unix_now_ms() / 86_400_000) as i64,
@@ -167,6 +169,8 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
                 None,
             )
             .unwrap(),
+            month_cutoff_secs: rimz::agents::spending::utc_month_start_secs(unix_now_ms() / 1000)
+                .unwrap(),
             timezone: "UTC".into(),
             chart: rimz::agents::spending::ChartSpend {
                 today: (unix_now_ms() / 86_400_000) as i64,
