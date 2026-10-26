@@ -120,7 +120,10 @@ pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
 /// embedded in their parent error. A stderr write failure cannot replace the
 /// command failure that brought us here.
 pub(crate) fn report(error: &anyhow::Error) {
-    let _ = write_report(&mut err(), error);
+    // Lazy theme loading must not prepend config warnings to the failure being reported.
+    let _ = tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+        write_report(&mut err(), error)
+    });
 }
 
 fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()> {
