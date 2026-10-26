@@ -182,6 +182,7 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
@@ -3282,6 +3283,83 @@ fn explain_uses_the_room_account_before_a_launch_batch_exists() {
 }
 
 #[test]
+fn explain_skill_callability_follows_the_applied_tools_list() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_kind_base(&env, "pi");
+    let mut actual = Vec::new();
+    for (name, tools) in [("reader", "\ntools: [Read, Bash]"), ("native", "")] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Reader\nagent: pi{tools}"),
+            "Read the code.",
+        );
+        let output = env
+            .rimz()
+            .args(["agents", "explain", name, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let human = env
+            .rimz()
+            .args(["agents", "explain", name])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let human = String::from_utf8(human.stdout).unwrap();
+        actual.push((
+            name,
+            report["skills"]["callable"].clone(),
+            report["prompt"]["reminder"]
+                .as_str()
+                .unwrap()
+                .contains("### Skills"),
+            report["skills"]["host"].clone(),
+            human
+                .lines()
+                .find(|line| line.trim().starts_with("callable:"))
+                .unwrap()
+                .trim()
+                .to_owned(),
+        ));
+        assert!(
+            report["warnings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            (
+                "reader",
+                serde_json::json!([]),
+                false,
+                serde_json::Value::Null,
+                "callable: none (tools list has no Skill)".into()
+            ),
+            (
+                "native",
+                serde_json::Value::Null,
+                true,
+                serde_json::Value::Null,
+                "callable: native discovery".into()
+            ),
+        ]
+    );
+}
+
+#[test]
 fn explain_prints_the_plan_without_side_effects() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
@@ -3333,7 +3411,7 @@ fn explain_prints_the_plan_without_side_effects() {
         &env,
         "agents",
         "leader",
-        "description: Team leader\nagent: claude\ntools: []",
+        "description: Team leader\nagent: claude\ntools: [Skill]",
         "",
     );
     crate::common::write_definition(
@@ -4522,6 +4600,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            no_skill_tool: false,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
@@ -4676,6 +4755,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            no_skill_tool: false,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
@@ -4888,6 +4968,7 @@ esac"#,
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(run.run_id.clone()),

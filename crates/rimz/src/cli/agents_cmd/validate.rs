@@ -324,7 +324,9 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
             let Some(profile) = profiles.0.get(&row.name) else {
                 return false;
             };
-            if !rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp") {
+            if rimz::agents::skills_lack_skill_tool(&row.kind, profile.tools.as_ref())
+                || !rimz::config::skill_is_callable(profile.skills.as_deref(), "rimz-lsp")
+            {
                 return false;
             }
             loaded
@@ -647,44 +649,40 @@ mod tests {
 
     #[test]
     fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
-        let mut loaded = LoadedDefinitions::default();
-        for (name, namespace, tools, skills) in [
-            ("navigator", "agents", ["Bash", "LSP"], None),
-            ("writer", "agents", ["Write", "Read"], None),
-            ("native", "agents", ["Bash", "LSP"], Some(vec!["commit"])),
-            ("empty", "agents", ["Bash", "LSP"], Some(vec![])),
-            ("child", "subagents", ["Bash", "LSP"], Some(vec!["commit"])),
-            ("team.lead", "team", ["Bash", "LSP"], Some(vec!["commit"])),
-        ] {
-            let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
-            profile.skills =
-                skills.map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
-            let profiles = if namespace == "subagents" {
-                &mut loaded.subagent_profiles
-            } else {
-                &mut loaded.agent_profiles
-            };
-            profiles.0.insert(name.into(), profile);
-            loaded
-                .tools
-                .insert(name.into(), tools.map(str::to_owned).to_vec());
-            loaded.rows.push(definitions::DefinitionRow {
-                keep_warm: None,
-                tier: None,
-                tier_fallback: None,
-                name: name.into(),
-                namespace: namespace.into(),
-                kind: "claude".into(),
-                model: None,
-                effort: None,
-                fast: false,
-                source: format!("agents/{name}.md").into(),
-                team: None,
-                role: None,
-                owns: Vec::new(),
-                signals: Vec::new(),
-            });
+        let root = tempfile::tempdir().unwrap();
+        for namespace in ["agents", "subagents", "teams"] {
+            std::fs::create_dir(root.path().join(namespace)).unwrap();
         }
+        std::fs::write(
+            root.path().join("agents/claude.md"),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+        for (name, namespace, tools, skills) in [
+            ("navigator", "agents", "Bash, LSP, Skill", None),
+            ("skillless", "agents", "Bash, LSP", None),
+            ("writer", "agents", "Write, Read, Skill", None),
+            ("native", "agents", "Bash, LSP, Skill", Some(vec!["commit"])),
+            ("empty", "agents", "Bash, LSP, Skill", Some(vec![])),
+            (
+                "child",
+                "subagents",
+                "Bash, LSP, Skill",
+                Some(vec!["commit"]),
+            ),
+        ] {
+            let skills = skills.map_or_else(String::new, |skills| {
+                format!("skills: {}\n", serde_json::to_string(&skills).unwrap())
+            });
+            std::fs::write(
+                root.path().join(format!("{namespace}/{name}.md")),
+                format!("---\ndescription: Test\nagent: claude\ntools: [{tools}]\n{skills}---\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(root.path().join("teams/probe.md"), "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: native\n    role: lead\n    owns: [Plan]\n---\nPipeline.").unwrap();
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         assert!(lsp_warnings(&loaded, &rimz::config::MachineConfig::default()).is_empty());
         let machine = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
         let warnings = lsp_warnings(&loaded, &machine);

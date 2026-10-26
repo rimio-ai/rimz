@@ -4,6 +4,36 @@
 use super::*;
 
 #[test]
+fn resumed_tools_policy_reaches_the_exec_request() {
+    let mut actual = Vec::new();
+    for tools in [vec!["Bash"], vec!["Skill", "Read"]] {
+        let mut worker = profile("claude");
+        worker.tools = Some(
+            crate::agents::ToolSet::parse(
+                &tools.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        );
+        let profiles = profiles("worker", worker);
+        let posture = posture_for("claude", Some("worker"), None, &profiles);
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        let request = posture.launch.exec_request(
+            AgentKind::new_unchecked("claude"),
+            crate::harness::launch::ExecAction::Resume {
+                session_id: "session".into(),
+                extra_args: Vec::new(),
+            },
+        );
+        let cell = posture
+            .launch
+            .into_cell(AgentKind::new_unchecked("claude"), Some("worker".into()));
+        actual.push((cell.no_skill_tool, request.no_skill_tool));
+    }
+    assert_eq!(actual, [(true, true), (false, false)]);
+    assert!(!bare_posture(None, &AgentKind::new_unchecked("claude")).no_skill_tool);
+}
+
+#[test]
 fn recorded_posture_replays_verbatim_model_without_observed_switch() {
     let mut profiles = profiles("planner", routed_profile(Some("medium")));
     profiles

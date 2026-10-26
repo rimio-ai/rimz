@@ -539,6 +539,8 @@ The default report shows:
 
 `--json` emits the same plan with the fields `isolation` (`host`, `scoped`, or `sandbox`), `isolation_source` (`--isolation`, `recorded --isolation` for an `@handle` target, `profile default <name>`, or `machine policy`), `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `account`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
 
+`skills.callable` is `null` for native discovery, an array of callable names for an explicit list, and `[]` when no skill is callable, including when an applied tools list lacks `Skill` ([skill policy](../../guide/configuration.md#skills)). The human `callable:` line names the tools list when that is the reason; the separate `profile view:` line still describes skill visibility.
+
 `prompt.sources` lists sources in composition order. File sources have `path` and `bytes`; the embedded team consensus has `builtin: "team consensus"` and `bytes`, with no `path`. A configured `consensus-file` is an ordinary file source. The human report labels the embedded source `source: built-in team consensus (N bytes)`, and adds `; read-only copy at <path>` when the [inspection copy](../definitions.md#the-built-in-consensus-copy) exists; the JSON shape does not carry that path.
 
 A routed plan also carries `tier`, `tier_skipped` for usage passes, and `tier_unbuildable` for build passes (`model`, full `error`); empty pass lists are omitted. Later static exclusions do not appear as passes.

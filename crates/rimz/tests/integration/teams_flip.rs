@@ -1435,6 +1435,7 @@ impl Fixture {
             loop_reminder: None,
             headless: None,
             skills: None,
+            no_skill_tool: false,
             allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,

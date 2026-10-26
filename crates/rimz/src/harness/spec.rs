@@ -115,6 +115,7 @@ pub struct AgentCell {
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub no_skill_tool: bool,
     pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
@@ -144,6 +145,7 @@ impl Cell {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            no_skill_tool: false,
             allowed_tools: None,
             isolation_default: None,
             launch: crate::agents::LaunchParams::default(),
@@ -1662,6 +1664,10 @@ fn agent_cell_from(
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
         skills: resolved.skills.clone(),
+        no_skill_tool: crate::agents::skills_lack_skill_tool(
+            resolved.kind.as_str(),
+            resolved.tools.as_ref(),
+        ),
         allowed_tools: resolved.allowed_tools.clone(),
         launch: crate::agents::LaunchParams {
             profile,

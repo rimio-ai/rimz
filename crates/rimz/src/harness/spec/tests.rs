@@ -230,6 +230,64 @@ fn profile(agent: &str) -> Profile {
 }
 
 #[test]
+fn tools_determine_skill_callability_after_layering_and_rebase() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (kind, tools, target, no_skill_tool) in [
+        ("claude", Some(vec!["Bash", "Read"]), None, true),
+        ("codex", Some(vec!["Bash"]), None, true),
+        ("pi", Some(vec!["Read", "Bash"]), None, true),
+        ("claude", Some(vec!["Skill", "Read"]), None, false),
+        ("codex", Some(vec!["Skill", "Read"]), None, false),
+        ("pi", Some(vec!["Skill", "Read"]), None, false),
+        ("claude", None, None, false),
+        ("codex", None, None, false),
+        ("pi", None, None, false),
+        ("claude", Some(vec!["Bash"]), Some("opencode"), false),
+        ("omp", Some(vec!["Read"]), None, false),
+    ] {
+        let mut parent = profile(kind);
+        parent.tools = tools.map(|tools| {
+            crate::agents::ToolSet::parse(&tools.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                .unwrap()
+        });
+        let profiles = profiles([
+            ("parent", parent),
+            (
+                "child",
+                Profile {
+                    skills: Some(
+                        ["rimz-lsp", "rimz-subagents"]
+                            .map(|name| name.parse().unwrap())
+                            .to_vec(),
+                    ),
+                    ..profile("parent")
+                },
+            ),
+        ]);
+        for spec in ["parent", "child"] {
+            let layout = resolve_spec_with_agent_override(
+                Some(spec),
+                &profiles,
+                &profiles,
+                &CommandsConfig::default(),
+                &TeamsConfig::default(),
+                target,
+            )
+            .unwrap();
+            let cell = layout.agent_cells().next().unwrap();
+            let request =
+                crate::harness::launch::ExecRequest::fresh(cell, Default::default(), None, false);
+            assert_eq!(cell.skills, profiles.0[spec].skills);
+            let case = format!("{kind} {spec} on {target:?}");
+            actual.push((case.clone(), cell.no_skill_tool, request.no_skill_tool));
+            expected.push((case, no_skill_tool, no_skill_tool));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn pi_native_tools_render_portably_after_an_engine_switch() {
     let worker = Profile {
         tools: Some(crate::agents::ToolSet::parse(&["read".into(), "bash".into()]).unwrap()),

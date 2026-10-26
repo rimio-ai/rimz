@@ -93,6 +93,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
                 team_prompt: posture.launch.team_prompt.clone(),
                 skills: posture.launch.skills.clone(),
+                no_skill_tool: posture.launch.no_skill_tool,
                 allowed_tools: posture.launch.allowed_tools.clone(),
                 isolation_default: posture.launch.isolation_default,
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,

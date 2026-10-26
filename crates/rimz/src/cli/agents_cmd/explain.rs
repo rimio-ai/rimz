@@ -347,6 +347,8 @@ struct ProfileReport<'a> {
 #[derive(Serialize)]
 struct SkillsReport<'a> {
     callable: Option<&'a [SkillName]>,
+    #[serde(skip)]
+    no_skill_tool: bool,
     applied: bool,
     host: Option<&'a rimz::agents::skills::HostSkillPlan>,
 }
@@ -584,7 +586,8 @@ impl<'a> ExplainReport<'a> {
             tier_stamp: params.tier.as_deref(),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
-                callable: request.skills.as_deref(),
+                callable: request.callable_skills(),
+                no_skill_tool: request.no_skill_tool,
                 applied: bwrap.is_some(),
                 host: process.host_skills.as_ref(),
             },
@@ -813,18 +816,24 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     writeln!(
         output,
         "  callable: {}",
-        report.skills.callable.map_or_else(
-            || "native discovery".to_owned(),
-            |skills| if skills.is_empty() {
-                "none (all manual)".to_owned()
-            } else {
-                skills
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        )
+        if report.skills.no_skill_tool {
+            "none (tools list has no Skill)".to_owned()
+        } else {
+            report.skills.callable.map_or_else(
+                || "native discovery".to_owned(),
+                |skills| {
+                    if skills.is_empty() {
+                        "none (all manual)".to_owned()
+                    } else {
+                        skills
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                },
+            )
+        }
     )?;
     use rimz::agents::skills::HostSkillPlan;
     if report.skills.applied {

@@ -2,6 +2,57 @@ use super::*;
 use crate::config::Team;
 
 #[test]
+fn missing_skill_tool_omits_skill_sections_but_keeps_child_body() {
+    let available = SubagentCatalog::Available(vec![subagent_policy::SubagentProfile {
+        name: "explorer".into(),
+        source: subagent_policy::SubagentProfileSource::Profile,
+        agent: Some("claude".into()),
+        model: None,
+        effort: None,
+        description: None,
+    }]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for skills in [
+        None,
+        Some(
+            ["rimz-lsp", "rimz-subagents"]
+                .map(|name| name.parse().unwrap())
+                .to_vec(),
+        ),
+    ] {
+        for catalog in [available.clone(), SubagentCatalog::Disabled] {
+            for subagent in [false, true] {
+                let mut request = ExecRequest::bare_launch(
+                    crate::ids::AgentKind::new_unchecked("claude"),
+                    Vec::new(),
+                );
+                request.skills.clone_from(&skills);
+                request.no_skill_tool = true;
+                request.subagent = subagent;
+                let reminders = LaunchReminders {
+                    lsp_configured: true,
+                    lsp_servers: vec!["rust".into()],
+                    subagent_catalog: Some(catalog.clone()),
+                    ..Default::default()
+                };
+                let text = render(&request, &reminders, Path::new("/checkout"), None);
+                let case = format!("{skills:?} {catalog:?} child={subagent}");
+                actual.push((
+                    case.clone(),
+                    text.contains("### Skills"),
+                    text.contains("- lsp:"),
+                    text.contains("### Subagents"),
+                    text.contains(SUBAGENT_REMINDER_BODY),
+                ));
+                expected.push((case, false, false, subagent, subagent));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());

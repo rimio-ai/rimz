@@ -560,6 +560,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
@@ -1202,6 +1203,8 @@ fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissi
 
 #[test]
 fn configured_lsp_denies_native_tool_on_every_launch_action() {
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
     for action in [
         ExecAction::Launch {
             prompt: None,
@@ -1216,7 +1219,9 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
             extra_args: Vec::new(),
         },
     ] {
-        for subagent in [false, true] {
+        for (subagent, no_skill_tool) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
             for configured in [false, true] {
                 for (skills, callable) in [
                     (None, true),
@@ -1226,6 +1231,7 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
                 ] {
                     let mut invocation = request("claude", action.clone());
                     invocation.subagent = subagent;
+                    invocation.no_skill_tool = no_skill_tool;
                     invocation.skills = skills
                         .map(|names| names.iter().map(|name| name.parse().unwrap()).collect());
                     let process = compile_agent_process_with_extra_env(
@@ -1240,18 +1246,21 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
                         },
                     )
                     .expect("process");
-                    assert_eq!(
+                    let case = format!(
+                        "{action:?} child={subagent} configured={configured} no_skill_tool={no_skill_tool} skills={:?}",
+                        invocation.skills
+                    );
+                    actual.push((
+                        case.clone(),
                         process.provider_argv.iter().any(|arg| arg == "LSP"),
-                        configured && callable
-                    );
-                    assert_eq!(
                         process.provider_argv.iter().any(|arg| arg == "Agent"),
-                        subagent
-                    );
+                    ));
+                    expected.push((case, configured && callable && !no_skill_tool, subagent));
                 }
             }
         }
     }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -1285,7 +1294,9 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
                 extra_args: Vec::new(),
             },
         ] {
-            for subagent in [false, true] {
+            for (subagent, no_skill_tool) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
                 for catalog in [
                     None,
                     Some(SubagentCatalog::Disabled),
@@ -1299,6 +1310,7 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
                     ] {
                         let mut invocation = request(kind, action.clone());
                         invocation.subagent = subagent;
+                        invocation.no_skill_tool = no_skill_tool;
                         invocation.skills = skills.map(|names| {
                             names
                                 .into_iter()
@@ -1332,7 +1344,7 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
                                 })
                         };
                         let case = format!(
-                            "{kind} {action:?} child={subagent} catalog={catalog:?} skills={:?}",
+                            "{kind} {action:?} child={subagent} no_skill_tool={no_skill_tool} catalog={catalog:?} skills={:?}",
                             invocation.skills
                         );
                         actual.push((case.clone(), disabled));
@@ -1340,6 +1352,7 @@ fn native_delegation_matches_catalog_and_skills_on_every_action() {
                             case,
                             subagent
                                 || (callable
+                                    && !no_skill_tool
                                     && matches!(catalog, Some(SubagentCatalog::Available(_)))),
                         ));
                     }
@@ -2479,6 +2492,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap(), "rebase".parse().unwrap()]),
+        no_skill_tool: false,
         allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
@@ -2581,6 +2595,25 @@ fn exec_wire_round_trips_resume_and_fork() {
         assert!(wire.get("prompt_file").is_none());
         assert_eq!(decoded, invocation);
     }
+}
+
+#[test]
+fn exec_wire_defaults_missing_skill_tool_flag_and_round_trips_true() {
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let legacy = serde_json::to_value(&request).unwrap();
+    assert!(legacy.get("no_skill_tool").is_none());
+    assert!(
+        !decode_exec_request("claude", None, &legacy.to_string())
+            .unwrap()
+            .no_skill_tool
+    );
+    request.no_skill_tool = true;
+    let payload = serde_json::to_value(&request).unwrap();
+    let decoded = decode_exec_request("claude", None, &payload.to_string()).unwrap();
+    assert_eq!(
+        (payload.get("no_skill_tool"), decoded),
+        (Some(&serde_json::json!(true)), request)
+    );
 }
 
 #[test]
