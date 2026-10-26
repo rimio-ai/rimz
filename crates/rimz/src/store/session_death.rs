@@ -6,7 +6,9 @@
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentLifecycleObservation, AgentState, SamePaneSessionPolicy, SessionOrigin};
+use crate::agents::{
+    AgentLifecycleObservation, AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin,
+};
 use crate::ids::AgentKind;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
@@ -34,6 +36,21 @@ pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
 
 pub(super) fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
     now.duration_since(agent.last_activity).as_secs()
+}
+
+/// A reaper's end stamp is a liveness guess, not a failed-turn verdict.
+/// Resting at Idle lets later activity recover a session that raced the reap.
+pub(super) fn reaped_end_rests_at_idle(
+    event_name: Option<&str>,
+    prior_status: Option<AgentStatus>,
+) -> bool {
+    matches!(
+        event_name,
+        Some("ReapedSuperseded" | "ReapedDead" | "ReapedStale" | "WorktreeRemoved")
+    ) && matches!(
+        prior_status,
+        Some(AgentStatus::Running | AgentStatus::Waiting)
+    )
 }
 
 /// Whether `newer` proves that `older` no longer owns its session slot.
