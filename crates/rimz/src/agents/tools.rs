@@ -185,6 +185,19 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     matches!(definitions(kind).tools, DefinitionTools::Required(_))
 }
 
+/// Whether a definition's `skills:` list goes unreached for want of a `Skill` tool: always on a
+/// kind that requires tools, and on one with optional tools once a list is supplied.
+pub(crate) fn skills_lack_skill_tool(kind: &str, tools: Option<&ToolSet>) -> bool {
+    if tools.is_some_and(|tools| tools.has("Skill")) {
+        return false;
+    }
+    match definitions(kind).tools {
+        DefinitionTools::Required(_) => true,
+        DefinitionTools::Optional(_) => tools.is_some(),
+        _ => false,
+    }
+}
+
 /// Whether `kind` runs models named by other providers' vocabularies.
 pub(crate) fn runs_other_providers_models(kind: &str) -> bool {
     definitions(kind).runs_other_providers_models
@@ -268,7 +281,7 @@ mod tests {
             "Bash(git *)",
         ]);
         let (args, notices) = render_launch_tool_args("pi", Some(&parsed)).unwrap();
-        assert_eq!(args, ["--tools", "read,bash"]);
+        assert_eq!(args, ["--tools", "read,bash", "--no-skills"]);
         assert_eq!(
             notices,
             [
@@ -276,6 +289,28 @@ mod tests {
                 ToolNotice::Restrictions(vec!["Read".into(), "Bash".into()]),
             ]
         );
+    }
+
+    #[test]
+    fn pi_keeps_skill_only_beside_a_reader() {
+        for (entries, expected_args, expected_notices) in [
+            (vec!["Skill", "Read"], vec!["--tools", "read"], vec![]),
+            (vec!["Bash", "Skill"], vec!["--tools", "bash"], vec![]),
+            (
+                vec!["Skill(foo)", "Read"],
+                vec!["--tools", "read"],
+                vec![ToolNotice::Restrictions(vec!["Skill".into()])],
+            ),
+            (
+                vec!["Skill(foo)"],
+                vec!["--no-tools"],
+                vec![ToolNotice::Dropped(vec!["Skill".into()])],
+            ),
+        ] {
+            let (args, notices) = render_launch_tool_args("pi", Some(&tools(&entries))).unwrap();
+            assert_eq!(args, expected_args, "{entries:?}");
+            assert_eq!(notices, expected_notices, "{entries:?}");
+        }
     }
 
     #[test]
@@ -369,12 +404,12 @@ mod tests {
         assert!(render_tool_args("pi", None).unwrap().is_empty());
         assert_eq!(
             render_tool_args("pi", Some(&parsed)).unwrap(),
-            ["--tools", "bash"]
+            ["--tools", "bash", "--no-skills"]
         );
         for (entries, expected) in [
-            (vec![], vec!["--no-tools"]),
-            (vec!["WebSearch"], vec!["--no-tools"]),
-            (vec!["Bash(git *)"], vec!["--tools", "bash"]),
+            (vec![], vec!["--no-tools", "--no-skills"]),
+            (vec!["WebSearch"], vec!["--no-tools", "--no-skills"]),
+            (vec!["Bash(git *)"], vec!["--tools", "bash", "--no-skills"]),
             (
                 vec![
                     "Bash",
@@ -390,11 +425,12 @@ mod tests {
                 vec![
                     "--tools",
                     "bash,read,edit,write,grep,find,ls,ask_user_question",
+                    "--no-skills",
                 ],
             ),
             (
                 vec!["Edit", "MultiEdit", "Read", "Bash", "read"],
-                vec!["--tools", "edit,read,bash"],
+                vec!["--tools", "edit,read,bash", "--no-skills"],
             ),
             (
                 vec![
@@ -411,6 +447,7 @@ mod tests {
                 vec![
                     "--tools",
                     "read,bash,powershell,edit,write,grep,find,ls,ask_user_question",
+                    "--no-skills",
                 ],
             ),
             (

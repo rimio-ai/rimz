@@ -642,7 +642,7 @@ pub(super) fn skill_policy(
     let Some(listed) = listed else {
         return Ok(None);
     };
-    if agents::tools_required(kind) && !tools.is_some_and(|tools| tools.has("Skill")) {
+    if agents::skills_lack_skill_tool(kind, tools) {
         return Err(DefinitionErr::new(
             path,
             "sets `skills:` and lists no Skill tool; the list governs which skills that tool reaches on its own",

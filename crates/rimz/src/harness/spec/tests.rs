@@ -271,10 +271,18 @@ fn tools_follow_nearest_role_value_with_explicit_empty_and_base_fallback() {
         ("bare", profile("claude")),
     ]);
     for (spec, target, expected) in [
-        ("child", "replacement", vec!["--tools", "read"]),
-        ("empty", "replacement", vec!["--no-tools"]),
-        ("bare", "replacement", vec!["--tools", "bash"]),
-        ("amp", "replacement", vec!["--tools", "bash"]),
+        (
+            "child",
+            "replacement",
+            vec!["--tools", "read", "--no-skills"],
+        ),
+        ("empty", "replacement", vec!["--no-tools", "--no-skills"]),
+        (
+            "bare",
+            "replacement",
+            vec!["--tools", "bash", "--no-skills"],
+        ),
+        ("amp", "replacement", vec!["--tools", "bash", "--no-skills"]),
         ("bare", "pi", vec![]),
     ] {
         let layout = resolve_spec_with_agent_override(
