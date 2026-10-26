@@ -8,12 +8,30 @@
 //! [docs/internals/agents/adapter.md](../../../../docs/internals/agents/adapter.md).
 
 use super::*;
+use crate::ids::AgentSessionId;
 use std::collections::BTreeMap;
 
 /// A provider launch precondition that would leave its managed pane unusable.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct LaunchBlocker(pub(crate) String);
+
+/// A pre-exec configuration refusal, not a provider crash.
+pub const SESSION_STEP_REFUSED: i32 = 78;
+
+/// Inputs visible inside the provider's final launch environment and filesystem view.
+pub struct SessionStepRequest<'a> {
+    pub session: Option<&'a AgentSessionId>,
+    pub model: &'a str,
+    pub provider_argv: &'a [String],
+    pub cwd: &'a Path,
+    pub env: &'a BTreeMap<String, String>,
+}
+
+/// A single-line reason the provider's session preparation refused the launch.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct SessionStepRefusal(pub(crate) String);
 
 /// Launch-scoped provider channel for additive system or developer text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,6 +358,14 @@ pub struct RejectedLaunchArg {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// Prepare the session before exec, or return `None` when unsupported.
+    fn session_step(
+        &self,
+        _request: &SessionStepRequest<'_>,
+    ) -> Option<std::result::Result<Vec<String>, SessionStepRefusal>> {
+        None
+    }
+
     /// A provider default that prevents an ask launch from enforcing prompts.
     fn ask_unenforced(
         &self,

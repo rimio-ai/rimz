@@ -521,6 +521,25 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
 }
 
 #[test]
+fn session_step_declarations_have_an_implementation() {
+    for definition in BUILTINS {
+        let supported = definition.session_step(&super::capabilities::SessionStepRequest {
+            session: None,
+            model: "model",
+            provider_argv: &[],
+            cwd: std::path::Path::new("/"),
+            env: &Default::default(),
+        });
+        assert_eq!(
+            definition.spec().launch.model_session_step,
+            supported.is_some(),
+            "{}",
+            definition.spec().kind
+        );
+    }
+}
+
+#[test]
 fn preset_matchers_find_split_joined_and_config_key_occurrences() {
     let flags = PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]);
     let argv = strings(&[

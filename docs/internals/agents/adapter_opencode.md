@@ -1,6 +1,6 @@
 # OpenCode adapter
 
-This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream protocol, pinned at OpenCode 2.0.27, is in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
+This page maps OpenCode 2 onto RimZ's types: the plugin RimZ installs, the events it forwards, launch and resume, the context gauge, the transcript, the account, and cost. The provider-neutral agent model is in [model.md](./model.md) and the integration layer in [adapter.md](./adapter.md). Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md). The upstream plugin protocol, pinned at OpenCode 2.0.27, and model-selection server at 2.1.4 are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
 
 RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` declares a 2.0.0 floor through `min_version`. RimZ authors the whole wire: an in-process TypeScript plugin flattens OpenCode's hooks and bus events into a snake_case envelope that RimZ owns. A payload drift is therefore a RimZ bug in the plugin, never an upstream one.
 
@@ -16,6 +16,7 @@ RimZ supports OpenCode 2 only. `crates/rimz/src/agents/adapters/opencode/mod.rs:
 | `crates/rimz/src/agents/adapters/opencode/go_usage.rs` | The Console [Go status](#go-status) read: the URL override's trust check, the wire, and the 5h, 7d, and month windows with their amounts |
 | `crates/rimz/src/agents/adapters/opencode/transcript.rs` | Transcript reads, the assistant-page cursor, and the final message |
 | `crates/rimz/src/agents/adapters/opencode/spend.rs` | The spend parser |
+| `crates/rimz/src/agents/adapters/opencode/session_step.rs` | Strict model matching, the private helper lease, and session create or switch |
 
 Only the registry reaches `OpencodeAdapter`. The modules above stay private to the adapter directory, except `go_usage`: it is visible to `crate::agents` so that `crates/rimz/src/agents/delegated_account.rs::probe_account_usage` can call it.
 
@@ -78,7 +79,7 @@ The plugin stands down in OpenCode's shared background service, the `opencode se
 
 ### Sessions
 
-Registration is lazy (`registers_lazily`). A fresh OpenCode TUI creates its session at the first prompt, so `session.created` and `session_created` arrive only then ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment)). Until then the pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds).
+Registration is lazy (`registers_lazily`). Without a requested model, a fresh OpenCode TUI creates its session at the first prompt, so `session.created` and `session_created` arrive only then ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment)). With a requested model, the [session step](#model-selection) creates the session before the TUI starts; its first `chat_message` adopts the card, since the TUI did not create that session and emits no creation event for it. Until the first prompt the pane renders as the idle row of [instances.md](./instances.md#before-a-session-binds). Restarting before that prompt starts fresh again, leaving an empty OpenCode session behind.
 
 `/new` registers a new root inside the same process. The adapter declares `SamePaneSessionPolicy::FollowLatest`, so pane and card ownership follow the latest root ([instances.md](./instances.md#same-pane-ownership)). The older root is collapsed by the in-place-switch rule of [supersession](./instances.md#supersession). The fresh-conversation rule never applies, because the wire does not say how a root was created and RimZ records no `Fresh` origin for it.
 
@@ -108,7 +109,7 @@ Plan approval is derived from the agent the plugin remembers. A root execution t
 | Plan | none: no agent is selected |
 | Yolo | `--auto` |
 
-Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Fork and every preset are unsupported (`PresetMatchers::EMPTY`), and a configured model preset refuses before launch.
+Detection searches `PATH`, then `~/.opencode/bin`. Launch, install, setup, and `rimz doctor` refuse a binary whose readable version is below 2.0.0, with the fix "run `opencode upgrade --major`" (`crates/rimz/src/agents/version.rs::check_launch_version_floor`). A version RimZ cannot read does not refuse. Model selection is verified on 2.1.4, without raising the floor for model-less launches. Fork and effort presets are unsupported; unsupported fast and auto-compact settings warn and launch without the setting.
 
 OpenCode never carries this launch text:
 
@@ -131,6 +132,22 @@ Every managed OpenCode launch also calls `crates/rimz/src/agents/adapters/openco
 | Invalid JSONC (including whitespace-only), non-object root, or non-object `tabs` | `{"tabs":{"mode":"off"}}` | One `LaunchPlanWarning::LaunchEnv`, naming the variable and problem, saying this launch ignored the configured value, and giving the fix: set a JSON object whose `tabs` is an object, or unset it |
 
 This hides the native session tab strip from OpenCode 2.0.13 onward; 2.0.0 through 2.0.12 keep their tabs, and the minimum supported version remains 2.0.0. Manual OpenCode launches, including from a room shell, are unchanged. RimZ validates only the root and `tabs` container shapes, not OpenCode's versioned settings schema: another invalid setting such as `{"theme":42}` or `{"tabs":{"scope":42}}` makes OpenCode drop the whole inline value, including RimZ's mode, and fall back to `cli.json`. The [upstream CLI config reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-cli-and-environment) owns parsing, precedence, version support, and legacy-tab normalization.
+
+## Model selection
+
+`LaunchSpec::model_session_step` declares model support without an argv matcher. The OpenCode `LaunchCapability::session_step` implementation prepares a native session before the TUI runs. The hidden command is `rimz agents session-step opencode --model <name> [--session <id>] -- <provider argv…>`. A fresh launch with a model creates a session; a resume with an explicit model override switches that session. Model-less launches, plain resume, and restart do not run the step. The provider argv stays OpenCode's command for binary and version checks; the step runs inside the login shell, scoped view, and hibernation scope.
+
+The step launches the provider argv's program as `serve --stdio --hostname 127.0.0.1 --port 0`, in its own process group. One 30-second deadline covers readiness, every HTTP request, and shutdown. The helper advertises its loopback URL on one stdout JSON line and is bound to the step by its stdin pipe. Killing the step closes that lease. Success closes stdin and waits for the helper's own exit. Every path then kills the helper's process group, so no worker it started outlives the step, and failure or expiry does so before returning a refusal. There is no retry inside the step.
+
+The helper inherits the step's environment except `RIMZ` and every `RIMZ_*` key, making RimZ's installed plugin inert. Its `OPENCODE_CONFIG_CONTENT` is parsed as JSONC, preserving authored keys and policies and appending `integration.use` denies for `plugin:*` and `mcp:*`. Malformed content becomes a deny-only document. The helper sets `OPENCODE_DISABLE_MODELS_FETCH=1`, `OPENCODE_FILEWATCHER_DISABLE=1`, `OPENCODE_DISABLE_FFF=1`, and a fresh random `OPENCODE_PASSWORD`. None of these changes reaches the final TUI: its environment, including launch reminders, is unchanged.
+
+Requests use Basic auth as `opencode:<password>`. `GET /api/model?location[directory]=<cwd>` reads the configured model list in the directory the agent sees. Matching accepts an exact full `providerID/id`, including an ID containing `/`, or a bare ID without `/` offered by exactly one provider. A name containing `/` names its provider, as OpenCode's own model references do, so it never matches another provider's ID: with only OpenRouter configured, `openai/gpt-5` is refused and `openrouter/openai/gpt-5` suggested. Ambiguous IDs list every full name. Unknown names suggest up to three nearest full names within two edits of either the full name or its ID, otherwise point at `opencode models`. A `#variant` suffix is refused. The list is not a credential check and is not cached by RimZ.
+
+Create posts `{"id":<minted>,"location":{"directory":<cwd>},"model":{"providerID":…,"id":…}}` to `/api/session`; switch posts `{"model":{"providerID":…,"id":…}}` to `/api/session/<id>/model`. Only a successful match can reach either POST. IDs follow OpenCode's descending `ses_` shape. After closing stdin and waiting for the helper to exit, the step execs the provider command with the same PID. Create inserts `--session <minted>` immediately after the program; switch keeps argv unchanged. The [upstream reference](../../externals/agent-adapter/opencode-reference.md#model-selection-server-v214) pins these surfaces.
+
+A refusal writes one final `rimz: OpenCode model check refused …` stderr line and exits 78. An HTTP error whose body carries OpenCode's own `message` (a switch onto a session OpenCode no longer has answers 404 `Session not found: <id>`) quotes that message. Other helper or API failures add the verified-version note and the adapter's upgrade fix. The exec wrapper does not retry exit 78 or record a provider-startup incident. Its pane hint points at the reason above and names the command to rerun: the fresh launch, or for a refused model switch on resume, the resume of that conversation. A failed subagent's captured tail carries the reason to its caller. Explicit subagent `--retries` still retries failed runs.
+
+During this short step, hibernation finds no provider child and a Zellij pane-PID match can miss; the helper itself matches OpenCode's process names. These transients write no lasting identity. Exec preserves the spawned PID, and the TUI plugin then names that PID as its parent.
 
 ## Context gauge
 
@@ -213,7 +230,7 @@ The spend cache stamps one origin per database file, either an origin override f
 
 - Native answering, background parking, background shells, and remote control are unsupported.
 - Idle attention is partial: OpenCode has no idle notification, so RimZ reconstructs it from turn boundaries, native asks, and the stall window.
-- Plan mode at launch, presets, fork, system-prompt replacement, and headless runs are unsupported.
+- Plan mode at launch, effort presets, fork, system-prompt replacement, and headless runs are unsupported.
 - RimZ does not read `OPENCODE_DB`, and it skips channel databases whose names contain a `.`, which OpenCode allows ([reference](../../externals/agent-adapter/opencode-reference.md#opencode-2-storage-and-credentials)).
 - Workspace-scoped spend reads one origin for the whole shared database.
 - The reference does not record whether OpenCode runs the `context` hook for title or generate requests, so whether those requests carry the launch reminder is unverified.

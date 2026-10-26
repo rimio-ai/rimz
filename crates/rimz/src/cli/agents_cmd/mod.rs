@@ -33,6 +33,7 @@ mod resume;
 mod run_command;
 mod run_timeout;
 mod runs_lookup;
+mod session_step;
 mod show;
 mod stall_notice;
 mod stop;
@@ -748,6 +749,8 @@ enum AgentsSubcmd {
     #[command(hide = true)]
     Exec(Box<ExecArgs>),
     #[command(hide = true)]
+    SessionStep(session_step::Args),
+    #[command(hide = true)]
     RunCommand(run_command::Args),
     /// Hidden helper the producer spawns to nudge a parked agent when its resume
     /// condition is due (`sidebar::enrich` auto-continue).
@@ -902,6 +905,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             );
         }
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
+        Some(AgentsSubcmd::SessionStep(args)) => return session_step::run(args),
         Some(AgentsSubcmd::RunCommand(args)) => return run_command::run(args, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),

@@ -1,6 +1,10 @@
 //! Integration coverage for interactive peer launches and the supervised agent launch shell wrapper.
 
 #[cfg(unix)]
+#[path = "opencode_session_step.rs"]
+mod session_step;
+
+#[cfg(unix)]
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use predicates::str::contains;

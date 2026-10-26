@@ -20,6 +20,7 @@ mod account;
 mod database;
 pub(in crate::agents) mod go_usage;
 mod payloads;
+mod session_step;
 mod spend;
 mod transcript;
 
@@ -355,6 +356,13 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn session_step(
+        &self,
+        request: &SessionStepRequest<'_>,
+    ) -> Option<std::result::Result<Vec<String>, SessionStepRefusal>> {
+        Some(session_step::run(request))
+    }
+
     fn min_version(&self) -> Option<super::version::CliVersion> {
         Some(super::version::CliVersion::new(2, 0, 0))
     }

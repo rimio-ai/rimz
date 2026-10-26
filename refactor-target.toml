@@ -272,7 +272,23 @@ upward-dependencies = ["address"]
 # skills_lack_skill_tool is public for launch inspection and definition validation; no surface raise.
 # LaunchSpec::takes_system_prompt shares prompt support with validation and launch (+1).
 # LaunchSpec::supports_preset admits session-applied models at the definition gate (+1).
-surface-budget = 1148
+# SessionStepRequest, SessionStepRefusal, SESSION_STEP_REFUSED and the capability carry pre-exec checks (+4).
+surface-budget = 1152
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SessionStepRequest"
+reason = "The hidden CLI passes the final provider view and model to adapter-owned session preparation."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SessionStepRefusal"
+reason = "Adapters return the single-line launch refusal for the process edge to report."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SESSION_STEP_REFUSED"
+reason = "The step and wrapper share the reserved configuration-refusal exit status."
 
 [[verdict]]
 kind = "item"
@@ -2765,6 +2781,11 @@ path = "crates/rimz/src/cli/agents_cmd/exec.rs"
 # The hidden duty request and entry re-export cross to agents dispatch (+2).
 # close_own_pane shares self-cleanup with the run-bound command wrapper (+1).
 surface-budget = 4
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd/session_step.rs"
+# Hidden argv parsing and the exec boundary cross only to agents dispatch (+2).
+surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec/duty.rs"
