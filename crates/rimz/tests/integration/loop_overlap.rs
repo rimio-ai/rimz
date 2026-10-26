@@ -890,7 +890,13 @@ fn a_ladder_written_replacement_notifies_when_it_disables_the_task() {
             .contains("disabled after 1 consecutive failed fires"),
         "{output:?}"
     );
-    wait_for_path(&notify_log);
+    // The notify shell creates the log with `>>` before `printf` writes to it.
+    let deadline = Instant::now() + LOOP_RUNNER_DEADLINE;
+    while std::fs::read_to_string(&notify_log).unwrap_or_default() != "loop_disabled\n"
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
     assert_eq!(
         std::fs::read_to_string(notify_log).unwrap(),
         "loop_disabled\n"
