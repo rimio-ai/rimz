@@ -164,6 +164,7 @@ pub struct LaunchSpec {
     pub picker: Option<&'static [&'static str]>,
     pub fork: Option<SessionCommand>,
     pub restores_session_model: bool,
+    pub model_session_step: bool,
     /// Value flags that require an explicit model.
     pub model_dependent_flags: &'static [&'static str],
     pub permission: LaunchPermissionArgs,
@@ -185,6 +186,7 @@ impl LaunchSpec {
         picker: None,
         fork: None,
         restores_session_model: false,
+        model_session_step: false,
         model_dependent_flags: &[],
         permission: LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
@@ -283,6 +285,12 @@ impl LaunchSpec {
             .is_some()
     }
 
+    /// Whether a field is applied through argv or the adapter's session step.
+    pub fn supports_preset(self, field: PresetField) -> bool {
+        (field == PresetField::Model && self.model_session_step)
+            || self.preset_arg_matcher(field).is_some()
+    }
+
     /// The provider argv that turns fast mode on (empty for an extension), or
     /// the provider's alternative.
     pub fn fast_args(self) -> Result<Vec<String>, &'static str> {
@@ -369,12 +377,15 @@ impl LaunchSpec {
                     value,
                 });
             }
-            let matcher = self
-                .preset_arg_matcher(field)
-                .ok_or(PresetErr::UnsupportedField {
+            if !self.supports_preset(field) {
+                return Err(PresetErr::UnsupportedField {
                     agent: agent_kind,
                     field: field_name,
-                })?;
+                });
+            }
+            let Some(matcher) = self.preset_arg_matcher(field) else {
+                continue;
+            };
             match matcher {
                 PresetArgMatcher::Flag(flags) => {
                     let flag = flags.first().ok_or(PresetErr::UnsupportedField {

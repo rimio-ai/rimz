@@ -465,6 +465,75 @@ fn concrete_models_keep_multi_provider_definitions_on_their_engine_until_agent_s
 }
 
 #[test]
+fn opencode_model_overrides_finalize_without_provider_model_args() {
+    let root = tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles =
+        toml::from_str("[worker]\nagent = 'opencode'\nmodel = 'opencode-go/deepseek-v4.1-flash'")
+            .unwrap();
+    machine.agents.teams =
+        toml::from_str("[crew]\nroles = [{role = 'code', profile = 'worker'}]").unwrap();
+    let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    launch.subagent_profiles = launch.profiles.clone();
+    for (scope, target) in [
+        (ProfileScope::Agents, "worker"),
+        (ProfileScope::Subagents, "worker"),
+        (ProfileScope::Agents, "crew"),
+    ] {
+        let mut launch = launch.clone();
+        let routed = launch.route(
+            &machine.tiers,
+            scope,
+            Some(target),
+            None,
+            Some("gpt-5"),
+            Some("opencode"),
+            |_, _| None,
+        );
+        assert!(
+            routed.is_ok(),
+            "OpenCode must accept another provider's model: {routed:?}"
+        );
+        let mut layout = crate::harness::plan::resolve_launch(
+            &launch,
+            scope,
+            &machine.agents.commands,
+            Some(target),
+            None,
+        )
+        .unwrap()
+        .layout;
+        crate::harness::plan::finalize_launch_layout(
+            &mut layout,
+            crate::harness::plan::LaunchFinalizeOptions {
+                agent_base: Some("opencode"),
+                permission_mode: None,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset {
+                    model: Some("gpt-5".into()),
+                    ..Default::default()
+                },
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "opencode");
+        assert_eq!(cell.launch.model.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            cell.launch
+                .record
+                .as_ref()
+                .and_then(|record| record.model.as_deref()),
+            Some("gpt-5")
+        );
+        assert!(cell.args.is_empty(), "{:?}", cell.args);
+    }
+}
+
+#[test]
 fn pi_model_routing_does_not_require_the_models_native_family_render() {
     let config = tempdir().unwrap();
     let project = tempdir().unwrap();

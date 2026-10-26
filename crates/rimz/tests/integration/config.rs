@@ -360,6 +360,28 @@ fn agents_explain_names_definition_prompt_on_kind_override() {
 }
 
 #[test]
+fn agents_validate_accepts_opencode_models_in_both_namespaces() {
+    let env = Env::new();
+    for namespace in ["agents", "subagents"] {
+        crate::common::write_definition(
+            &env,
+            namespace,
+            &format!("{namespace}-worker"),
+            "description: Worker\nagent: opencode\nmodel: gpt-5\nfast: true\nauto-compact: 200k",
+            "",
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["agents", "validate", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+}
+
+#[test]
 fn agents_validate_warns_only_for_explicit_sandbox_without_a_switch() {
     let env = Env::new();
     write_machine_file(

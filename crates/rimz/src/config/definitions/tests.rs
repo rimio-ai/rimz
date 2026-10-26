@@ -1419,7 +1419,11 @@ fn flip_compact_accepts_yaml_off_and_rejects_other_shapes() {
 
 #[test]
 fn unsupported_preset_fields_fail_at_the_definition() {
-    for (kind, field, value) in [("amp", "effort", "high"), ("droid", "model", "custom")] {
+    for (kind, field, value) in [
+        ("amp", "effort", "high"),
+        ("droid", "model", "custom"),
+        ("opencode", "effort", "high"),
+    ] {
         let root = fixture();
         definition(
             root.path(),
@@ -1978,25 +1982,29 @@ fn definition_tools_stay_typed_until_the_final_engine_is_known() {
 }
 
 #[test]
-fn multi_provider_models_do_not_change_a_pi_definition_engine() {
-    let root = fixture();
-    definition(
-        root.path(),
-        "agents/pi-sonnet.md",
-        "agent: pi\nmodel: sonnet",
-        "",
-    );
-    definition(
-        root.path(),
-        "agents/pi-child.md",
-        "agent: pi-sonnet\nmodel: haiku",
-        "",
-    );
-    let loaded = clean(root.path());
-    for (name, model) in [("pi-sonnet", "sonnet"), ("pi-child", "haiku")] {
-        let profile = &loaded.agent_profiles.0[name];
-        assert_eq!(profile.agent, "pi");
-        assert_eq!(profile.model.as_deref(), Some(model));
+fn multi_provider_models_do_not_change_the_definition_engine() {
+    for kind in ["pi", "opencode"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/pi-sonnet.md",
+            &format!("agent: {kind}\nmodel: sonnet"),
+            "",
+        );
+        definition(
+            root.path(),
+            "agents/pi-child.md",
+            "agent: pi-sonnet\nmodel: haiku",
+            "",
+        );
+        let loaded = clean(root.path());
+        for (name, model) in [("pi-sonnet", "sonnet"), ("pi-child", "haiku")] {
+            let profile = &loaded.agent_profiles.0[name];
+            assert_eq!(profile.agent, kind);
+            assert_eq!(profile.model.as_deref(), Some(model));
+        }
+        definition(root.path(), "agents/gpt.md", "model: gpt-5\ntools: []", "");
+        assert_eq!(clean(root.path()).agent_profiles.0["gpt"].agent, "codex");
     }
 }
 

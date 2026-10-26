@@ -230,6 +230,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         }),
         restores_session_model: false,
+        model_session_step: false,
         model_dependent_flags: &[],
         permission: super::LaunchPermissionArgs {
             ask: &[
