@@ -234,6 +234,12 @@ pub(crate) fn resume_parked(
             }
             continue;
         }
+        if read_park(&path).is_some_and(
+            |record| matches!(record.kind, ParkKind::Budget { deadline } if now >= deadline),
+        ) {
+            fire_if_due(agent, &path, ctx);
+            continue;
+        }
         clear_budget_park(runtime, &agent.kind, &agent.agent_id);
         if let Some(mut record) = read_park(&path)
             && matches!(
