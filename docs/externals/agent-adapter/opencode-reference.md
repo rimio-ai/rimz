@@ -146,4 +146,8 @@ Session IDs must start with `ses` ([ID schema](https://github.com/anomalyco/open
 
 `OPENCODE_CONFIG_CONTENT` is parsed as the last, highest-priority config document ([`core/src/config.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/core/src/config.ts)).
 
+Since 2.0.6, `OPENCODE_CLI_CONFIG_CONTENT` supplies a separate inline CLI config object over `cli.json`. Unset or exactly `""` is absent. The loader accepts JSONC comments and trailing commas; a parse error, non-object root, or schema decode failure silently drops the whole inline value. Objects merge recursively, while arrays and other values replace the lower layer ([`cli/src/config/config.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/config/config.ts)).
+
+Since 2.0.13, `tabs.mode` accepts `"auto"`, `"on"`, or `"off"` ([`tui/src/config/index.tsx`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/tui/src/config/index.tsx)). Each layer normalizes legacy `tabs.enabled` to `mode` only when `mode` is absent, so an explicit `mode` wins ([`cli/src/config/schema.ts`](https://github.com/anomalyco/opencode/blob/v2.0.27/packages/cli/src/config/schema.ts)).
+
 To migrate from 1.19.0, run that legacy binary's `opencode upgrade --major` ([legacy upgrade command](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/cli/cmd/upgrade.ts)).

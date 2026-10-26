@@ -376,30 +376,13 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
     ) -> Option<String> {
         const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
         const SELECTOR: &str = "-opencode.tool.subagent";
-        let parsed = login_env.get(CONFIG_ENV).map_or_else(
-            || Ok(serde_json::Map::new()),
-            |raw| {
-                let value = crate::agents::jsonc::from_slice::<Value>(raw.as_bytes())
-                    .map_err(|_| "is not valid JSONC")?;
-                let Value::Object(config) = value else {
-                    return Err("is not a JSON object");
-                };
-                if config.get("plugins").is_some_and(|value| !value.is_array()) {
-                    return Err("has a plugins value that is not an array");
-                }
-                Ok(config)
-            },
+        let (mut config, warning) = parse_inline_config(
+            CONFIG_ENV,
+            login_env.get(CONFIG_ENV).map(String::as_str),
+            "plugins",
+            "an array",
+            Value::is_array,
         );
-        let (mut config, warning) = match parsed {
-            Ok(config) => (config, None),
-            Err(problem) => (
-                serde_json::Map::new(),
-                Some(format!(
-                    "{CONFIG_ENV} {problem}; this launch ignored the configured value; \
-                     set it to a JSON object whose plugins is an array, or unset it"
-                )),
-            ),
-        };
         let mut plugins = match config.remove("plugins") {
             Some(Value::Array(plugins)) => plugins,
             _ => Vec::new(),
@@ -411,6 +394,57 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
         warning
     }
+
+    fn finalize_launch_env(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        env: &mut BTreeMap<String, String>,
+    ) -> Option<String> {
+        const CONFIG_ENV: &str = "OPENCODE_CLI_CONFIG_CONTENT";
+        // OpenCode reads this variable only when it is non-empty, unlike
+        // OPENCODE_CONFIG_CONTENT, so `""` is absent here rather than malformed.
+        let raw = login_env
+            .get(CONFIG_ENV)
+            .map(String::as_str)
+            .filter(|raw| !raw.is_empty());
+        let (mut config, warning) =
+            parse_inline_config(CONFIG_ENV, raw, "tabs", "an object", Value::is_object);
+        let mut tabs = match config.remove("tabs") {
+            Some(Value::Object(tabs)) => tabs,
+            _ => serde_json::Map::new(),
+        };
+        tabs.insert("mode".to_owned(), Value::String("off".to_owned()));
+        config.insert("tabs".to_owned(), Value::Object(tabs));
+        env.insert(CONFIG_ENV.to_owned(), Value::Object(config).to_string());
+        warning
+    }
+}
+
+/// Parses the inline config `name` carries, whose `member` must be `shape` when present.
+/// Content that fails is replaced by an empty object, with a warning that says so.
+fn parse_inline_config(
+    name: &str,
+    raw: Option<&str>,
+    member: &str,
+    shape: &str,
+    valid: fn(&Value) -> bool,
+) -> (serde_json::Map<String, Value>, Option<String>) {
+    let Some(raw) = raw else {
+        return (serde_json::Map::new(), None);
+    };
+    let problem = match crate::agents::jsonc::from_slice::<Value>(raw.as_bytes()) {
+        Ok(Value::Object(config)) if config.get(member).is_none_or(valid) => {
+            return (config, None);
+        }
+        Ok(Value::Object(_)) => format!("has a {member} value that is not {shape}"),
+        Ok(_) => "is not a JSON object".to_owned(),
+        Err(_) => "is not valid JSONC".to_owned(),
+    };
+    let warning = format!(
+        "{name} {problem}; this launch ignored the configured value; \
+         set it to a JSON object whose {member} is {shape}, or unset it"
+    );
+    (serde_json::Map::new(), Some(warning))
 }
 
 impl crate::agents::capabilities::HookCapability for OpencodeAdapter {

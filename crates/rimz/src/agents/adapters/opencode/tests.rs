@@ -152,6 +152,97 @@ fn native_subagent_denial_warns_when_opencode_config_is_ignored() {
 }
 
 #[test]
+fn managed_launch_hides_tabs_preserving_other_cli_config() {
+    let mut actual = Vec::new();
+    for raw in [
+        None,
+        Some(""),
+        Some(
+            r#"{/* JSONC */"theme":"dark","tabs":{
+                "mode":"on","layout":"vertical","enabled":true,},}"#,
+        ),
+        Some(r#"{"tabs":{"mode":"auto"}}"#),
+        Some(r#"{"theme":"light"}"#),
+    ] {
+        let mut inherited = BTreeMap::from([("OPENCODE_CONFIG_CONTENT".into(), "keep".into())]);
+        if let Some(raw) = raw {
+            inherited.insert("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into());
+        }
+        let mut env = BTreeMap::new();
+        let warning = OpencodeAdapter.finalize_launch_env(&inherited, &mut env);
+        actual.push((
+            env.get("OPENCODE_CLI_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
+            warning,
+            env.contains_key("OPENCODE_CONFIG_CONTENT"),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![
+            (Some(json!({"tabs":{"mode":"off"}})), None, false),
+            (Some(json!({"tabs":{"mode":"off"}})), None, false),
+            (
+                Some(json!({"theme":"dark","tabs":{
+                    "mode":"off","layout":"vertical","enabled":true
+                }})),
+                None,
+                false,
+            ),
+            (Some(json!({"tabs":{"mode":"off"}})), None, false),
+            (
+                Some(json!({"theme":"light","tabs":{"mode":"off"}})),
+                None,
+                false
+            ),
+        ]
+    );
+}
+
+#[test]
+fn managed_launch_warns_when_opencode_cli_config_is_ignored() {
+    let mut actual = Vec::new();
+    for (raw, problem) in [
+        ("not JSON", "not valid JSONC"),
+        (" ", "not valid JSONC"),
+        ("[]", "not a JSON object"),
+        ("null", "not a JSON object"),
+        ("42", "not a JSON object"),
+        ("true", "not a JSON object"),
+        (r#""config""#, "not a JSON object"),
+        (r#"{"tabs":"off"}"#, "tabs value that is not an object"),
+        (r#"{"tabs":null}"#, "tabs value that is not an object"),
+        (r#"{"tabs":[]}"#, "tabs value that is not an object"),
+        (r#"{"tabs":42}"#, "tabs value that is not an object"),
+        (r#"{"tabs":false}"#, "tabs value that is not an object"),
+    ] {
+        let inherited = BTreeMap::from([("OPENCODE_CLI_CONFIG_CONTENT".into(), raw.into())]);
+        let mut env = BTreeMap::new();
+        let warning = OpencodeAdapter
+            .finalize_launch_env(&inherited, &mut env)
+            .unwrap_or_default();
+        actual.push((
+            env.get("OPENCODE_CLI_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<Value>(raw).unwrap()),
+            [
+                "OPENCODE_CLI_CONFIG_CONTENT",
+                problem,
+                "ignored the configured value",
+                "JSON object",
+                "tabs",
+                "unset",
+            ]
+            .iter()
+            .all(|part| warning.contains(part)),
+        ));
+    }
+    assert_eq!(
+        actual,
+        vec![(Some(json!({"tabs":{"mode":"off"}})), true); 12]
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn install_blocker_refuses_only_old_opencode() {
     use std::os::unix::fs::PermissionsExt as _;

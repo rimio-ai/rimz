@@ -2190,6 +2190,106 @@ fn opencode_delegation_uses_composed_config_over_inherited_config() {
 }
 
 #[test]
+fn opencode_tabs_are_hidden_on_every_launch_action_with_or_without_delegation() {
+    let project = tempfile::tempdir().unwrap();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for action in [
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        ExecAction::Resume {
+            session_id: "ses_123".into(),
+            extra_args: Vec::new(),
+        },
+    ] {
+        for subagent in [false, true] {
+            let mut invocation = request("opencode", action.clone());
+            invocation.subagent = subagent;
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &invocation,
+                project.path(),
+                &BTreeMap::new(),
+                &LaunchReminders {
+                    settings: Some((project.path().into(), BTreeMap::new())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            actual.push((
+                process
+                    .env
+                    .get("OPENCODE_CLI_CONFIG_CONTENT")
+                    .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap()),
+                process
+                    .env
+                    .get("OPENCODE_CONFIG_CONTENT")
+                    .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap()),
+            ));
+            expected.push((
+                Some(serde_json::json!({"tabs":{"mode":"off"}})),
+                subagent.then(|| serde_json::json!({"plugins":["-opencode.tool.subagent"]})),
+            ));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn opencode_tabs_use_composed_cli_config_over_inherited_config() {
+    let project = tempfile::tempdir().unwrap();
+    let invocation = request(
+        "opencode",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let mut actual = Vec::new();
+    for composed in [None, Some(r#"{"theme":"composed","tabs":{"mode":"auto"}}"#)] {
+        let extra = composed
+            .map(|raw| env(&[("OPENCODE_CLI_CONFIG_CONTENT", raw)]))
+            .unwrap_or_default();
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &extra,
+            &LaunchReminders {
+                settings: Some((
+                    project.path().into(),
+                    env(&[(
+                        "OPENCODE_CLI_CONFIG_CONTENT",
+                        r#"{"theme":"inherited","tabs":{"mode":"on","layout":"vertical"}}"#,
+                    )]),
+                )),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        actual.push(
+            process
+                .env
+                .get("OPENCODE_CLI_CONFIG_CONTENT")
+                .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap()),
+        );
+    }
+    assert_eq!(
+        actual,
+        [
+            Some(
+                serde_json::json!({"theme":"inherited","tabs":{"mode":"off","layout":"vertical"}})
+            ),
+            Some(serde_json::json!({"theme":"composed","tabs":{"mode":"off"}})),
+        ]
+    );
+}
+
+#[test]
 fn process_compiler_disables_opencode_native_subagents() {
     let project = tempfile::tempdir().expect("project");
     let mut invocation = request(

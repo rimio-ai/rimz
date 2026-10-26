@@ -957,6 +957,7 @@ fn compile_agent_process_with_extra_env(
     if reminders.disable_native_subagents(request) {
         env_warnings.extend(adapter.disable_native_subagent_env(&login_env, &mut env));
     }
+    env_warnings.extend(adapter.finalize_launch_env(&login_env, &mut env));
     let ask = adapter
         .spec()
         .launch
