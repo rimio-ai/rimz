@@ -1,5 +1,7 @@
 use super::*;
-use rimz::store::run::RunRecord;
+use rimz::store::run::{RunRecord, RunStatus};
+
+const UNKNOWN: &str = "rimz: OpenCode model check refused \"deepseek-4-1-flash\": unknown model; did you mean opencode-go/deepseek-v4.1-flash?";
 
 fn wrapper_request(env: &Env, model: Option<&str>, subagent: bool) -> (ExecRequest, RunRecord) {
     env.record(&env.project_root);
@@ -219,4 +221,69 @@ fn explain_shows_the_model_step_without_changing_the_provider_command() {
         !env.home_root.join("serve-pids").exists(),
         "explain must not execute the step"
     );
+}
+
+#[test]
+fn wrapper_model_refusals_do_not_retry_or_report_a_startup_crash() {
+    for child in [false, true] {
+        let env = Env::new();
+        let (origin, server) = crate::oauth_usage::serve_http_routes(
+            vec![("GET /api/model?", 200, CATALOG.into())],
+            1,
+        );
+        let (request, run) = wrapper_request(&env, Some("deepseek-4-1-flash"), child);
+        let output = wrapper_command(&env, &request, &origin)
+            .bounded_output()
+            .unwrap();
+        let tail = pane_tail(&env);
+        assert_eq!(output.status.code(), Some(78), "{tail}");
+        assert_eq!(
+            tail.lines()
+                .filter(|line| line.starts_with("rimz: OpenCode model check refused"))
+                .collect::<Vec<_>>(),
+            [UNKNOWN]
+        );
+        for absent in ["failed to start", "relaunching", "died at startup"] {
+            assert!(!tail.contains(absent), "{tail}");
+        }
+        assert_eq!(
+            server.join().unwrap().len(),
+            1,
+            "no POST and no repeated model GET"
+        );
+        assert!(!env.home_root.join("final-argv").exists());
+        assert_eq!(
+            std::fs::read_to_string(env.home_root.join("serve-pids"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(launch_retries(&env).is_empty());
+        let workspace = env.resolve_workspace(&env.project_root);
+        assert!(
+            !env.diag_records(&workspace.session_name)
+                .iter()
+                .any(|entry| matches!(
+                    &entry.event,
+                    rimz::diag::record::DiagEvent::ProviderStartupExit { .. }
+                ))
+        );
+        assert!(env.store().read_events().unwrap().iter().any(|event| {
+            matches!(
+                event.kind(),
+                EventKind::AgentLaunch(payload) if payload.state == AgentLaunchState::Failed
+            )
+        }));
+        let run =
+            rimz::harness::run::load(&env.state_path_for(&env.project_root), &run.run_id).unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert_eq!(
+            run.failure_tail
+                .as_deref()
+                .and_then(|tail| tail.lines().rev().find(|line| !line.trim().is_empty()))
+                .map(str::trim),
+            Some(UNKNOWN)
+        );
+    }
 }

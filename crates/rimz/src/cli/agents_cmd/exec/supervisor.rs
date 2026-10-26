@@ -603,6 +603,7 @@ fn run_loop(
         let exit = rimz::harness::run::ProviderExit {
             fresh_launch,
             success: outcome.status.success(),
+            exit_code,
             abrupt: outcome.abrupt,
             signaled: cleanup_signal_received() || provider_interrupted,
             relaunches,
