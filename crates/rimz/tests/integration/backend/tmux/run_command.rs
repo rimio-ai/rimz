@@ -139,19 +139,7 @@ fn check_command_pane(measure_memory: bool) {
             }
             candidates.extend(rimz::proc::children(pid));
         };
-        let rollup = std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup")).unwrap();
-        let private_kib: u64 = rollup
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("Pss_Anon:")
-                    .and_then(|value| value.split_whitespace().next())
-                    .and_then(|value| value.parse().ok())
-            })
-            .unwrap();
-        assert!(
-            private_kib < 8 * 1024,
-            "command wrapper uses {private_kib} KiB private memory"
-        );
+        crate::common::assert_wrapper_memory_budget("command wrapper", wrapper, 8);
     }
     rimz::harness::run::cancel(store.paths(), &record.run_id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
