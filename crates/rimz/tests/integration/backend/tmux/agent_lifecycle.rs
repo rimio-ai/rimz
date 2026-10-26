@@ -34,6 +34,7 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
     }
     let budget_mib = std::env::var("RIMZ_TEST_PARK_BUDGET_MIB")
         .map_or(8, |value| value.parse::<u64>().expect("park budget in MiB"));
+    let mut figures = Vec::new();
     for subagent in [false, true] {
         let env = Env::new();
         init_repo(&env.project_root);
@@ -302,7 +303,12 @@ fn parked_wrapper_memory_budget(isolation: rimz::config::Isolation) {
         } else {
             "parked wrapper plain"
         };
-        crate::common::assert_wrapper_memory_budget(label, wrapper, budget_mib);
+        figures.push(crate::common::measure_wrapper_memory(
+            label, wrapper, budget_mib,
+        ));
+    }
+    for memory in &figures {
+        memory.assert_within(budget_mib);
     }
 }
 

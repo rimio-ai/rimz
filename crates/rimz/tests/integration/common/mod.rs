@@ -59,11 +59,27 @@ pub use zellij::ZellijNamespace;
 
 pub(crate) const ENV_PROBE_TIMEOUT_MS_ENV: &str = "RIMZ_TEST_ENV_PROBE_TIMEOUT_MS";
 
+const WRAPPER_HUGE_BUDGET_MIB: u64 = 16;
+
+/// One wrapper's private-memory figures, read from its `smaps_rollup` while it lives.
+pub(crate) struct WrapperMemory {
+    label: String,
+    private_kib: u64,
+    huge_kib: u64,
+    mode: String,
+}
+
+pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib: u64) {
+    measure_wrapper_memory(label, wrapper, budget_mib).assert_within(budget_mib);
+}
+
+/// Prints the wrapper's figures, and its mappings when they exceed a budget, without
+/// asserting, so a caller measuring several subcases reports each before it fails.
 #[expect(
     clippy::print_stdout,
     reason = "live memory measurements are test output"
 )]
-pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib: u64) {
+pub(crate) fn measure_wrapper_memory(label: &str, wrapper: u32, budget_mib: u64) -> WrapperMemory {
     let rollup = std::fs::read_to_string(format!("/proc/{wrapper}/smaps_rollup"))
         .expect("wrapper smaps_rollup");
     let field = |key: &str| -> u64 {
@@ -76,22 +92,31 @@ pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib
             })
             .expect("smaps_rollup field")
     };
-    let private_kib = field("Pss_Anon:");
-    let huge_kib = field("AnonHugePages:");
-    let outside_huge_kib = private_kib.saturating_sub(huge_kib);
     let enabled =
         std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled").unwrap_or_default();
-    let mode = enabled
-        .split_whitespace()
-        .find_map(|mode| mode.strip_prefix('[')?.strip_suffix(']'))
-        .unwrap_or("unavailable");
+    let memory = WrapperMemory {
+        label: label.to_owned(),
+        private_kib: field("Pss_Anon:"),
+        huge_kib: field("AnonHugePages:"),
+        mode: enabled
+            .split_whitespace()
+            .find_map(|mode| mode.strip_prefix('[')?.strip_suffix(']'))
+            .unwrap_or("unavailable")
+            .to_owned(),
+    };
+    let WrapperMemory {
+        private_kib,
+        huge_kib,
+        ref mode,
+        ..
+    } = memory;
+    let outside_huge_kib = memory.outside_huge_kib();
     println!(
         "{label}: {private_kib} KiB Pss_Anon; {} KiB Pss; {outside_huge_kib} KiB outside huge \
          pages; AnonHugePages {huge_kib} KiB; THP {mode}",
         field("Pss:")
     );
-    let huge_budget_mib = 16;
-    if outside_huge_kib > budget_mib * 1024 || huge_kib > huge_budget_mib * 1024 {
+    if outside_huge_kib > budget_mib * 1024 || huge_kib > WRAPPER_HUGE_BUDGET_MIB * 1024 {
         println!(
             "{label} mappings (load {}):\n{}",
             std::fs::read_to_string("/proc/loadavg")
@@ -100,16 +125,33 @@ pub(crate) fn assert_wrapper_memory_budget(label: &str, wrapper: u32, budget_mib
             std::fs::read_to_string(format!("/proc/{wrapper}/smaps")).expect("wrapper mappings")
         );
     }
-    assert!(
-        outside_huge_kib <= budget_mib * 1024,
-        "{label} {outside_huge_kib} KiB outside huge pages exceeds {budget_mib} MiB; \
-         private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
-    );
-    assert!(
-        huge_kib <= huge_budget_mib * 1024,
-        "{label} AnonHugePages {huge_kib} KiB exceeds {huge_budget_mib} MiB; \
-         private {private_kib} KiB; outside huge pages {outside_huge_kib} KiB; THP {mode}"
-    );
+    memory
+}
+
+impl WrapperMemory {
+    fn outside_huge_kib(&self) -> u64 {
+        self.private_kib.saturating_sub(self.huge_kib)
+    }
+
+    pub(crate) fn assert_within(&self, budget_mib: u64) {
+        let Self {
+            label,
+            private_kib,
+            huge_kib,
+            mode,
+        } = self;
+        let outside_huge_kib = self.outside_huge_kib();
+        assert!(
+            outside_huge_kib <= budget_mib * 1024,
+            "{label} {outside_huge_kib} KiB outside huge pages exceeds {budget_mib} MiB; \
+             private {private_kib} KiB; AnonHugePages {huge_kib} KiB; THP {mode}"
+        );
+        assert!(
+            *huge_kib <= WRAPPER_HUGE_BUDGET_MIB * 1024,
+            "{label} AnonHugePages {huge_kib} KiB exceeds {WRAPPER_HUGE_BUDGET_MIB} MiB; \
+             private {private_kib} KiB; outside huge pages {outside_huge_kib} KiB; THP {mode}"
+        );
+    }
 }
 
 pub(crate) fn append_frame(

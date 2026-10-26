@@ -112,6 +112,12 @@ status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
+# The wrapper budget tests print their memory figures; keep them in the final
+# summary on a pass too, so CI's log shows the margin under each budget.
+[[profile.live.overrides]]
+filter = 'package(rimz) & test(/wrapper_holds_under_8_mib$/)'
+success-output = "final"
+
 # A retried pass hides its failed attempts from the console summary, so the
 # retrying tiers keep a JUnit report that records every failed attempt with its
 # output. nextest writes it to `target/nextest/<profile>/junit.xml` under the
