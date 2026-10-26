@@ -107,7 +107,7 @@ fn hash_modified(hasher: &mut Sha256, modified: Option<Duration>) {
     }
 }
 
-/// Provider of the freshest root Pi session, tail-scanned newest-first.
+/// Provider of the newest Pi session candidate, read through a usable parent once.
 fn used_provider() -> Option<String> {
     used_provider_from(&pi_session_roots())
 }
@@ -126,7 +126,7 @@ fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
             });
         std::iter::once(root.clone()).chain(subdirectories)
     });
-    let mut candidates: Vec<_> = directories
+    let (_, newest) = directories
         .flat_map(|directory| std::fs::read_dir(directory).into_iter().flatten().flatten())
         .filter_map(|entry| {
             let path = entry.path();
@@ -136,13 +136,9 @@ fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
             let metadata = std::fs::metadata(&path).ok()?;
             metadata.is_file().then_some((mtime(&metadata)?, path))
         })
-        .collect();
-    candidates.sort_unstable();
-    let (_, newest) = candidates
-        .into_iter()
-        .rev()
-        .find(|(_, path)| !has_parent_session(path))?;
-    let tail = read_transcript_tail(&newest)?;
+        .max()?;
+    let deciding = parent_session(&newest).unwrap_or(newest);
+    let tail = read_transcript_tail(&deciding)?;
     tail.lines().rev().find_map(provider_of_line).or_else(|| {
         tail.lines()
             .rev()
@@ -152,22 +148,21 @@ fn used_provider_from(roots: &[PathBuf]) -> Option<String> {
     })
 }
 
-fn has_parent_session(path: &Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
+fn parent_session(path: &Path) -> Option<PathBuf> {
+    let file = std::fs::File::open(path).ok()?;
     let mut first = String::new();
     if BufReader::new(file.take(MAX_SESSION_HEADER_BYTES as u64 + 1))
         .read_line(&mut first)
         .is_err()
         || first.len() > MAX_SESSION_HEADER_BYTES
     {
-        return false;
+        return None;
     }
     serde_json::from_str::<SessionHeader>(&first)
         .ok()
         .and_then(|header| header.parent_session)
-        .is_some_and(|parent| !parent.is_empty())
+        .map(PathBuf::from)
+        .filter(|parent| parent.is_absolute() && parent.is_file())
 }
 
 #[derive(Deserialize)]
@@ -414,6 +409,125 @@ mod tests {
             1,
         );
         write_session(&dir.path().join("--cwd--/new.jsonl"), None, None, 2);
+
+        assert_eq!(used_provider_from(&[dir.path().to_owned()]), None);
+    }
+
+    #[test]
+    fn fork_of_a_stopped_agent_uses_its_source_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("--cwd--/source.jsonl");
+        write_session(&source, None, Some("anthropic"), 1);
+        write_session(
+            &dir.path().join("--cwd--/other.jsonl"),
+            None,
+            Some("openai-codex"),
+            2,
+        );
+        write_session(
+            &dir.path().join("--cwd--/fork.jsonl"),
+            Some(&source),
+            Some("anthropic"),
+            3,
+        );
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn child_of_a_fork_uses_only_its_immediate_parent_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("--cwd--/source.jsonl");
+        let fork = dir.path().join("--cwd--/fork.jsonl");
+        write_session(&source, None, Some("anthropic"), 1);
+        write_session(&fork, Some(&source), Some("openai-codex"), 2);
+        write_session(
+            &dir.path().join("--cwd--/child.jsonl"),
+            Some(&fork),
+            Some("openai"),
+            3,
+        );
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("openai-codex")
+        );
+    }
+
+    #[test]
+    fn unusable_parent_leaves_the_session_provider_deciding() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        write_session(
+            &dir.path().join("--cwd--/old.jsonl"),
+            None,
+            Some("anthropic"),
+            1,
+        );
+        let providers = [dir.path().join("missing.jsonl"), directory].map(|parent| {
+            write_session(
+                &dir.path().join("--cwd--/new.jsonl"),
+                Some(&parent),
+                Some("openai-codex"),
+                2,
+            );
+            used_provider_from(&[dir.path().to_owned()])
+        });
+
+        assert_eq!(
+            providers,
+            [
+                Some("openai-codex".to_owned()),
+                Some("openai-codex".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_parent_leaves_the_session_provider_deciding() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = Path::new("Cargo.toml");
+        assert!(parent.is_file());
+        write_session(
+            &dir.path().join("--cwd--/old.jsonl"),
+            None,
+            Some("anthropic"),
+            1,
+        );
+        write_session(
+            &dir.path().join("--cwd--/new.jsonl"),
+            Some(parent),
+            Some("openai-codex"),
+            2,
+        );
+
+        assert_eq!(
+            used_provider_from(&[dir.path().to_owned()]).as_deref(),
+            Some("openai-codex")
+        );
+    }
+
+    #[test]
+    fn parent_without_a_provider_does_not_fall_back_to_the_child_or_an_older_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("--cwd--/parent.jsonl");
+        write_session(&parent, None, None, 1);
+        write_session(
+            &dir.path().join("--cwd--/other.jsonl"),
+            None,
+            Some("anthropic"),
+            2,
+        );
+        write_session(
+            &dir.path().join("--cwd--/child.jsonl"),
+            Some(&parent),
+            Some("openai-codex"),
+            3,
+        );
 
         assert_eq!(used_provider_from(&[dir.path().to_owned()]), None);
     }
