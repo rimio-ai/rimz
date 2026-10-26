@@ -403,7 +403,7 @@ A subscription can hear another signal in its family without acting on it. Those
 
 To test an action before its condition becomes true, use `rimz loop fire <name>`. It warns that the condition is not met, including the clause count when available, then runs anyway without disarming the task. A condition that is already met adds no warning.
 
-Teardown is one command. `rimz loop remove <name>` deletes the entry from whichever file owns it; the run history stays. `rimz loop timer remove` takes the timer out, and `rimz uninstall` removes it too.
+Teardown is one command. `rimz loop remove <name>` deletes the entry from whichever file owns it; the run history stays readable through `rimz loop logs <name>`. `rimz loop timer remove` takes the timer out, and `rimz uninstall` removes it too.
 
 ## Every schedule shape
 

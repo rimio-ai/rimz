@@ -1,6 +1,7 @@
 //! Room-list behavior at the CLI boundary.
 
 use super::*;
+use rimz::harness::schedule::TaskKind;
 use rimz::harness::schedule::run_log::SignalRecord;
 use std::path::PathBuf;
 
@@ -156,21 +157,201 @@ fn show_resolves_other_rooms_and_retired_names_but_mutations_stay_local() {
     );
     write_loop_run_records(
         &env,
-        &[record("retired", &other, LoopRunResult::Completed, 1)],
+        &[record("retired", &other, LoopRunResult::Completed, 1440)],
     );
-    let text = loop_ok(&env, &["loop", "show", "retired"]);
-    assert!(text.contains("completed"), "{text}");
-    assert!(
-        text.contains(&format!("other commands need --root {}", other.display())),
-        "{text}"
+    for flags in [vec![], vec!["--json"]] {
+        let output = env
+            .rimz()
+            .args(["loop", "show", "retired"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!(
+                "error: no loop task named `retired`; see `rimz loop list`\n  1 retained run, last 1d ago: `rimz --root {} loop logs retired`\n",
+                other.display()
+            )
+        );
+    }
+}
+
+fn assert_gone_task_refuses(kind: Option<TaskKind>) {
+    let env = Env::new();
+    let mut run = record("gone", &env.project_root, LoopRunResult::Completed, 1440);
+    run.kind = kind;
+    write_loop_run_records(&env, &[run]);
+    for flags in [vec![], vec!["--json"]] {
+        let output = env
+            .rimz()
+            .args(["loop", "show", "gone"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "error: no loop task named `gone`; see `rimz loop list`\n  1 retained run, last 1d ago: `rimz loop logs gone`\n"
+        );
+    }
+}
+
+#[test]
+fn show_refuses_legacy_history_without_a_definition() {
+    assert_gone_task_refuses(None);
+}
+
+#[test]
+fn show_refuses_routine_history_without_a_definition() {
+    assert_gone_task_refuses(Some(TaskKind::Routine));
+}
+
+#[test]
+fn show_history_hints_use_known_rooms_and_prefer_the_caller() {
+    let env = Env::new();
+    let roots = [
+        env.home_root.join("first-room"),
+        env.home_root.join("second-room"),
+    ];
+    for root in &roots {
+        std::fs::create_dir(root).unwrap();
+    }
+    config(
+        &env,
+        roots
+            .iter()
+            .enumerate()
+            .map(|(index, root)| (format!("remote-{index}"), task(root)))
+            .collect(),
     );
-    let json = env
-        .rimz()
-        .args(["loop", "show", "retired", "--json"])
-        .output()
-        .unwrap();
-    assert!(!json.status.success());
-    assert!(json.stdout.is_empty());
+    let mut records = roots
+        .iter()
+        .map(|root| record("gone", root, LoopRunResult::Completed, 1440))
+        .collect::<Vec<_>>();
+    write_loop_run_records(&env, &records);
+    let (stdout, stderr) = loop_fail(&env, &["loop", "show", "gone"]);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        format!(
+            "error: no loop task named `gone`; see `rimz loop list`\n  1 retained run, last 1d ago: `rimz --root {} loop logs gone`\n  1 retained run, last 1d ago: `rimz --root {} loop logs gone`\n",
+            roots[0].display(),
+            roots[1].display()
+        )
+    );
+    records.extend(std::iter::repeat_n(
+        record("gone", &env.project_root, LoopRunResult::Completed, 1440),
+        1001,
+    ));
+    records.push(record(
+        "gone",
+        &env.project_root,
+        LoopRunResult::SignalSkipped,
+        0,
+    ));
+    write_loop_run_records(&env, &records);
+    let (stdout, stderr) = loop_fail(&env, &["loop", "show", "gone"]);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error: no loop task named `gone`; see `rimz loop list`\n  1,001 retained runs, last 1d ago: `rimz loop logs gone`\n"
+    );
+}
+
+#[test]
+fn show_ignores_unrelated_unknown_room_and_heard_only_history() {
+    let env = Env::new();
+    for records in [
+        vec![],
+        vec![record(
+            "other",
+            &env.project_root,
+            LoopRunResult::Completed,
+            1440,
+        )],
+        vec![record(
+            "gone",
+            &env.home_root.join("unknown-room"),
+            LoopRunResult::Completed,
+            1440,
+        )],
+        vec![record(
+            "gone",
+            &env.project_root,
+            LoopRunResult::SignalSkipped,
+            1440,
+        )],
+    ] {
+        write_loop_run_records(&env, &records);
+        for flags in [vec![], vec!["--json"]] {
+            let output = env
+                .rimz()
+                .args(["loop", "show", "gone"])
+                .args(flags)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                "error: no loop task named `gone`; see `rimz loop list`\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn show_names_retired_one_offs_and_limits_their_fires() {
+    let env = Env::new();
+    let other = env.home_root.join("other-room");
+    std::fs::create_dir(&other).unwrap();
+    config(&env, BTreeMap::from([("remote".into(), task(&other))]));
+    for root in [&env.project_root, &other] {
+        let mut older = record("once", root, LoopRunResult::Completed, 2880);
+        older.kind = Some(TaskKind::OneOff);
+        older.last_message = Some("older fire".into());
+        let mut newer = record("once", root, LoopRunResult::StartFailed, 1440);
+        newer.error = Some("newer fire".into());
+        write_loop_run_records(&env, &[older, newer]);
+        let room = if root == &env.project_root {
+            String::new()
+        } else {
+            format!(
+                "room ~/other-room · other commands need --root {}\n",
+                root.display()
+            )
+        };
+        let shown = loop_ok(&env, &["loop", "show", "once", "--runs", "1"]);
+        assert!(
+            shown.starts_with(&format!("{room}once — one-shot fired · finished\n\n")),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("newer fire") && !shown.contains("older fire"),
+            "{shown}"
+        );
+        let shown = loop_ok(&env, &["loop", "show", "once"]);
+        assert!(
+            shown.find("older fire").unwrap() < shown.find("newer fire").unwrap(),
+            "{shown}"
+        );
+        let (stdout, stderr) = loop_fail(&env, &["loop", "show", "once", "--json"]);
+        assert!(stdout.is_empty(), "{stdout}");
+        let command = if root == &env.project_root {
+            "rimz loop logs once".to_owned()
+        } else {
+            format!("rimz --root {} loop logs once", root.display())
+        };
+        assert_eq!(
+            stderr,
+            format!(
+                "error: no loop task named `once`; see `rimz loop list`\n  2 retained runs, last 1d ago: `{command}`\n"
+            )
+        );
+    }
 }
 
 #[test]
@@ -185,6 +366,9 @@ fn show_resolves_worktree_names_and_lists_ambiguous_tasks_and_wakeups() {
         &env,
         BTreeMap::from([("card-ux-merged".into(), bound.clone())]),
     );
+    let mut removed = record("card-ux", &env.project_root, LoopRunResult::Completed, 1);
+    removed.kind = Some(TaskKind::Routine);
+    write_loop_run_records(&env, &[removed]);
     let text = loop_ok(&env, &["loop", "show", "card-ux"]);
     assert!(
         text.starts_with("worktree card-ux → card-ux-merged\n"),
@@ -299,6 +483,12 @@ fn show_resolves_team_owners_and_disambiguates_exact_names_by_room() {
             wake.clone(),
         )])),
     );
+    let history = ["forge", "forge#lane"].map(|name| {
+        let mut run = record(name, &env.project_root, LoopRunResult::Completed, 1440);
+        run.kind = Some(TaskKind::Routine);
+        run
+    });
+    write_loop_run_records(&env, &history);
     for owner in ["forge", "forge#lane"] {
         let text = loop_ok(&env, &["loop", "show", owner]);
         assert!(text.contains("SUBSCRIPTIONS"), "{text}");
@@ -363,7 +553,6 @@ fn show_resolves_team_owners_and_disambiguates_exact_names_by_room() {
 
 #[test]
 fn lifecycle_sections_and_retired_one_offs_are_explicit() {
-    use rimz::harness::schedule::TaskKind;
     let env = Env::new();
     let clock = task(&env.project_root);
     let one_off = TaskEntry {
@@ -514,6 +703,33 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
         all.contains("retired-6") && all.contains("team forge#lane") && all.contains("wake"),
         "{all}"
     );
+    for index in 0..7 {
+        let name = format!("retired-{index}");
+        let shown = loop_ok(&env, &["loop", "show", &name]);
+        assert!(
+            shown.starts_with(&format!("{name} — one-shot fired · finished\n")),
+            "{shown}"
+        );
+    }
+    for name in ["removed-routine", "legacy", "formerly-once"] {
+        let (stdout, stderr) = loop_fail(&env, &["loop", "show", name]);
+        assert!(stdout.is_empty(), "{stdout}");
+        let count = history.iter().filter(|run| run.task == name).count();
+        let age = stderr
+            .split_once(", last ")
+            .unwrap()
+            .1
+            .split_once(": `")
+            .unwrap()
+            .0;
+        let noun = if count == 1 { "run" } else { "runs" };
+        assert_eq!(
+            stderr,
+            format!(
+                "error: no loop task named `{name}`; see `rimz loop list`\n  {count} retained {noun}, last {age}: `rimz loop logs {name}`\n"
+            )
+        );
+    }
     let outside = tempfile::tempdir().unwrap();
     let output = env
         .rimz()

@@ -5427,24 +5427,38 @@ fn loop_history_filters_workspace_and_keeps_legacy_records() {
         record
     });
     write_loop_run_records(&env, &records);
-    for command in ["logs", "show"] {
-        let output = loop_ok(&env, &["loop", command, "history"]);
+    {
+        let output = loop_ok(&env, &["loop", "logs", "history"]);
         assert!(
             output.contains("legacy-room") && output.contains("this-room"),
             "{output}"
         );
         assert!(!output.contains("foreign-room"), "{output}");
     }
-    let output = env
-        .rimz()
-        .args(["loop", "show", "history", "--json"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "missing task must fail JSON show");
-    assert!(
-        output.stdout.is_empty(),
-        "JSON show must not print human history"
-    );
+    for flags in [vec![], vec!["--json"]] {
+        let output = env
+            .rimz()
+            .args(["loop", "show", "history"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let age = stderr
+            .split_once(", last ")
+            .unwrap()
+            .1
+            .split_once(": `")
+            .unwrap()
+            .0;
+        assert_eq!(
+            stderr,
+            format!(
+                "error: no loop task named `history`; see `rimz loop list`\n  2 retained runs, last {age}: `rimz loop logs history`\n"
+            )
+        );
+    }
 }
 
 #[test]
@@ -10121,10 +10135,30 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
         "{show}"
     );
     loop_ok(&env, &["loop", "remove", "probe"]);
-    for command in ["show", "logs"] {
-        let history = display(command);
-        assert!(history.contains("manual"), "{history}");
-    }
+    let history = display("logs");
+    assert!(history.contains("manual"), "{history}");
+    let (stdout, stderr) = loop_fail(&env, &["loop", "show", "probe"]);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr
+            .matches("cannot read the loop run lock of `probe`")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    let age = stderr
+        .split_once(", last ")
+        .unwrap()
+        .1
+        .split_once(": `")
+        .unwrap()
+        .0;
+    assert_eq!(
+        stderr.split_once("error: ").unwrap().1,
+        format!(
+            "no loop task named `probe`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs probe`\n"
+        )
+    );
     let (_stdout, error) = loop_fail(&env, &["loop", "logs", "ghost"]);
     assert!(
         error.contains("cannot read the loop run lock")

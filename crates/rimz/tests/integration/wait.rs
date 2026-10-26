@@ -1649,10 +1649,27 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
         "{logs}"
     );
     assert!(logs.contains(&path.display().to_string()), "{logs}");
-    let shown = wait_ok(&env, &["loop", "show", &records[0].task]);
-    assert!(
-        shown.contains(&records[0].watch.as_ref().unwrap().label()),
-        "{shown}"
+    let output = env
+        .rimz()
+        .args(["loop", "show", &records[0].task])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let name = &records[0].task;
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let age = stderr
+        .split_once(", last ")
+        .unwrap()
+        .1
+        .split_once(": `")
+        .unwrap()
+        .0;
+    assert_eq!(
+        stderr,
+        format!(
+            "error: no loop task named `{name}`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs {name}`\n"
+        )
     );
     assert!(!message.contains("--- watch"), "{message}");
     assert_eq!(wait_for_wait_messages(&env, 1).len(), 1);
@@ -1796,10 +1813,27 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let logs = wait_ok(&env, &["loop", "logs", name]);
     assert!(logs.contains(&verdict.label()), "{logs}");
     assert!(logs.contains(&path.display().to_string()), "{logs}");
-    let shown = wait_ok(&env, &["loop", "show", &records[0].task]);
-    assert!(
-        shown.contains(&records[0].watch.as_ref().unwrap().label()),
-        "{shown}"
+    let output = env
+        .rimz()
+        .args(["loop", "show", &records[0].task])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let name = &records[0].task;
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let age = stderr
+        .split_once(", last ")
+        .unwrap()
+        .1
+        .split_once(": `")
+        .unwrap()
+        .0;
+    assert_eq!(
+        stderr,
+        format!(
+            "error: no loop task named `{name}`; see `rimz loop list`\n  1 retained run, last {age}: `rimz loop logs {name}`\n"
+        )
     );
 }
 

@@ -1161,8 +1161,14 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
 
 enum ShowTarget {
     Task(Box<LoadedTask>),
-    History(Option<PathBuf>),
+    Rowless(Box<RowlessShow>),
     Owner(Vec<(PathBuf, Vec<SubscriptionView>)>),
+}
+
+struct RowlessShow {
+    root: PathBuf,
+    history: run_log::TaskHistory,
+    in_flight: Option<InFlightRun>,
 }
 
 fn show_room(
@@ -1248,18 +1254,33 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
             return Ok(ShowTarget::Task(Box::new(task)));
         }
     }
-    let history = catalogs
+    let mut rowless = catalogs
         .iter()
-        .filter(|(root, _)| {
-            !run_log::task_history(&rimz::disk::paths::logs_dir(), &args.name, Some(root), None)
-                .records
-                .is_empty()
-                || in_flight_run(&args.name, root).ok().flatten().is_some()
+        .map(|(root, _)| RowlessShow {
+            root: root.clone(),
+            history: run_log::task_history(
+                &rimz::disk::paths::logs_dir(),
+                &args.name,
+                Some(root),
+                None,
+            ),
+            in_flight: displayed_in_flight(&args.name, in_flight_run(&args.name, root)),
         })
-        .map(|(root, _)| root.as_path())
-        .collect();
-    if let Some(root) = show_room(&args.name, history, caller, args.json)? {
-        return Ok(ShowTarget::History(Some(root)));
+        .collect::<Vec<_>>();
+    let roots = rowless
+        .iter()
+        .filter(|view| view.in_flight.is_some() || view.history.is_retired_one_off())
+        .map(|view| view.root.as_path())
+        .collect::<Vec<_>>();
+    if !roots.is_empty() {
+        if args.json {
+            return Err(missing_show_task(&args.name, &rowless, caller)?);
+        }
+        if let Some(root) = show_room(&args.name, roots, caller, args.json)?
+            && let Some(index) = rowless.iter().position(|view| view.root == root)
+        {
+            return Ok(ShowTarget::Rowless(Box::new(rowless.swap_remove(index))));
+        }
     }
     let mut matches = Vec::new();
     let mut wakes = 0;
@@ -1332,7 +1353,47 @@ fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget
     if !owners.is_empty() {
         return Ok(ShowTarget::Owner(owners));
     }
-    Ok(ShowTarget::History(caller.map(Path::to_path_buf)))
+    Err(missing_show_task(&args.name, &rowless, caller)?)
+}
+
+fn missing_show_task(
+    name: &str,
+    rowless: &[RowlessShow],
+    caller: Option<&Path>,
+) -> Result<anyhow::Error> {
+    let mut message = format!("no loop task named `{name}`; see `rimz loop list`");
+    let here = rowless
+        .iter()
+        .find(|view| Some(view.root.as_path()) == caller && !view.history.fires.is_empty());
+    let now = Timestamp::now();
+    for view in rowless {
+        if here.is_some_and(|here| here.root != view.root) {
+            continue;
+        }
+        let Some(latest) = view.history.fires.iter().map(|record| record.at).max() else {
+            continue;
+        };
+        let command = if Some(view.root.as_path()) == caller {
+            shlex::try_join(["rimz", "loop", "logs", name])?
+        } else {
+            shlex::try_join([
+                "rimz",
+                "--root",
+                view.root.to_string_lossy().as_ref(),
+                "loop",
+                "logs",
+                name,
+            ])?
+        };
+        let count = view.history.fires.len();
+        let noun = if count == 1 { "run" } else { "runs" };
+        message.push_str(&format!(
+            "\n{} retained {noun}, last {}: `{command}`",
+            rimz::theme::fmt::group_thousands(count as u64),
+            ui::rel_age(latest, now)
+        ));
+    }
+    Ok(anyhow::anyhow!(message))
 }
 
 fn write_show_room(root: &Path, caller: Option<&Path>) -> Result<()> {
@@ -1351,12 +1412,27 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let caller = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .ok()
         .map(|workspace| workspace.project_root);
-    let mut scoped = globals.clone();
     let task = match resolve_show(&mut args, caller.as_deref())? {
-        ShowTarget::Task(task) => Some(task),
-        ShowTarget::History(root) => {
-            scoped.root = root;
-            None
+        ShowTarget::Task(task) => task,
+        ShowTarget::Rowless(view) => {
+            write_show_room(&view.root, caller.as_deref())?;
+            if let Some(in_flight) = &view.in_flight {
+                return show_in_flight(&args, &view.root, in_flight);
+            }
+            let mut out = ui::out();
+            writeln!(
+                out,
+                "{} — one-shot fired · finished\n",
+                ui::paint(ui::palette::header(), &args.name)
+            )?;
+            let visible = view
+                .history
+                .fires
+                .iter()
+                .rev()
+                .take(args.runs)
+                .collect::<Vec<_>>();
+            return write_log_records(&mut out, None, &visible);
         }
         ShowTarget::Owner(owners) => {
             if args.json {
@@ -1368,28 +1444,6 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             }
             return Ok(());
         }
-    };
-    let globals = &scoped;
-    let Some(task) = task else {
-        if args.json {
-            bail!("no loop task named {}; see rimz loop list", args.name);
-        }
-        if let Some(root) = &globals.root {
-            write_show_room(root, caller.as_deref())?;
-        }
-        // A failed lookup falls through to `logs`, whose own lookup warns once.
-        if let Ok(Some((root, in_flight))) = in_flight_without_row(&args.name, globals) {
-            return show_in_flight(&args, &root, &in_flight);
-        }
-        return logs(
-            LogsArgs {
-                name: args.name,
-                runs: args.runs,
-                failed: false,
-                heard: false,
-            },
-            globals,
-        );
     };
     let entry = task.entry();
     let root = entry.resolved_root();
